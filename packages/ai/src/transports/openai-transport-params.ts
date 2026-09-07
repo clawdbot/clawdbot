@@ -348,7 +348,7 @@ export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; m
 export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-  options?: { stream?: boolean; timeoutMs?: number },
+  options?: { stream?: boolean; timeoutMs?: number; headers?: Record<string, string> },
 ):
   | {
       signal?: AbortSignal;
@@ -363,11 +363,13 @@ export function buildOpenAISdkRequestOptions(
   const headers =
     options?.stream === true
       ? {
-          // Compressed event streams can be buffered or truncated by compatible
-          // endpoints and intermediaries before the terminal SSE event reaches
-          // the SDK. Streaming is already incremental, so prefer the stable
-          // wire contract over response compression.
-          "Accept-Encoding": "identity",
+          // Default SSE to identity without overriding explicitly resolved headers.
+          // Some compatible endpoints truncate compressed streams before the terminal event.
+          ...(Object.keys(options.headers ?? {}).some(
+            (key) => normalizeLowercaseStringOrEmpty(key) === "accept-encoding",
+          )
+            ? {}
+            : { "Accept-Encoding": "identity" }),
           ...(usesNativeOpenAICodexResponsesBackend(model) ? { Accept: "text/event-stream" } : {}),
         }
       : undefined;

@@ -377,6 +377,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
+          headers: buildOpenAIClientHeaders(
+            model,
+            context,
+            options?.headers,
+            turnState?.headers,
+            options?.sessionId,
+          ),
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,
