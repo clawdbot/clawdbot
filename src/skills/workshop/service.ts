@@ -143,18 +143,21 @@ export async function reviseSkillProposal(
       input.supportFiles === undefined ? (read.supportFiles ?? []) : input.supportFiles;
     const requestedContent = input.content ?? read.content;
     const nextVersion = nextProposalVersion(record.proposedVersion);
-    const description = normalizeOptionalString(input.description) ?? record.description;
+    const explicitDescription = normalizeOptionalString(input.description);
+    const description = explicitDescription ?? record.description;
     const now = new Date().toISOString();
     const prepared = prepareSkillProposalDraft({
       name: resolveSkillProposalName(record.kind, record.target),
       description,
-      // The listing label is the skill description only for create proposals whose
-      // content never carried one; updates keep the description from the drafted or
-      // previously rendered content instead of the label.
+      // The listing label is the skill description only for proposals whose
+      // content never carried one; otherwise the description comes from the drafted
+      // or previously rendered content. An explicitly revised description still wins
+      // for create proposals so description-only revisions reach the applied skill.
       skillDescription: resolveDraftedSkillDescription({
         content: requestedContent,
-        ...(record.kind === "update" ? { fallbackContent: read.content } : {}),
+        fallbackContent: read.content,
         label: description,
+        ...(record.kind === "create" && explicitDescription ? { explicitDescription } : {}),
       }),
       content: requestedContent,
       fallbackFrontmatterContent: read.content,

@@ -64,4 +64,27 @@ describe("workshop proposal frontmatter", () => {
       }),
     ).toBe("Short listing label");
   });
+
+  it("prefers an explicitly revised description over previously rendered content", () => {
+    const explicitDescription = "Explicitly revised description";
+    expect(
+      resolveDraftedSkillDescription({
+        content: "---\nname: rich-skill\ndescription: Stale rendered description\n---\n\n# Body\n",
+        fallbackContent:
+          "---\nname: rich-skill\ndescription: Older live description\n---\n\n# Old\n",
+        label: "Short listing label",
+        explicitDescription,
+      }),
+    ).toBe(explicitDescription);
+    // Without an explicit revision the previously rendered content still wins,
+    // so body-only revisions keep the prior description instead of the label.
+    expect(
+      resolveDraftedSkillDescription({
+        content: "# Body only\n",
+        fallbackContent:
+          "---\nname: rich-skill\ndescription: Prior rich description\n---\n\n# Old\n",
+        label: "Short listing label",
+      }),
+    ).toBe("Prior rich description");
+  });
 });

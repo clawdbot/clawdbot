@@ -1536,6 +1536,63 @@ describe("skill workshop proposals", () => {
     expect(applied).not.toContain("Concise listing label");
   });
 
+  it("applies explicitly revised descriptions from description-only create revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Describable Skill",
+      description: "Original label",
+      content: "# Describable\n\nOriginal body.\n",
+    });
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      description: "Revised label",
+    });
+
+    expect(revised.record.description).toBe("Revised label");
+    expect(revised.content).toContain("Revised label");
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await expect(
+      fs.readFile(path.join(workshopSkillsDir(), "describable-skill", "SKILL.md"), "utf8"),
+    ).resolves.toBe(
+      '---\nname: "describable-skill"\ndescription: "Revised label"\n---\n\n# Describable\n\nOriginal body.\n',
+    );
+  });
+
+  it("preserves rich create frontmatter descriptions across body-only revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"z".repeat(200)} plus trigger phrases and keywords`;
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Rich Create Skill",
+      description: "Short listing label",
+      content: `---\nname: rich-create-skill\ndescription: ${richDescription}\n---\n\n# Rich Create\n\nOriginal body.\n`,
+    });
+    expect(proposal.record.description).toBe("Short listing label");
+    expect(proposal.content).toContain(richDescription);
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Rich Create\n\nRevised body.\n",
+    });
+
+    expect(revised.record.description).toBe("Short listing label");
+    expect(revised.content).toContain(richDescription);
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    const applied = await fs.readFile(
+      path.join(workshopSkillsDir(), "rich-create-skill", "SKILL.md"),
+      "utf8",
+    );
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Revised body.");
+    expect(applied).not.toContain("Short listing label");
+  });
+
   it("quarantines unsafe proposals during apply", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({

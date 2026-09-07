@@ -139,8 +139,15 @@ export function resolveDraftedSkillDescription(params: {
   content: string;
   fallbackContent?: string;
   label: string;
+  /**
+   * A description the caller explicitly supplied for this revision. It wins over
+   * any description still carried by previously rendered content, so an explicit
+   * description-only revision reaches the applied skill file.
+   */
+  explicitDescription?: string;
 }): string {
   return (
+    params.explicitDescription ??
     extractFrontmatterDescription(params.content) ??
     extractFrontmatterDescription(params.fallbackContent) ??
     params.label
