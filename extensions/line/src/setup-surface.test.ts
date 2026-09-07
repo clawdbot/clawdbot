@@ -239,6 +239,8 @@ describe("line setup wizard", () => {
     expect(asked).not.toContain("LINE_CHANNEL_ACCESS_TOKEN detected. Use env var?");
     expect(asked).toContain("Enter LINE channel access token");
     expect(result.cfg.channels?.line?.channelAccessToken).toBe("typed-token");
+    // The operator replaced the file with a value, so the path that could not be read goes.
+    expect(result.cfg.channels?.line?.tokenFile).toBeUndefined();
   });
 
   it("asks for a token instead of offering to keep one behind an unreadable file", async () => {
