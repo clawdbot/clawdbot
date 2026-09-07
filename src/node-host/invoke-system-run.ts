@@ -287,6 +287,14 @@ async function sendSystemRunDenied(
   params: {
     reason: SystemRunDeniedReason;
     message: string;
+    /** Suppress for host-authored freeform messages (mac app exec host), where
+     * the generic policy hint may mislabel a transient outcome. */
+    suppressEscalationHint?: boolean;
+    /** "binding" routes to renewal guidance instead of the policy hint:
+     * approval-binding integrity failures (cwd/script drift, binding capture)
+     * are corrected by re-requesting approval for the current operand, not by
+     * an exec-policy change. */
+    escalationOwner?: "binding";
   },
 ) {
   await opts.sendNodeEvent(
@@ -306,9 +314,72 @@ async function sendSystemRunDenied(
     // A missing companion reply can follow execution; it is not a policy denial.
     error: {
       code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message: params.message,
+      message: params.suppressEscalationHint
+        ? params.message
+        : deniedMessageWithEscalationHint({
+            reason: params.reason,
+            message: params.message,
+            ...(params.escalationOwner ? { escalation: params.escalationOwner } : {}),
+          }),
     },
   });
+}
+
+/**
+ * Appended to model-facing denials so the sanctioned path is taught at the decision
+ * point; without it the agent's next move is unguided and retries burn turns.
+ */
+const SYSTEM_RUN_DENIED_ESCALATION_HINT =
+  "to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again";
+
+/**
+ * Appended to approval-binding integrity denials instead of the policy hint:
+ * the approved binding no longer matches the execution, and the sanctioned
+ * correction is renewing the approval — policy-relaxation guidance would send
+ * the model (and the operator) after the wrong lever.
+ */
+const SYSTEM_RUN_DENIED_BINDING_HINT =
+  "the approved binding no longer matches this execution; request approval again for the current command";
+
+/** Denial reasons that an exec-policy change actually corrects. */
+const POLICY_OWNED_DENIED_REASONS = new Set<SystemRunDeniedReason>([
+  "security=deny",
+  "approval-required",
+  "allowlist-miss",
+  "execution-plan-miss",
+]);
+
+/**
+ * Structured policy reasons the mac app exec host's final policy evaluator
+ * emits verbatim; recognized host responses keep the escalation hint while
+ * freeform ones (cancelled prompt, unavailable approval store, permission
+ * prompts) are suppressed.
+ */
+const MAC_HOST_POLICY_OWNED_REASONS = new Set(["security=deny", "allowlist-miss", "ask=always"]);
+
+function deniedMessageWithEscalationHint(params: {
+  reason: SystemRunDeniedReason;
+  message: string;
+  /** Explicit owner override from the denial site; see sendSystemRunDenied. */
+  escalation?: "binding";
+}): string {
+  // Binding-owned denials get renewal guidance, never policy relaxation.
+  if (params.escalation === "binding") {
+    return `${params.message} — ${SYSTEM_RUN_DENIED_BINDING_HINT}`;
+  }
+  // Only policy-owned denials carry the hint: transient outcomes
+  // (approval-state-write-failed), infrastructure availability
+  // (companion-unavailable), OS permission grants (permission:screenRecording)
+  // are all fixed by something other than an exec-policy change, and the
+  // hint's "identical retry will be denied" claim would be wrong for them.
+  if (!POLICY_OWNED_DENIED_REASONS.has(params.reason)) {
+    return params.message;
+  }
+  // Already carries its own next-step guidance; a generic hint would contradict it.
+  if (params.message.endsWith("request approval again")) {
+    return params.message;
+  }
+  return `${params.message} — ${SYSTEM_RUN_DENIED_ESCALATION_HINT}`;
 }
 
 async function sendSystemRunCompleted(
@@ -786,6 +857,7 @@ async function evaluateSystemRunPolicyPhase(
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: hardenedPaths.message,
+      escalationOwner: "binding",
     });
     return null;
   }
@@ -797,6 +869,7 @@ async function evaluateSystemRunPolicyPhase(
       await sendSystemRunDenied(opts, parsed.execution, {
         reason: "approval-required",
         message: capturedCwd.message,
+        escalationOwner: "binding",
       });
       return null;
     }
@@ -807,6 +880,7 @@ async function evaluateSystemRunPolicyPhase(
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+      escalationOwner: "binding",
     });
     return null;
   }
@@ -866,6 +940,7 @@ async function revalidateSystemRunApprovedPathBindings(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+      escalationOwner: "binding",
     });
     return false;
   }
@@ -881,6 +956,7 @@ async function revalidateSystemRunApprovedPathBindings(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+      escalationOwner: "binding",
     });
     return false;
   }
@@ -910,6 +986,7 @@ async function executeSystemRunPhase(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: expectedMutableFileOperand.message,
+      escalationOwner: "binding",
     });
     return;
   }
@@ -918,6 +995,7 @@ async function executeSystemRunPhase(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE,
+      escalationOwner: "binding",
     });
     return;
   }
@@ -989,9 +1067,27 @@ async function executeSystemRunPhase(
         return;
       }
     } else if (!response.ok) {
+      const hostReason = response.error.reason ?? "";
+      const hostMessage = response.error.message;
+      // Structured binding-integrity failures come back through an
+      // approval-required host response carrying the binding-denial message
+      // (the mac host revalidates the approved cwd/script snapshots with the
+      // same infra); they teach renewal, not policy relaxation — parity with
+      // the local binding path.
+      const macBindingFailure =
+        normalizeDeniedReason(hostReason) === "approval-required" &&
+        (hostMessage === APPROVAL_CWD_DRIFT_DENIED_MESSAGE ||
+          hostMessage === APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE ||
+          hostMessage === APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE);
       await sendSystemRunDenied(opts, phase.execution, {
-        reason: normalizeDeniedReason(response.error.reason),
-        message: response.error.message,
+        reason: normalizeDeniedReason(hostReason),
+        message: hostMessage,
+        // Freeform host-authored messages (cancelled prompt, temporarily
+        // unavailable approval store, permission prompts) carry no policy
+        // guarantee; the host's structured policy verdicts do.
+        suppressEscalationHint:
+          !macBindingFailure && !MAC_HOST_POLICY_OWNED_REASONS.has(hostReason),
+        ...(macBindingFailure ? { escalationOwner: "binding" as const } : {}),
       });
       return;
     } else {

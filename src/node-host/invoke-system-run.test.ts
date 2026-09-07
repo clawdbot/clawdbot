@@ -267,7 +267,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   ) {
     const params = { sendNodeEvent, sendInvokeResult };
     expectExecDeniedEvent(params.sendNodeEvent);
-    expectInvokeErrorMessage(params.sendInvokeResult, "SYSTEM_RUN_DENIED: approval required", true);
+    expectInvokeErrorMessage(
+      params.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: approval required — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
   }
 
   function expectApprovalStateWriteDenied(params: {
@@ -779,6 +783,151 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
     },
   );
+
+  it("does not append the escalation hint to freeform mac exec-host denials", async () => {
+    // Host-authored freeform messages (cancelled prompt, temporarily unavailable
+    // approval store) may describe retryable outcomes; the normalized reason
+    // does not establish that an exec-policy change would fix them.
+    const result = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "APPROVAL_CANCELLED",
+          message: "approval prompt cancelled",
+          reason: "approval-required",
+        },
+      }),
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(result.sendInvokeResult, "approval prompt cancelled", true);
+  });
+
+  it("keeps the escalation hint for structured mac policy denials", async () => {
+    // The mac host's final policy evaluator emits structured security=deny /
+    // allowlist-miss verdicts through the same response path; those are
+    // policy-owned and keep the sanctioned next step.
+    const denied = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: command not allowed by security policy",
+          reason: "security=deny",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      denied.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: command not allowed by security policy — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
+
+    const miss = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: command not on the allowlist",
+          reason: "allowlist-miss",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      miss.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: command not on the allowlist — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
+
+    // ask=always is the third structured verdict from the same evaluator:
+    // auto-review can never bypass it, so an identical retry is guaranteed
+    // to be denied and the hint must survive here too.
+    const askAlways = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always",
+          reason: "ask=always",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      askAlways.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
+  });
+
+  it("gives mac binding-integrity denials renewal guidance, not policy relaxation", async () => {
+    // The mac host revalidates approved cwd/script snapshots with the same
+    // infra as the local path and returns the binding-denial message through
+    // an approval-required host response; parity says those teach renewal.
+    const drift = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+          reason: "approval-required",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      drift.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
+      true,
+    );
+
+    const operand = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          reason: "approval-required",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      operand.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
+      true,
+    );
+  });
+
+  it("does not append the escalation hint to screen-recording permission denials", async () => {
+    // The fix for a missing Screen Recording permission is granting the macOS
+    // permission, not adjusting exec policy — the hint would misdirect.
+    const result = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "PERMISSION_MISSING",
+          message: "PERMISSION_MISSING: screenRecording",
+          reason: "permission:screenRecording",
+        },
+      }),
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(result.sendInvokeResult, "PERMISSION_MISSING: screenRecording", true);
+  });
+
+  it("does not publish a cancelled Mac exec-host completion", async () => {
+    const controller = new AbortController();
+    const result = await runMacSystemInvoke({
+      signal: controller.signal,
+      runViaMacAppExecHost: async () => {
+        controller.abort();
+        return { ok: true, payload: createLocalRunResult("cancelled") };
+      },
+    });
+
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
 
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runLocalSystemInvoke({});
@@ -1547,7 +1696,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+        // Windows hits the stable-path denial (no pinned executable for .sh); the
+        // send site routes it binding-owned, so the renewal hint — not the policy
+        // hint — is the sanctioned-path guidance (parity with the mac binding tests).
+        "SYSTEM_RUN_DENIED: approval requires a stable executable path — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
       return;
@@ -1584,14 +1736,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         if (process.platform === "win32") {
           expectInvokeErrorMessage(
             sendInvokeResult,
-            "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+            // Windows hits the stable-path denial (no pinned executable for .sh); the
+            // send site routes it binding-owned, so the renewal hint — not the policy
+            // hint — is the sanctioned-path guidance (parity with the mac binding tests).
+            "SYSTEM_RUN_DENIED: approval requires a stable executable path — the approved binding no longer matches this execution; request approval again for the current command",
             true,
           );
           return;
         }
         expectInvokeErrorMessage(
           sendInvokeResult,
-          "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+          "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
           true,
         );
       },
@@ -1625,7 +1780,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(
           sendInvokeResult,
-          "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
           true,
         );
       } else {
@@ -1662,7 +1817,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(invoke.runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         invoke.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+        "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
     },
@@ -1695,7 +1850,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(invoke.runCommand).not.toHaveBeenCalled();
     expectInvokeErrorMessage(
       invoke.sendInvokeResult,
-      "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+      "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
       true,
     );
   });
@@ -1719,7 +1874,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+        "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
       const missingBindingTmp = createFixtureDir("openclaw-approval-tsx-missing-binding-");
@@ -1745,7 +1900,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(missingBindingRun.runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         missingBindingRun.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval missing script operand binding",
+        "SYSTEM_RUN_DENIED: approval missing script operand binding — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
     });
@@ -2360,7 +2515,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expectExecDeniedEvent(invoke.sendNodeEvent);
       expectInvokeErrorMessage(
         invoke.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: explicit approval required",
+        "SYSTEM_RUN_DENIED: explicit approval required — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
         true,
       );
     });
@@ -2514,9 +2669,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(commitAuthorization).not.toHaveBeenCalled();
       expect(invoke.runCommand).not.toHaveBeenCalled();
+      // Exact: this denial already states its next step, so no generic escalation
+      // hint is appended (the suffix would contradict "request approval again").
       expectInvokeErrorMessage(
         invoke.sendInvokeResult,
-        "exec approval policy changed; request approval again",
+        "SYSTEM_RUN_DENIED: exec approval policy changed; request approval again",
+        true,
       );
     });
   });
@@ -3186,7 +3344,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(rerun.runCommand).not.toHaveBeenCalled();
           expectInvokeErrorMessage(
             rerun.sendInvokeResult,
-            "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
             true,
           );
         },
