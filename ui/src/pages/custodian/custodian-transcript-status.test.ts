@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import * as uuid from "../../lib/uuid.ts";
@@ -169,6 +170,55 @@ describe("custodian transcript status", () => {
     expect(page.textContent).toContain("Recovered reconnect history");
   });
 
+  it("recovers parked history once after an in-flight send settles", async () => {
+    const reply = deferred<SystemAgentChatResult>();
+    let historyCalls = 0;
+    const request = vi.fn(async (method: string, params?: { message?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCalls += 1;
+        if (historyCalls === 1) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Gateway is suspending",
+            retryable: true,
+            details: { reason: "gateway-suspending", phase: "draining" },
+          });
+        }
+        return { turns: [{ role: "assistant", text: "Recovered after send", at: 1 }] };
+      }
+      return params?.message
+        ? reply.promise
+        : { sessionId: "custodian-session", reply: "Ready", action: "none" };
+    });
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(page.store.canSend).toBe(true));
+    expect(page.store.transcript.status.awaitingGateway).toBe(true);
+
+    const send = page.store.send("Continue");
+    setGatewaySnapshot({ suspensionPhase: "draining" });
+    setGatewaySnapshot({ suspensionPhase: "accepting" });
+    setGatewaySnapshot({ suspensionPhase: "draining" });
+    setGatewaySnapshot({ suspensionPhase: "accepting" });
+    await page.updateComplete;
+    expect(page.store.sending).toBe(true);
+    expect(historyCalls).toBe(1);
+    expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+    expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
+
+    reply.resolve({ sessionId: "custodian-session", reply: "Done", action: "none" });
+    await send;
+    await waitForFast(() => expect(page.textContent).toContain("Recovered after send"));
+    setGatewaySnapshot({ suspensionPhase: "accepting" });
+    await page.updateComplete;
+    expect(historyCalls).toBe(2);
+    expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+    expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
+  });
+
   it("does not automatically refresh history while the welcome or wizard is active", async () => {
     const welcome = deferred<{
       sessionId: string;
@@ -177,11 +227,20 @@ describe("custodian transcript status", () => {
       wizardInputPending: true;
       step: { id: string; type: "text"; message: string };
     }>();
+    const answer = deferred<SystemAgentChatResult>();
+    let historyCalls = 0;
+    let chatCalls = 0;
     const request = vi.fn((method: string) => {
       if (method === "openclaw.chat.history") {
-        return Promise.reject(new Error("history unavailable"));
+        historyCalls += 1;
+        return historyCalls === 1
+          ? Promise.reject(new Error("history unavailable"))
+          : Promise.resolve({
+              turns: [{ role: "assistant", text: "Recovered after wizard", at: 1 }],
+            });
       }
-      return welcome.promise;
+      chatCalls += 1;
+      return chatCalls === 1 ? welcome.promise : answer.promise;
     });
     const { context, setGatewaySnapshot } = createContext(request, [
       "openclaw.chat",
@@ -197,6 +256,7 @@ describe("custodian transcript status", () => {
     expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
     setGatewaySnapshot({ suspensionPhase: "draining" });
     setGatewaySnapshot({ suspensionPhase: "accepting" });
+    await page.updateComplete;
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
@@ -213,10 +273,29 @@ describe("custodian transcript status", () => {
 
     setGatewaySnapshot({ suspensionPhase: "draining" });
     setGatewaySnapshot({ suspensionPhase: "accepting" });
+    await page.updateComplete;
     expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
     ]);
+
+    const wizardMessage = page.store.messages.find((message) => message.step);
+    expect(wizardMessage).toBeDefined();
+    page.store.answerWizardStep(wizardMessage!, "Continue");
+    await page.updateComplete;
+    expect(page.store.sending).toBe(true);
+    expect(historyCalls).toBe(1);
+
+    answer.resolve({
+      sessionId: "wizard-session",
+      reply: "Wizard complete",
+      action: "none",
+      wizardInputPending: false,
+    });
+    await waitForFast(() => expect(page.textContent).toContain("Recovered after wizard"));
+    expect(historyCalls).toBe(2);
+    expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+    expect(page.querySelector(".custodian__transcript-status button")).toBeNull();
   });
 });

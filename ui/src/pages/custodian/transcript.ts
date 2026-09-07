@@ -135,6 +135,7 @@ async function readCustodianTranscript(
 export class CustodianTranscriptLoader {
   status: PanelRefreshStatus = createPanelRefreshStatus();
   private generation = 0;
+  private recoveryPending = false;
   private inFlight: {
     client: GatewayBrowserClient;
     epoch: number;
@@ -148,6 +149,21 @@ export class CustodianTranscriptLoader {
 
   get refreshing(): boolean {
     return this.inFlight !== null;
+  }
+
+  deferRecovery(): void {
+    this.recoveryPending = true;
+  }
+
+  clearRecovery(): void {
+    this.recoveryPending = false;
+  }
+
+  settleRecovery(blocked: boolean, refresh: () => void): void {
+    if (this.recoveryPending && !blocked) {
+      this.clearRecovery();
+      refresh();
+    }
   }
 
   watchAvailability(refresh: () => void): () => void {
@@ -178,11 +194,13 @@ export class CustodianTranscriptLoader {
   }
 
   invalidate(): void {
+    // Normal turns invalidate reads, but keep the intent to recover once idle.
     this.generation += 1;
     this.inFlight = null;
   }
 
   reset(): void {
+    this.clearRecovery();
     this.invalidate();
     this.status = createPanelRefreshStatus();
   }
@@ -225,6 +243,7 @@ export class CustodianTranscriptLoader {
     firstMessageId: number,
     isCurrent: () => boolean,
   ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
+    this.clearRecovery();
     const result = await this.read(client, epoch, isCurrent);
     return result?.ok && isCurrent()
       ? createCustodianTranscriptMessages(result.turns, firstMessageId)
