@@ -78,7 +78,7 @@ export type SuhengToolProfileOptions = {
 };
 
 const REPORT_INTENT =
-  /(?:报告|简报|快报|专报|日报|周报|月报|汇报材料|表格|图表|看板|可视化|Word|Excel|PDF|PPT|HTML|文件|文档)/iu;
+  /(?:报告|简报|快报|专报|日报|周报|月报|汇报材料|表格|图表|看板|可视化|Word|docx|WPS|Excel|PDF|PPT|HTML|文件|文档)/iu;
 const COMPLAINT_INTENT = /(?:侵权|投诉|举报|维权|投诉函|投诉通知|主体档案|证件|盖章|下架|固证)/iu;
 const LINK_CHECK_INTENT_PATTERNS = [
   /(?:失效|无效|死链|坏链).{0,8}(?:链接|网址|URL)/iu,
@@ -91,8 +91,10 @@ const MEDIA_INTENT_PATTERNS = [
 ] as const;
 const EXTERNAL_HTTP_LINK = /https?:\/\/[^\s]+/iu;
 const LINK_EVIDENCE_INTENT = /(?:研判|分析|核查|核实|判断|评估|看看|查看|读取|理解)/iu;
-const SKILL_INTENT =
-  /(?:技能|skill).{0,16}(?:创建|新建|保存|修改|更新|查看|列出|管理)|(?:创建|新建|保存|修改|更新|查看|列出|管理).{0,16}(?:技能|skill)/iu;
+// Keep the small catalog tool family available whenever skills are mentioned.
+// Verb lists miss natural requests such as "放到我的 skill 中" and distant actions.
+// ASCII boundaries support Chinese/English mixing without matching "skillful".
+const SKILL_REFERENCE = /技能|(?<![a-z])skills?(?![a-z])/iu;
 const JOB_CONTROL_INTENT = /(?:任务|报告).{0,12}(?:状态|进度|停止|取消|终止|列表)/iu;
 const EMAIL_INTENT = /(?:发送|发|推送|寄送).{0,8}(?:邮件|邮箱)|(?:邮件|邮箱).{0,8}(?:发送|推送)/iu;
 const DAILY_RISK_TIPS_INTENT = /(?:每日风险提示|风险提示选题|风险提示素材)/iu;
@@ -169,7 +171,7 @@ export function resolveSuhengToolsAllow(
   if (EXTERNAL_HTTP_LINK.test(message) && LINK_EVIDENCE_INTENT.test(message)) {
     addTools(tools, VIDEO_EVIDENCE_TOOLS);
   }
-  if (SKILL_INTENT.test(message)) {
+  if (SKILL_REFERENCE.test(message)) {
     addTools(tools, SKILL_TOOLS);
   }
   if (JOB_CONTROL_INTENT.test(message)) {

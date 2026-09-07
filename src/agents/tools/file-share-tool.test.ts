@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AliyunOssConfig } from "../../infra/aliyun-oss.js";
 import { createFileShareTool } from "./file-share-tool.js";
@@ -15,6 +16,23 @@ const TEST_CONFIG: AliyunOssConfig = {
   maxFileSizeMb: 1,
   allowedExtensions: ["docx", "pdf", "txt"],
 };
+
+async function docxBytes() {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+  );
+  zip.file(
+    "_rels/.rels",
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+  );
+  zip.file(
+    "word/document.xml",
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>测试</w:t></w:r></w:p></w:body></w:document>',
+  );
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
 
 describe("file_share tool", () => {
   let workspaceDir: string;
@@ -62,7 +80,7 @@ describe("file_share tool", () => {
 
   it("uploads a workspace file and returns the public URL", async () => {
     await fs.mkdir(path.join(workspaceDir, "reports"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "reports", "速报.docx"), "content");
+    await fs.writeFile(path.join(workspaceDir, "reports", "速报.docx"), await docxBytes());
 
     const tool = makeTool();
     const result = await tool!.execute("call-1", { path: "reports/速报.docx" });
@@ -84,6 +102,61 @@ describe("file_share tool", () => {
     });
     const payload = (result as { details?: unknown }).details as Record<string, unknown>;
     expect(payload.filename).toBe(".._报告_最终版.pdf");
+  });
+
+  it.each(["fake.docx", "fake.html"])(
+    "rejects HTML delivered as DOCX from %s before upload",
+    async (filename) => {
+      await fs.writeFile(path.join(workspaceDir, filename), "<html><body>Report</body></html>");
+      await expect(
+        makeTool()!.execute("fake", { path: filename, filename: "报告.docx" }),
+      ).rejects.toThrow(/Invalid DOCX/);
+      expect(uploads).toHaveLength(0);
+    },
+  );
+
+  it("rejects a ZIP without Word document parts", async () => {
+    const zip = new JSZip();
+    zip.file("report.html", "<html>report</html>");
+    await fs.writeFile(
+      path.join(workspaceDir, "fake.docx"),
+      await zip.generateAsync({ type: "nodebuffer" }),
+    );
+    await expect(makeTool()!.execute("fake", { path: "fake.docx" })).rejects.toThrow(
+      /Invalid DOCX/,
+    );
+    expect(uploads).toHaveLength(0);
+  });
+
+  it("rejects truncated DOCX archives", async () => {
+    const bytes = await docxBytes();
+    await fs.writeFile(path.join(workspaceDir, "broken.docx"), bytes.subarray(0, 100));
+    await expect(makeTool()!.execute("broken", { path: "broken.docx" })).rejects.toThrow(
+      /Invalid DOCX/,
+    );
+    expect(uploads).toHaveLength(0);
+  });
+
+  it.each(["<html>Not a Word document</html>", "x".repeat(8 * 1024 * 1024 + 1)])(
+    "rejects invalid or oversized Word XML before upload (%#)",
+    async (document) => {
+      const zip = await JSZip.loadAsync(await docxBytes());
+      zip.file("word/document.xml", document);
+      await fs.writeFile(
+        path.join(workspaceDir, "bad-part.docx"),
+        await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }),
+      );
+      await expect(makeTool()!.execute("bad-part", { path: "bad-part.docx" })).rejects.toThrow(
+        /Invalid DOCX/,
+      );
+      expect(uploads).toHaveLength(0);
+    },
+  );
+
+  it("allows a real DOCX with a different local extension and uppercase download suffix", async () => {
+    await fs.writeFile(path.join(workspaceDir, "output.bin"), await docxBytes());
+    await makeTool()!.execute("real", { path: "output.bin", filename: "报告.DOCX" });
+    expect(uploads).toHaveLength(1);
   });
 
   it("rejects paths outside the workspace", async () => {

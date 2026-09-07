@@ -22,6 +22,19 @@ describe("Suheng workspace context", () => {
     },
   );
 
+  it.each(["以docx版发给我", "这个文件打不开，你给我普通WORD版", "导出投诉函.docx"])(
+    "guides real Word generation and repair: %s",
+    (message) => {
+      const context = buildSuhengWorkspaceContext(message);
+      expect(context).toContain("python-docx");
+      expect(context).toContain("不能");
+      expect(context).toContain("HTML");
+      expect(context).toContain("file_share");
+      expect(context).toContain("exec");
+      expect(buildSuhengWorkspaceContext(message)).toBe(context);
+    },
+  );
+
   it("returns deterministic Unicode-safe Python guidance", () => {
     const context = buildSuhengWorkspaceContext("请生成中文目录下的报告文件");
 

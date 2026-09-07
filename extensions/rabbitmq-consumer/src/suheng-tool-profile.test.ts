@@ -30,6 +30,17 @@ describe("resolveSuhengToolsAllow", () => {
     expect(tools).not.toContain("music_generate");
   });
 
+  it.each(["以docx版发给我", "这个文件打不开，你给我普通WORD版", "给我WPS版"])(
+    "keeps generation and delivery tools available for Word requests: %s",
+    (message) => {
+      const tools = resolveSuhengToolsAllow(message);
+      expect(tools).toEqual(
+        expect.arrayContaining(["exec", "process", "read", "write", "file_share"]),
+      );
+      expect(tools).toEqual(tools.toSorted());
+    },
+  );
+
   it("adds only the relevant transactional family for complaint work", () => {
     const tools = resolveSuhengToolsAllow("请研判这些链接并提交侵权投诉");
 
@@ -156,6 +167,37 @@ describe("resolveSuhengToolsAllow", () => {
       resolveSuhengToolsAllow("执行流程", { builtinSkillName: "future-bundled-skill" }),
     ).toBeUndefined();
   });
+
+  it.each([
+    "只要把这个skill 放到“我的skill”中，起名为“央办12377举报函模板”即可",
+    "把这套流程加入我的技能库",
+    "这个技能帮我收录一下，下次直接调用",
+    "导入这个 SKILL，中文名叫举报函模板",
+    "我的skills里有哪些？",
+    "这个技能\n请将上面已经确认过的格式、写作规范和自检清单全部整理好，然后放进去",
+    "把流程做成一个可复用的技能",
+    "技能库里刚才那个，再改一下标题",
+    "skill_save 为什么没有开放？",
+  ])("keeps skill library tools available for natural requests: %s", (message) => {
+    const tools = resolveSuhengToolsAllow(message);
+
+    expect(tools).toEqual(expect.arrayContaining(["skill_get", "skill_list", "skill_save"]));
+    expect(tools).toEqual([...new Set(tools)].toSorted());
+    expect(resolveSuhengToolsAllow(message)).toEqual(tools);
+    expect(tools).not.toContain("schedule_create");
+    expect(tools).not.toContain("send_email");
+  });
+
+  it.each(["查询今日舆情", "把这段文字放进报告", "a skillful analyst", "review upskilling trends"])(
+    "does not expose skill tools without a skill reference: %s",
+    (message) => {
+      const tools = resolveSuhengToolsAllow(message);
+
+      expect(tools).not.toContain("skill_get");
+      expect(tools).not.toContain("skill_list");
+      expect(tools).not.toContain("skill_save");
+    },
+  );
 
   it.each([
     ["把这套流程保存为技能", ["skill_get", "skill_list", "skill_save"]],

@@ -11,6 +11,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { type AnyAgentTool, jsonResult, readStringParam, ToolInputError } from "./common.js";
+import { assertDocxPackage } from "./docx-validation.js";
 
 const log = createSubsystemLogger("file-share-tool");
 
@@ -146,7 +147,7 @@ export function createFileShareTool(opts?: FileShareToolOptions): AnyAgentTool |
     label: "Share file",
     name: "file_share",
     description:
-      "Upload a file from the agent workspace to cloud storage and get a permanent public download URL for the user. Use this whenever the user asks to download or receive a generated file (report, spreadsheet, slides). Reply with the returned URL — never tell the user a file was saved to a local path or desktop.",
+      "Upload a file from the agent workspace to cloud storage and get a permanent public download URL for the user. Use this whenever the user asks to download or receive a generated file (report, spreadsheet, slides). This uploads existing bytes; filename does not convert formats. A .docx must be a real Office Open XML ZIP document, generated with an available document library, not renamed HTML/text. Reply with the returned URL — never tell the user a file was saved to a local path or desktop.",
     parameters: FileShareToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -175,6 +176,10 @@ export function createFileShareTool(opts?: FileShareToolOptions): AnyAgentTool |
         throw new ToolInputError(
           `file type ".${extension || "?"}" is not allowed for sharing (allowed: ${config.allowedExtensions.join(", ")})`,
         );
+      }
+
+      if (extension === "docx") {
+        await assertDocxPackage(filePath);
       }
 
       try {
