@@ -7,6 +7,7 @@ import {
   logInboundDrop,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
+  resolveGroupThreadMentionFacts,
   resolveUnmentionedGroupInboundPolicy,
   toHistoryMediaEntries,
   toInboundMediaFactsWithMetadata,
@@ -77,6 +78,7 @@ import {
   resolveDiscordMessageMentionDocuments,
   resolveDiscordMessageText,
 } from "./message-text.js";
+import { buildDiscordRoutePeer } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -666,7 +668,25 @@ export async function preflightDiscordMessage(
         source.documents.some((text) => matchesActiveDiscordMentionPatterns(text, mentionRegexes)),
     ) ||
       matchesActiveDiscordMentionPatterns(preflightTranscript ?? "", mentionRegexes));
-  const wasMentioned = wasNormallyMentioned || hasActiveBotMention;
+  const groupThread = resolveGroupThreadMentionFacts({
+    cfg: params.cfg,
+    channel: "discord",
+    peerId: isDirectMessage
+      ? buildDiscordRoutePeer({
+          isDirectMessage,
+          isGroupDm,
+          directUserId: author.id,
+          conversationId: messageChannelId,
+        }).id
+      : params.cfg.broadcast?.[`discord:${messageChannelId}`] !== undefined
+        ? messageChannelId
+        : (threadParentId ?? messageChannelId),
+    text: mentionText || preflightTranscript || "",
+    sessionKey: boundSessionKey || effectiveRoute.sessionKey,
+    acpBinding: Boolean(configuredBinding),
+  });
+  const wasMentioned =
+    wasNormallyMentioned || hasActiveBotMention || Boolean(groupThread?.mentionedAgentIds.length);
   logDiscordPreflightInboundSummary({
     messageId: message.id,
     guildId: params.data.guild_id ?? undefined,
@@ -729,7 +749,7 @@ export async function preflightDiscordMessage(
     }
   }
 
-  const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+  const canDetectMention = Boolean(groupThread) || Boolean(botId) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
@@ -931,6 +951,7 @@ export async function preflightDiscordMessage(
   );
   return buildDiscordMessagePreflightContext({
     preflightParams: params,
+    groupThread,
     data,
     client: params.client,
     message,

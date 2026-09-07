@@ -43,6 +43,7 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   ctxPayload: FinalizedMsgContext;
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
+  runId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
@@ -215,9 +216,11 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    ...((params.runId ?? params.executionIdentityToken?.runId)
+      ? { runId: params.runId ?? params.executionIdentityToken?.runId }
+      : {}),
     ...(params.executionIdentityToken
       ? {
-          runId: params.executionIdentityToken.runId,
           executionIdentityToken: params.executionIdentityToken,
         }
       : {}),

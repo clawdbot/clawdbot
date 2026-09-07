@@ -38,6 +38,7 @@ import {
 } from "./bot-message-dispatch-progress.js";
 import {
   deliverReply,
+  formatTelegramGroupThreadReply,
   handleBeforeDeliverCancelled,
   handleReplyError,
   handleReplySkip,
@@ -148,6 +149,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            groupThreadReplyFormatter: formatTelegramGroupThreadReply,
             skillFilter: context.skillFilter,
             disableBlockStreaming: turn.disableBlockStreaming,
             preserveProgressCallbackStartOrder: true,

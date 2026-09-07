@@ -28,6 +28,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -352,6 +353,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
   const admittedSessionSettings = opts?.admittedSessionSettings;
+  const groupTurn = getGroupThreadTurn();
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -375,7 +377,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             : { kind: "drop" as const, reason: "source-unavailable" as const },
         }
       : {}),
-    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    messageId:
+      groupTurn && groupTurn.round > 1
+        ? groupTurn.messageId
+        : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid),
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),

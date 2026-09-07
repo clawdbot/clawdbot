@@ -7,7 +7,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMediaResult } from "../media-types.js";
 import {
   discardSlackPreflightMedia,
-  findCaptionlessSlackAudioFile,
+  findSlackPreflightAudioFile,
   formatSlackAudioTranscriptForAgent,
   resolveSlackPreflightAudioTranscript,
 } from "./preflight-audio.js";
@@ -60,10 +60,10 @@ describe("Slack captionless audio preflight", () => {
       ],
     });
 
-    expect(findCaptionlessSlackAudioFile(voiceClip)).toEqual(voiceClip.files?.[0]);
-    expect(findCaptionlessSlackAudioFile({ ...voiceClip, text: "typed caption" })).toBeUndefined();
+    expect(findSlackPreflightAudioFile(voiceClip)).toEqual(voiceClip.files?.[0]);
+    expect(findSlackPreflightAudioFile({ ...voiceClip, text: "typed caption" })).toBeUndefined();
     expect(
-      findCaptionlessSlackAudioFile(
+      findSlackPreflightAudioFile(
         createSlackMessage({
           files: [{ id: "F2", name: "screen.mp4", mimetype: "video/mp4" }],
         }),

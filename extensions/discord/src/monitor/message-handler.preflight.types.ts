@@ -1,5 +1,8 @@
 // Discord type declarations define plugin contracts.
-import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  GroupThreadMentionFacts,
+  InboundEventKind,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
@@ -111,6 +114,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 

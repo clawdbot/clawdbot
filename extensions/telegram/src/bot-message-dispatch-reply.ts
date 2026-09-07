@@ -216,13 +216,28 @@ function trackBlockMedia(
   }
 }
 
+export function formatTelegramGroupThreadReply(
+  text: string,
+  participant: { name: string },
+): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
+
 export async function deliverReply(
   turn: Turn,
-  payload: Parameters<NonNullable<Deliver>>[0],
+  incomingPayload: Parameters<NonNullable<Deliver>>[0],
   info: Parameters<NonNullable<Deliver>>[1],
 ): Promise<TelegramReplyDeliveryResult> {
   if (turn.isSuperseded()) {
     return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
+  }
+  let payload = incomingPayload;
+  if (info.participant && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
+    payload = {
+      ...payload,
+      text: formatTelegramGroupThreadReply(payload.text ?? "", info.participant),
+    };
   }
   const normalizedPayload = normalizeDeliveryPayload(turn, payload);
   if (!normalizedPayload) {

@@ -2,6 +2,7 @@
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
@@ -16,19 +17,30 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
+import {
+  createTestWebAudioInboundMessage,
+  createTestWebInboundMessage,
+} from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
 
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
 
-  it("skips unknown broadcast agent ids when agents.list is present", async () => {
+  it.each([
+    { label: "legacy list", roster: { list: [{ id: "alfred" }] } },
+    { label: "entries", roster: { entries: { alfred: {} } } },
+    {
+      label: "entries overriding legacy list",
+      roster: { entries: { alfred: {} }, list: [{ id: "missing" }] },
+    },
+  ])("skips unknown broadcast agent ids with $label", async ({ roster }) => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }],
+        ...roster,
       },
       broadcast: {
         "+1000": ["alfred", "missing"],
@@ -40,6 +52,79 @@ describe("broadcast groups", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(seen[0]).toContain("agent:alfred:");
     resetLoadConfigMock();
+  });
+
+  it.each([
+    { body: "@carla please review", expected: ["carla"] },
+    { body: "Baerbel and Carla have context", expected: ["baerbel", "carla"] },
+  ])("uses qualified participants and mention selection for $body", async ({ body, expected }) => {
+    setLoadConfigMock({
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        entries: {
+          alfred: {},
+          baerbel: { groupChat: { mentionPatterns: ["@baerbel\\b"] } },
+          carla: { groupChat: { mentionPatterns: ["@carla\\b"] } },
+        },
+      },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
+      broadcast: {
+        strategy: "sequential",
+        "+1000": ["alfred"],
+        "whatsapp:+1000": { agents: ["baerbel", "carla"] },
+      },
+    } satisfies OpenClawConfig);
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey).split(":")[1] ?? "");
+      return { text: "ok" };
+    });
+    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
+    await sendWebDirectInboundMessage({
+      onMessage,
+      spies,
+      id: "qualified-message",
+      from: "+1000",
+      to: "+2000",
+      body,
+    });
+    expect(seen).toEqual(expected);
+    resetLoadConfigMock();
+  });
+
+  it("keeps caption mentions when selecting participants for transcribed audio", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          alfred: { groupChat: { mentionPatterns: ["@alfred\\b"] } },
+          carla: { groupChat: { mentionPatterns: ["@carla\\b"] } },
+        },
+      },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
+      broadcast: { "whatsapp:+15550000002": { agents: ["alfred", "carla"] } },
+    };
+    const participants: string[] = [];
+    const transcript = "Please review the attached voice note.";
+    await maybeBroadcastMessage({
+      cfg,
+      msg: createTestWebAudioInboundMessage({ payload: { body: "@carla please review" } }),
+      peerId: "+15550000002",
+      route: resolveAgentRoute({
+        cfg,
+        channel: "whatsapp",
+        accountId: "default",
+        peer: { kind: "direct", id: "+15550000002" },
+      }),
+      groupHistoryKey: "caption-history",
+      groupHistories: new Map(),
+      preflightAudioTranscript: transcript,
+      processMessage: async (_msg, route, _historyKey, opts) => {
+        participants.push(route.agentId);
+        expect(opts?.preflightAudioTranscript).toBe(transcript);
+        return true;
+      },
+    });
+    expect(participants).toEqual(["carla"]);
   });
 
   it("broadcasts sequentially in configured order", async () => {

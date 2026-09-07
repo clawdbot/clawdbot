@@ -135,6 +135,11 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Channel-owned participant name encoding for source replies sent through message actions. */
+  groupThreadReplyFormatter?: (
+    text: string,
+    participant: { agentId: string; name: string },
+  ) => string;
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */

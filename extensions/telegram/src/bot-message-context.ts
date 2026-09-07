@@ -476,6 +476,7 @@ export const buildTelegramMessageContext = async ({
     originatingTo,
     routeAgentId: route.agentId,
     sessionKey,
+    acpBinding: bindingMode.kind === "configured",
     effectiveGroupAllow,
     effectiveDmAllow: dmAllow.effectiveAllow,
     groupConfig,
@@ -533,6 +534,7 @@ export const buildTelegramMessageContext = async ({
     inboundEventKind: bodyResult.inboundEventKind,
     groupRequireMention: Boolean(groupRequireMention),
     mentionFacts: bodyResult.mentionFacts,
+    groupThread: bodyResult.groupThread,
     hasControlCommand: bodyResult.hasControlCommand,
     stickerCacheHit: bodyResult.stickerCacheHit,
     ...(bodyResult.audioTranscribedMediaIndex !== undefined

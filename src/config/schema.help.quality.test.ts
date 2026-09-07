@@ -264,8 +264,13 @@ describe("config help copy quality", () => {
       ],
     },
     {
-      name: "documents broadcast command examples",
-      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+      name: "documents agent group participants and bounds",
+      fields: [
+        ["broadcast.*", ["telegram:-100123", /agent IDs/i, /precedence/i, "16"]],
+        ["broadcast.*.mentionGating", [/explicitly @mentioned/i, /otherwise run all/i]],
+        ["broadcast.*.maxRounds", [/initial round/i, "1–4"]],
+        ["broadcast.*.maxTurns", [/participant turns/i, "1–32", /agents.length/i, /restart/i]],
+      ],
     },
     {
       name: "documents hook transform safety and queue behavior options",

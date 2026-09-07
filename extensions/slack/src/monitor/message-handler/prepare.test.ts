@@ -4062,7 +4062,11 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.TransportThreadId).toBe("701.000");
   });
 
-  it("routes Slack thread replies through runtime conversation bindings", async () => {
+  it.each([
+    { name: "thread reply", rootText: undefined, admitted: true },
+    { name: "participant-only root", rootText: "@Analyst please review", admitted: false },
+    { name: "native bot root", rootText: "<@B1> @Analyst please review", admitted: true },
+  ])("respects runtime ACP ownership for $name", async ({ rootText, admitted }) => {
     const targetSessionKey = "agent:review:acp:session-67739";
     const binding: SessionBindingRecord = {
       bindingId: "test-binding",
@@ -4102,31 +4106,52 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       });
       const slackCtx = createThreadSlackCtx({
         cfg: {
+          agents: { entries: { main: {}, review: {}, analyst: { identity: { name: "Analyst" } } } },
+          bindings: [{ agentId: "main", match: { channel: "slack" } }],
+          broadcast: { "slack:C123": ["main", "analyst"] },
           channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
         } as OpenClawConfig,
         replies,
       });
+      slackCtx.defaultRequireMention = rootText !== undefined;
       slackCtx.resolveUserName = async () => ({ name: "Alice" });
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-      const prepared = await prepareThreadMessage(slackCtx, {
-        channel: "C123",
-        text: "bound reply",
-        ts: "101.000",
-        thread_ts: "100.000",
-      });
+      const prepared =
+        rootText === undefined
+          ? await prepareThreadMessage(slackCtx, {
+              channel: "C123",
+              text: "bound reply",
+              ts: "101.000",
+              thread_ts: "100.000",
+            })
+          : await prepareMessageWith(
+              slackCtx,
+              createThreadAccount(),
+              createSlackMessage({
+                channel: "C123",
+                channel_type: "channel",
+                text: rootText,
+                ts: "100.000",
+              }),
+            );
 
-      assertPrepared(prepared);
-      expect(prepared.route.sessionKey).toBe(targetSessionKey);
-      expect(prepared.route.agentId).toBe("review");
-      expect(prepared.ctxPayload.SessionKey).toBe(targetSessionKey);
-      expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
       expect(resolveByConversation).toHaveBeenCalledWith({
         channel: "slack",
         accountId: "default",
         conversationId: "100.000",
         parentConversationId: "C123",
       });
+      if (!admitted) {
+        expect(prepared).toBeNull();
+        return;
+      }
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.GroupThread).toBeUndefined();
+      expect(prepared.route.sessionKey).toBe(targetSessionKey);
+      expect(prepared.route.agentId).toBe("review");
+      expect(prepared.ctxPayload.SessionKey).toBe(targetSessionKey);
+      expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
       expect(touch).toHaveBeenCalledWith("test-binding", undefined);
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
@@ -4807,6 +4832,67 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       }
     }
   });
+
+  it.each([
+    { caption: "", mentionedAgentIds: ["analyst"] },
+    { caption: "@Writer check the summary", mentionedAgentIds: ["analyst", "writer"] },
+  ])(
+    "selects participants from audio and caption '$caption'",
+    async ({ caption, mentionedAgentIds }) => {
+      mediaFetchMock.mockImplementation(
+        async () =>
+          new Response(Buffer.from("voice clip"), {
+            status: 200,
+            headers: { "content-type": "audio/mp4" },
+          }),
+      );
+      const { storePath } = storeFixture.makeTmpStorePath();
+      const slackCtx = createAudioMentionSlackCtx({ storePath });
+      slackCtx.cfg.agents = {
+        entries: {
+          primary: { groupChat: { mentionPatterns: ["@Primary"] } },
+          analyst: { groupChat: { mentionPatterns: ["@Analyst"] } },
+          writer: { groupChat: { mentionPatterns: ["@Writer"] } },
+        },
+      };
+      slackCtx.cfg.bindings = [{ agentId: "primary", match: { channel: "slack" } }];
+      slackCtx.cfg.broadcast = { "slack:C0AHZFCAS1K": ["primary", "analyst", "writer"] };
+      const paths = new Set<string>();
+      transcribeFirstAudioMock.mockImplementation(
+        async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
+          for (const media of ctx.media) {
+            if (media.path) {
+              paths.add(media.path);
+            }
+          }
+          return "@Analyst please review";
+        },
+      );
+      try {
+        const prepared = await prepareMessageWith(
+          slackCtx,
+          createSlackAccount({ replyToMode: "all" }),
+          createCaptionlessSlackAudioMessage({ text: caption }),
+        );
+        for (const media of prepared?.ctxPayload.media ?? []) {
+          if (media.path) {
+            paths.add(media.path);
+          }
+        }
+        assertPrepared(prepared);
+        expect(prepared.route.agentId).toBe("primary");
+        expect(prepared.ctxPayload.GroupThread?.mentionedAgentIds).toEqual(mentionedAgentIds);
+        expect(prepared.ctxPayload.WasMentioned).toBe(true);
+        expect(prepared.ctxPayload.Transcript).toBe("@Analyst please review");
+        expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+        if (caption) {
+          expect(prepared.ctxPayload.CommandBody).toBe(caption);
+        }
+      } finally {
+        await Promise.all([...paths].map((mediaPath) => fs.rm(mediaPath, { force: true })));
+      }
+    },
+  );
 
   it("does not download or transcribe denied senders' captionless audio", async () => {
     const mockFetch = mediaFetchMock.mockImplementation(async () => {

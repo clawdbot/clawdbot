@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements broadcast behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
+import { resolveGroupThreadConfig, runGroupThread } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
@@ -7,7 +8,6 @@ import {
   deriveLastRoutePolicy,
   buildAgentMainSessionKey,
   DEFAULT_MAIN_KEY,
-  normalizeAgentId,
 } from "openclaw/plugin-sdk/routing";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
@@ -73,81 +73,65 @@ export async function maybeBroadcastMessage(params: {
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
 }) {
-  const broadcastAgents = params.cfg.broadcast?.[params.peerId];
-  if (!broadcastAgents || !Array.isArray(broadcastAgents)) {
-    return false;
-  }
-  if (broadcastAgents.length === 0) {
+  const group = resolveGroupThreadConfig({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    peerId: params.peerId,
+  });
+  if (!group) {
     return false;
   }
 
-  const strategy = params.cfg.broadcast?.strategy || "parallel";
-  whatsappInboundLog.info(`Broadcasting message to ${broadcastAgents.length} agents (${strategy})`);
-
-  const agentIds = params.cfg.agents?.list?.map((agent) => normalizeAgentId(agent.id));
-  const hasKnownAgents = (agentIds?.length ?? 0) > 0;
+  whatsappInboundLog.info(
+    `Broadcasting message to ${group.agents.length} agents (${group.strategy})`,
+  );
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const isGroupConversation = admission.conversation.kind === "group";
   const groupHistorySnapshot = isGroupConversation
-    ? (params.groupHistories.get(params.groupHistoryKey) ?? [])
+    ? [...(params.groupHistories.get(params.groupHistoryKey) ?? [])]
     : undefined;
 
-  const processForAgent = async (agentId: string): Promise<boolean> => {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
-      whatsappInboundLog.warn(`Broadcast agent ${agentId} not found in agents.list; skipping`);
-      return false;
-    }
-    const routeKeys = buildBroadcastRouteKeys({
-      cfg: params.cfg,
-      msg: params.msg,
-      route: params.route,
-      peerId: params.peerId,
-      agentId: normalizedAgentId,
-    });
-    const baseAgentRoute = {
-      ...params.route,
-      agentId: normalizedAgentId,
-      ...routeKeys,
-    };
-    const agentRoute = isGroupConversation
-      ? resolveWhatsAppGroupSessionRoute(baseAgentRoute)
-      : baseAgentRoute;
-
-    try {
-      const opts: {
-        groupHistory?: GroupHistoryEntry[];
-        suppressGroupHistoryClear: true;
-        preflightAudioTranscript?: string | null;
-        ackAlreadySent?: boolean;
-        ackReaction?: AckReactionHandle | null;
-      } = {
-        groupHistory: groupHistorySnapshot,
-        suppressGroupHistoryClear: true,
+  await runGroupThread({
+    cfg: params.cfg,
+    group,
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+    peerId: params.peerId,
+    messageId: params.msg.event.id,
+    text: [params.msg.payload.body, params.preflightAudioTranscript].filter(Boolean).join("\n"),
+    onError: (err, turn) => {
+      whatsappInboundLog.error(`Broadcast agent ${turn.agentId} failed: ${formatError(err)}`);
+    },
+    runTurn: async (turn) => {
+      const routeKeys = buildBroadcastRouteKeys({
+        cfg: params.cfg,
+        msg: params.msg,
+        route: params.route,
+        peerId: params.peerId,
+        agentId: turn.agentId,
+      });
+      const baseAgentRoute = {
+        ...params.route,
+        agentId: turn.agentId,
+        ...routeKeys,
       };
-      if (params.preflightAudioTranscript !== undefined) {
-        opts.preflightAudioTranscript = params.preflightAudioTranscript;
-      }
-      if (params.ackAlreadySent === true) {
-        opts.ackAlreadySent = true;
-      }
-      if (params.ackReaction !== undefined) {
-        opts.ackReaction = params.ackReaction;
-      }
-      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, opts);
-    } catch (err) {
-      whatsappInboundLog.error(`Broadcast agent ${agentId} failed: ${formatError(err)}`);
-      return false;
-    }
-  };
+      const agentRoute = isGroupConversation
+        ? resolveWhatsAppGroupSessionRoute(baseAgentRoute)
+        : baseAgentRoute;
 
-  if (strategy === "sequential") {
-    for (const agentId of broadcastAgents) {
-      await processForAgent(agentId);
-    }
-  } else {
-    await Promise.allSettled(broadcastAgents.map(processForAgent));
-  }
+      return params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {
+        groupHistory: turn.round === 1 ? groupHistorySnapshot : [],
+        suppressGroupHistoryClear: true,
+        ...(params.preflightAudioTranscript !== undefined
+          ? { preflightAudioTranscript: params.preflightAudioTranscript }
+          : {}),
+        ...(params.ackAlreadySent === true || turn.round > 1 ? { ackAlreadySent: true } : {}),
+        ...(params.ackReaction !== undefined && turn.round === 1
+          ? { ackReaction: params.ackReaction }
+          : {}),
+      });
+    },
+  });
 
   if (isGroupConversation) {
     params.groupHistories.set(params.groupHistoryKey, []);

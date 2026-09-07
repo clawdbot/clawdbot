@@ -220,6 +220,53 @@ function transcribeCallContext(): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it.each<{
+    text: string;
+    admitted: boolean;
+    sessionKey?: string;
+    acpBinding?: boolean;
+    direct?: boolean;
+  }>([
+    { text: "@Analyst please review", admitted: true },
+    { text: "Analyst wrote the summary", admitted: false },
+    { text: "🔎 review this", admitted: false },
+    { text: "@Other ask Analyst", admitted: false },
+    { text: "@Analyst please review", admitted: false, sessionKey: "agent:primary:acp:bound" },
+    { text: "@Analyst please review", admitted: false, acpBinding: true },
+    { text: "Please review", admitted: true, direct: true },
+  ])(
+    "resolves participant admission for $text (ACP $acpBinding, session $sessionKey, direct $direct)",
+    async ({ text, admitted, sessionKey, acpBinding, direct }) => {
+      const peerId = direct ? "42" : String(GROUP_ID);
+      const overrides: Partial<BodyParams> = {
+        routeAgentId: "primary",
+        sessionKey,
+        acpBinding,
+        cfg: {
+          agents: {
+            entries: {
+              primary: { identity: { name: "Primary" } },
+              analyst: { identity: { name: "Analyst", emoji: "🔎" } },
+            },
+          },
+          broadcast: { [`telegram:${peerId}`]: ["primary", "analyst"] },
+        },
+      };
+      const result = direct
+        ? await resolvePrivate({ text }, overrides)
+        : await resolveGroup({ message: { text }, logger: createLogger(), overrides });
+      if (admitted) {
+        expect(result?.groupThread?.peerId).toBe(peerId);
+        expect(result?.groupThread?.mentionedAgentIds).toEqual(direct ? [] : ["analyst"]);
+        if (!direct) {
+          expect(result?.effectiveWasMentioned).toBe(true);
+        }
+      } else {
+        expect(result).toBeNull();
+      }
+    },
+  );
+
   privateBodyTest(
     "delivers native poll questions, options, voter totals, and state",
     {
@@ -563,6 +610,34 @@ describe("resolveTelegramInboundBody", () => {
       '[Audio transcript (machine-generated, untrusted)]: "hey bot please help"',
     );
     expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("admits a transcript participant mention despite a whitespace-only audio caption", async () => {
+    transcribeFirstAudioMock.mockReset();
+    transcribeFirstAudioMock.mockResolvedValueOnce("@Analyst please review");
+    const result = await resolveGroup({
+      logger: createLogger(),
+      allowFrom: ["46"],
+      message: voiceMessage("voice-participant", 2, { caption: " \n " }),
+      overrides: {
+        routeAgentId: "primary",
+        allMedia: [media("/tmp/voice-participant.ogg", "audio")],
+        cfg: {
+          agents: {
+            entries: {
+              primary: { identity: { name: "Primary" } },
+              analyst: { identity: { name: "Analyst" } },
+            },
+          },
+          broadcast: { [`telegram:${GROUP_ID}`]: ["primary", "analyst"] },
+          tools: { media: { audio: { enabled: true } } },
+        },
+      },
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(result?.effectiveWasMentioned).toBe(true);
+    expect(result?.groupThread?.mentionedAgentIds).toEqual(["analyst"]);
   });
 
   it("transcribes DM voice notes via preflight (not only groups)", async () => {

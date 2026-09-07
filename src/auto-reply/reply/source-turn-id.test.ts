@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
@@ -60,7 +60,7 @@ describe("buildChannelSourceTurnId", () => {
     expect(buildChannelSourceTurnId({ provider: "telegram", messageId: "7" })).toBeUndefined();
   });
 
-  it("carries host-only identity through context clones without serializing it", () => {
+  it("carries host-only identity through clones and runtime module boundaries without serializing it", async () => {
     const context = { MessageSid: "7" };
     setChannelSourceTurnId(context, "channel-user:v1:source-7");
     setChannelSourceTurnSameThreadRequired(context, true);
@@ -68,6 +68,10 @@ describe("buildChannelSourceTurnId", () => {
     expect(readChannelSourceTurnId({ ...context })).toBe("channel-user:v1:source-7");
     expect(readChannelSourceTurnSameThreadRequired({ ...context })).toBe(true);
     expect(JSON.stringify(context)).toBe('{"MessageSid":"7"}');
+    vi.resetModules();
+    const otherRuntime = await import("./source-turn-id.js");
+    expect(otherRuntime.readChannelSourceTurnId({ ...context })).toBe("channel-user:v1:source-7");
+    expect(otherRuntime.readChannelSourceTurnSameThreadRequired({ ...context })).toBe(true);
   });
   it("does not mint channel source-turn ids for internal-origin ingress", () => {
     // Gateway chat.send stamps the internal channel as the ingress provider and

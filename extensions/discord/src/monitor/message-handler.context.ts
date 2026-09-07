@@ -510,6 +510,7 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
+      GroupThread: ctx.groupThread,
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
