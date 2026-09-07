@@ -430,20 +430,26 @@ async function screenshotWithLabelsOnPage(
 
   // DOM boxes use the visual viewport, including pan during mobile zoom.
   // Mixing the layout viewport here can produce negative element clips.
-  const view = await page.evaluate(() => ({
-    x: window.visualViewport!.pageLeft,
-    y: window.visualViewport!.pageTop,
-    width: window.visualViewport!.width,
-    height: window.visualViewport!.height,
-    fullWidth: Math.max(
-      document.body?.scrollWidth ?? 0,
-      document.documentElement.scrollWidth,
-      document.body?.offsetWidth ?? 0,
-      document.documentElement.offsetWidth,
-      document.body?.clientWidth ?? 0,
-      document.documentElement.clientWidth,
-    ),
-  }));
+  const view = await page.evaluate(
+    (viewportWidth) => ({
+      x: window.visualViewport!.pageLeft,
+      y: window.visualViewport!.pageTop,
+      width: window.visualViewport!.width,
+      height: window.visualViewport!.height,
+      nativeCaptureWidth: Math.floor(
+        (viewportWidth ?? window.innerWidth) / window.visualViewport!.scale + 1e-3,
+      ),
+      fullWidth: Math.max(
+        document.body?.scrollWidth ?? 0,
+        document.documentElement.scrollWidth,
+        document.body?.offsetWidth ?? 0,
+        document.documentElement.offsetWidth,
+        document.body?.clientWidth ?? 0,
+        document.documentElement.clientWidth,
+      ),
+    }),
+    page.viewportSize()?.width,
+  );
 
   let elementRect: { x: number; y: number; width: number; height: number } | undefined;
   if (space === "element") {
@@ -514,12 +520,12 @@ async function screenshotWithLabelsOnPage(
       );
     }
     const capture = await capturePageScreenshot(page, opts, locator);
-    // CDP owns its exact clip. Playwright uses the visual viewport for page
-    // captures and encloses element bounds in integer CSS pixels.
+    // Native viewport captures include classic scrollbars and use page scale;
+    // the visual viewport still owns element positioning and visibility.
     const clip =
       capture.clip ??
       (space === "viewport"
-        ? view
+        ? { ...view, width: view.nativeCaptureWidth }
         : {
             x: Math.floor(origin.x + 1e-3),
             y: Math.floor(origin.y + 1e-3),

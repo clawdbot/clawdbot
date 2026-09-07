@@ -22,6 +22,7 @@ function evaluateMockReturning(view: { x: number; y: number; width?: number; hei
     width: 1280,
     height: 720,
     fullWidth: 1280,
+    nativeCaptureWidth: 1280,
     ...view,
   };
   return vi.fn(async (arg: unknown) => {

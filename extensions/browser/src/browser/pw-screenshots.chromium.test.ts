@@ -47,6 +47,7 @@ const readGeometry = () => ({
 async function withBrowser(
   run: (target: { cdpUrl: string; targetId: string }, page: Page, wsUrl: string) => Promise<void>,
   deviceScaleFactor?: number,
+  showScrollbars = false,
 ) {
   const port = await getFreePort();
   const cdpUrl = `http://127.0.0.1:${port}`;
@@ -54,6 +55,7 @@ async function withBrowser(
     path.join(tempDirs.make("openclaw-screenshot-geometry-"), "profile"),
     {
       headless: true,
+      ...(showScrollbars ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}),
       ...(deviceScaleFactor
         ? { viewport: { width: 640, height: 480 }, deviceScaleFactor }
         : { viewport: null }),
@@ -248,21 +250,28 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
     }, 30_000);
 
     it.for([
-      { device: "Native DPR 2", pageScale: 1 },
+      { device: "Native DPR 2", pageScale: 1, nativeDpr: 2 },
       { device: "Desktop Chrome", pageScale: 1 },
       { device: "iPad Mini", pageScale: 1 },
       { device: "iPhone 13", pageScale: 1 },
       { device: "iPhone 13", pageScale: 2 },
+      { device: "Native classic scrollbars", pageScale: 1, nativeDpr: 1, showScrollbars: true },
     ])(
       "returns image-space annotations through routes for $device at page scale $pageScale",
       { timeout: 60_000 },
-      async ({ device, pageScale }, { annotate }) => {
+      async ({ device, pageScale, nativeDpr, showScrollbars }, { annotate }) => {
         await withBrowser(
           async (target) => {
-            if (device !== "Native DPR 2") {
+            if (nativeDpr === undefined) {
               await setDeviceViaPlaywright({ ...target, name: device });
             }
             const page = await getPageForTargetId(target);
+            if (showScrollbars) {
+              await page.addStyleTag({
+                content:
+                  "html{overflow-y:scroll}::-webkit-scrollbar{width:16px;height:16px}::-webkit-scrollbar-thumb{background:#888}button{left:480px}",
+              });
+            }
             const zoom = await page.context().newCDPSession(page);
             await zoom.send("Emulation.setPageScaleFactor", { pageScaleFactor: pageScale });
             await zoom.detach();
@@ -292,6 +301,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
                   });
               }
               const before = await page.evaluate(readGeometry);
+              if (showScrollbars) {
+                expect(before.width - before.visual.width).toBe(16);
+              }
               const response = createBrowserRouteResponse();
               const request = { targetId: target.targetId, labels: true };
               if (mode === "snapshot") {
@@ -352,7 +364,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
               }
             }
           },
-          device === "Native DPR 2" ? 2 : undefined,
+          nativeDpr,
+          showScrollbars,
         );
       },
     );
