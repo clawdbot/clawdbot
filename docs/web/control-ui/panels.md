@@ -59,6 +59,8 @@ Drag one or more files onto the active terminal, or use the paperclip button to 
 
 Images, PDFs, archives, and other file types are accepted up to 16 MiB per file. New uploads must fit within shared limits of 256 MiB and 64 files per staging directory, including files from other terminal tabs and previous processes. When either limit is reached, move or remove staged files, or wait for cleanup, then retry. Existing unexpired files are not evicted to make room, including uploads retained above these limits after an upgrade. Staged files use a private system-temporary directory on POSIX hosts (directory mode `0700`, file mode `0600`) or a directory under the user-profile ACL boundary on Windows, plus a 24-hour cleanup timer, so move or copy anything you need to keep.
 
+Renaming staged files or retrying failed cleanup does not restart an already scheduled cleanup deadline.
+
 If staging stays locked after a process crash, follow the lock error's recovery steps: stop all Gateway and node-host processes using that staging directory, remove only the lock directory named in the error, and restart them. This leaves staged files intact. An incomplete lock record is never cleared automatically because it cannot prove that another writer has stopped.
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the Gateway inside WSL for a native WSL terminal and Linux upload paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
