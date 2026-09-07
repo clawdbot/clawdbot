@@ -70,68 +70,101 @@ describe("Anthropic thinking-binding transport parity", () => {
     }
   });
 
-  it("keeps append-only carriers as stable cache anchors through a tool loop in both paths", async () => {
-    const messages: Context["messages"] = [
-      { role: "user", content: "Question", timestamp: 1 },
-      {
-        role: "user",
-        content: "Retained runtime context",
-        timestamp: 2,
-        runtimeContextCarrier: true,
-      },
-    ];
-    for (const implementation of ["provider", "transport"] as const) {
-      const first = await captureAnthropicRequest(implementation, {
-        context: { ...context, messages },
-      });
-      const continued = await captureAnthropicRequest(implementation, {
-        context: {
-          ...context,
-          messages: [
-            ...messages,
+  it.each([false, true])(
+    "keeps append-only carriers as stable cache anchors (prior turn: %s)",
+    async (priorTurn) => {
+      const model = { ...anthropicModel, id: "claude-fable-5-1" };
+      const history: Context["messages"] = priorTurn
+        ? [
+            { role: "user", content: "Earlier question", timestamp: 0 },
             {
               role: "assistant",
-              api: anthropicModel.api,
-              provider: anthropicModel.provider,
-              model: anthropicModel.id,
-              timestamp: 3,
-              stopReason: "toolUse",
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              timestamp: 0,
+              stopReason: "stop",
+              content: [{ type: "text", text: "Earlier answer" }],
               usage: {
-                input: 1,
-                output: 1,
+                input: 0,
+                output: 0,
                 cacheRead: 0,
                 cacheWrite: 0,
-                totalTokens: 2,
+                totalTokens: 0,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
               },
-              content: [
-                { type: "thinking", thinking: "Think", thinkingSignature: "synthetic-signature" },
-                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "value" } },
-              ],
             },
+          ]
+        : [];
+      const messages: Context["messages"] = [
+        ...history,
+        { role: "user", content: "Question", timestamp: 1 },
+        {
+          role: "user",
+          content: "Retained runtime context",
+          timestamp: 2,
+          runtimeContextCarrier: true,
+        },
+      ];
+      for (const implementation of ["provider", "transport"] as const) {
+        const first = await captureAnthropicRequest(implementation, {
+          model,
+          context: { ...context, messages },
+        });
+        const continued = await captureAnthropicRequest(implementation, {
+          model,
+          context: {
+            ...context,
+            messages: [
+              ...messages,
+              {
+                role: "assistant",
+                api: anthropicModel.api,
+                provider: anthropicModel.provider,
+                model: model.id,
+                timestamp: 3,
+                stopReason: "toolUse",
+                usage: {
+                  input: 1,
+                  output: 1,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 2,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                content: [
+                  { type: "thinking", thinking: "Think", thinkingSignature: "synthetic-signature" },
+                  { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "value" } },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId: "call_1",
+                toolName: "lookup",
+                timestamp: 4,
+                content: [{ type: "text", text: "Answer" }],
+                isError: false,
+              },
+            ],
+          },
+        });
+        const firstMessages = first.payload.messages as Array<Record<string, unknown>>;
+        const continuedMessages = continued.payload.messages as Array<Record<string, unknown>>;
+        expect(firstMessages[history.length + 1]).toEqual({
+          role: "user",
+          content: [
             {
-              role: "toolResult",
-              toolCallId: "call_1",
-              toolName: "lookup",
-              timestamp: 4,
-              content: [{ type: "text", text: "Answer" }],
-              isError: false,
+              type: "text",
+              text: "Retained runtime context",
+              cache_control: { type: "ephemeral" },
             },
           ],
-        },
-      });
-      const firstMessages = first.payload.messages as Array<Record<string, unknown>>;
-      const continuedMessages = continued.payload.messages as Array<Record<string, unknown>>;
-      expect(firstMessages[1]).toEqual({
-        role: "user",
-        content: [
-          { type: "text", text: "Retained runtime context", cache_control: { type: "ephemeral" } },
-        ],
-      });
-      expect(JSON.stringify(continuedMessages.slice(0, 2))).toBe(JSON.stringify(firstMessages));
-      expect(continuedMessages[2]?.role).toBe("assistant");
-    }
-  });
+        });
+        expect(continuedMessages.slice(0, messages.length)).toEqual(firstMessages);
+        expect(continuedMessages[messages.length]?.role).toBe("assistant");
+      }
+    },
+  );
 
   it.each(["start", "delta", "both"] as const)(
     "reports dropped thinking once from message %s with bounded paths",

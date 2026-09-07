@@ -2417,7 +2417,7 @@ describe("Anthropic provider", () => {
 
   it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
+      { id: "claude-fable-5-1" },
       { stopBeforeNetwork: true },
       {
         systemPrompt: "system",
@@ -2443,6 +2443,48 @@ describe("Anthropic provider", () => {
         cache_control: { type: "ephemeral" },
       },
     ]);
+  });
+
+  it("skips a relocated runtime-context carrier after tool turns so the prior user/tool prefix stays the cache anchor", async () => {
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 0 },
+          makeAnthropicAssistantMessage(
+            [
+              { type: "thinking", thinking: "Think", thinkingSignature: "sig" },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "q" } },
+            ],
+            { stopReason: "toolUse", timestamp: 1 },
+          ),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            timestamp: 2,
+            content: [{ type: "text", text: "Answer" }],
+            isError: false,
+          },
+          {
+            role: "user",
+            content: "relocated runtime context",
+            timestamp: 3,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
+    const carrier = messages.at(-1);
+    expect(carrier?.content).toBe("relocated runtime context");
+    const markerJson = JSON.stringify(messages);
+    expect(markerJson).toContain('"cache_control":{"type":"ephemeral"}');
+    expect(markerJson).not.toContain('"text":"relocated runtime context","cache_control"');
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

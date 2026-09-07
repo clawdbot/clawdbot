@@ -17,6 +17,7 @@ import {
 } from "../internal/anthropic-inline-images.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
+  bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
@@ -137,9 +138,14 @@ export async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
+    /** Output indexes of transient carriers that cannot anchor the cached prefix. */
+    cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
+  const cacheBreakpointOptOutMessageIndexes = options.cacheBreakpointOptOutMessageIndexes;
+  // Match the session replay policy, including before a transient carrier first moves.
+  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -155,6 +161,10 @@ export async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+          if (isRuntimeContextCarrier && !retainRuntimeContext) {
+            cacheBreakpointOptOutMessageIndexes?.add(params.length);
+          }
           const userParam: AnthropicWireMessage = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
@@ -195,6 +205,10 @@ export async function convertAnthropicMessages(
       );
       if (filteredBlocks.length === 0) {
         continue;
+      }
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      if (isRuntimeContextCarrier && !retainRuntimeContext) {
+        cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
         role: "user",

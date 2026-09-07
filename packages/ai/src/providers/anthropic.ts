@@ -648,8 +648,7 @@ async function buildParams(
         compat.supportsCacheControlOnTools ? cacheControl : undefined,
       )
     : undefined;
-  const tools = convertedTools?.tools;
-  const toolProjection = convertedTools?.projection;
+  const { tools, projection: toolProjection } = convertedTools ?? {};
   const systemCacheControlCount = countNativeCacheControlMarkers(system);
   const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
@@ -661,6 +660,7 @@ async function buildParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const params: MessageCreateParamsStreaming = {
     model: model.id,
     // The SDK's stable message union omits compaction blocks accepted by its beta endpoint.
@@ -673,6 +673,7 @@ async function buildParams(
         allowEmptySignature: compat.allowEmptySignature,
         compaction: replayPlan.compaction,
         replayThinkingEnabled,
+        cacheBreakpointOptOutMessageIndexes,
       },
     )) as MessageParam[],
     max_tokens: options?.maxTokens ?? model.maxTokens,
@@ -680,12 +681,11 @@ async function buildParams(
   };
 
   if (cacheControl) {
-    // Anthropic-family carriers are append-only, so they are stable cache anchors too.
     applyAnthropicCacheControlToMessages(
       params.messages,
       cacheControl,
       messageCacheControlLimit,
-      new Set(),
+      cacheBreakpointOptOutMessageIndexes,
     );
   }
 
