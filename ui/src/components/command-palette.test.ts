@@ -22,10 +22,6 @@ import {
   type DesktopPanelToggleDetail,
 } from "./panel-toggle-contract.ts";
 
-vi.mock("../app/native-browser-host.ts", () => ({
-  hasNativeBrowserBridge: () => true,
-}));
-
 type CustodianPanelToggleDetail = { open?: boolean };
 
 type GatewayHarness = {
@@ -177,9 +173,13 @@ describe("CommandPalette lifecycle", () => {
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("hides native browser overlays while the palette is open and releases on close or disconnect", async () => {
+    vi.stubGlobal("webkit", {
+      messageHandlers: { openclawBrowser: { postMessage: vi.fn() } },
+    });
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(
       createContext(
