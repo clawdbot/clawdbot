@@ -962,6 +962,46 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
+  it("does not fall back to an older base tag for npm correction releases", () => {
+    expect(script).not.toContain("npm_republish_git_tag_fallback");
+    expect(script).toContain("Correction releases must publish an immutable tag");
+    expect(script).toContain("assert_git_checkout_matches_ref");
+    expect(script).toContain("--no-git-update skips pull only");
+    expect(script).toContain("still resolve/checkout/validate the requested release tag");
+  });
+
+  it("does not resolve npm release tags when the existing git checkout is dirty", () => {
+    expect(script).toContain("Dirty checkout ref:");
+    expect(script).toContain("never resolve npm tag");
+    expect(script).toMatch(/Repo is dirty; skipping git checkout\/update[\s\S]*Dirty checkout ref/);
+  });
+
+  it("asserts package.json version matches the checked-out version tag", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      printf '%s\\n' '{"name":"openclaw","version":"2026.7.1"}' > "$tmp/package.json"
+      set +e
+      (assert_git_checkout_matches_ref "$tmp" v2026.7.1-2)
+      mismatch=$?
+      set -e
+      printf 'mismatch=%s\\n' "$mismatch"
+      printf '%s\\n' '{"name":"openclaw","version":"2026.7.1-2"}' > "$tmp/package.json"
+      set +e
+      (assert_git_checkout_matches_ref "$tmp" v2026.7.1-2)
+      match=$?
+      set -e
+      printf 'match=%s\\n' "$match"
+      rm -rf "$tmp"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("mismatch=1");
+    expect(result.stdout).toContain("match=0");
+    expect(result.stdout + result.stderr).toMatch(/version mismatch|expected 2026\.7\.1-2/i);
+  });
+
   it("keeps ref resolution and rebase failures explicit", () => {
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',

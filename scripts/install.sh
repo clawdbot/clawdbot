@@ -2733,7 +2733,14 @@ checkout_git_openclaw_ref() {
         fi
     done
 
+    # Fail closed: never substitute an older base tag (for example v2026.7.1
+    # when the requested npm correction release is v2026.7.1-2). That would
+    # silently install different code than the resolved registry version.
     ui_error "Requested git version not found: ${ref}"
+    if [[ "$ref" =~ ^v[0-9] ]]; then
+        ui_error "No matching GitHub tag for this version. Correction releases must publish an immutable tag that matches the npm version (for example v2026.7.1-2 for npm 2026.7.1-2)."
+        ui_error "Publish the missing tag, or use --install-method npm to install the registry package."
+    fi
     return 1
 }
 
@@ -2743,6 +2750,28 @@ git_install_lockfile_flag() {
     else
         echo "--frozen-lockfile"
     fi
+}
+
+# After checking out a version tag, require package.json to match exactly.
+# Prevents silent install of a different release if a wrong tag/commit is used.
+assert_git_checkout_matches_ref() {
+    local repo_dir="$1"
+    local ref="$2"
+    local expected=""
+    local actual=""
+
+    if [[ ! "$ref" =~ ^v[0-9] ]]; then
+        return 0
+    fi
+
+    expected="${ref#v}"
+    actual="$(openclaw_package_version "${repo_dir}/package.json")"
+    if [[ "$actual" != "$expected" ]]; then
+        ui_error "Git checkout version mismatch for ${ref}: package.json is ${actual}, expected ${expected}."
+        ui_error "Refusing to continue with a different OpenClaw version than the resolved git ref."
+        return 1
+    fi
+    return 0
 }
 
 validate_git_checkout_head() {
@@ -3289,7 +3318,7 @@ install_openclaw_from_git() {
         repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
     fi
 
-    if [[ -d "$repo_dir/.git" ]]; then
+    if [[ -e "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
         ui_info "Installing OpenClaw from GitHub (${repo_url})"
@@ -3309,17 +3338,24 @@ install_openclaw_from_git() {
     fi
 
     local git_ref
-    git_ref="$(resolve_git_openclaw_ref)"
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    # --no-git-update skips pull only (see checkout_git_openclaw_ref). Dirty
+    # trees keep the operator's work. Clean trees still resolve, check out, and
+    # validate the requested release so `--version vX --no-git-update` cannot
+    # silently build an unrelated HEAD.
+    if [[ -e "$repo_dir/.git" && -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+        # Dirty tree: keep the user's checkout. Do not call resolve_git_openclaw_ref
+        # (that fail-closes on missing release tags even when checkout is skipped).
+        ui_info "Repo has local changes; skipping git checkout/update"
+        git_ref="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+        if [[ -z "$git_ref" || "$git_ref" == "HEAD" ]]; then
+            git_ref="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "HEAD")"
+        fi
+        ui_info "Dirty checkout ref: ${git_ref}"
+    else
+        git_ref="$(resolve_git_openclaw_ref)"
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
-    else
-        ui_info "Repo has local changes; skipping git checkout/update"
-        if git -C "$repo_dir" symbolic-ref --quiet HEAD >/dev/null; then
-            GIT_REF_KIND="moving"
-        else
-            GIT_REF_KIND="immutable"
-        fi
+        assert_git_checkout_matches_ref "$repo_dir" "$git_ref"
     fi
 
     cleanup_legacy_submodules "$repo_dir"
