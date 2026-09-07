@@ -175,9 +175,6 @@ type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
-    onRetryTimeSeries: () => void;
-    onRetrySessionLogs: () => void;
-    onRetryContextWeight: () => void;
   };
 };
 

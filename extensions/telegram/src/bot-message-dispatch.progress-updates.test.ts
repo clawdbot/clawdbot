@@ -30,63 +30,44 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
-  it("does not restart progress drafts after final answer delivery", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        return { queuedFinal: true };
-      },
-    );
+  it.each(["tool start", "command output"] as const)(
+    "does not restart progress drafts for %s after final answer delivery",
+    async (lateCallback) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
+          if (lateCallback === "tool start") {
+            await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          } else {
+            await replyOptions?.onCommandOutput?.({
+              phase: "end",
+              title: "Exec",
+              name: "exec",
+              status: "failed",
+              exitCode: 1,
+            });
+          }
+          return { queuedFinal: true };
+        },
+      );
 
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
-      },
-    });
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+        },
+      });
 
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
-    );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
-  });
-
-  it("does not restart progress drafts for command output after final answer delivery", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
-        await replyOptions?.onCommandOutput?.({
-          phase: "end",
-          title: "Exec",
-          name: "exec",
-          status: "failed",
-          exitCode: 1,
-        });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
-      },
-    });
-
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
-    );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
-  });
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
+      expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+        telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+      );
+      expectDeliveredReply(0, { text: "Branch is up to date" });
+    },
+  );
 
   it("does not restart progress drafts for command output while final answer delivery is pending", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
@@ -975,6 +956,35 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       ),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("delivers authorized fast-mode progress once when no draft can accept it", async () => {
+    let rendered: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      rendered = await replyOptions?.onToolResult?.({
+        text: "Fast mode enabled",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true },
+        },
+      },
+    });
+
+    expect(rendered).toBe(true);
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expectDeliveredReply(0, {
+      text: "Fast mode enabled",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    });
   });
 
   it("keeps string tool-result progress beneath a Telegram preamble", async () => {

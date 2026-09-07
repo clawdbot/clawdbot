@@ -27,10 +27,7 @@ import {
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { readPluginMutationSnapshot } from "./management-config.js";
-import {
-  type ManagedPluginSourceInstallRequest,
-  installManagedPluginSource,
-} from "./management-install.js";
+import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import {
   loadFreshManagedPluginMetadata,
@@ -226,6 +223,7 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
+  const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
@@ -453,5 +451,3 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
     };
   });
 }
-
-export { uninstallManagedPlugin } from "./management-uninstall.js";

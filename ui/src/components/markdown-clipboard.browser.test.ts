@@ -12,11 +12,6 @@ import "./markdown-mermaid.ts";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-vi.mock("@openclaw/mermaid-renderer", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@openclaw/mermaid-renderer")>()),
-  renderMermaidSvg: async () => '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
-}));
-
 const owners: HTMLElement[] = [];
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 let clipboard = "original clipboard";

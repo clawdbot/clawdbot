@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
@@ -18,6 +17,7 @@ import {
   prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
+import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
 
@@ -57,7 +57,7 @@ export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrls?.some((url) => url.trim()));
 }
 
-export function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
+function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
     (payload) =>
       payload.sensitiveMedia === true &&
@@ -122,7 +122,7 @@ export function extractAssistantDisplayTextFromContent(
   return text || undefined;
 }
 
-export async function buildAssistantDisplayContentFromReplyPayloads(params: {
+export async function buildAssistantReplyContent(params: {
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
@@ -131,7 +131,13 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   includeSensitiveDisplay?: boolean;
   onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
-}): Promise<AssistantDisplayContentBlock[] | undefined> {
+  transcriptMediaMessage?: Awaited<
+    ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>
+  >;
+}): Promise<{
+  assistantContent: AssistantDisplayContentBlock[] | undefined;
+  persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
+}> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) =>
       payload.isReasoning !== true &&
@@ -145,16 +151,21 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
         buildManagedMediaFailureBlock,
       ),
     );
-    if (failureBlocks.length > 0) {
-      return failureBlocks;
-    }
-    return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
+    const assistantContent =
+      failureBlocks.length > 0
+        ? failureBlocks
+        : rawTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined;
+    return { assistantContent, persistedAssistantContent: assistantContent };
   }
 
   const preserveTextBoundaries =
     plan.filter(({ payload }) => typeof payload.text === "string" && payload.text.trim()).length >
     1;
   const content: AssistantDisplayContentBlock[] = [];
+  const persistedContent: AssistantDisplayContentBlock[] = [];
+  const persistSensitiveDisplay = !hasSensitiveMediaPayload(params.payloads);
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
@@ -176,11 +187,20 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
+    // Display text may merge across payloads. Transcript captions and directives
+    // stay attached to their source payload instead of matching display slots.
+    const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
+    if (transcriptText && !isSuppressedControlReplyText(transcriptText)) {
+      persistedContent.push({ type: "text", text: transcriptText });
+    }
     if (params.includeSensitiveDisplay === true) {
       try {
         const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
         if (pairingQrBlock) {
           content.push(pairingQrBlock);
+          if (persistSensitiveDisplay) {
+            persistedContent.push(pairingQrBlock);
+          }
         }
       } catch (err) {
         params.onSensitiveDisplayPrepareError?.(formatForLog(err));
@@ -206,54 +226,26 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
         }
       }
     }
-    content.push(...mediaBlocks);
-    content.push(...mediaFailures.map(buildManagedMediaFailureBlock));
+    const mediaContent = [...mediaBlocks, ...mediaFailures.map(buildManagedMediaFailureBlock)];
+    content.push(...mediaContent);
+    persistedContent.push(...mediaContent);
   }
 
-  if (content.length > 0) {
-    return content;
-  }
-  return strippedTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
-}
-
-export function replaceAssistantContentTextBlocks(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-  transcriptMediaMessage: { content: Array<Record<string, unknown>> } | null,
-): AssistantDisplayContentBlock[] | undefined {
-  const transcriptTextBlocks = (transcriptMediaMessage?.content ?? []).filter(
-    (block): block is AssistantDisplayContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string",
-  );
-  if (transcriptTextBlocks.length === 0) {
-    return content ? [...content] : undefined;
-  }
-  if (!content || content.length === 0) {
-    return [...transcriptTextBlocks];
-  }
-  const merged: AssistantDisplayContentBlock[] = [];
-  let transcriptTextIndex = 0;
-  for (const block of content) {
-    if (
-      block?.type === "text" &&
-      typeof block.text === "string" &&
-      transcriptTextIndex < transcriptTextBlocks.length
-    ) {
-      const replacement = expectDefined(
-        transcriptTextBlocks[transcriptTextIndex++],
-        "transcript text blocks entry at transcript text index++",
-      );
-      merged.push(replacement);
-      continue;
-    }
-    merged.push(block);
-  }
-  if (transcriptTextIndex < transcriptTextBlocks.length) {
-    merged.unshift(...transcriptTextBlocks.slice(transcriptTextIndex));
-  }
-  return merged;
+  const assistantContent =
+    content.length > 0
+      ? content
+      : strippedTextPayloadCount > 0
+        ? [{ type: "text", text: "" }]
+        : undefined;
+  return {
+    assistantContent,
+    persistedAssistantContent:
+      persistedContent.length > 0
+        ? persistedContent
+        : strippedTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined,
+  };
 }
 
 function isManagedOutgoingMediaUrl(value: unknown): boolean {

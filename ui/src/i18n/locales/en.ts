@@ -2196,6 +2196,8 @@ export const en: TranslationMap & {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupDevice: "This Mac",
+    settingsGroupThisIPhone: "This iPhone",
+    settingsGroupThisIPad: "This iPad",
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -3670,6 +3672,8 @@ export const en: TranslationMap & {
       supportFiles: "{count} support files",
       noSupportFiles: "0 support files",
       loading: "Loading\u2026",
+      draftMissing:
+        "This suggestion's draft is missing. Reject it and ask your agent to create a new suggestion.",
       supportFilesTitle: "Support files",
       clickToPreview: "\u00b7 click to preview",
     },

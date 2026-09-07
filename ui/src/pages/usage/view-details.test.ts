@@ -71,8 +71,6 @@ function mount(
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[];
     stale?: boolean;
-    onRetryTimeSeries?: () => void;
-    onRetrySessionLogs?: () => void;
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
@@ -82,6 +80,7 @@ function mount(
     error: error ?? null,
     hasLoaded: errors.stale ?? false,
     stale: errors.stale ?? false,
+    awaitingGateway: false,
   });
   const container = document.createElement("div");
   render(
@@ -90,7 +89,6 @@ function mount(
       { points },
       false,
       status(errors.timeSeries),
-      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -105,7 +103,6 @@ function mount(
       errors.sessionLogsData ?? [],
       false,
       status(errors.sessionLogs),
-      errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -119,7 +116,6 @@ function mount(
         loading: false,
         status: status(),
       },
-      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -265,9 +261,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("renders independent retry actions for detail request failures", () => {
-    const onRetryTimeSeries = vi.fn();
-    const onRetrySessionLogs = vi.fn();
+  it("renders detail request failure messages without retry buttons", () => {
     const container = mount(
       [],
       null,
@@ -277,8 +271,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       {
         timeSeries: "timeline unavailable",
         sessionLogs: "logs unavailable",
-        onRetryTimeSeries,
-        onRetrySessionLogs,
       },
     );
 
@@ -293,10 +285,8 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "Could not load conversation: logs unavailable",
     );
 
-    timelineError?.querySelector("button")?.click();
-    conversationError?.querySelector("button")?.click();
-    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
-    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+    expect(timelineError?.querySelector("button")).toBeNull();
+    expect(conversationError?.querySelector("button")).toBeNull();
   });
 
   it("keeps loaded details visible and marks them stale after refresh failures", () => {
