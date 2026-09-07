@@ -27,6 +27,11 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
+// Query-path stall deadline. It must fire BEFORE the 15s Memory Core recall
+// lane so default-config users get this precise, actionable error instead of
+// the generic search deadline (#136405); the caller's own signal still wins
+// when it is tighter. Batch indexing keeps its inline-batch bound.
+const DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS = 10_000;
 
 /** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
@@ -40,6 +45,7 @@ type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  requestTimeoutMs?: number;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
@@ -49,6 +55,7 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  timeoutSeconds?: number;
   localService?: ModelProviderLocalServiceConfig;
 };
 
@@ -322,9 +329,29 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
+  // Compose the caller's signal with the client-owned stall deadline so a hung
+  // provider surfaces a precise timeout even when the caller has no budget of
+  // its own; an explicit provider timeoutSeconds bounds every call it labels.
+  // The built-in deadline covers query-labeled calls and single-input calls
+  // (memory status probes, single-document recall) — multi-input batches are
+  // indexing traffic and keep the inline-batch bound.
+  const perCallTimeoutMs =
+    client.requestTimeoutMs ??
+    (params.inputType === "query" || input.length === 1
+      ? DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS
+      : undefined);
+  const timeoutSecondsLabel =
+    perCallTimeoutMs === undefined ? undefined : Math.round(perCallTimeoutMs / 1000);
+  const timeoutSignal =
+    perCallTimeoutMs === undefined ? undefined : AbortSignal.timeout(perCallTimeoutMs);
+  const signal = params.signal
+    ? timeoutSignal
+      ? AbortSignal.any([params.signal, timeoutSignal])
+      : params.signal
+    : timeoutSignal;
   const localServiceLease =
     client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(client.localServiceTarget, params.signal)
+      ? await client.acquireLocalService(client.localServiceTarget, signal)
       : undefined;
   try {
     return await withRemoteHttpResponse({
@@ -334,7 +361,7 @@ async function postEmbeddingRequest(params: {
         headers: client.headers,
         body: JSON.stringify(body),
       },
-      signal: params.signal,
+      signal,
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
@@ -352,6 +379,17 @@ async function postEmbeddingRequest(params: {
         );
       },
     });
+  } catch (error) {
+    if (timeoutSignal?.aborted && !params.signal?.aborted) {
+      throw new Error(
+        `openai-compatible embeddings request timed out after ${timeoutSecondsLabel}s` +
+          (client.requestTimeoutMs === undefined
+            ? " (set models.providers.<id>.timeoutSeconds to adjust)"
+            : ""),
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
     localServiceLease?.release();
   }
@@ -395,6 +433,20 @@ async function createOpenAICompatibleEmbeddingClient(
     }
   }
   const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
+  // Explicit provider timeoutSeconds bounds every call for this provider — but
+  // only when the provider owns the destination, matching the headers/auth
+  // ownership boundary above: a distinct memory.search.remote.baseUrl must not
+  // inherit another provider's timeout (#136405). The built-in query deadline
+  // covers labeled query calls when no owned timeout is configured.
+  const configuredTimeoutSeconds = providerOwnsDestination
+    ? configuredProvider?.timeoutSeconds
+    : undefined;
+  const requestTimeoutMs =
+    typeof configuredTimeoutSeconds === "number" &&
+    Number.isFinite(configuredTimeoutSeconds) &&
+    configuredTimeoutSeconds > 0
+      ? configuredTimeoutSeconds * 1000
+      : undefined;
   return {
     providerId,
     baseUrl,
@@ -402,6 +454,7 @@ async function createOpenAICompatibleEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
     ...(configuredProvider?.localService && !remoteBaseUrl
       ? {
           localServiceTarget: {

@@ -368,7 +368,9 @@ describe("openai-compatible generic embedding provider", () => {
           "x-gpu-host": "spark",
         }),
       },
-      undefined,
+      // Single-input calls carry the built-in stall deadline even when the
+      // caller passes no signal (#136405).
+      expect.any(AbortSignal),
     );
     expect(release).toHaveBeenCalledOnce();
   });
