@@ -60,4 +60,27 @@ describe("dashboards index", () => {
     expect(empty?.textContent).toContain("No dashboards yet");
     expect(empty?.textContent).toContain("Dashboards created in your tasks will appear here");
   });
+
+  it("renders a complete emoji grapheme in the author avatar initial", () => {
+    const container = document.createElement("div");
+    render(
+      renderDashboards(
+        routeData([
+          {
+            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+            kind: "direct",
+            boardFace: "dashboard",
+            displayName: "Deploy monitor",
+            updatedAt: 2,
+            createdActor: { type: "human", id: "profile-ada", label: "🇺🇸Team" },
+          },
+        ]),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector(".dashboard-card__avatar");
+    expect(avatar?.textContent).toBe("🇺🇸");
+    expect(avatar?.textContent).not.toBe("🇺🇸Team".charAt(0));
+  });
 });

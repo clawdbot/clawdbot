@@ -7,6 +7,7 @@ import { icons } from "../../components/icons.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { deriveAvatarInitial } from "../../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -104,7 +105,7 @@ function renderDashboardCard(
   });
   const author = dashboardAuthor(row, data.fallbackAgentId);
   const title = resolveSessionDisplayName(row.key, row);
-  const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
+  const initial = deriveAvatarInitial(author.label.trim()) || "?";
   return html`<article class="dashboard-card" data-dashboard-session=${row.key}>
     <a class="dashboard-card__main" href=${target.href} aria-label=${title}>
       ${renderDashboardPreview(row, gatewaySnapshot, previewError)}

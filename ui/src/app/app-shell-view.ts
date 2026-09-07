@@ -12,6 +12,7 @@ import {
 } from "../components/settings-sidebar-lazy.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
+import { deriveAvatarInitial } from "../lib/avatar.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -461,7 +462,9 @@ export function renderApplicationShell(host: ShellViewHost) {
                     aria-label=${t("nav.expand")}
                     aria-expanded="false"
                     data-env-avatar=${
-                      config.environment ? config.assistantIdentity.name.charAt(0) : nothing
+                      config.environment
+                        ? deriveAvatarInitial(config.assistantIdentity.name) || nothing
+                        : nothing
                     }
                     @click=${() => host.toggleNavigationSurface()}
                   >
