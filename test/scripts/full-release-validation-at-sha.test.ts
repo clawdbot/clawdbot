@@ -1109,9 +1109,11 @@ describe("full-release-validation-at-sha", () => {
       expect(fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push")).toEqual(
         [],
       );
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((call) => call[0] === "workflow"),
-      ).toEqual([]);
+      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
+      expect(ghCalls.filter((call) => call[0] === "api" && ghApiMethod(call) !== "GET")).toEqual(
+        [],
+      );
+      expect(ghCalls.filter((call) => call[0] === "workflow")).toEqual([]);
     } finally {
       fixture.cleanup();
     }
