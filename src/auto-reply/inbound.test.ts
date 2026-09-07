@@ -408,6 +408,28 @@ describe("createInboundDebouncer", () => {
     return { admission: completion, completion };
   };
 
+  it("reports, without crashing, when onFlush returns a malformed flush (openclaw#125079)", async () => {
+    const errors: unknown[] = [];
+    // A consumer returning an object without admission/completion promises used
+    // to throw an uncaught TypeError on the `.catch` deref and take the process
+    // down. It must now surface via onError instead.
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: () => ({}) as unknown as TestInboundDebounceFlush,
+      onError: (err) => {
+        errors.push(err);
+      },
+    });
+
+    // A rejection here would be the pre-fix crash surfacing; awaiting is the assertion.
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.drain();
+
+    expect(errors).toHaveLength(1);
+    expect(String(errors[0])).toContain("malformed flush");
+  });
+
   it("debounces and combines items", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

@@ -133,6 +133,20 @@ function createInboundDebounceFlush(params: {
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 const MAX_DEBOUNCE_WINDOW_MULTIPLIER = 5;
 
+/**
+ * A flush is only usable if it carries real admission/completion promises.
+ * onFlush is contracted to return them (normally via createInboundDebounceFlush),
+ * but a malformed return must be rejected before we deref them — otherwise the
+ * `.catch` access in runFlush throws an uncaught TypeError and crashes the process.
+ */
+function isFlushPromise(value: unknown): value is Promise<void> {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return false;
+  }
+  const candidate = value as { then?: unknown; catch?: unknown };
+  return typeof candidate.then === "function" && typeof candidate.catch === "function";
+}
+
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
@@ -175,6 +189,19 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       flush = params.onFlush(items, createInboundDebounceFlush);
     } catch (err) {
       reportFlushError(err, items);
+      return;
+    }
+    // A malformed flush (missing admission/completion) would crash the process
+    // on the `.catch` deref below. Route it through the same non-fatal path a
+    // thrown onFlush already takes so one bad inbound event can't take the
+    // gateway down. See openclaw/openclaw#125079.
+    if (!isFlushPromise(flush?.admission) || !isFlushPromise(flush?.completion)) {
+      reportFlushError(
+        new Error(
+          "Inbound debounce onFlush returned a malformed flush (missing admission/completion promise)",
+        ),
+        items,
+      );
       return;
     }
     let reported = false;
