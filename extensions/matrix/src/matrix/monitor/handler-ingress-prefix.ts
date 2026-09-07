@@ -1,5 +1,5 @@
 import type { LocationMessageEventContent } from "../sdk.js";
-import { hasBundledMatrixReplacementRelation } from "./handler-helpers.js";
+import { hasBundledMatrixReplacementRelation, readSelfTriggerMarker } from "./handler-helpers.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
@@ -51,7 +51,11 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     claimInboundReplay,
   } = config;
   const selfUserId = await client.getUserId();
-  if (senderId === selfUserId) {
+  const selfTriggerMarker = senderId === selfUserId ? readSelfTriggerMarker(event, roomId) : null;
+  if (senderId === selfUserId && !selfTriggerMarker) {
+    // Self-authored messages are dropped to prevent self-reply loops.
+    // Exception: messages carrying a valid self-trigger marker are allowed
+    // through, enabling cross-room session wake-up for multi-agent systems.
     return undefined;
   }
   if (dropPreStartupMessages) {
@@ -104,5 +108,5 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     senderId,
     selfUserId,
   });
-  return { content, isDirectMessage, locationPayload, selfUserId };
+  return { content, isDirectMessage, locationPayload, selfUserId, selfTriggerMarker };
 }

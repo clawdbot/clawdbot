@@ -286,14 +286,22 @@ export async function resolveMatrixIngressContent(config: {
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
   }
+  // Self-trigger messages bypass the mention requirement: they are intentional
+  // cross-session wake-ups, not casual messages that need @mention to justify a
+  // response. The marker was already validated in the ingress prefix stage and
+  // is only set when senderId === selfUserId, so non-self senders cannot forge
+  // the exemption.
+  const { selfTriggerMarker } = paramsLocal;
   const shouldRequireMention = isRoom
-    ? roomConfig?.autoReply === true
+    ? selfTriggerMarker
       ? false
-      : roomConfig?.autoReply === false
-        ? true
-        : typeof roomConfig?.requireMention === "boolean"
-          ? roomConfig?.requireMention
-          : true
+      : roomConfig?.autoReply === true
+        ? false
+        : roomConfig?.autoReply === false
+          ? true
+          : typeof roomConfig?.requireMention === "boolean"
+            ? roomConfig?.requireMention
+            : true
     : false;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
