@@ -1,4 +1,4 @@
-// Line plugin module owns the outbound text chunk size.
+// Line plugin module owns the text chunk size, for replies as well as sends.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 
@@ -7,7 +7,7 @@ export const LINE_TEXT_CHUNK_LIMIT = 5000;
 
 /** Configured LINE chunk size, bounded by what the platform accepts. */
 export function resolveLineTextChunkLimit(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): number {
   return Math.min(
