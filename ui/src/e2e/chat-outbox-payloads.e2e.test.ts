@@ -1,84 +1,140 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
-import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
-  readOutboxPayloadAttachments,
 } from "./chat-flow.test-support.ts";
+import {
+  holdOutboxPreviewReads,
+  outboxPayloadFile as file,
+  outboxPayloadHistory as history,
+  outboxPaneFor as paneFor,
+  outboxComposerFor as composerFor,
+  readOutboxQueue as readQueue,
+  countOutboxPayloads as payloadCount,
+  readOutboxPayloadBytes as readPayloadBytes,
+  stageOutboxAttachment as stage,
+  outboxChatUrl as chatUrl,
+} from "./chat-outbox-payloads.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
-const file = {
-  name: "mock-original.txt",
-  mimeType: "text/plain",
-  buffer: Buffer.from("Exact synthetic outbox bytes\n".repeat(1000)),
-};
-const history = [{ role: "assistant", content: "Mock Gateway: payload lifecycle proof." }];
-const paneFor = (page: Page) => page.locator('openclaw-chat-pane[aria-hidden="false"]');
-const composerFor = (page: Page) =>
-  paneFor(page).locator(".agent-chat__composer-combobox textarea");
-
-async function readQueue(page: Page): Promise<ChatQueueItem[]> {
-  return page.evaluate(() =>
-    Object.keys(sessionStorage)
-      .filter((key) => key.startsWith("openclaw.control.chatComposer.v4:"))
-      .flatMap((key) => {
-        const store = JSON.parse(sessionStorage.getItem(key)!) as {
-          sessions: Record<string, { queue?: ChatQueueItem[] }>;
-        };
-        return Object.values(store.sessions).flatMap((session) => session.queue ?? []);
-      }),
-  );
-}
-
-async function payloadCount(page: Page): Promise<number> {
-  return page.evaluate(async () => {
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openclaw-control-ui");
-      request.onsuccess = () => resolve(request.result);
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("IndexedDB request failed")),
-      );
-    });
-    try {
-      return await new Promise<number>((resolve, reject) => {
-        const request = database
-          .transaction("outboxPayloads")
-          .objectStore("outboxPayloads")
-          .count();
-        request.onsuccess = () => resolve(request.result);
-        request.addEventListener("error", () =>
-          reject(request.error ?? new Error("IndexedDB request failed")),
-        );
-      });
-    } finally {
-      database.close();
-    }
-  });
-}
-
-async function readPayloadBytes(page: Page, key: string): Promise<string[] | null> {
-  return (
-    (await readOutboxPayloadAttachments(page, key))?.map((attachment) => attachment.base64) ?? null
-  );
-}
-
-async function stage(page: Page, message: string) {
-  await composerFor(page).fill(message);
-  await paneFor(page).locator(".agent-chat__file-input").setInputFiles(file);
-  await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
-}
+const plainHttpHost = "plain-http.test";
+const suite = createChatFlowE2eSuite({
+  args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
+});
 
 suite.define(() => {
+  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", async () => {
+    await suite.withPage(
+      {
+        serviceWorkers: "block",
+        locale: "en-US",
+        viewport: { width: 1280, height: 900 },
+        recordVideo: { dir: path.join(suite.artifactDir, "plain-http-video") },
+      },
+      async ({ context, page }) => {
+        const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
+        const gateway = await installMockGateway(page, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+          deferredMethods: ["chat.send"],
+        });
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await waitForControlUiGatewayReady(page);
+        expect(
+          await page.evaluate(() => ({
+            indexedDB: typeof indexedDB,
+            isSecureContext,
+            locks: typeof navigator.locks,
+            randomUUID: typeof crypto.randomUUID,
+          })),
+        ).toEqual({
+          indexedDB: "object",
+          isSecureContext: false,
+          locks: "undefined",
+          randomUUID: "undefined",
+        });
+        const message = "Mock Gateway: plain HTTP attachment";
+        await stage(page, message);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "plain-http-before-send.png"),
+          animations: "disabled",
+        });
+        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toEqual(
+          expect.objectContaining({
+            message,
+            attachments: [
+              {
+                type: "file",
+                mimeType: file.mimeType,
+                fileName: file.name,
+                content: file.buffer.toString("base64"),
+              },
+            ],
+          }),
+        );
+        const original = (await readQueue(page))[0]!;
+        assert(original.attachmentPayload);
+        const releasePreviewReads = await holdOutboxPreviewReads(page);
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+        await expectRequestCountStable(gateway, "chat.send", 0);
+        // Reconnect parks the captured row while its real Blob read is pending.
+        // Adoption must preserve that newer delivery state and the original bytes.
+        expect(await releasePreviewReads()).toBeGreaterThan(0);
+        await expect
+          .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
+          .not.toBe(original.attachmentPayload.key);
+        const recovered = (await readQueue(page))[0]!;
+        assert(recovered.attachmentPayload);
+        expect(recovered.sendRunId).toBe(original.sendRunId);
+        expect(recovered.attachmentPayload.tabId).not.toBe(original.attachmentPayload.tabId);
+        expect(recovered.attachmentPayload.key).not.toBe(original.attachmentPayload.key);
+        expect(await readPayloadBytes(page, original.attachmentPayload.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        expect(await readPayloadBytes(page, recovered.attachmentPayload.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        await expectRequestCountStable(gateway, "chat.send", 0);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "plain-http-reload-unconfirmed.png"),
+          animations: "disabled",
+        });
+        await paneFor(page)
+          .locator(".chat-group.user")
+          .getByRole("button", { name: /Retry/i })
+          .click();
+        const retried = await gateway.waitForRequest("chat.send");
+        expect(retried.params).toEqual(sent.params);
+        await gateway.resolveDeferred("chat.send");
+        await expect.poll(async () => (await readQueue(page)).length).toBe(0);
+        await expect
+          .poll(() => readPayloadBytes(page, recovered.attachmentPayload!.key))
+          .toBeNull();
+        expect(await readPayloadBytes(page, original.attachmentPayload.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "plain-http-after-retry.png"),
+          animations: "disabled",
+        });
+      },
+    );
+  });
+
   it.each(["agent:main:topic", "global"])(
     "preserves landed v3 %s Blobs through migration, reload, explicit retry and retirement",
     async (legacySessionKey) => {
@@ -239,7 +295,7 @@ suite.define(() => {
           expect(await readPayloadBytes(page, reference.key)).toEqual([
             file.buffer.toString("base64"),
           ]);
-          await gateway.resolveDeferred("chat.send", { runId: original.sendRunId, status: "ok" });
+          await gateway.resolveDeferred("chat.send");
           await expect.poll(async () => (await readQueue(page)).length).toBe(0);
           await expect.poll(() => payloadCount(page)).toBe(0);
           await expectRequestCountStable(gateway, "chat.send", 1);
@@ -298,11 +354,12 @@ suite.define(() => {
         await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);
         expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "reload-unconfirmed.png"),
-          fullPage: true,
-          animations: "disabled",
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "reload-unconfirmed.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            paneFor(page).getByText("Delivery unconfirmed", { exact: true }),
+          ]),
+        );
       },
     );
   });
@@ -397,73 +454,105 @@ suite.define(() => {
     });
   });
 
-  it("isolates independent tabs and gives a duplicate its own bytes without replaying the logical submission", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: history,
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+  it.each(["localhost", "plain HTTP"] as const)(
+    "isolates independent and copied tabs on %s without replay or foreign deletion",
+    async (origin) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+        const url = await chatUrl(context, suite.server.baseUrl, origin);
+        const gateway = await installMockGateway(page, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await paneFor(page)
+          .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
+          .waitFor();
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await stage(page, "Mock Gateway: one logical submission");
+        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        await expect.poll(async () => (await readQueue(page)).length).toBe(1);
+        const original = (await readQueue(page))[0]!;
+        const independent = await context.newPage();
+        const independentGateway = await installMockGateway(independent, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await independent.goto(url, { waitUntil: "domcontentloaded" });
+        await paneFor(independent)
+          .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
+          .waitFor();
+        expect(await readQueue(independent)).toEqual([]);
+        await expectRequestCountStable(independentGateway, "chat.send", 0);
+        const popup = context.waitForEvent("page");
+        await page.evaluate(() => window.open("about:blank"));
+        const duplicate = await popup;
+        const duplicateGateway = await installMockGateway(duplicate, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await duplicate.goto(url, { waitUntil: "domcontentloaded" });
+        await duplicateGateway.setOnline(true);
+        await expect
+          .poll(async () => (await readQueue(duplicate))[0]?.sendState)
+          .toBe("unconfirmed");
+        await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+        const copied = (await readQueue(duplicate))[0]!;
+        expect(copied.id).toBe(original.id);
+        expect(copied.sendRunId).toBe(original.sendRunId);
+        expect(copied.attachmentPayload?.key).not.toBe(original.attachmentPayload?.key);
+        await expect.poll(() => payloadCount(page)).toBe(2);
+        assert(original.attachmentPayload);
+        assert(copied.attachmentPayload);
+        expect(await readPayloadBytes(duplicate, copied.attachmentPayload.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        const removalPopup = context.waitForEvent("page");
+        await page.evaluate(() => window.open("about:blank"));
+        const removedDuplicate = await removalPopup;
+        const removalGateway = await installMockGateway(removedDuplicate, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await removedDuplicate.goto(url, { waitUntil: "domcontentloaded" });
+        await removalGateway.setOnline(true);
+        await expect
+          .poll(async () => (await readQueue(removedDuplicate))[0]?.sendState)
+          .toBe("unconfirmed");
+        await expect.poll(() => payloadCount(page)).toBe(3);
+        await paneFor(removedDuplicate)
+          .getByRole("button", { name: /Remove queued message/ })
+          .click();
+        await expect.poll(() => payloadCount(page)).toBe(2);
+        expect(await readPayloadBytes(page, original.attachmentPayload.key)).toEqual([
+          file.buffer.toString("base64"),
+        ]);
+        await expectRequestCountStable(removalGateway, "chat.send", 0);
+        const latePopup = context.waitForEvent("page");
+        await page.evaluate(() => window.open("about:blank"));
+        const lateDuplicate = await latePopup;
+        // Retiring the source releases only its own bundle, preserving the live copy.
+        await paneFor(page)
+          .getByRole("button", { name: /Remove queued message/ })
+          .click();
+        await expect.poll(() => payloadCount(page)).toBe(1);
+        expect((await readQueue(duplicate))[0]?.attachmentPayload?.key).toBe(
+          copied.attachmentPayload?.key,
+        );
+        const lateGateway = await installMockGateway(lateDuplicate, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await lateDuplicate.goto(url, { waitUntil: "domcontentloaded" });
+        await lateGateway.setOnline(true);
+        await expect
+          .poll(async () => (await readQueue(lateDuplicate))[0]?.attachmentStorageError)
+          .toBe("missing");
+        await expectRequestCountStable(lateGateway, "chat.send", 0);
+        expect((await readQueue(lateDuplicate))[0]?.sendRunId).toBe(original.sendRunId);
       });
-      await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await paneFor(page)
-        .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
-        .waitFor();
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
-      await stage(page, "Mock Gateway: one logical submission");
-      await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
-      await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-      const original = (await readQueue(page))[0]!;
-      const independent = await context.newPage();
-      const independentGateway = await installMockGateway(independent, {
-        historyMessages: history,
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
-      });
-      await independent.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await paneFor(independent)
-        .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
-        .waitFor();
-      expect(await readQueue(independent)).toEqual([]);
-      await expectRequestCountStable(independentGateway, "chat.send", 0);
-      const popup = context.waitForEvent("page");
-      await page.evaluate(() => window.open("about:blank"));
-      const duplicate = await popup;
-      const duplicateGateway = await installMockGateway(duplicate, {
-        historyMessages: history,
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
-      });
-      await duplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await duplicateGateway.setOnline(true);
-      await expect.poll(async () => (await readQueue(duplicate))[0]?.sendState).toBe("unconfirmed");
-      await expectRequestCountStable(duplicateGateway, "chat.send", 0);
-      const copied = (await readQueue(duplicate))[0]!;
-      expect(copied.id).toBe(original.id);
-      expect(copied.sendRunId).toBe(original.sendRunId);
-      expect(copied.attachmentPayload?.key).not.toBe(original.attachmentPayload?.key);
-      await expect.poll(() => payloadCount(page)).toBe(2);
-      const latePopup = context.waitForEvent("page");
-      await page.evaluate(() => window.open("about:blank"));
-      const lateDuplicate = await latePopup;
-      // Retiring the source releases only its own bundle, preserving the live copy.
-      await paneFor(page)
-        .getByRole("button", { name: /Remove queued message/ })
-        .click();
-      await expect.poll(() => payloadCount(page)).toBe(1);
-      expect((await readQueue(duplicate))[0]?.attachmentPayload?.key).toBe(
-        copied.attachmentPayload?.key,
-      );
-      const lateGateway = await installMockGateway(lateDuplicate, {
-        historyMessages: history,
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
-      });
-      await lateDuplicate.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await lateGateway.setOnline(true);
-      await expect
-        .poll(async () => (await readQueue(lateDuplicate))[0]?.attachmentStorageError)
-        .toBe("missing");
-      await expectRequestCountStable(lateGateway, "chat.send", 0);
-      expect((await readQueue(lateDuplicate))[0]?.sendRunId).toBe(original.sendRunId);
-    });
-  });
+    },
+  );
   it("keeps source Blob bytes when a duplicate removes its row before lock-confirmed adoption", async () => {
     await suite.withPage(
       { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },

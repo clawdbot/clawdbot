@@ -679,14 +679,16 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Keep TERM entry in shell builtins so helper scheduling cannot consume
+        // the owner's bounded shutdown grace before the marker is written.
         let script = """
         printf '%s\n' "$$" > "$1"
         /bin/sh -c 'trap "" HUP TERM; printf "%s\\n" "$$" > "$1"; while :; do /bin/sleep 1; done' \
           descendant "$2" </dev/null >/dev/null 2>&1 &
         while [ ! -s "$2" ]; do /bin/sleep 0.01; done
-        trap 'touch "$3"; /bin/sleep 0.2; exit 0' TERM
+        trap ': > "$3"; /bin/sleep 0.2; exit 0' TERM
         printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [

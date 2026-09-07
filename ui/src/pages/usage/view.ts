@@ -28,6 +28,7 @@ import {
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
+  buildUsageFilterOptions,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
@@ -168,7 +169,7 @@ export function renderUsage(props: UsageProps) {
   const selectedSessionSet = new Set(filters.selectedSessions);
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...data.sessions].toSorted((a, b) => {
+  const sortedSessions = data.sessions.toSorted((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;
@@ -180,36 +181,28 @@ export function renderUsage(props: UsageProps) {
       )
     : sortedSessions;
 
-  // Filter sessions by selected days
-  const dayFilteredSessions =
-    selectedDaySet.size > 0
-      ? agentScopedSessions.filter((s) => {
-          if (s.usage?.activityDates?.length) {
-            return s.usage.activityDates.some((d) => selectedDaySet.has(d));
-          }
-          if (!s.updatedAt) {
-            return false;
-          }
-          return selectedDaySet.has(usageDateKey(s.updatedAt, filters.timeZone));
-        })
-      : agentScopedSessions;
-
   const hourFilteredSessions =
     filters.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) =>
-          sessionTouchesSelectedHours(s, filters.selectedHours, filters.timeZone),
+      ? agentScopedSessions.filter((session) =>
+          sessionTouchesSelectedHours(session, filters.selectedHours, filters.timeZone),
         )
-      : dayFilteredSessions;
-
-  // Filter sessions by query (client-side)
+      : agentScopedSessions;
   const queryResult = filterSessionsByQuery(hourFilteredSessions, filters.query);
-  const filteredSessions = queryResult.sessions;
+  const matchesSelectedDays = (session: UsageSessionEntry) => {
+    if (selectedDaySet.size === 0) {
+      return true;
+    }
+    if (session.usage?.activityDates?.length) {
+      return session.usage.activityDates.some((date) => selectedDaySet.has(date));
+    }
+    return Boolean(
+      session.updatedAt && selectedDaySet.has(usageDateKey(session.updatedAt, filters.timeZone)),
+    );
+  };
+  const filteredSessions = queryResult.sessions.filter(matchesSelectedDays);
   const queryWarnings = queryResult.warnings;
-  const querySuggestions = buildQuerySuggestions(
-    filters.queryDraft,
-    agentScopedSessions,
-    data.aggregates,
-  );
+  const filterOptions = buildUsageFilterOptions(agentScopedSessions, data.aggregates);
+  const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
   const queryTerms = extractQueryTerms(filters.queryDraft);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
@@ -218,29 +211,6 @@ export function renderUsage(props: UsageProps) {
       .map((term) => term.value)
       .filter(Boolean);
   };
-  const unique = (items: Array<string | undefined>) => {
-    const set = new Set<string>();
-    for (const item of items) {
-      if (item) {
-        set.add(item);
-      }
-    }
-    return Array.from(set);
-  };
-  const channelOptions = unique(agentScopedSessions.map((s) => s.channel)).slice(0, 12);
-  const providerOptions = unique([
-    ...agentScopedSessions.map((s) => s.modelProvider),
-    ...agentScopedSessions.map((s) => s.providerOverride),
-    ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
-  ]).slice(0, 12);
-  const modelOptions = unique([
-    ...agentScopedSessions.map((s) => s.model),
-    ...(data.aggregates?.byModel.map((entry) => entry.model) ?? []),
-  ]).slice(0, 12);
-  const toolOptions = unique(data.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
-    0,
-    12,
-  );
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
@@ -249,77 +219,54 @@ export function renderUsage(props: UsageProps) {
         filteredSessions.find((s) => s.key === filters.selectedSessions[0]))
       : null;
 
-  // Compute totals from sessions
-  const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
-    const totals = createEmptyCostUsageTotals();
-    for (const session of sessions) {
-      if (session.usage) {
-        addCostUsageTotals(totals, session.usage);
-      }
-    }
-    return totals;
-  };
-
-  // Compute totals from daily data for selected days (more accurate than session totals)
-  const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
-    const totals = createEmptyCostUsageTotals();
-    for (const day of data.costDaily) {
-      if (days.has(day.date)) {
-        addCostUsageTotals(totals, day);
-      }
-    }
-    return totals;
-  };
-
-  // Compute display totals and count based on filters
-  let displayTotals: UsageTotals | null;
-  let displaySessionCount: number;
-  const totalSessions = agentScopedSessions.length;
-
-  if (filters.selectedSessions.length > 0) {
-    // Sessions selected - compute totals from selected sessions
-    const selectedSessionEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
-    displayTotals = computeSessionTotals(selectedSessionEntries);
-    displaySessionCount = selectedSessionEntries.length;
-  } else if (filters.selectedDays.length > 0 && filters.selectedHours.length === 0) {
-    // Days selected - use daily aggregates for accurate per-day totals
-    displayTotals = computeDailyTotals(selectedDaySet);
-    displaySessionCount = filteredSessions.length;
-  } else if (filters.selectedHours.length > 0) {
-    displayTotals = computeSessionTotals(filteredSessions);
-    displaySessionCount = filteredSessions.length;
-  } else if (hasQuery) {
-    displayTotals = computeSessionTotals(filteredSessions);
-    displaySessionCount = filteredSessions.length;
-  } else if (filters.agentId) {
-    displayTotals = computeSessionTotals(agentScopedSessions);
-    displaySessionCount = totalSessions;
-  } else {
-    // No filters - show all
-    displayTotals = data.totals;
-    displaySessionCount = totalSessions;
-  }
-
-  const aggregateSessions =
-    filters.selectedSessions.length > 0
-      ? filteredSessions.filter((s) => selectedSessionSet.has(s.key))
-      : hasQuery || filters.selectedHours.length > 0
-        ? filteredSessions
-        : filters.selectedDays.length > 0
-          ? dayFilteredSessions
-          : agentScopedSessions;
-  const hasAggregateFilters =
-    filters.selectedSessions.length > 0 ||
+  const scopedSessions = selectedSessionSet.size
+    ? queryResult.sessions.filter((session) => selectedSessionSet.has(session.key))
+    : queryResult.sessions;
+  const aggregateSessions = scopedSessions.filter(matchesSelectedDays);
+  const hasSessionFilters =
+    selectedSessionSet.size > 0 ||
     hasQuery ||
     filters.selectedHours.length > 0 ||
-    filters.selectedDays.length > 0 ||
     Boolean(filters.agentId);
+  const hasAggregateFilters = hasSessionFilters || selectedDaySet.size > 0;
+  const computeTotals = (sources: Iterable<UsageTotals | null | undefined>): UsageTotals => {
+    const totals = createEmptyCostUsageTotals();
+    for (const source of sources) {
+      if (source) {
+        addCostUsageTotals(totals, source);
+      }
+    }
+    return totals;
+  };
+  // Keep global daily totals when no row scope is active: the visible session page can be capped.
+  const filteredDaily = hasSessionFilters
+    ? (() => {
+        const days = new Map<string, UsageTotals>();
+        for (const session of scopedSessions) {
+          for (const day of session.usage?.dailyBreakdown ?? []) {
+            const totals = days.get(day.date) ?? createEmptyCostUsageTotals();
+            addCostUsageTotals(totals, day);
+            days.set(day.date, totals);
+          }
+        }
+        return Array.from(days, ([date, totals]) => ({ date, ...totals })).toSorted((a, b) =>
+          a.date.localeCompare(b.date),
+        );
+      })()
+    : data.costDaily;
+  const displayTotals = selectedDaySet.size
+    ? computeTotals(filteredDaily.filter((day) => selectedDaySet.has(day.date)))
+    : hasSessionFilters
+      ? computeTotals(aggregateSessions.map((session) => session.usage))
+      : data.totals;
+  const displaySessionCount = aggregateSessions.length;
+  const totalSessions = agentScopedSessions.length;
   const activeAggregates = hasAggregateFilters
     ? buildAggregatesFromSessions(aggregateSessions)
     : buildAggregatesFromSessions([], data.aggregates);
   const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
   const insightTotals = insightsUseVisiblePage
-    ? computeSessionTotals(aggregateSessions)
+    ? computeTotals(aggregateSessions.map((session) => session.usage))
     : displayTotals;
   const insightAggregates = insightsUseVisiblePage
     ? buildAggregatesFromSessions(aggregateSessions)
@@ -328,23 +275,6 @@ export function renderUsage(props: UsageProps) {
   const costWindowComparison = hasAggregateFilters
     ? nothing
     : renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate);
-
-  // Filter daily chart data if sessions are selected
-  const filteredDaily =
-    filters.selectedSessions.length > 0
-      ? (() => {
-          const selectedEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
-          const allActivityDates = new Set<string>();
-          for (const entry of selectedEntries) {
-            for (const date of entry.usage?.activityDates ?? []) {
-              allActivityDates.add(date);
-            }
-          }
-          return allActivityDates.size > 0
-            ? data.costDaily.filter((d) => allActivityDates.has(d.date))
-            : data.costDaily;
-        })()
-      : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
   // The gateway always returns a totals object (all-zero when idle), so key
@@ -711,10 +641,10 @@ export function renderUsage(props: UsageProps) {
                 </div>
               </div>
               <div class="usage-filter-row">
-                ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
-                ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
-                ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
-                ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
+                ${renderFilterSelect("channel", t("usage.filters.channel"), filterOptions.channel)}
+                ${renderFilterSelect("provider", t("usage.filters.provider"), filterOptions.provider)}
+                ${renderFilterSelect("model", t("usage.filters.model"), filterOptions.model)}
+                ${renderFilterSelect("tool", t("usage.filters.tool"), filterOptions.tool)}
                 <span class="usage-query-hint">${t("usage.query.tip")}</span>
               </div>
               ${
@@ -883,7 +813,6 @@ export function renderUsage(props: UsageProps) {
                             detail.timeSeries,
                             detail.timeSeriesLoading,
                             detail.timeSeriesStatus,
-                            detailActions.onRetryTimeSeries,
                             detail.timeSeriesMode,
                             detailActions.onTimeSeriesModeChange,
                             detail.timeSeriesBreakdownMode,
@@ -898,7 +827,6 @@ export function renderUsage(props: UsageProps) {
                             detail.sessionLogs,
                             detail.sessionLogsLoading,
                             detail.sessionLogsStatus,
-                            detailActions.onRetrySessionLogs,
                             detail.sessionLogsExpanded,
                             detailActions.onToggleSessionLogsExpanded,
                             detail.logFilters,
@@ -908,7 +836,6 @@ export function renderUsage(props: UsageProps) {
                             detailActions.onLogFilterQueryChange,
                             detailActions.onLogFilterClear,
                             detail.context,
-                            detailActions.onRetryContextWeight,
                             display.contextExpanded,
                             detailActions.onToggleContextExpanded,
                             filterActions.onClearSessions,

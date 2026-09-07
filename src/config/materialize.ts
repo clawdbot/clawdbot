@@ -4,16 +4,14 @@ import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
   applyAgentDefaults,
-  applyCronDefaults,
-  applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
-  applyTalkConfigNormalization,
 } from "./defaults.js";
 import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
+import { normalizeTalkConfig } from "./talk.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
 // Snapshot and load must materialize identically: prepared-runtime exact-config
@@ -31,23 +29,23 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   options: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
   } = {},
 ): RuntimeConfig {
   let next = applyMessageDefaults(config);
-  next = applyLoggingDefaults(next);
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
-  next = applyCronDefaults(next);
   next = applyContextPruningDefaults(next, options);
   next = applyCompactionDefaults(next);
   next = applyModelDefaults(next, {
     manifestRegistry: options.manifestRegistry,
     loadManifestRegistry: options.loadManifestRegistry,
   });
-  next = applyTalkConfigNormalization(next);
-  normalizeConfigPaths(next);
+  next = normalizeTalkConfig(next);
+  normalizeConfigPaths(next, options);
   normalizeExecSafeBinProfilesInConfig(next);
   return asRuntimeConfig(inheritLegacyDefaultAgentId(config, next));
 }

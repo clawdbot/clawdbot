@@ -86,7 +86,7 @@ export function readNewSessionSubmissionAccess(options: {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
   const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
-  const remoteProject = target || !hasInitialTurn ? place.browser.remoteProject : null;
+  const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",
@@ -189,11 +189,6 @@ export function resolveNewSessionSubmitBlock(
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
-  if (modelUnavailableMessage) {
-    return { gate: "model-unavailable", reason: modelUnavailableMessage };
-  }
   if (host.pendingAttachmentReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
@@ -262,11 +257,16 @@ export function resolveNewSessionSubmitBlock(
       host.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
       host.pendingPlacement.recoveryScope === client.recoveryScope,
     );
-    // Recovery retries own the remaining draft state; the place gates
+    // Recovery retries own the frozen request; the model and place gates
     // below intentionally do not apply to a restored placement draft.
     return retryReady
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  const modelUnavailableMessage =
+    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+  if (modelUnavailableMessage) {
+    return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
   if (place.agents().length === 0) {
     return { gate: "agents", reason: t("newSession.agentsUnavailable") };
@@ -295,16 +295,18 @@ export function resolveNewSessionSubmitBlock(
   if (
     cloudProfileId &&
     (!gateway.cloudProfilesReady ||
-      !place.worktree ||
+      (!place.worktree && !place.remoteRepository) ||
       !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
       Boolean(host.cloudRuntimeUnsupportedReason()))
   ) {
     const reason =
       host.cloudDisabledReason() ??
-      (place.worktree ? t("newSession.placementNotReady") : t("newSession.cloudRequiresWorktree"));
+      (place.worktree || place.remoteRepository
+        ? t("newSession.placementNotReady")
+        : t("newSession.cloudRequiresWorktree"));
     return { gate: "cloud", reason };
   }
-  // Remote placements force a managed worktree; this gate owns repository readiness for both.
+  // Gateway-backed placements still require a usable managed worktree source.
   if (place.worktree && !place.worktreeAvailable()) {
     return {
       gate: "worktree-unavailable",

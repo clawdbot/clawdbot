@@ -9,41 +9,18 @@
  */
 import { isHeadersLike, type HeadersLike } from "../infra/fetch-headers.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 
 export const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
 
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
-
 function isSensitiveCaptureHeaderName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+  return (
+    isLikelySensitiveModelProviderHeaderName(normalized) ||
+    normalized === "cookie" ||
+    normalized === "set-cookie" ||
+    normalized.includes("session")
+  );
 }
 
 export function redactedCaptureHeaders(

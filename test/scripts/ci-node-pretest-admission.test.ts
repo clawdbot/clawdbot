@@ -20,7 +20,7 @@ function setGroups(groups: Array<[string, Mode, number]>) {
     mode === "private-qa"
       ? "test/vitest/vitest.extension-qa.config.ts"
       : mode === "runtime"
-        ? "test/vitest/vitest.gateway-core.config.ts"
+        ? "test/vitest/vitest.gateway-server.config.ts"
         : "test/vitest/vitest.unit-support.config.ts";
   fixture.shards.splice(
     0,

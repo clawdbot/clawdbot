@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  canLoadActivatedBundledPluginPublicSurface,
   listImportedBundledPluginFacadeIds,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -28,7 +27,6 @@ describe("cold facade runtime", () => {
       expect(loaded).toEqual({ marker: "cold" });
       expect(loadBundledPluginPublicSurfaceModuleSync(params)).toBe(loaded);
       expect(listImportedBundledPluginFacadeIds()).toEqual(["cold-facade-owner"]);
-      expect(canLoadActivatedBundledPluginPublicSurface(params)).toBe(false);
       expect(() => loadActivatedBundledPluginPublicSurfaceModuleSync(params)).toThrow(
         'Bundled plugin public surface access blocked for "cold-facade-owner"',
       );

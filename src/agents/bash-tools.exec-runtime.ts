@@ -37,6 +37,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
@@ -44,6 +45,7 @@ import {
   isProcessSessionIdTaken,
   markExited,
   recordNotifyOnExitRemoval,
+  resolveProcessCleanupMs,
   tail,
 } from "./bash-process-registry.js";
 import {
@@ -56,7 +58,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
-import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
@@ -80,30 +82,11 @@ export class ExecProcessPreflightError extends Error {
   }
 }
 
-const SMKX = "\x1b[?1h";
-const RMKX = "\x1b[?1l";
-
 function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
   if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
     return undefined;
   }
   return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
-}
-
-/**
- * Detect cursor key mode from PTY output chunk.
- * Uses lastIndexOf to find the *last* toggle in the chunk.
- * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
- * or null if no toggle is found.
- */
-function detectCursorKeyMode(raw: string): "application" | "normal" | null {
-  const lastSmkx = raw.lastIndexOf(SMKX);
-  const lastRmkx = raw.lastIndexOf(RMKX);
-  if (lastSmkx === -1 && lastRmkx === -1) {
-    return null;
-  }
-  // Whichever appears later in the chunk wins.
-  return lastSmkx > lastRmkx ? "application" : "normal";
 }
 
 /** Default retained aggregate output cap for exec sessions. */
@@ -388,10 +371,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {
-    mainKey: session.mainKey,
-    sessionScope: session.sessionScope,
-  };
+  const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
   const eventOptions = {
     sessionKey: eventSessionKey,
@@ -678,20 +658,12 @@ export async function runExecProcess({
   warnings: string[];
   maxOutput: number;
   pendingMaxOutput: number;
+  cleanupMs?: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
-  /** `session.mainKey` from the runtime config; snapshotted onto the
-   *  ProcessSession so background-exit notifications can remap cron-run
-   *  keys without an ambient config load. Long-running background exits use
-   *  this start-time value even if config changes while the process runs. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; snapshotted alongside
-   *  `mainKey` so the cron-run remap can route global-scope agents to
-   *  the "global" queue instead of agent-main. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -706,6 +678,8 @@ export async function runExecProcess({
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 }): Promise<ExecProcessHandle> {
+  let assertSourceActive: (() => void) | undefined =
+    captureAgentToolSourceExecutionGuard(initialStartupSignal);
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
@@ -721,9 +695,8 @@ export async function runExecProcess({
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
     agentId: opts.agentId,
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
     eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
@@ -754,7 +727,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let startupSignal = initialStartupSignal;
   let beforeSpawn = initialBeforeSpawn;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
@@ -779,19 +751,17 @@ export async function runExecProcess({
   };
 
   // One parser per stream so ESC sequences split across chunks are not mangled.
-  const sanitizeStdout = createStreamingBinaryOutputSanitizer();
+  const sanitizeStdout = createStreamingBinaryOutputSanitizer((sequence) => {
+    if (sequence === "?1h" || sequence === "?1l") {
+      session.cursorKeyMode = sequence === "?1h" ? "application" : "normal";
+    } else if (usingPty && (sequence === "6n" || sequence === "?6n")) {
+      managedRun?.stdin?.write("\x1b[1;1R");
+    }
+  });
   const sanitizeStderr = createStreamingBinaryOutputSanitizer();
 
   const handleStdout = (data: string) => {
-    const raw = data;
-    // Detect smkx/rmkx BEFORE the sanitizer strips ESC sequences.
-    // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
-    // and sent atomically by terminals. Split across chunks is rare in practice.
-    const mode = detectCursorKeyMode(raw);
-    if (mode) {
-      session.cursorKeyMode = mode;
-    }
-    const str = sanitizeStdout(raw);
+    const str = sanitizeStdout(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -836,6 +806,7 @@ export async function runExecProcess({
         timedOut: outcome.timedOut,
       });
     } catch (error) {
+      recordAgentCleanupFailure();
       if (outcome.status === "completed") {
         finalOutcome = buildExecRuntimeErrorOutcome({
           error,
@@ -881,8 +852,6 @@ export async function runExecProcess({
         // retain it, including when a task callback or notification throws.
         delete session.sessionKey;
         delete session.agentId;
-        delete session.mainKey;
-        delete session.sessionScope;
         delete session.eventRouting;
         delete session.notifyDeliveryContext;
         delete session.notifyOnExit;
@@ -944,50 +913,35 @@ export async function runExecProcess({
 
   let managedRun: ManagedRun | null = null;
   let usingPty = opts.usePty && !opts.sandbox;
-  const cursorResponse = buildCursorPositionResponse();
-
-  const onSupervisorStdout = (chunk: string) => {
-    if (usingPty) {
-      const { cleaned, requests } = stripDsrRequests(chunk);
-      if (requests > 0 && managedRun?.stdin) {
-        for (let i = 0; i < requests; i += 1) {
-          managedRun.stdin.write(cursorResponse);
-        }
-      }
-      handleStdout(cleaned);
-      return;
-    }
-    handleStdout(chunk);
-  };
-
   const assertPreSpawnAuthorized = async () => {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const denied = await beforeSpawn?.();
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
   const spawn = (input: SpawnInput) => {
-    // No await between the final cancellation check and supervisor admission.
-    startupSignal?.throwIfAborted();
-    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+    // No await between source authority validation and supervisor admission.
+    assertSourceActive?.();
+    return withoutGatewayToolCallerIdentity(() =>
+      supervisor.spawn({ ...input, assertCurrent: assertSourceActive }),
+    );
   };
 
   try {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
-      sessionId: opts.sessionKey?.trim() || sessionId,
-      backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
+      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
       captureOutput: false,
-      onStdout: onSupervisorStdout,
+      onStdout: handleStdout,
       onStderr: handleStderr,
     };
     await assertPreSpawnAuthorized();
@@ -999,7 +953,7 @@ export async function runExecProcess({
           argv: spawnSpec.argv,
         });
       } catch (err) {
-        startupSignal?.throwIfAborted();
+        assertSourceActive?.();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -1037,9 +991,10 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
-    startupSignal = undefined;
     beforeSpawn = undefined;
+    assertSourceActive = undefined;
   }
+  session.processActivity = managedRun.activity;
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
 

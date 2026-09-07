@@ -1,5 +1,6 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -17,6 +18,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
   root,
   seedLocalPublication,
 } from "./github-publication.test-support.js";
@@ -30,6 +32,52 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication boundaries", () => {
   installGitHubPublicationTestHarness();
+
+  it.each(["retained", "missing"] as const)(
+    "does not rebind a %s receipt lifecycle when replaying after the real reset",
+    async (bindingState) => {
+      const session = await persistPublicationTestSession(REQUEST.sessionKey);
+      const placements = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase(),
+      });
+      const requested = placements.startDispatch(REQUEST);
+      placements.fail({
+        sessionId: REQUEST.sessionId,
+        expectedGeneration: requested.generation,
+        recoveryError: "Provisioning stopped before allocation",
+      });
+      const coordinator = createTestGitHubPublicationCoordinator({ placements });
+      const input = {
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        idempotencyKey: "deferred-before-reset",
+      };
+      const accepted = await coordinator.requestForSession(input);
+      expect(accepted.status).toBe("requested");
+      const binding = { publicationKind: "shared" as const, requestId: accepted.requestId };
+      const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
+      expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+      if (bindingState === "missing") {
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "DELETE FROM github_publication_session_lifecycles WHERE publication_kind = 'shared' AND request_id = ?",
+          )
+          .run(accepted.requestId);
+      }
+      await session.reset(placements);
+      const replay = await coordinator.requestForSession(input);
+      expect(replay).toMatchObject({ status: "failed", code: "session_changed" });
+      expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(
+        bindingState === "retained" ? originalLifecycle : undefined,
+      );
+      await coordinator.resumeSessionRequests();
+      expect(coordinator.read(accepted.requestId)).toMatchObject({
+        status: "failed",
+        code: "session_changed",
+      });
+      expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
+    },
+  );
 
   it.each([
     ["URL rewrite", "url.https://attacker.invalid/.insteadof https://github.com/"],
@@ -637,6 +685,7 @@ describe("Gateway GitHub publication boundaries", () => {
     { label: "no live claim", claimRunId: undefined, expectedRunId: undefined },
     { label: "another active turn", claimRunId: "run-active", expectedRunId: undefined },
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
+    { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -644,16 +693,16 @@ describe("Gateway GitHub publication boundaries", () => {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
-    if (claimRunId) {
-      placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "claim-active",
-        runId: claimRunId,
-        owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
-      });
-    }
+    const claim = claimRunId
+      ? placements.claimTurn({
+          sessionId: active.sessionId,
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          claimId: "claim-active",
+          runId: claimRunId,
+          owner: { kind: "worker", environmentId: "environment-deferred-request", ownerEpoch: 2 },
+        })
+      : undefined;
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     const result = await coordinator.requestForSession({
@@ -662,6 +711,7 @@ describe("Gateway GitHub publication boundaries", () => {
       idempotencyKey: "deferred-cloud-request",
       ...(expectedRunId ? { expectedRunId } : {}),
     });
+    const acceptedClaim = claim?.runId === expectedRunId ? claim : undefined;
 
     expect(result).toMatchObject({ status: "requested" });
     expect(
@@ -671,11 +721,11 @@ describe("Gateway GitHub publication boundaries", () => {
         )
         .get(result.requestId),
     ).toEqual({
-      claim_id: null,
-      run_id: null,
-      environment_id: null,
-      owner_epoch: null,
-      placement_generation: null,
+      claim_id: acceptedClaim?.claimId ?? null,
+      run_id: acceptedClaim?.runId ?? null,
+      environment_id: acceptedClaim?.owner.environmentId ?? null,
+      owner_epoch: acceptedClaim?.owner.ownerEpoch ?? null,
+      placement_generation: acceptedClaim?.placementGeneration ?? null,
       source_head_commit: null,
       source_index_tree: null,
       workspace_tree: null,

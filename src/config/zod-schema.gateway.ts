@@ -80,6 +80,7 @@ export const GatewayConfigSchema = z
         dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
+        experimental: z.strictObject({ customPlugins: z.boolean().optional() }).optional(),
         root: z.string().optional(),
         environment: z
           .strictObject({
@@ -91,7 +92,6 @@ export const GatewayConfigSchema = z
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
           .optional(),
-        toolTitles: z.boolean().optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])

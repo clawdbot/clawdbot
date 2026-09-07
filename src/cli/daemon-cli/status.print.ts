@@ -11,8 +11,8 @@ import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
+import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -27,11 +27,10 @@ import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
-  filterDaemonEnv,
   formatRuntimeStatus,
+  projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
-  renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
 import {
@@ -39,29 +38,6 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-
-function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
-  // JSON output can be copied into issues; redact service env before serialization.
-  const command = status.service.command;
-  if (!command) {
-    return status;
-  }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand: GatewayServiceCommandConfig = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
-  delete nextCommand.managedDefinition;
-  delete nextCommand.managedOverrides;
-  delete nextCommand.definitionPaths;
-  return {
-    ...status,
-    service: {
-      ...status.service,
-      command: nextCommand,
-    },
-  };
-}
 
 function formatProbeKindLabel(kind?: "connect" | "read") {
   return kind === "read" ? "Read probe:" : "Connectivity probe:";
@@ -97,8 +73,10 @@ function formatConnectionLine(
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
-    const sanitized = sanitizeDaemonStatusForJson(status);
-    defaultRuntime.writeJson(sanitized);
+    defaultRuntime.writeJson({
+      ...status,
+      service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
+    });
     return;
   }
 
@@ -428,47 +406,37 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.error(errorText("Service unit not found."));
     const recovery = installBlock ?? `Run: ${installCommand}`;
     defaultRuntime.error(errorText(recovery));
-  } else if (service.runtime?.missingGuiSession) {
-    defaultRuntime.error(
-      errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
-    );
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
-      defaultRuntime.error(errorText(hint));
-    }
-  } else if (service.runtime?.missingSupervision) {
-    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
-      defaultRuntime.error(errorText(hint));
-    }
-  } else if (serviceLoaded && service.runtime?.status === "stopped") {
+  } else if (
+    service.runtime?.missingGuiSession ||
+    (serviceLoaded && service.runtime?.status === "stopped")
+  ) {
+    const missingGuiSession = service.runtime.missingGuiSession;
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
       errorText(
-        startLimitHit
-          ? // systemd gave up restarting after repeated crashes; sending the operator
-            // to restart (which now clears the failed latch) beats "exited immediately".
-            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
-              "openclaw gateway restart",
-            )} or inspect logs.`
-          : "Service is loaded but not running (likely exited immediately).",
+        missingGuiSession
+          ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
+          : startLimitHit
+            ? // systemd gave up restarting after repeated crashes; sending the operator
+              // to restart (which now clears the failed latch) beats "exited immediately".
+              `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+                "openclaw gateway restart",
+              )} or inspect logs.`
+            : "Service is loaded but not running (likely exited immediately).",
       ),
     );
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
+    const env = service.command?.environment ?? process.env;
+    for (const hint of buildGatewayRuntimeRecoveryHints({
+      kind: missingGuiSession ? "gui-session" : "stopped",
+      restartCommand: formatCliCommand("openclaw gateway restart", env),
+      env,
+      logFile: status.logFile,
+    })) {
       defaultRuntime.error(errorText(hint));
     }
-    spacer();
+    if (!missingGuiSession) {
+      spacer();
+    }
   }
 
   if (service.runtime?.cachedLabel) {

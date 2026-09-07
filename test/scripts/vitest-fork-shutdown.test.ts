@@ -4,9 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
-import { isProcessAlive, waitForDead, waitForFile } from "../helpers/process-wait.js";
+import {
+  isProcessAlive,
+  waitForDead,
+  waitForFile,
+  waitForFixtureFile,
+} from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 
 const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
@@ -185,14 +191,18 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
       const ownedDirs = createTempDirTracker();
       const root = ownedDirs.make("vitest-fork-cancellation-", fixtureRoots);
       const control = new URL("../fixtures/vitest-shutdown-cancellation.mjs", import.meta.url);
-      control.searchParams.set("root", root);
-      // Subscribe before launch; the producer publishes worker.pid atomically.
-      const watcher = fs.watch(root);
+      const preload = path.join(root, "cancellation-preload.mjs");
+      fs.writeFileSync(
+        preload,
+        `import {installVitestShutdownCancellation} from ${JSON.stringify(control.href)};
+installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.meta.url});
+`,
+      );
       let child!: ChildProcess;
       const invocation = runFixture(
         root,
         { scenario: "slow-exit", setup: "shared", fail: false },
-        ["--import", control.href],
+        fixturePreloadArgs(preload),
         {
           onReady(owned) {
             child = owned;
@@ -204,36 +214,11 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
       );
-      let cancelReady!: () => void;
-      const ready = new Promise<{ shim: number; worker: number }>((resolve, reject) => {
-        const readReady = () => {
-          try {
-            if (fs.existsSync(path.join(root, "worker.pid"))) {
-              resolve({
-                shim: Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8")),
-                worker: Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8")),
-              });
-            }
-          } catch (error) {
-            reject(error);
-          }
-        };
-        cancelReady = () => reject(context.signal.reason);
-        watcher.on("change", readReady).once("error", reject);
-        context.signal.addEventListener("abort", cancelReady, { once: true });
-        if (context.signal.aborted) cancelReady();
-        else readReady();
-        void outcome.then((result) => {
-          reject(
-            new Error(`Fixture exited before worker receipt: ${JSON.stringify(result)}`, {
-              cause: result.error,
-            }),
-          );
-        });
-      });
       const pids: number[] = [];
       try {
-        const { worker, shim } = await ready;
+        await waitForFixtureFile(path.join(root, "worker.pid"), invocation);
+        const shim = Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8"));
+        const worker = Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8"));
         context.signal.throwIfAborted();
         pids.push(shim, worker);
         process.kill(shim, "SIGSTOP");
@@ -297,9 +282,6 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
         expectReleasedNamespace(root);
         ownedDirs.cleanup();
       } finally {
-        context.signal.removeEventListener("abort", cancelReady);
-        watcher.close();
-        watcher.removeAllListeners();
         for (const pid of pids) {
           if (isProcessAlive(pid)) {
             process.kill(pid, "SIGCONT");
@@ -336,8 +318,6 @@ fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
 fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
 `;
       const controller = new AbortController();
-      // Watch before launch; the existing command deadline also bounds readiness.
-      const watcher = fs.watch(root);
       let child!: ChildProcess;
       const invocation = runVitestShutdownCommand({
         args: [
@@ -365,29 +345,12 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
       );
-      let cancelReady!: () => void;
-      const ready = new Promise<number>((resolve, reject) => {
-        const readReady = () => {
-          try {
-            if (fs.existsSync(descendantPidPath)) {
-              const pid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-              if (Number.isSafeInteger(pid) && pid > 0) resolve(pid);
-            }
-          } catch (error) {
-            reject(error);
-          }
-        };
-        cancelReady = () => reject(context.signal.reason);
-        watcher.on("change", readReady).once("error", reject);
-        context.signal.addEventListener("abort", cancelReady, { once: true });
-        if (context.signal.aborted) cancelReady();
-        else readReady();
-        void outcome.then((result) => {
-          reject(result.error ?? new Error("Fixture exited before descendant PID receipt"));
-        });
-      });
       try {
-        const descendantPid = await ready;
+        await waitForFixtureFile(descendantPidPath, invocation);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        if (!Number.isSafeInteger(descendantPid) || descendantPid <= 0) {
+          throw new Error("Invalid descendant PID receipt");
+        }
         context.signal.throwIfAborted();
         const childPid = child.pid!;
         const processes = execFileSync(
@@ -436,9 +399,6 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
           }),
         );
       } finally {
-        context.signal.removeEventListener("abort", cancelReady);
-        watcher.close();
-        watcher.removeAllListeners();
         controller.abort();
         expect((await outcome).error).toMatchObject({ code: "ABORT_ERR" });
       }

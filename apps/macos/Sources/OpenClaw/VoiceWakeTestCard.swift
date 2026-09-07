@@ -23,7 +23,7 @@ struct VoiceWakeTestCard: View {
             HStack(spacing: 8) {
                 self.statusIcon
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(self.statusText)
+                    Text(verbatim: self.statusText)
                         .font(.subheadline)
                         .frame(maxHeight: 22, alignment: .center)
                     if case let .detected(text) = testState {
@@ -71,22 +71,22 @@ struct VoiceWakeTestCard: View {
     private var statusText: String {
         switch self.testState {
         case .idle:
-            "Press start, say a trigger word, and wait for detection."
+            String(localized: "Press start, say a trigger word, and wait for detection.")
 
         case .requesting:
-            "Requesting mic & speech permission…"
+            String(localized: "Requesting mic & speech permission…")
 
         case .listening:
-            "Listening… say your trigger word."
+            String(localized: "Listening… say your trigger word.")
 
         case let .hearing(text):
-            "Heard: \(text)"
+            String(format: String(localized: "Heard: %@"), text)
 
         case .finalizing:
-            "Finalizing…"
+            String(localized: "Finalizing…")
 
         case .detected:
-            "Voice wake detected!"
+            String(localized: "Voice wake detected!")
 
         case let .failed(reason):
             reason

@@ -1,6 +1,6 @@
 // Verifies config validation rejects unsupported enumerated values.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
   const issue = issues.find((entry) => entry.path === path);

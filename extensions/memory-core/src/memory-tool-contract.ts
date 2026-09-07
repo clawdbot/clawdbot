@@ -1,6 +1,6 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  resolveMemorySearchConfig,
+  resolveMemorySearchIndexConfig,
   type MemoryPromptSectionBuilder,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -47,7 +47,7 @@ const MemoryGetSchema = {
 type MemorySourceContract = Readonly<{ files: string; search: string }>;
 
 function resolveMemorySourceContract(
-  settings: NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
+  settings: NonNullable<ReturnType<typeof resolveMemorySearchIndexConfig>>,
 ): MemorySourceContract {
   const files = [
     "MEMORY.md, USER.md, Markdown files recursively under memory/",
@@ -73,7 +73,8 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
     config: cfg,
     agentId: options.agentId,
   });
-  const settings = resolveMemorySearchConfig(cfg, agentId);
+  // Tool schemas and guidance need source policy; provider validation belongs to execution.
+  const settings = resolveMemorySearchIndexConfig(cfg, agentId);
   return settings
     ? { cfg, agentId, settings, sources: resolveMemorySourceContract(settings) }
     : null;
@@ -107,24 +108,24 @@ export type MemoryToolContract =
 export function buildMemoryPromptSection({
   availableTools,
   citationsMode,
-  sources,
-}: Parameters<MemoryPromptSectionBuilder>[0] & { sources: MemorySourceContract }): string[] {
+}: Parameters<MemoryPromptSectionBuilder>[0]): string[] {
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
   if (!hasMemorySearch && !hasMemoryGet) {
     return [];
   }
 
+  // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
-    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on ${sources.search}${
+    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search${
         hasMemoryGet ? "; then use memory_get to pull only the needed lines" : ""
-      }. ${SEARCH_CORPUS_OUTCOME_GUIDANCE}${
-        hasMemoryGet ? ` For memory_get, ${GET_READ_OUTCOME_GUIDANCE}` : ""
-      } If low confidence after search, say you checked.`
-    : `Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific source in ${sources.files}: run memory_get to pull only the needed lines. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If low confidence after reading, say you checked.`;
+      }. If low confidence after search, say you checked.`
+    : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific memory file: run memory_get to pull only the needed lines. If low confidence after reading, say you checked.";
+  const outcomeGuidance =
+    "Report partial, unavailable, or stale recall to the user, including returned warning and action guidance.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
       : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
-  return ["## Memory Recall", guidance, citationGuidance, ""];
+  return ["## Memory Recall", guidance, outcomeGuidance, citationGuidance, ""];
 }

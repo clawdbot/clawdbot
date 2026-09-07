@@ -1,6 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
+import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -67,12 +67,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     // Cloud workers call back over the public network; a loopback URL can still be
     // valid for same-host device pairing, so refuse it at this cloud-only boundary.
     const host = new URL(url.url).hostname;
-    if (
-      isLoopbackHost(host) ||
-      isLinkLocalIpAddress(host) ||
-      host === "0.0.0.0" ||
-      host === "[::]"
-    ) {
+    if (isLoopbackHost(host) || isLinkLocalIpAddress(host) || isUnspecifiedIpAddress(host)) {
       throw new Error(
         `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (${url.url}, from ${url.source ?? "unknown"}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
       );

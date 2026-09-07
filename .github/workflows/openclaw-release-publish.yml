@@ -136,6 +136,9 @@ jobs:
       prepared_docker_artifact_name: ${{ steps.full_manifest.outputs.prepared_docker_artifact_name }}
       prepared_docker_manifest_sha256: ${{ steps.full_manifest.outputs.prepared_docker_manifest_sha256 }}
       coverage_policy: ${{ steps.full_manifest.outputs.coverage_policy }}
+      android_pin_version: ${{ steps.ref.outputs.android_pin_version }}
+      android_pin_matches: ${{ steps.ref.outputs.android_pin_matches }}
+      android_release_note: ${{ steps.ref.outputs.android_release_note }}
     steps:
       - name: Validate inputs
         env:
@@ -277,8 +280,12 @@ jobs:
             fi
             sha_pinned_release_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]; then
-            echo "OpenClaw Release Publish must use trusted main workflow tooling, a protected SHA-pinned release-publish tag, or a matching Tideclaw alpha branch." >&2
+          # Docker-only recovery dispatches no publishing children and may use main.
+          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
+            publish_tag="release-publish/${WORKFLOW_SHA:0:12}-$(date +%s)"
+            echo "Publishing children requires the parent to run from a protected release-publish tag (or a matching Tideclaw alpha branch), so parent approval and child provenance use the same ref." >&2
+            echo "Mint the tooling tag: git tag ${publish_tag} ${WORKFLOW_SHA} && git push origin refs/tags/${publish_tag}" >&2
+            echo "Then dispatch: gh workflow run openclaw-release-publish.yml --ref ${publish_tag} (with the same release inputs)." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -307,9 +314,42 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 1
           filter: blob:none
-          sparse-checkout: package.json
+          sparse-checkout: |
+            package.json
+            apps/android/version.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Resolve checked-out release ref
+        id: ref
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          # The pin comes from the release checkout and is echoed into GITHUB_OUTPUT;
+          # only an exact YYYY.M.PATCH string may pass so it cannot inject output records.
+          android_pin_version="$(jq -r '.version // empty' apps/android/version.json)"
+          if [[ ! "${android_pin_version}" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[0-9]{1,3}$ ]]; then
+            echo "apps/android/version.json must pin an exact YYYY.M.PATCH Android version, got: ${android_pin_version@Q}" >&2
+            exit 1
+          fi
+          android_pin_matches=false
+          android_release_note=""
+          if [[ "${android_pin_version}" == "${release_version%%-*}" ]]; then
+            android_pin_matches=true
+          elif [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PUBLISH_DOCKER_ONLY}" != "true" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]; then
+            android_release_note="- Android APK: skipped — apps/android/version.json is ${android_pin_version}, release train is ${release_version%%-*}; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag."
+            echo "${android_release_note}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "android_pin_version=${android_pin_version}"
+            echo "android_pin_matches=${android_pin_matches}"
+            echo "android_release_note=${android_release_note}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fetch exact release and trusted tooling ancestry
         env:
@@ -365,10 +405,6 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.full_release_validation_run_id }}
           github-token: ${{ github.token }}
-
-      - name: Resolve checked-out release ref
-        id: ref
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate full release validation manifest
         id: full_manifest
@@ -894,7 +930,7 @@ jobs:
   qualify_android_native:
     name: Qualify native Android release source
     needs: [resolve_release_target]
-    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
+    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
     # Native failure blocks its approval receipt, while core publication proceeds.
     continue-on-error: true
     permissions:
@@ -941,7 +977,7 @@ jobs:
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
-          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${PARENT_WORKFLOW_SHA}")"
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${WORKFLOW_FULL_REF}")"
           dispatch_id="release-native-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}"
           run_id="$(dispatch_workflow ci.yml \
             -f target_ref="${TARGET_SHA}" \
@@ -984,7 +1020,7 @@ jobs:
   publish_android:
     name: Approve and dispatch qualified Android
     needs: [resolve_release_target, publish, qualify_android_native]
-    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
+    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
     continue-on-error: true
     permissions:
       actions: write
@@ -1090,6 +1126,7 @@ jobs:
     env:
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
+      ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}
     permissions:
       actions: write
       attestations: write
@@ -1175,7 +1212,6 @@ jobs:
         run: |
           set -euo pipefail
           install_args=(
-            --dir .release-harness
             install
             --frozen-lockfile
             --prefer-offline
@@ -1183,7 +1219,8 @@ jobs:
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
           )
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          # Corepack selects packageManager before pnpm processes its arguments.
+          (cd .release-harness && { pnpm "${install_args[@]}" || pnpm "${install_args[@]}"; })
           # Node resolves --import tsx from the process cwd. Point that root at
           # the trusted harness install instead of the frozen target checkout.
           ln -s .release-harness/node_modules node_modules
@@ -1207,7 +1244,7 @@ jobs:
           # Regular publication binds every child to the exact parent revision.
           # Tideclaw retains its validated branch child and main bootstrap split.
           CHILD_WORKFLOW_REF="$(
-            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${GITHUB_SHA}"
+            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"
           )"
           if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
             BOOTSTRAP_WORKFLOW_REF="main"
@@ -1380,7 +1417,7 @@ jobs:
               echo "- OpenClaw npm publish: skipped by input"
             fi
             if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Android APK: a separate native job qualifies the source before approval and dispatch; core publication does not wait for native qualification"
+              echo "${ANDROID_RELEASE_NOTE:-- Android APK: a separate native job qualifies the source before approval and dispatch; core publication does not wait for native qualification}"
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- Windows Hub promotion: optional detached child after GitHub publication"
@@ -1711,8 +1748,8 @@ jobs:
           fi
 
           # Native qualification and APK dispatch belong to separate jobs.
-          android_release_note=""
-          if is_android_release; then
+          android_release_note="${ANDROID_RELEASE_NOTE:-}"
+          if is_android_release && [[ -z "${android_release_note}" ]]; then
             android_release_note="- Android APK: monitor the native qualification and publication jobs at https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           fi
           openclaw_failed=0
@@ -1894,7 +1931,7 @@ jobs:
             '{tag: $tag, sourceTag: $source, installerDigests: $digests, state: "dispatch-failed"}' \
             > "$RUNNER_TEMP/windows-dispatch.json"
           verify_release_tag_target
-          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${GITHUB_REF}" "${PARENT_WORKFLOW_SHA}")"
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${GITHUB_REF}")"
           promote_windows_release_assets
           jq --arg runId "${windows_node_run_id}" '. + {state: "dispatched", childRunId: $runId}' \
             "$RUNNER_TEMP/windows-dispatch.json" > "$RUNNER_TEMP/windows-dispatch.next.json"

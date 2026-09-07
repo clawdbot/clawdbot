@@ -7,7 +7,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../../agent-bundle-mcp-tools.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
-import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
+import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
 import { clearProviderPromptState } from "../provider-prompt-state.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
@@ -102,17 +102,7 @@ export async function settleEmbeddedRun(input: {
   forgetPromptBuildDrainCacheForRun(params.runId);
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
-  if (ownedContextEngineLease) {
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "context-engine-dispose",
-      log,
-      cleanup: async () => {
-        await ownedContextEngineLease.dispose();
-      },
-    });
-  }
+  await ownedContextEngineLease?.dispose();
   if (params.cleanupBundleMcpOnRunEnd === true) {
     await runAgentCleanupStep({
       runId: params.runId,
@@ -121,6 +111,7 @@ export async function settleEmbeddedRun(input: {
       log,
       cleanup: async () => {
         const onError = (errorLocal: unknown, sessionId: string) => {
+          recordAgentCleanupFailure();
           log.warn(
             `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
           );

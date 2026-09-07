@@ -99,7 +99,7 @@ export function createConfigServerMock() {
  * createConfigServerMock variant whose FIRST config.set stays pending until
  * `firstSet` resolves — for exercising mid-flight edits/reverts/teardown.
  */
-export function createDeferredSetServerMock(options: { legacyAck?: boolean } = {}) {
+export function createDeferredSetServerMock() {
   const firstSet = deferred<unknown>();
   let hashCounter = 1;
   let storedRaw = '{\n  "count": 1\n}\n';
@@ -120,7 +120,7 @@ export function createDeferredSetServerMock(options: { legacyAck?: boolean } = {
       submissions.push({ raw, baseHash });
       storedRaw = raw;
       hashCounter += 1;
-      const ack = options.legacyAck ? {} : { hash: `hash-${hashCounter}` };
+      const ack = { hash: `hash-${hashCounter}` };
       return submissions.length === 1 ? firstSet.promise.then(() => ack) : Promise.resolve(ack);
     }
     if (method === "config.apply") {

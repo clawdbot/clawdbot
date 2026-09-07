@@ -212,21 +212,31 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   each; hosted fallbacks remain serial. Runtime preparation completes before
   project readers start. Native proof must cover available CPUs/RAM, concurrent
   fixture memory and cleanup. This adds no runner registrations.
-- macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
-  release compilation and the complete shared/app test workload. This adds one
-  registration per eligible Blacksmith native run: up to four across the two
-  active and two pending main slots, plus one for each eligible trusted PR.
-  Build caches are phase-owned; only the release phase writes the shared
-  SwiftPM dependency cache.
-- iOS Release, Debug/simulator tests, and both screenshot shards always use
-  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
-  hosted image; do not require a failed first attempt to select that capacity.
-  The conservative non-Node inventory, including Control UI performance, is
+- macOS Swift regular PR/main and PR `release_gate` CI retains the complete
+  shared/app test workload plus lint/schema guards in one `tests` phase.
+  Ordinary full-scope manual validation adds independent release compilation,
+  moves the guards to `release`, and retains health renders in `tests`.
+  Both phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
+  30-minute budget. Build caches stay phase-owned; the sole eligible shared
+  SwiftPM cache writer is regular `tests` or full-validation `release`.
+- Android regular CI uses four test/lint rows, including benchmark compilation
+  in the Kotlin-lint row when benchmark/build/dependency inputs change or the
+  changed-path manifest is unusable. Full manual validation retains all six
+  rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
+  The cap stays at two; frozen task contracts and npm native deferral are unchanged.
+- iOS regular PR/main and PR `release_gate` CI runs one required Debug build
+  and Swift lint smoke. Ordinary full-scope manual validation retains Release
+  and Debug/native-test phases, both screenshot shards, and the evidence reducer.
+  Frozen full-manual targets keep their Debug-only contract without screenshots;
+  npm qualification still defers native jobs. All iOS build phases and screenshot
+  shards use `macos-26` from the first attempt.
+  The conservative full-tier non-Node inventory, including Control UI performance, is
   86 rows, or 87 for historical UI targets. Excluding those four hosted rows
-  and the always-hosted aggregate gate leaves at most 82 potentially eligible jobs.
-  The enforced Node caps therefore give 146 registrations per main run and
-  202 per PR: `4 × 146 + 21 × 202 = 4,826` in the retained peak arrival
-  envelope. The old 19-arrival estimate is obsolete. The remaining 1,174 below
+  plus both macOS Swift phases and the always-hosted aggregate gate leaves at
+  most 80 potentially eligible jobs. The enforced Node caps therefore give
+  144 registrations per main run and 200 per PR:
+  `4 × 144 + 21 × 200 = 4,776` in the retained peak arrival envelope.
+  The old 19-arrival estimate is obsolete. The remaining 1,224 below
   the 6,000 reference target must cover adjacent repositories, releases and
   carryover; the bounded 2026-09-02 census did not prove that upper bound.
   Treat a single PR concurrency trial separately from a global rollout.
@@ -244,7 +254,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   existing 90-file envelope budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
-- Plugin fallback groups retain separate child processes, including process-bounded
+- Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
   within 240 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. Runtime preparation stays separate. Each original envelope retains
@@ -257,9 +267,15 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
-  exclusive bins retain 150s, and groups above their serial cap stay alone.
+  exclusive bins retain 150s by default, and groups above their serial cap stay alone.
+  Complete ordinary hybrid bins containing only non-build CLI groups may use
+  250s and co-locate split siblings, provided each original child still fits
+  150s. Keep file splits, workers, process isolation and other profiles unchanged.
   Runtime consumers in ordinary bins share preparation only with other consumers;
-  hybrid exclusive/dist sharing is unchanged. Complete inventories remain intact.
+  Affordable generated CLI runtime children may share one preparation in an
+  exclusive serial bin within the same 150s budget; fixed stripe families remain
+  separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
+  remain intact.
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.

@@ -3,6 +3,15 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migrate validation", () => {
+  it("restores a schema-valid ambient owner after explicit roster normalization", () => {
+    const result = migrateLegacyConfig({
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+    });
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
+    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+  });
+
   let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
 
   beforeAll(() => {

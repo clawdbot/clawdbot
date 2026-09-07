@@ -35,6 +35,7 @@ import type {
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
+import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -82,6 +83,8 @@ type ReasoningStreamPayload = Pick<
 
 export type CurrentInboundPromptContext = {
   text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
@@ -114,6 +117,8 @@ export type RunEmbeddedAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
@@ -209,8 +214,6 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
   /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
-  /** Restrict Skill Workshop to one atomic collection reconciliation. */
-  skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
@@ -231,6 +234,10 @@ export type RunEmbeddedAgentParams = {
   bootstrapWorkspaceDir?: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
+  /** Require file tools to stay within the task workspace without changing exec policy. */
+  requireWorkspaceOnly?: true;
+  /** Refuse an enabled sandbox that would redirect a review away from its workspace. */
+  requireWritableSandbox?: true;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
   agentDir?: string;
@@ -244,6 +251,8 @@ export type RunEmbeddedAgentParams = {
   toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** Context supplied by internal producers, separate from inbound prompt text. */
+  runtimeContextFragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   /** Finalizes caller-owned guidance after the submitted tool surface is known. */
@@ -297,8 +306,6 @@ export type RunEmbeddedAgentParams = {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
-  /** If true, suppress tool error warning payloads for this run (including mutating tools). */
-  suppressToolErrorWarnings?: boolean;
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
@@ -453,7 +460,7 @@ export type RunEmbeddedAgentParams = {
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
-  suppressAssistantErrorPersistence?: boolean;
+  assistantErrorTranscript?: AssistantErrorTranscript;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Context engine resolved once by the outer logical-turn owner. */
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
@@ -463,9 +470,6 @@ export type RunEmbeddedAgentParams = {
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onUserMessagePersistenceInvalidated?: () => void;
-  onAssistantErrorMessagePersisted?: (
-    message: Extract<AgentMessage, { role: "assistant" }>,
-  ) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must
@@ -518,6 +522,8 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "githubPublicationAvailable"
   | "conversationRecall"
   | "toolOverrides"
+  | "permissionMode"
+  | "execOverrides"
   | "skillsSnapshot"
   | "currentInboundEventKind"
   | "clientTools"

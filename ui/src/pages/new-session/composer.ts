@@ -30,13 +30,11 @@ import {
   type HumanMentionDirectory,
   type HumanMentionMenuHost,
 } from "../chat/components/chat-composer-mention-menu.ts";
+import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
 import {
   createSkillMenuState,
-  getActiveSkillMenuOptionId,
-  getActiveSkillMenuOptionLabel,
   handleSkillMenuKeydown,
-  isSkillMenuVisible,
   renderSkillMenu,
   resetSkillMenuState,
   updateSkillMenu,
@@ -44,10 +42,7 @@ import {
 } from "../chat/components/chat-composer-skill-menu.ts";
 import {
   createSlashMenuState,
-  getActiveSlashMenuOptionId,
-  getActiveSlashMenuOptionLabel,
   handleSlashMenuKeydown,
-  isSlashMenuVisible,
   renderSlashMenu,
   resetSlashMenuState,
   type SlashMenuHost,
@@ -448,7 +443,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getTextarea: skillMenuHost.getTextarea,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
-    canRunInlineCommand: () => false,
+    canRun: (inline) => !inline,
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -523,32 +518,23 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         options.message,
         options.requestUpdate,
       );
-  const skillMenuVisible =
-    !options.nativeTerminal && !composerLocked && isSkillMenuVisible(skillMenuState);
-  const slashMenuVisible =
-    !options.nativeTerminal && !composerLocked && isSlashMenuVisible(slashMenuState);
-  const menuVisible = skillMenuVisible || slashMenuVisible || mentionMenu.open;
+  const {
+    skillMenuVisible,
+    slashMenuVisible,
+    menuVisible,
+    menuListboxId,
+    activeMenuOptionId,
+    activeMenuOptionLabel,
+  } = resolveComposerMenus(
+    skillMenuHost.paneId,
+    !options.nativeTerminal && !composerLocked,
+    skillMenuState,
+    slashMenuState,
+    mentionMenu,
+  );
   if (mentionMenu.open) {
     ensureChatComposerPickerDismissal();
   }
-  const menuListboxId = paneDomId(
-    skillMenuHost.paneId,
-    mentionMenu.open
-      ? "mention-menu-listbox"
-      : skillMenuVisible
-        ? "skill-menu-listbox"
-        : "slash-menu-listbox",
-  );
-  const activeMenuOptionId = mentionMenu.open
-    ? mentionMenu.activeId(skillMenuHost.paneId)
-    : skillMenuVisible
-      ? getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId)
-      : getActiveSlashMenuOptionId(slashMenuState, slashMenuHost.paneId);
-  const activeMenuOptionLabel = mentionMenu.open
-    ? mentionMenu.activeLabel()
-    : skillMenuVisible
-      ? getActiveSkillMenuOptionLabel(skillMenuState)
-      : getActiveSlashMenuOptionLabel(slashMenuState);
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
   const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
   const backgroundShortcut = options.requiresModifier

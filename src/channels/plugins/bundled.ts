@@ -61,11 +61,6 @@ type BundledChannelSetupEntryRuntimeContract = {
   };
 };
 
-type BundledChannelPackageSetupFeature =
-  | "configPromotion"
-  | "legacyStateMigrations"
-  | "legacySessionSurfaces";
-
 type BundledChannelArtifactValues = {
   entry: BundledChannelEntryRuntimeContract;
   setupEntry: BundledChannelSetupEntryRuntimeContract;
@@ -202,19 +197,12 @@ function resolveGeneratedBundledChannelModulePath(params: {
   if (!packageRoot || !pluginRoot || !isPathInside(packageRoot, pluginRoot)) {
     return null;
   }
-  for (const rawEntry of [params.entry.built, params.entry.source]) {
-    if (!rawEntry) {
-      continue;
-    }
-    const candidate = path.isAbsolute(rawEntry)
-      ? path.normalize(rawEntry)
-      : path.resolve(pluginRoot, rawEntry);
-    const realCandidate = pluginCacheRealpathSync(candidate, true);
-    if (realCandidate && isPathInside(pluginRoot, realCandidate)) {
-      return realCandidate;
-    }
-  }
-  return null;
+  const rawEntry = params.entry.source;
+  const candidate = path.isAbsolute(rawEntry)
+    ? path.normalize(rawEntry)
+    : path.resolve(pluginRoot, rawEntry);
+  const realCandidate = pluginCacheRealpathSync(candidate, true);
+  return realCandidate && isPathInside(pluginRoot, realCandidate) ? realCandidate : null;
 }
 
 function loadGeneratedBundledChannelModule(params: {
@@ -349,16 +337,6 @@ function listBundledChannelPluginIdsForRoot(
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
-}
-
-export function hasBundledChannelPackageSetupFeature(
-  id: ChannelId,
-  feature: BundledChannelPackageSetupFeature,
-): boolean {
-  const rootScope = resolveBundledChannelRootScope();
-  return (
-    resolveBundledChannelMetadata(id, rootScope)?.packageManifest?.setupFeatures?.[feature] === true
-  );
 }
 
 function resolveBundledChannelMetadata(

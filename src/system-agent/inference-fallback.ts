@@ -10,7 +10,11 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { verifySetupInference, type BoundVerifySetupInferenceResult } from "./setup-inference.js";
+import {
+  verifySetupInference,
+  type BoundVerifySetupInferenceResult,
+  type VerifySetupInferenceResult,
+} from "./setup-inference.js";
 
 const RETRYABLE_INFERENCE_STATUSES = new Set([
   "auth",
@@ -49,19 +53,41 @@ async function readCurrentConfig(): Promise<OpenClawConfig> {
   return snapshot.runtimeConfig ?? snapshot.config;
 }
 
-/** Requester first. Other configured, authenticated providers: provider-id order. */
-export async function verifySystemAgentInferenceWithFallback(params: {
+type InferenceFallbackParams = {
   requestingAgentId?: string;
   runtime: RuntimeEnv;
   deps?: InferenceFallbackDeps;
-}): Promise<BoundVerifySetupInferenceResult> {
+};
+
+type ConfiguredRoutePolicy = {
+  expand: (route: SystemAgentConfiguredRoute) => Promise<SystemAgentConfiguredRoute[]>;
+  accept: (route: SystemAgentConfiguredRoute) => Promise<boolean>;
+  verify: (route: SystemAgentConfiguredRoute) => Promise<VerifySetupInferenceResult>;
+};
+
+type ConfiguredRouteResult =
+  | { ok: true; route: SystemAgentConfiguredRoute }
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
+
+export function verifySystemAgentInferenceWithFallback(
+  params: InferenceFallbackParams & { routePolicy: ConfiguredRoutePolicy },
+): Promise<ConfiguredRouteResult>;
+export function verifySystemAgentInferenceWithFallback(
+  params: InferenceFallbackParams,
+): Promise<BoundVerifySetupInferenceResult>;
+
+/** Requester first. Other configured, authenticated providers: provider-id order. */
+export async function verifySystemAgentInferenceWithFallback(
+  params: InferenceFallbackParams & { routePolicy?: ConfiguredRoutePolicy },
+): Promise<BoundVerifySetupInferenceResult | ConfiguredRouteResult> {
   const deps = params.deps ?? {};
+  const routePolicy = params.routePolicy;
   const config = await (deps.readConfig ?? readCurrentConfig)();
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
-  const candidateAgentIds = [
+  const candidateAgentIds = new Set([
     requestedAgentId,
     ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
-  ];
+  ]);
   const resolveRoute = deps.resolveRoute ?? resolveSystemAgentConfiguredRouteFromConfig;
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =
     [];
@@ -77,7 +103,7 @@ export async function verifySystemAgentInferenceWithFallback(params: {
     routes.push({ agentId, provider, route });
   }
   const first = routes.find((candidate) => candidate.agentId === requestedAgentId);
-  const ordered = [
+  const orderedOwners = [
     ...(first ? [first] : []),
     ...routes
       .filter((candidate) => candidate !== first)
@@ -86,9 +112,22 @@ export async function verifySystemAgentInferenceWithFallback(params: {
           left.provider.localeCompare(right.provider) || left.agentId.localeCompare(right.agentId),
       ),
   ];
+  const ordered = routePolicy
+    ? (
+        await Promise.all(
+          orderedOwners.map(async ({ route }) =>
+            (await routePolicy.expand(route)).map((expanded) => ({
+              agentId: expanded.agentId,
+              provider: normalizeProviderId(expanded.provider),
+              route: expanded,
+            })),
+          ),
+        )
+      ).flat()
+    : orderedOwners;
   const hasAuth = deps.hasAuth ?? hasAvailableAuthForProvider;
   const verify = deps.verify ?? verifySetupInference;
-  let lastFailure: BoundVerifySetupInferenceResult | undefined;
+  let lastFailure: Extract<VerifySetupInferenceResult, { ok: false }> | undefined;
   const failedProviders = new Set<string>();
   const attemptedOwners = new Set<string>();
   for (const candidate of ordered) {
@@ -102,11 +141,16 @@ export async function verifySystemAgentInferenceWithFallback(params: {
       candidate.provider,
       candidate.route.authProfileId ?? null,
       candidate.route.agentDir ?? null,
+      ...(routePolicy ? [candidate.route.model] : []),
     ]);
     if (attemptedOwners.has(ownerKey)) {
       continue;
     }
+    if (routePolicy && !(await routePolicy.accept(candidate.route))) {
+      continue;
+    }
     if (
+      !routePolicy &&
       candidate !== first &&
       !(await hasAuth({
         provider: candidate.provider,
@@ -119,20 +163,29 @@ export async function verifySystemAgentInferenceWithFallback(params: {
       continue;
     }
     attemptedOwners.add(ownerKey);
-    const result = await verify({
-      runtime: params.runtime,
-      bindSession: true,
-      agentId: candidate.agentId,
-    });
-    if (result.ok) {
-      return result;
+    if (routePolicy) {
+      const result = await routePolicy.verify(candidate.route);
+      if (result.ok) {
+        return { ok: true, route: candidate.route };
+      }
+      lastFailure = result;
+    } else {
+      const result = await verify({
+        runtime: params.runtime,
+        bindSession: true,
+        agentId: candidate.agentId,
+      });
+      if (result.ok) {
+        return result;
+      }
+      lastFailure = result;
     }
-    lastFailure = result;
     // Identity or owner-integrity uncertainty stays fail-closed as unknown.
-    if (!RETRYABLE_INFERENCE_STATUSES.has(result.status)) {
-      return result;
+    if (!RETRYABLE_INFERENCE_STATUSES.has(lastFailure.status)) {
+      return lastFailure;
     }
-    if (PROVIDER_WIDE_FAILURE_STATUSES.has(result.status)) {
+    // Expanded model probes do not establish that sibling models are unavailable.
+    if (!routePolicy && PROVIDER_WIDE_FAILURE_STATUSES.has(lastFailure.status)) {
       failedProviders.add(candidate.provider);
     }
   }

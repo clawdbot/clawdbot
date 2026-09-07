@@ -21,6 +21,8 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
+import "../plugins/control-ui-contributions.ts";
+import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import "../styles/app-sidebar.css";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
@@ -153,6 +155,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.config,
       (config, notify) => config.subscribe(notify),
       () => this.syncCommunityInviteState(),
+    )
+    .watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
     );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
@@ -205,10 +211,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
     // Admit new geometry only between interactions; once shown it stays put.
+    // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
     if (
       this.communityInvitePresentation === "pending" &&
-      !this.matches(":hover, :focus-within") &&
+      !this.matches(":hover") &&
+      !this.contains(this.ownerDocument.activeElement) &&
       this.sessionOrganizer.draggingSessionKey === null &&
       this.sessionOrganizer.draggingSidebarSection === null &&
       this.sessionOrganizer.draggingSidebarEntry === null
@@ -522,27 +530,35 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     ) {
       void this.preloadCatalogRenderer().catch(() => undefined);
     }
-    return renderSessionList({
-      host: this,
-      empty: visibleSessions.length === 0,
-      sections,
-      nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
-      catalogRenderer: this.catalogRenderer,
-      catalogs: {
-        catalogs,
-        basePath: this.basePath,
-        routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
-        newSessionAgentId: expandedAgentId,
-        mainKey: this.sessionMainKey(),
-        loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
-        projectGrouping: this.catalogProjectGrouping,
-        liveRows,
-        toSidebarSession: navigationState.toSidebarSession,
-        ownerId: this.activeSessionOwnerId,
-        catalogOpenTarget: this.catalogOpenTarget,
-        terminalAvailable: this.terminalAvailable,
+    return renderPluginSurface(
+      "session-list",
+      {
+        sessionKey: this.sessionKey,
+        agentId: navigationState.selectedAgentId,
+        sessions: this.context?.sessions.state.result?.sessions ?? [],
       },
-    });
+      renderSessionList({
+        host: this,
+        empty: visibleSessions.length === 0,
+        sections,
+        nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
+        catalogRenderer: this.catalogRenderer,
+        catalogs: {
+          catalogs,
+          basePath: this.basePath,
+          routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
+          newSessionAgentId: expandedAgentId,
+          mainKey: this.sessionMainKey(),
+          loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
+          projectGrouping: this.catalogProjectGrouping,
+          liveRows,
+          toSidebarSession: navigationState.toSidebarSession,
+          ownerId: this.activeSessionOwnerId,
+          catalogOpenTarget: this.catalogOpenTarget,
+          terminalAvailable: this.terminalAvailable,
+        },
+      }),
+    );
   }
 
   override render() {
@@ -589,16 +605,24 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 >
                   ${renderAppSidebarHomeRow(this)}
                   ${sidebarZone.entries.map((entry) =>
-                    renderAppSidebarZoneEntry(
-                      this,
-                      entry,
-                      sidebarZone.sessionRows,
-                      sidebarZone.workboardRows,
-                    ),
+                    renderAppSidebarZoneEntry(this, entry, sidebarZone.sessionRows),
                   )}
                   ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
-                    .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                    .filter(
+                      (tab) =>
+                        (!tab.placement || !occupiedPluginPlacements.has(tab.placement)) &&
+                        !this.pluginNavigation().some(
+                          (entry) =>
+                            entry.pluginId === tab.pluginId && entry.value.page.id === tab.id,
+                        ),
+                    )
                     .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
+                  <openclaw-plugin-contributions
+                    .kind=${"navigation"}
+                    .excludedNavigationKeys=${sidebarZone.entries
+                      .filter((entry) => entry.type === "plugin")
+                      .map((entry) => entry.key)}
+                  ></openclaw-plugin-contributions>
                 </div>
               </nav>
               ${renderAppSidebarOnline(this)} ${this.renderSessions()}
@@ -608,7 +632,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 ? nothing
                 : renderPanelRefreshStatus({
                     status: this.sessionData.sessionCatalogRefreshStatus,
-                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
                     className: "sidebar-session-error sidebar-session-catalog-error",
                   })
             }

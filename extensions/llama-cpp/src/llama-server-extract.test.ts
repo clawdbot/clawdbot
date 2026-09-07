@@ -232,4 +232,29 @@ describe("llama-server asset alias manifests", () => {
     ).toBe(true);
     expect(asset.archive === "zip" ? names.length === 0 : names.length > 0).toBe(true);
   });
+
+  it("pins the release library versions used to replace archive symlinks", () => {
+    expect(
+      selectLlamaServerAsset("darwin", "arm64").regularFileAliases.map(([source]) => source),
+    ).toStrictEqual([
+      "libggml-rpc.0.23.0.dylib",
+      "libllama.0.4.0.dylib",
+      "libmtmd.0.4.0.dylib",
+      "libggml.0.23.0.dylib",
+      "libggml-base.0.23.0.dylib",
+      "libggml-blas.0.23.0.dylib",
+      "libllama-common.0.4.0.dylib",
+      "libggml-cpu.0.23.0.dylib",
+      "libggml-metal.0.23.0.dylib",
+    ]);
+    expect(
+      selectLlamaServerAsset("linux", "x64").regularFileAliases.map(([source]) => source),
+    ).toStrictEqual([
+      "libllama.so.0.4.0",
+      "libggml.so.0.23.0",
+      "libmtmd.so.0.4.0",
+      "libggml-base.so.0.23.0",
+      "libllama-common.so.0.4.0",
+    ]);
+  });
 });

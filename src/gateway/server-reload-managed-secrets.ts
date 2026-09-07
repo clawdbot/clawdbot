@@ -119,7 +119,7 @@ export function createManagedReloadSecretHandlers(options: {
     | "activateRuntimeSecrets"
     | "assertRuntimeSecurityConfig"
     | "clients"
-    | "commitTerminalConfig"
+    | "commitRuntimePolicy"
     | "reconcileRuntimePolicy"
     | "resolveSharedGatewaySessionGenerationForConfig"
     | "sharedGatewaySessionGenerationState"
@@ -424,10 +424,10 @@ export function createManagedReloadSecretHandlers(options: {
                   await commit();
                 } finally {
                   // Published policy remains authoritative if a later service handoff fails.
-                  // Commit terminal admission before irreversible PTY and socket eviction.
+                  // Commit admission policy before irreversible PTY and socket eviction.
                   if (isCommitted()) {
                     if (!runtimePolicyReconciled) {
-                      params.commitTerminalConfig(prepared.config);
+                      params.commitRuntimePolicy(prepared.config);
                       await params.reconcileRuntimePolicy(prepared.config, "committed");
                       runtimePolicyReconciled = true;
                     }

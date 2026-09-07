@@ -10,6 +10,7 @@ export * from "./transports/model-transport-debug.js";
 export * from "./transports/model-transport-url.js";
 export * from "./transports/openai-compatible-conversation-turn.js";
 export * from "./transports/openai-completions-compat.js";
+export { applyCompletionsAnthropicCacheControl } from "./transports/openai-completions-cache-control.js";
 export * from "./transports/openai-completions-string-content.js";
 export * from "./transports/openai-completions-transport.js";
 export * from "./transports/openai-reasoning-compat.js";
@@ -27,3 +28,12 @@ export {
   isCodeModeModelVisibleToolName,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
 } from "./transports/transport-utils.js";
+export {
+  consumeGoogleGenerateContentStream,
+  type GoogleStreamChunk,
+} from "./providers/google-stream.js";
+export {
+  convertGoogleTools,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+} from "./providers/google-messages.js";

@@ -397,7 +397,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
-  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
@@ -638,7 +637,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     threadInheritParent,
     slashCommand,
     textLimit,
-    ackReactionScope,
     typingReaction,
     mediaMaxBytes,
   });
@@ -706,6 +704,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({
     ctx,
     account,
+    abortSignal: opts.abortSignal,
     trackEvent,
     onPrepared: (prepared) => presenceMonitor?.observe(prepared),
   });

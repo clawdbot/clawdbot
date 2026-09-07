@@ -194,7 +194,8 @@ describe("pending tab acquisition claims", () => {
     f.release();
     expect.soft((await c.response(request)).error).toBeDefined();
     await peer.response(pending);
-    expect.soft(c.attached()).toHaveLength(1);
+    expect.soft(c.attached()).toHaveLength(2);
+    expect(c.attached()[1]).toMatchObject({ targetInfo: { targetId: "target-2" } });
     expect(peer.attached()).toHaveLength(1);
     expect(peer.attached()[0]).toMatchObject({ targetInfo: { targetId: "target-2" } });
     expect(f.commands("detach")).toEqual([]);

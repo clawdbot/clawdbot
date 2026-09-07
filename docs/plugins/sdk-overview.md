@@ -22,7 +22,29 @@ reference for **what to import** and **what you can register**.
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
+## API stability
+
+All OpenClaw plugin APIs are **experimental**. This includes every
+`openclaw/plugin-sdk/*` subpath, registration and runtime APIs, channel and
+provider contracts, hooks, and native Control UI APIs. These contracts can
+change between OpenClaw releases.
+
+Pin the OpenClaw version used to develop and deploy your plugin, and test each
+host version you declare compatible. Set package compatibility ranges from
+those tested versions; do not assume a working build supports future releases.
+Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
+still apply. Experimental status does not remove a documented migration path.
+
+Native UI from user-installed plugins also requires the default-off
+[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
+Backend plugin APIs and ordinary plugin loading do not require that setting.
+
 ## Import convention
+
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
 
 Always import from a specific subpath:
 
@@ -135,6 +157,8 @@ Providers may implement `maintain({ profiles, signal, assertCurrent })` for boun
 
 Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` and `options.executionMode` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease for the same operation id and selected execution mode; a retry cannot silently change modes. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare one or both current `supportedExecutionModes` values in deterministic canonical order: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicate values, unknown modes, and noncanonical order are rejected. `worker-turn` requires a node lease; `remote-exec` accepts either a node lease or an existing SSH lease. Omission advertises no placement modes while preserving direct environment lifecycle calls. Direct environment creation without a session supplies no execution mode, so providers retain their intentional default setup; the bundled Crabbox provider defaults to `worker-turn`. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound. `resolveDestroyTimeoutMs(profile)` declares the equivalent budget for teardown, including snapshot capture or other provider-owned work before confirmed release. Core uses that budget for both requested teardown and bootstrap-failure cleanup; an explicit service timeout override takes precedence. Budgets must be positive safe integers within the platform timer limit.
 An optional `options.signal` cancels the current provisioning attempt. Forward it to acquisition, project preparation, setup, readiness, and enrollment waits, and settle active commands before rejecting; a caller-visible timeout or abort is not proof that a provider child exited or a lease was released. Compose it with project, runtime-preparation, and enrollment signals instead of replacing it with a narrower grant's signal. Keep cleanup on its independent, uncancelled lifecycle authority. Core records destroy intent for the exact operation and resolves its allocation before canonical teardown; providers that cannot cancel promptly remain owned until their real operation settles. Gateway shutdown is distinct: enrollment closure alone retains a fixed allocation for restart adoption, while an aborted provisioning signal means explicit cancellation.
+
+Providers can implement `prepareProvision(profile, operationId, options?)`, returning an allocation function `() => Promise<WorkerLease>`. Preparation may validate local settings and read configuration, but must not allocate, renew, modify resources, enroll nodes, or call project preparation. Core keeps a fresh environment in `requested` during preparation and records `provisioning` immediately before invoking the returned function. Prepared facts remain in that invocation; do not reread configuration inside the allocation function. A fresh preparation failure needs no provider teardown. A replay preparation failure remains uncertain because a previous invocation may already have allocated. Cancellation or timeout discards the prepared function. Providers without this hook retain the existing `provision` contract; providers implementing it should delegate their direct `provision` entry point to the same preparation and allocation flow.
 
 Every worker provider must implement `resolveAllocation(profile, operationId)`, returning `{ leaseId: string; sharedHost: boolean }` for the exact operation. Core passes the frozen settings snapshot, even after the named profile changes or is removed. The handle identifies the cleanup target; it does not prove a machine was created or a transport is ready. Resolution must not allocate, start, renew, run setup, read setup secrets, enroll nodes, or wait for availability. Throw if the identity cannot be resolved safely. When destruction is requested before a provision result is recorded, core persists this handle with the existing teardown state and calls `destroy`, without replaying `provision`. `destroy` still must prove release or authoritative absence. Both calls remain serialized behind any earlier provider operation until it actually settles, including after a caller-visible timeout.
 
@@ -271,6 +295,35 @@ advertised node command.
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+#### File-watch capacity errors
+
+`getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`
+returns `EMFILE`, `ENFILE`, or `ENOSPC` for a native watch failure, or `undefined`
+for other errors. It requires `syscall: "watch"` because watcher libraries can
+forward directory-scan errors through the same error event. Use the result in
+the watcher lifecycle owner to stop native retries and select an existing
+refresh path.
+
+#### SQLite write admission
+
+`runSqliteImmediateTransaction(db, prepare, options?)` from
+`openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
+the event loop. Its asynchronous `prepare` function may run more than once when
+another writer holds the database. Keep preparation repeatable: read and plan
+there, then return a **synchronous** transaction callback. Revalidate current
+owner and row predicates inside that callback before writing.
+
+Returning `undefined` from preparation skips the write and resolves the helper
+to `undefined`, even while another writer remains active. Otherwise, the helper
+resolves to the transaction callback's result. It rejects an already active
+transaction or preparation that leaves a transaction open. Once admitted, the
+callback runs once; callback and commit failures are never replayed.
+
+Admission retries use the connection's existing `busy_timeout`; this is not a
+total deadline for preparation or transaction execution. `options` supplies the
+same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
+database handle and its owning operation alive until the returned promise settles.
 
 #### Webhook body rejection
 
@@ -453,6 +506,20 @@ their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
 Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
 not for renderer registration.
 
+For inline rendering, `resources.readPublicResource(path)` can optionally return
+`{ body: Uint8Array, contentType: string }` for the registered resource paths.
+These bytes are public: the isolated sandbox listener serves them with no
+Gateway credentials. Return only static renderer assets, never user data or
+secrets. Unregistered paths and registrations without this callback stay private.
+Opting in reserves every declared path in one global sandbox namespace: no other
+content kind may declare the same path, even without a public reader. Registration
+rejects these collisions regardless of order; only private registrations may
+share paths. Public paths must already be canonical URL pathnames, without dot
+segments, backslashes, query strings, or fragments. The sandbox host endpoint
+`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
+registrations with `readPublicResource`; private paths retain their capability
+URL encoding.
+
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
 hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
@@ -535,6 +602,15 @@ Cron scheduler. Cron owns timing and creates the background task record when the
 turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
+
+Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
+model-selection helpers. Exact provider/model IDs take precedence over case-insensitive
+matches; ambiguous references need exact provider and model IDs. Pass the provider
+separately when distinct identities share a combined reference. Human-name
+matching, alias/date version selection, and case-insensitive glob scopes remain
+available.
+
+Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:
 

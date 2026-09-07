@@ -29,7 +29,7 @@ import {
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
-import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
@@ -51,7 +51,9 @@ type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  dispatchedAttempt: Awaited<ReturnType<typeof dispatchEmbeddedRunAttempt>>;
+  dispatchedAttempt: Awaited<
+    ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>
+  >["dispatchedAttempt"];
   sessionPromptState: SessionPromptState;
   provider: string;
   modelId: string;
@@ -188,7 +190,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
-  const lastRunPromptUsage = callUsage.latest;
+  // A real mid-turn truncation rewrites the context after earlier usage observations.
+  // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
+  const contextMutatedByMidTurnTruncation =
+    preflightRecovery?.handled === true &&
+    preflightRecovery.source === "mid-turn" &&
+    (preflightRecovery.truncatedCount ?? 0) > 0;
+  const lastRunPromptUsage = contextMutatedByMidTurnTruncation
+    ? { contextUsage: { state: "unavailable" as const } }
+    : callUsage.latest;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),

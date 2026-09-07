@@ -125,6 +125,32 @@ describe("Feishu message content over the real Lark SDK", () => {
           return;
         }
 
+        if (messageId === "om_loopback_merge_forward") {
+          sendJson(200, {
+            code: 0,
+            msg: "ok",
+            data: {
+              items: [
+                {
+                  message_id: messageId,
+                  chat_id: "oc_feishu_content_107947",
+                  chat_type: "group",
+                  msg_type: "merge_forward",
+                  body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+                },
+                {
+                  message_id: "om_loopback_merge_child",
+                  upper_message_id: messageId,
+                  msg_type: "text",
+                  body: { content: JSON.stringify({ text: "forwarded context" }) },
+                  create_time: "1710000000000",
+                },
+              ],
+            },
+          });
+          return;
+        }
+
         const malformed = sensitiveContentByMessageId.get(messageId);
         const message = malformed
           ? { msg_type: malformed.type, body: { content: malformed.content } }
@@ -238,6 +264,14 @@ describe("Feishu message content over the real Lark SDK", () => {
       });
 
       await expect(
+        getMessageFeishu({ cfg, messageId: "om_loopback_merge_forward" }),
+      ).resolves.toMatchObject({
+        messageId: "om_loopback_merge_forward",
+        contentType: "merge_forward",
+        content: "[Merged and Forwarded Messages]\n- forwarded context",
+      });
+
+      await expect(
         getMessageFeishu({ cfg, messageId: "om_loopback_vendor_error" }),
       ).resolves.toBeNull();
 
@@ -255,7 +289,7 @@ describe("Feishu message content over the real Lark SDK", () => {
           appId: "cli_feishu_content_107947",
         },
       ]);
-      expect(requests.filter((request) => request.method === "GET")).toHaveLength(6);
+      expect(requests.filter((request) => request.method === "GET")).toHaveLength(7);
       for (const request of requests.filter((entry) => entry.method === "GET")) {
         expect(request).toMatchObject({
           authorization: "Bearer tat-feishu-content-107947",

@@ -227,15 +227,9 @@ describe("failover-error", () => {
         },
       }),
     ).toBe("format");
-    // Transient server errors (500/502/503/504) should trigger failover as timeout.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
+    for (const status of [500, 502, 503, 504, 520, 521, 522, 523, 524]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("timeout");
+    }
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
@@ -662,6 +656,7 @@ describe("failover-error", () => {
         activeToolCount: 1,
         backgroundTaskCount: 0,
       },
+      timeout: { timeoutPhase: "provider" },
       attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
       soonestCooldownExpiry: null,
     } satisfies ConstructorParameters<typeof FailoverError>[1];
@@ -685,6 +680,26 @@ describe("failover-error", () => {
     );
     expect(original.authMode).toBeUndefined();
   });
+
+  it.each([undefined, "provider"] as const)(
+    "adds a recorded timeout with phase=%s without replacing attribution",
+    (phase) => {
+      const original = new FailoverError("provider failed", {
+        reason: "timeout",
+        authMode: "oauth",
+      });
+      const timeout = phase ? { timeoutPhase: phase } : {};
+      const error = coerceToFailoverError(original, { timeout, authMode: "token" });
+
+      expect(error).toMatchObject({ timeout, authMode: "oauth" });
+      expect(error?.timeout).toBe(timeout);
+      expect(original.timeout).toBeUndefined();
+      expect(coerceToFailoverError(error, { timeout: { timeoutPhase: "preflight" } })).toBe(error);
+      expect(
+        coerceToFailoverError({ status: 500, message: "upstream failed" }, { timeout })?.timeout,
+      ).toBe(timeout);
+    },
+  );
 
   it("preserves raw provider error text for diagnostic logs", () => {
     const err = new FailoverError("LLM request failed: provider rejected the request schema.", {

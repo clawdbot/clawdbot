@@ -66,6 +66,9 @@ channel and optionally per account:
 | `block`   | Keep native tables where the transport supports them; falls back to `code` otherwise |
 | `off`     | Disable table parsing; raw table text passes through unchanged                       |
 
+Inline code in table cells keeps its parsed content, including leading and
+trailing spaces, in every enabled table mode.
+
 Per-channel plugin defaults: Matrix defaults to `block` (native tables);
 Mattermost defaults to `off`; Signal and WhatsApp default to `bullets`;
 Telegram defaults to `block` (which resolves to `code` unless the account
@@ -92,6 +95,8 @@ channels:
   channels render the closing fence correctly.
 - List and blockquote prefixes are part of the IR text, so chunking never
   splits mid-prefix.
+- Paragraphs, headings, and code blocks inside a list item stay separated in
+  the IR, including paragraphs nested inside a quoted list item.
 - Inline styles never split across chunks; the renderer reopens an open
   style at the start of the next chunk.
 
@@ -142,6 +147,8 @@ content is hidden or lost.
 - Signal style ranges use UTF-16 offsets, not code-point offsets.
 - Preserve trailing newlines on fenced code blocks so the closing marker
   lands on its own line.
+- Code-span parsing preserves all-space content. It removes one surrounding
+  space from each end only when both are present and the content is not all spaces.
 
 ## Related
 

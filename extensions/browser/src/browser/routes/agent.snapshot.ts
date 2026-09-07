@@ -91,7 +91,7 @@ async function collectChromeMcpSnapshotUrls(
     fn: `() => {
       const seen = new Set();
       const out = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor.href || "";
         if (!href || seen.has(href)) continue;
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
@@ -594,6 +594,7 @@ export function registerBrowserAgentSnapshotRoutes(
           });
           buffer = snap.buffer;
         } else {
+          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           buffer = await captureScreenshot({
             wsUrl: tab.wsUrl ?? "",
             ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
@@ -601,7 +602,9 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
-            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
+            headless:
+              profileRuntime?.running?.headless ??
+              (await profileRuntime?.externalBrowserMode?.headless),
           });
         }
 

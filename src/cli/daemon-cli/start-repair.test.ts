@@ -129,7 +129,6 @@ describe("repairLoadedGatewayServiceForStart", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
-      tokenRefConfigured: false,
       warnings: [],
     });
     readConfigFileSnapshotForWriteMock.mockResolvedValue({
@@ -571,14 +570,22 @@ describe("repairLoadedGatewayServiceForStart", () => {
     expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
   });
 
-  it.each(["start", "restart"] as const)(
-    "fails %s repair when the post-install isLoaded probe throws",
-    async (action) => {
-      const installMock = vi.fn(async () => {});
+  it.each([
+    { action: "start", probe: "throws" },
+    { action: "restart", probe: "throws" },
+    { action: "start", probe: "returns false" },
+    { action: "restart", probe: "returns false" },
+  ] as const)(
+    "fails $action repair when the post-install probe $probe",
+    async ({ action, probe }) => {
+      const error = new Error("systemd show failed");
       const service = {
-        install: installMock,
+        install: vi.fn(async () => {}),
         isLoaded: vi.fn(async () => {
-          throw new Error("systemd show failed");
+          if (probe === "throws") {
+            throw error;
+          }
+          return false;
         }),
       };
       const state: GatewayServiceState = {
@@ -598,45 +605,17 @@ describe("repairLoadedGatewayServiceForStart", () => {
         json: true,
         stdout: process.stdout,
       };
-
       const repair =
         action === "restart"
           ? repairLoadedGatewayServiceForStart({ ...params, action })
           : repairLoadedGatewayServiceForStart(params);
 
-      await expect(repair).rejects.toThrow(
-        "Gateway service repair verification failed: Error: systemd show failed",
-      );
-      expect(installMock).toHaveBeenCalled();
+      if (probe === "throws") {
+        await expect(repair).rejects.toBe(error);
+      } else {
+        await expect(repair).rejects.toThrow("Gateway service is not loaded after repair.");
+      }
+      expect(service.install).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("fails repair when the post-install isLoaded probe reports not loaded", async () => {
-    const installMock = vi.fn(async () => {});
-    const service = {
-      install: installMock,
-      isLoaded: vi.fn(async () => false),
-    };
-    const state: GatewayServiceState = {
-      installed: true,
-      loadState: { status: "loaded" },
-      running: false,
-      env: {},
-      command: {
-        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-        environment: { HOME: "/home/openclaw" },
-      },
-    };
-
-    await expect(
-      repairLoadedGatewayServiceForStart({
-        service,
-        state,
-        issues: [{ code: "port-mismatch", message: "old port" }],
-        json: true,
-        stdout: process.stdout,
-      }),
-    ).rejects.toThrow("Gateway service repair verification failed: service is not loaded.");
-    expect(installMock).toHaveBeenCalled();
-  });
 });

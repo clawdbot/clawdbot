@@ -424,12 +424,6 @@ async function resolveBackupPlanFromPaths(params: {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.backupPlanTestApi")] = {
-    resolveBackupPlanFromPaths,
-  };
-}
-
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
   const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
   if (depthDelta !== 0) {
@@ -598,6 +592,14 @@ export async function resolveBackupPlanFromDisk(
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
   const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
+  // Effective agent workspaces can omit their shared base. Exclude it only here
+  // so full backups and destructive cleanup retain their existing selection.
+  if (!includeWorkspace && discoverySnapshot.valid) {
+    const sharedWorkspaceBase = discoverySnapshot.config.agents?.defaults?.workspace?.trim();
+    if (sharedWorkspaceBase) {
+      discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));
+    }
+  }
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({

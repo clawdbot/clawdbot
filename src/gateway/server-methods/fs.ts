@@ -16,13 +16,6 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
-function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
-  if (payloadJSON) {
-    return safeParseJson(payloadJSON);
-  }
-  return payload;
-}
-
 export const fsHandlers: GatewayRequestHandlers = {
   "fs.listDir": async ({ params, respond, context, client }) => {
     if (!validateFsListDirParams(params)) {
@@ -81,7 +74,7 @@ export const fsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const payload = parseNodePayload(result.payload, result.payloadJSON);
+        const payload = result.payloadJSON ? safeParseJson(result.payloadJSON) : result.payload;
         if (!validateFsListDirResult(payload)) {
           respond(
             false,
@@ -99,7 +92,7 @@ export const fsHandlers: GatewayRequestHandlers = {
         return;
       }
       const containment = await resolveWorkspacePathContainment(
-        params.path?.trim() || undefined,
+        params.path || undefined,
         context.getRuntimeConfig(),
         { allowMissing: true },
       );

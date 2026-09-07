@@ -1,9 +1,6 @@
 import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type ProjectRankable = {
-  path: string;
-  startLine: number;
-  endLine: number;
   score: number;
   projectKey?: string;
 };
@@ -37,17 +34,10 @@ export function applyProjectRanking<T extends ProjectRankable>(
   if (!activeProjectKeys || activeProjectKeys.length === 0) {
     return eligible;
   }
-  return eligible
-    .map((entry) =>
-      Object.assign({}, entry, {
-        score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
-      }),
-    )
-    .toSorted(
-      (left, right) =>
-        right.score - left.score ||
-        left.path.localeCompare(right.path) ||
-        left.startLine - right.startLine ||
-        left.endLine - right.endLine,
-    ) as T[];
+  // Retrieval owners sort after score adjustment, preserving their exact-match tiers.
+  return eligible.map((entry) =>
+    Object.assign({}, entry, {
+      score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
+    }),
+  );
 }

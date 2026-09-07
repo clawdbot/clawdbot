@@ -153,8 +153,7 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
   pruneMapToMaxSize(normalizedSessionKeyCache, NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES);
 }
 
-function mayContainCasePreservingPeer(raw: string): boolean {
-  const folded = raw.toLowerCase();
+function mayContainCasePreservingPeer(folded: string): boolean {
   return CASE_PRESERVING_PEERS.some((descriptor) => folded.includes(`${descriptor.channel}:`));
 }
 
@@ -212,10 +211,11 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   if (cached !== undefined) {
     return cached;
   }
-  if (!mayContainCasePreservingPeer(raw)) {
-    const normalized = raw.toLowerCase();
-    writeNormalizedSessionKeyCache(raw, normalized);
-    return normalized;
+  const folded = raw.toLowerCase();
+  // Ordinary inventory keys are cheap to fold and would churn the bounded
+  // opaque-key cache, repeatedly scanning deleted Map entries during eviction.
+  if (!mayContainCasePreservingPeer(folded)) {
+    return folded;
   }
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)

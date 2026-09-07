@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Synchronization
 import Testing
@@ -351,7 +352,10 @@ struct WatchSessionActivationGateTests {
                 "Sources/Services/WatchMessagingService.swift"),
             encoding: .utf8)
 
-        #expect(receiverSource.contains("final class WatchMessageAcknowledgment"))
+        let acknowledgmentSource = try String(
+            contentsOf: iosRoot.appendingPathComponent("Sources/Services/WatchSessionActivationGate.swift"),
+            encoding: .utf8)
+        #expect(acknowledgmentSource.contains("final class WatchMessageAcknowledgment"))
         #expect(receiverSource.contains(
             "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
         #expect(receiverSource.contains("acknowledgment?.accept()"))
@@ -368,6 +372,24 @@ struct WatchSessionActivationGateTests {
 
 @MainActor
 struct WatchMessagingInboundTransportTests {
+    @MainActor
+    private final class AdmissionGate {
+        private(set) var entered = false
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            self.entered = true
+            if !self.released { await withCheckedContinuation { self.continuation = $0 } }
+        }
+
+        func release() {
+            self.released = true
+            self.continuation?.resume()
+            self.continuation = nil
+        }
+    }
+
     private final class Recorder: @unchecked Sendable {
         private let lock = NSLock()
         private var values: [String] = []
@@ -386,10 +408,6 @@ struct WatchMessagingInboundTransportTests {
         let service = WatchMessagingService(transport: transport)
         let events = Recorder()
         let order = Recorder()
-        service.setReplyHandler { event in
-            order.append("callback")
-            events.append("reply|\(event.replyId)|\(event.transport)")
-        }
         service.setExecApprovalResolveHandler { event in
             order.append("callback")
             events.append("resolve|\(event.approvalId)|\(event.transport)")
@@ -409,11 +427,6 @@ struct WatchMessagingInboundTransportTests {
 
         let opaqueApprovalID = "approval.e\u{301}/opaque"
         let cases: [([String: Any], String, String)] = [
-            ([
-                "type": OpenClawWatchPayloadType.reply.rawValue,
-                "replyId": "reply/opaque",
-                "actionId": "approve",
-            ], "reply", "reply/opaque"),
             ([
                 "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
                 "replyId": "resolve/opaque",
@@ -445,6 +458,7 @@ struct WatchMessagingInboundTransportTests {
                     transport.session(WCSession.default, didReceiveMessage: item.0)
                 case 1:
                     var reply: [String: Any]?
+                    let orderBefore = order.snapshot().count
                     order.append("reply-pending")
                     transport.session(
                         WCSession.default,
@@ -453,6 +467,7 @@ struct WatchMessagingInboundTransportTests {
                             reply = $0
                             order.append("reply")
                         })
+                    try await Self.waitForCount(orderBefore + 3, in: order)
                     #expect(reply?.count == 1)
                     #expect(reply?["ok"] as? Bool == true)
                 default:
@@ -462,7 +477,7 @@ struct WatchMessagingInboundTransportTests {
                 #expect(events.snapshot().last == "\(item.1)|\(item.2)|\(transportLabel)")
                 #expect(events.snapshot().count == before + 1)
                 if ingress == 1 {
-                    #expect(Array(order.snapshot().suffix(3)) == ["reply-pending", "reply", "callback"])
+                    #expect(Array(order.snapshot().suffix(3)) == ["reply-pending", "callback", "reply"])
                 }
             }
         }
@@ -471,7 +486,6 @@ struct WatchMessagingInboundTransportTests {
         for payload: [String: Any] in [
             [:],
             ["type": "watch.unknown"],
-            ["type": OpenClawWatchPayloadType.reply.rawValue],
         ] {
             transport.session(WCSession.default, didReceiveMessage: payload)
             transport.session(WCSession.default, didReceiveUserInfo: payload)
@@ -487,6 +501,100 @@ struct WatchMessagingInboundTransportTests {
         transport.session(WCSession.default, didReceiveMessage: cases[0].0)
         try await Self.waitForCount(countBeforeInvalid + 1, in: events)
         #expect(events.snapshot().count == countBeforeInvalid + 1)
+    }
+
+    @Test(arguments: [OpenClawWatchChatDeliveryKind.chat, .quickReply])
+    func `interactive chat transfer ACK follows SQLite admission`(kind: OpenClawWatchChatDeliveryKind) async throws {
+        let fixture = try await WatchDeliveryFixture()
+        do {
+            let transport = WatchConnectivityTransport()
+            let service = WatchMessagingService(transport: transport)
+            let gate = AdmissionGate()
+            defer { gate.release() }
+            let order = Recorder()
+            let journal = fixture.journal
+            service.setChatDeliveryHandler { command in
+                order.append("handler")
+                await gate.wait()
+                _ = try await journal.admit(command, nowMs: WatchMessagingPayloadCodec.nowMs())
+                order.append("committed")
+            }
+            let body: OpenClawWatchChatDeliveryBody = kind == .chat ? .chat(text: "Keep this chat")
+                : .quickReply(promptId: "prompt", actionId: "done", actionLabel: nil, note: nil)
+            let command = fixture.command(body: body)
+            let payload = try OpenClawWatchChatDeliveryCodec.encode(command)
+            transport.session(WCSession.default, didReceiveMessage: payload, replyHandler: { receipt in
+                order.append(receipt["ok"] as? Bool == true ? "ok" : "rejected")
+            })
+            let deadline = ContinuousClock.now + .seconds(2)
+            while !gate.entered, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+            try #require(gate.entered)
+            #expect(order.snapshot() == ["handler"])
+            #expect(try await journal.entries().isEmpty)
+            gate.release()
+            try await Self.waitForCount(3, in: order)
+            #expect(order.snapshot() == ["handler", "committed", "ok"])
+            #expect(try await journal.entries().first?.command == command)
+        } catch {
+            await fixture.close()
+            throw error
+        }
+        await fixture.close()
+    }
+
+    @Test func `legacy chat is rejected across every ingress without dispatch or positive ACK`() async throws {
+        let transport = WatchConnectivityTransport()
+        let service = WatchMessagingService(transport: transport)
+        let failures = Recorder()
+        service.setLegacyChatRejectedHandler { failures.append("upgrade_required") }
+        service.setChatDeliveryHandler { _ in Issue.record("legacy payload entered new admission") }
+        service.setAppCommandHandler { _ in Issue.record("legacy chat entered ephemeral commands") }
+        for payload: [String: Any] in [
+            ["type": OpenClawWatchPayloadType.reply.rawValue, "actionId": "done"],
+            ["type": OpenClawWatchPayloadType.appCommand.rawValue, "command": "send-chat"],
+            ["type": OpenClawWatchPayloadType.appCommand.rawValue, "command": " send-chat "],
+        ] {
+            let before = failures.snapshot().count
+            transport.session(WCSession.default, didReceiveMessage: payload)
+            transport.session(WCSession.default, didReceiveUserInfo: payload)
+            transport.session(WCSession.default, didReceiveMessage: payload, replyHandler: { receipt in
+                #expect(receipt["ok"] as? Bool == false)
+                #expect(receipt["error"] as? String == "upgrade_required")
+                failures.append("negative_ack")
+            })
+            try await Self.waitForCount(before + 4, in: failures)
+        }
+    }
+
+    @Test func `interactive chat rejects stale journal authority without a success ACK`() async throws {
+        let fixture = try await WatchDeliveryFixture()
+        do {
+            let transport = WatchConnectivityTransport()
+            let service = WatchMessagingService(transport: transport)
+            let journal = fixture.journal
+            let command = fixture.command()
+            try fixture.databases.removeGatewayData(gatewayID: command.context.gatewayStableID)
+            service.setChatDeliveryHandler { command in
+                _ = try await journal.admit(command, nowMs: WatchMessagingPayloadCodec.nowMs())
+            }
+            let replies = Recorder()
+            try transport.session(
+                WCSession.default,
+                didReceiveMessage: OpenClawWatchChatDeliveryCodec.encode(command),
+                replyHandler: { reply in
+                    #expect(reply["ok"] as? Bool == false)
+                    #expect(reply["error"] as? String == "stale_route")
+                    replies.append("rejected")
+                })
+            try await Self.waitForCount(1, in: replies)
+            #expect(try await journal.entries().isEmpty)
+        } catch {
+            await fixture.close()
+            throw error
+        }
+        await fixture.close()
     }
 
     private static func waitForCount(_ count: Int, in recorder: Recorder) async throws {

@@ -143,11 +143,34 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
+### Config record migrations
+
+Use `mergeMissing(canonical, legacy)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to fill undefined fields without
+replacing authored values. It fills existing nested records in place and keeps
+authored arrays, nulls, and scalars. Missing values are assigned by reference;
+callers own any cloning needed to isolate the migration from its input.
+
+The helper skips undefined source values and `__proto__`, `prototype`, and
+`constructor` keys at each level it merges. It does not recursively sanitize
+newly assigned subtrees.
+
 ### Plugin state migration declarations
 
-Plugins should declare `doctorContract.stateMigrations: true` in
-`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
-artifact. Plan-based migrations can use
+Bundled plugins should list every migration under
+`doctorContract.stateMigrations` in `openclaw.plugin.json` and export the
+matching `stateMigrations` array from their doctor-contract artifact. Keep the
+IDs, order, `doctorOnly` flags, and phases identical. Read-only Doctor planning
+uses candidate-bundled descriptors to record exact plugin owners without
+loading the plugin.
+
+Installed external plugin artifacts are not part of the copied-state or
+candidate content identity. Copied-state planning refuses their migrations,
+including manifests that contain descriptor arrays, until candidate validation
+binds those artifacts separately. The legacy value `true` continues to locate
+their dynamic contract for non-planning Doctor flows.
+
+Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
@@ -306,6 +329,11 @@ media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
 clean published-plugin artifact sweep at that time; migrate before the date.
+
+The unused `buildChannelTurnMediaPayload` alias has been removed from
+`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`buildChannelInboundMediaPayload` export remains available for the compatibility
+window above. New ingress code should pass ordered media facts directly.
 
 For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
 `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,

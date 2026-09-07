@@ -1,9 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { StoredComposerState } from "../lib/chat/outbox-store.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -11,7 +13,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const proofDir = path.resolve(".artifacts/control-ui-e2e/outbox-capacity/after");
+const proofRoot = path.resolve(".artifacts/control-ui-e2e/outbox-capacity/after");
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
 const storageError =
@@ -128,6 +130,7 @@ suite.define(() => {
   ])(
     "durably admits $name PNG attachments before steering an active run (mock Gateway)",
     async ({ name, sizes }) => {
+      const proofDir = createControlUiE2eArtifactDir(`outbox-capacity-${name}`, proofRoot);
       await suite.withPage(
         {
           locale: "en-US",
@@ -230,7 +233,6 @@ suite.define(() => {
               attachmentPreviews: await previews.count(),
               queueRows: await pane.locator(".chat-queue__item").count(),
             };
-            await mkdir(proofDir, { recursive: true });
             await writeFile(
               path.join(proofDir, `${name}.json`),
               `${JSON.stringify(evidence, null, 2)}\n`,
@@ -257,11 +259,14 @@ suite.define(() => {
               .toBe(true);
             await pane.getByText(historyText, { exact: true }).waitFor();
             await pane.getByText(activeText, { exact: true }).waitFor();
-            await page.screenshot({
-              path: path.join(proofDir, `${name}-${outcome}.png`),
-              fullPage: true,
-              animations: "disabled",
-            });
+            await writeFile(
+              path.join(proofDir, `${name}-${outcome}.png`),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                pane.getByText(historyText, { exact: true }),
+                pane.getByText(activeText, { exact: true }),
+                captureImages.first(),
+              ]),
+            );
 
             expect(outcome, JSON.stringify(evidence)).toBe("sent");
             const payloads = await page.evaluate(async () => {
@@ -335,10 +340,7 @@ suite.define(() => {
             await expectRequestCountStable(gateway, "chat.send", 1);
             const sent = sends[0];
             assert(sent, "Expected the observed chat.send before emitting its terminal");
-            await gateway.resolveDeferred("chat.send", {
-              runId: sent.runId,
-              status: "started",
-            });
+            await gateway.resolveDeferred("chat.send");
             await pane.getByRole("button", { name: "Stop generating" }).waitFor();
             await gateway.deferNext("chat.history");
             await gateway.emitChatFinal({
@@ -420,11 +422,12 @@ suite.define(() => {
               )
               .toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
-            await page.screenshot({
-              path: path.join(proofDir, `${name}-terminal-handoff.png`),
-              fullPage: true,
-              animations: "disabled",
-            });
+            await writeFile(
+              path.join(proofDir, `${name}-terminal-handoff.png`),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                deliveredImages.first(),
+              ]),
+            );
           } finally {
             await observation.evaluate((proof) => proof.dispose());
             await observation.dispose();
