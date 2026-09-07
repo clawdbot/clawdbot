@@ -38,6 +38,12 @@ layout remain per-device UI state. Ordinary task revisits restore the browser's
 saved arrangement for that task; opening a gallery card explicitly focuses the
 dashboard.
 
+The browser keeps the three most recently visited tasks in each pane loaded,
+including their dashboard widgets, while you switch tasks or visit Settings.
+Returning to a retained task preserves widget interactions and reading position;
+changed content refreshes in place. Older tasks may reload when reopened. A browser
+reload or a change of Gateway or signed-in user clears these retained views.
+
 ## Arrange your task
 
 The main area and side panel can show either the dashboard or chat. Browser,

@@ -35,6 +35,7 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -591,6 +592,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
+          .retentionScope=${gatewayPresentationScope(context.gateway)}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
