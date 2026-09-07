@@ -22,7 +22,7 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
-async function assertDoctorDatabaseSchemasCompatible(scope?: "state", repair = false) {
+async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db-contract.js"),
@@ -47,7 +47,6 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state", repair = f
       cfg,
       { env: process.env },
     ),
-    verifyCurrentSchemaShape: repair,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
       agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -139,10 +138,7 @@ async function runDoctorHealthFlowWithResult(
         return;
       }
     }
-    const schemas = await assertDoctorDatabaseSchemasCompatible(
-      undefined,
-      maintenance !== undefined,
-    );
+    const schemas = await assertDoctorDatabaseSchemasCompatible();
     const { guardUpdateDoctorSchemaUpgrade } =
       await import("../commands/doctor-update-schema-guard.js");
     await guardUpdateDoctorSchemaUpgrade({

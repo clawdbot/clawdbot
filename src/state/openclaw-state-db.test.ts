@@ -27,6 +27,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -5889,8 +5890,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     let failRemoval = true;
     vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
       if (
-        fs.realpathSync.native(String(pathname)) === fs.realpathSync.native(privateDirectory) &&
-        failRemoval
+        failRemoval &&
+        isPathInside(
+          fs.realpathSync.native(String(pathname)),
+          fs.realpathSync.native(privateDirectory),
+        )
       ) {
         failRemoval = false;
         const error = new Error("busy");
