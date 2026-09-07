@@ -109,7 +109,10 @@ const SessionsHistoryOutputSchema = Type.Union([
   ),
 ]);
 
-const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
+// History reads remain loss-aware and pageable (`truncated`, `hasMore`,
+// `nextOffset`), so a caller can explicitly continue without one response
+// consuming most of the next model prompt.
+const SESSIONS_HISTORY_MAX_BYTES = 32 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
 type GatewayCaller = AgentToolGatewayRequestCaller;

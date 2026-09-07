@@ -46,7 +46,9 @@ const SESSIONS_SEARCH_MAX_LIMIT = 25;
 const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 // Bounds FTS token expansion on the synchronous gateway path while leaving ample query context.
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
-const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
+// Search is a discovery surface: return enough candidates to refine the query,
+// while using the explicit `truncated` flag instead of flooding the model history.
+const SESSIONS_SEARCH_MAX_BYTES = 12 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
 const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
