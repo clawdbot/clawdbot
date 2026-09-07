@@ -3684,7 +3684,14 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
-              pnpm check:browser-inspect-script:swift
+              if has_package_script "check:browser-inspect-script:swift"; then
+                pnpm check:browser-inspect-script:swift
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the browser inspect Swift script guard"
+              else
+                echo "Current CI targets must provide the check:browser-inspect-script:swift package script." >&2
+                exit 1
+              fi
               if has_package_script "check:temp-path-guardrails"; then
                 pnpm check:temp-path-guardrails
               elif [[ "$FROZEN_TARGET" == "true" ]]; then
