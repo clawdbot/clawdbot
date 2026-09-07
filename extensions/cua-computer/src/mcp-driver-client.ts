@@ -9,18 +9,17 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+import { CuaMcpResponseDecoder } from "./mcp-response-decoder.js";
 
 type McpStdioRuntime = Awaited<ReturnType<typeof mcpStdioRuntime.load>>;
 type McpStdioClient = ReturnType<McpStdioRuntime["createMcpStdioClient"]>;
-type McpStdioDecoder = NonNullable<
-  ConstructorParameters<McpStdioRuntime["OpenClawStdioClientTransport"]>[0]["decoder"]
->;
-type McpMessage = NonNullable<ReturnType<McpStdioDecoder["readMessage"]>>;
+type McpMessage = Parameters<
+  InstanceType<McpStdioRuntime["OpenClawStdioClientTransport"]>["send"]
+>[0];
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_STARTUP_TIMEOUT_MS = 10_000;
 const MCP_REQUEST_TIMEOUT_MS = 120_000;
-const MAX_MCP_LINE_BYTES = 256 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_STDERR_BYTES = 32 * 1024;
 const MCP_DESKTOP_TARGET = { kind: "desktop", display_id: "primary" } as const;
@@ -179,94 +178,6 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   };
 }
 
-class CuaMcpResponseDecoder implements McpStdioDecoder {
-  private pending = Buffer.alloc(0);
-  private pendingBytes = 0;
-  private chunk: Buffer = Buffer.alloc(0);
-  private cursor = 0;
-
-  constructor(private readonly fail: (error: Error) => void) {}
-
-  append(chunk: Buffer): void {
-    if (this.pendingBytes + chunk.length > MAX_MCP_LINE_BYTES) {
-      throw this.protocolError("CUA MCP response exceeded the line-size limit");
-    }
-    this.chunk = chunk;
-    this.cursor = 0;
-  }
-
-  readMessage(): McpMessage | null {
-    while (this.cursor < this.chunk.length) {
-      const newline = this.chunk.indexOf(0x0a, this.cursor);
-      if (newline < 0) {
-        this.appendPending(this.chunk.subarray(this.cursor));
-        this.chunk = Buffer.alloc(0);
-        this.cursor = 0;
-        return null;
-      }
-      let line = this.chunk.subarray(this.cursor, newline);
-      this.cursor = newline + 1;
-      if (this.pendingBytes > 0) {
-        this.appendPending(line);
-        line = this.pending.subarray(0, this.pendingBytes);
-        this.pending = Buffer.alloc(0);
-        this.pendingBytes = 0;
-      }
-      if (this.cursor === this.chunk.length) {
-        this.chunk = Buffer.alloc(0);
-        this.cursor = 0;
-      }
-      if (line.length === 0) {
-        continue;
-      }
-      let response: Record<string, unknown> | undefined;
-      try {
-        response = record(JSON.parse(line.toString("utf8")));
-      } catch (error) {
-        throw this.protocolError("CUA MCP proxy returned invalid JSON", error);
-      }
-      if (response?.jsonrpc !== "2.0") {
-        throw this.protocolError("CUA MCP proxy returned an invalid JSON-RPC version");
-      }
-      if (typeof response.id !== "number" || !Number.isSafeInteger(response.id)) {
-        throw this.protocolError("CUA MCP proxy returned an invalid response id");
-      }
-      // Preserve CUA's response/error policy; SDK correlation sees a standard result envelope.
-      return {
-        jsonrpc: "2.0",
-        id: response.id - 1,
-        result: { value: response.result, error: response.error },
-      };
-    }
-    return null;
-  }
-
-  clear(): void {
-    this.pending = Buffer.alloc(0);
-    this.pendingBytes = 0;
-    this.chunk = Buffer.alloc(0);
-    this.cursor = 0;
-  }
-
-  private appendPending(chunk: Buffer): void {
-    const required = this.pendingBytes + chunk.length;
-    if (required > this.pending.length) {
-      const capacity = Math.min(MAX_MCP_LINE_BYTES, Math.max(required, this.pending.length * 2));
-      const pending = Buffer.allocUnsafe(capacity);
-      this.pending.copy(pending, 0, 0, this.pendingBytes);
-      this.pending = pending;
-    }
-    chunk.copy(this.pending, this.pendingBytes);
-    this.pendingBytes = required;
-  }
-
-  private protocolError(message: string, cause?: unknown): Error {
-    const error = driverProtocolError(message, cause);
-    this.fail(error);
-    return error;
-  }
-}
-
 type CuaMcpConnection = Pick<McpStdioClient, "request" | "isTimeout"> & {
   retire: () => Promise<void>;
   terminate: () => Promise<void>;
@@ -280,7 +191,11 @@ class CuaMcpProxyClient {
   private readonly fatal = new Promise<never>((_resolve, reject) => {
     this.rejectFatal = reject;
   });
-  private readonly decoder = new CuaMcpResponseDecoder((error) => this.fail(error));
+  private readonly decoder = new CuaMcpResponseDecoder((message, cause) => {
+    const error = driverProtocolError(message, cause);
+    this.fail(error);
+    return error;
+  });
   private connection?: CuaMcpConnection;
   private shutdown?: Promise<void>;
   private inFlight = 0;
@@ -345,7 +260,8 @@ class CuaMcpProxyClient {
     if (this.stopped) {
       throw driverUnavailable("CUA MCP proxy is stopping");
     }
-    const owner = this;
+    const failWrite = (error: unknown) =>
+      this.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
     class CuaTransport extends OpenClawStdioClientTransport {
       override async send(message: McpMessage): Promise<void> {
         if ("method" in message && message.method === "notifications/cancelled") {
@@ -359,7 +275,7 @@ class CuaMcpProxyClient {
               : message,
           );
         } catch (error) {
-          owner.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
+          failWrite(error);
           throw error;
         }
       }
