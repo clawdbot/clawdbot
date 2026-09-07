@@ -91,7 +91,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .description("Repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
     .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
-    .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
+    .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option("--no-restart", "Accepted for update command parity; repair never restarts")

@@ -399,6 +399,7 @@ describe("update orchestration lifecycle ownership", () => {
       channel: "beta",
       restart: false,
       phaseTimings: [
+        "preflight",
         "targetConfigValidation",
         "configSnapshot",
         "doctor",

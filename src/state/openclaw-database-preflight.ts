@@ -72,6 +72,7 @@ export type IndeterminateOpenClawDatabase = {
 export type OpenClawDatabaseSchemaPreflight = {
   incompatible: IncompatibleOpenClawDatabase[];
   indeterminate: IndeterminateOpenClawDatabase[];
+  pendingMigrations?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">[];
 };
 
 type OpenClawStateSchemaPreflightResult = {
@@ -375,6 +376,14 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       });
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const stateVersion = readSqliteUserVersion(stateDatabase);
+      if (stateVersion < options.supportedVersions.state) {
+        (result.pendingMigrations ??= []).push({
+          kind: "state",
+          path: statePath,
+          foundVersion: stateVersion,
+          supportedVersion: options.supportedVersions.state,
+        });
+      }
       if (stateVersion > options.supportedVersions.state) {
         const writerAppVersion = readWriterAppVersion(stateDatabase);
         result.incompatible.push({
@@ -502,6 +511,15 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       });
       agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const agentVersion = readSqliteUserVersion(agentDatabase);
+      if (agentVersion < options.supportedVersions.agent) {
+        (result.pendingMigrations ??= []).push({
+          kind: "agent",
+          path: agentPath,
+          ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
+          foundVersion: agentVersion,
+          supportedVersion: options.supportedVersions.agent,
+        });
+      }
       if (agentVersion <= options.supportedVersions.agent) {
         if (options.verifyCurrentSchemaShape === true && row.agentId !== undefined) {
           // Existing agent databases require Doctor-owned migration before

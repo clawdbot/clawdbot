@@ -51,7 +51,7 @@ it.each([
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
 ])(
-  "classifies activation after a first serving turn (agent=$agentId, changed=$changed)",
+  "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
     const stateDir = await fs.realpath(dirs.make("update-first-serving-turn-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };

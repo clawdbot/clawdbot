@@ -89,7 +89,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-media",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });
@@ -144,7 +144,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-1",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked },
     });
@@ -195,7 +195,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-command",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });
@@ -241,7 +241,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-cancel",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked },
     });
@@ -286,7 +286,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-finalize",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });

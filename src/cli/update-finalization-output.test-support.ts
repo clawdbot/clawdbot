@@ -7,9 +7,22 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-// Keep real install discovery inside the fixture; no openclaw.mjs means no completion-cache write.
+// Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [scenario, ...args] = process.argv.slice(2);
+const borrowed = scenario?.startsWith("borrowed-");
+if (scenario === "completion-hang") {
+  await fs.writeFile(
+    path.join(root, "openclaw.mjs"),
+    `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(path.join(root, "completion.pid"))}, String(process.pid));
+process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 10_000);`,
+  );
+}
+if (scenario === "human-recovery-plugin-error") {
+  Object.defineProperty(process.stdin, "isTTY", { value: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true });
+}
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
@@ -87,7 +100,11 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    "export const createUpdateConfigSnapshot = async () => {};",
+    scenario === "phase-hang"
+      ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
+      : scenario === "borrowed-phase"
+        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+        : "export const createUpdateConfigSnapshot = async () => {};",
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -102,6 +119,17 @@ const stubs = new Map<string, string>([
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
+if (scenario === "human-recovery-plugin-error") {
+  stubs.set(
+    sourceUrl("./update-cli/update-command-report.ts"),
+    `
+export async function runInteractiveUpdateFailureAction({ runtime }) {
+  await new Promise(resolve => setTimeout(resolve, 11_000));
+  runtime.log('Interactive recovery completed.');
+  return 'handled';
+}`,
+  );
+}
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
@@ -120,28 +148,45 @@ const { registerUpdateCli } = await import("./update-cli.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { formatCliJsonFailure } = await import("./failure-output.js");
 const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
+const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
 const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
-await runCliWithExitFinalization({
-  run: () =>
-    withConsoleLogsRoutedToStderrForJson(
-      process.argv,
-      async () => {
-        const program = new Command().name("openclaw");
-        program.hook("preAction", (_root, command) => {
-          applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
-        });
-        registerUpdateCli(program);
-        await program.parseAsync(process.argv);
-      },
-      { retainRoutingUntilProcessExit: true },
-    ),
-  onError: (error) => {
-    defaultRuntime.writeJson(formatCliJsonFailure(error));
-    process.exitCode = 1;
-  },
-});
+const run = () =>
+  withConsoleLogsRoutedToStderrForJson(
+    process.argv,
+    async () => {
+      const program = new Command().name("openclaw");
+      program.hook("preAction", (_root, command) => {
+        applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
+      });
+      registerUpdateCli(program);
+      await program.parseAsync(process.argv);
+      if (scenario === "handle-hang") {
+        setInterval(() => {}, 1000);
+      }
+      if (borrowed) {
+        if (scenario === "borrowed-output") {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 11_000);
+          });
+        }
+        console.error("Borrowed caller completed.");
+      }
+    },
+    { retainRoutingUntilProcessExit: true },
+  );
+if (borrowed) {
+  await run();
+} else {
+  await runCliWithExitFinalization({
+    run: () => withCliProcessScope(run),
+    onError: (error) => {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
+      process.exitCode = 1;
+    },
+  });
+}

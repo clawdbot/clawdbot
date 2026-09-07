@@ -2360,7 +2360,6 @@ src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
-src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
@@ -2533,7 +2532,7 @@ src/config/doc-baseline.ts	8
 src/config/docs-config-examples.ts	1
 src/config/future-version-guard.ts	2
 src/config/gateway-dispatch-config.ts	2
-src/config/group-policy.ts	2
+src/config/group-policy.ts	1
 src/config/implicit-mentions.ts	1
 src/config/includes-scan.ts	1
 src/config/io.audit.ts	3
@@ -2801,7 +2800,7 @@ src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-history-budget.ts	6
 src/gateway/server-methods/chat-history-handler.ts	2
-src/gateway/server-methods/chat-message-get-handler.ts	3
+src/gateway/server-methods/chat-message-get-handler.ts	2
 src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
@@ -2809,7 +2808,7 @@ src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
-src/gateway/server-methods/chat.ts	2
+src/gateway/server-methods/chat.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/cron.ts	17
@@ -3811,7 +3810,6 @@ ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
-ui/src/components/terminal/terminal-panel-session-controller.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
@@ -3900,7 +3898,7 @@ ui/src/pages/chat/components/chat-message-markdown.ts	1
 ui/src/pages/chat/components/chat-message-media.ts	3
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
-ui/src/pages/chat/components/chat-model-picker.ts	7
+ui/src/pages/chat/components/chat-model-picker.ts	5
 ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-rail.ts	4
@@ -3965,7 +3963,6 @@ ui/src/pages/model-setup/provider-picker.ts	3
 ui/src/pages/model-setup/view.ts	2
 ui/src/pages/new-session/discovery.ts	3
 ui/src/pages/new-session/draft-place-browser.ts	4
-ui/src/pages/new-session/new-session-runtime.ts	1
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/place-facts.ts	1
 ui/src/pages/new-session/preferences.ts	1

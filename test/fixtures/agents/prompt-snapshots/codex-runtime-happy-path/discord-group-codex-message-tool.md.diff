@@ -1,5 +1,5 @@
 --- telegram-direct-codex-message-tool.md	sha256=1f0e5aa6d2bd912cd45d8e604558bb4f4d82124496c23526c62d00e7e3cf8237
-+++ discord-group-codex-message-tool.md	sha256=3e483c9beea3569b68e0f9a79991aa1acae9f6e10ee333e18758871a6317a6e9
++++ discord-group-codex-message-tool.md	sha256=63d926a4f2a0f55a67faace9939eb9e283a550c794b3da6f9bf60f9b375da41f
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -39,18 +39,18 @@
 @@ -258,2 +258,2 @@
 -    "chars": 3672,
 -    "roughTokens": 918
-+    "chars": 4781,
-+    "roughTokens": 1196
++    "chars": 4620,
++    "roughTokens": 1155
 @@ -262,2 +262,2 @@
 -    "chars": 28502,
 -    "roughTokens": 7126
-+    "chars": 29981,
-+    "roughTokens": 7496
++    "chars": 29820,
++    "roughTokens": 7455
 @@ -266,2 +266,2 @@
 -    "chars": 86325,
 -    "roughTokens": 21582
-+    "chars": 88360,
-+    "roughTokens": 22090
++    "chars": 88199,
++    "roughTokens": 22050
 @@ -270,2 +270,2 @@
 -    "chars": 863,
 -    "roughTokens": 216
@@ -67,7 +67,7 @@
 +  "chat_type": "group"
 @@ -486,1 +486,3 @@
 -You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
-+You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to this group chat. Be extremely selective: reply only when directly addressed or clearly helpful.
++You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send).
 +
 +Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
 @@ -524,1 +526,1 @@

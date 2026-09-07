@@ -1028,6 +1028,8 @@ export const en: TranslationMap & {
     nativeTerminalHint:
       "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
     chooseNativeHost: "Choose a native CLI host",
+    nativeHostsUnavailable:
+      "No native CLI is available. Install it on the Gateway or connect a machine with CLI access, then reconnect to the Gateway.",
     nativeTerminalPrompt: "Optional initial prompt for the native CLI",
     terminalNodeFolder: "Existing absolute folder on this node",
     terminalAttachmentsUnsupported:
@@ -2237,6 +2239,8 @@ export const en: TranslationMap & {
     sessionAttached: "attached",
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
+    startCancelled: "Terminal start was cancelled. Try again.",
+    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -2245,6 +2249,7 @@ export const en: TranslationMap & {
     agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
+    exitedSignal: "exited (signal {signal})",
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",

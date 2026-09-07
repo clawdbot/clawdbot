@@ -127,6 +127,9 @@ export async function prepareCodexAttemptTurnRequest(
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
+    const referencesRetained = turnState.codexTurnPromptText.includes(
+      workspaceBootstrapContext.promptContext ?? "",
+    );
     const turnStartParams = buildTurnStartParams(
       {
         ...runtimeParams,
@@ -194,7 +197,10 @@ export async function prepareCodexAttemptTurnRequest(
       );
       acceptedTurnId = startedTurn.turn.id;
       connection.assertCurrent();
-      references.accepted();
+      // Fitting may drop or truncate references; only acknowledge the complete block.
+      if (referencesRetained) {
+        references.accepted();
+      }
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
