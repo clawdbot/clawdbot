@@ -413,6 +413,12 @@ Packaging, deployment, and integrations that make OpenClaw easier to run and ext
 
 <CardGroup cols={2}>
 
+<Card title="VibeKit phone-native app builder" icon="mobile" href="https://vibekit.bot">
+  **@609NFT** • `mobile` `hosting` `app-builder`
+
+Every app gets its own persistent OpenClaw agent that builds, hosts, and keeps improving it over time (Postgres database and a live domain included), driven entirely from your phone or a CLI. On iOS: [App Store](https://apps.apple.com/us/app/vibekit-ai-app-builder/id6760206636).
+</Card>
+
 <Card title="Home Assistant add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
 
