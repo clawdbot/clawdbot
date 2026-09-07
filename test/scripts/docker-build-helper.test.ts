@@ -1758,11 +1758,29 @@ export -f node
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  local last_arg=""
+  local arg
+  for arg in "$@"; do
+    last_arg="$arg"
+  done
   if [[ "$1" == "rm" ]]; then
     shift
     test "$1" = "-f"
     shift
+    printf "rm %s\\n" "$1" >>"$TMPDIR/docker-lifecycle"
     printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
+    return 0
+  fi
+  if [[ "$1" == "inspect" ]]; then
+    printf "inspect %s\\n" "$last_arg" >>"$TMPDIR/docker-lifecycle"
+    if [[ "\${DOCKER_STUB_INSPECT_STATUS:-0}" != "0" ]]; then
+      printf "%s\\n" "\${DOCKER_STUB_INSPECT_ERROR:-inspect failed}" >&2
+      return "$DOCKER_STUB_INSPECT_STATUS"
+    fi
+    printf "ExitCode=%s\\nOOMKilled=%s\\nError=%s\\n" \\
+      "\${DOCKER_STUB_EXIT_CODE:-0}" \\
+      "\${DOCKER_STUB_OOM:-false}" \\
+      "\${DOCKER_STUB_ERROR:-}"
     return 0
   fi
 
@@ -1770,8 +1788,8 @@ docker() {
   local mount_path=""
   local expect_volume_path=0
   local expect_cidfile=0
-  local arg
   for arg in "$@"; do
+    test "$arg" != "--rm"
     if [[ "$expect_cidfile" == "1" ]]; then
       cidfile="$arg"
       expect_cidfile=0
@@ -1793,7 +1811,8 @@ docker() {
 
   test -n "$cidfile"
   test ! -e "$cidfile"
-  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-}" >"$cidfile"
+  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >"$cidfile"
+  printf "run container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >>"$TMPDIR/docker-lifecycle"
   test -n "$mount_path"
   test -f "$mount_path"
   printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
@@ -1804,10 +1823,22 @@ export -f docker
 package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
 pack_dir="$(dirname "$package_tgz")"
 docker_e2e_package_mount_args "$package_tgz"
-DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
+export DOCKER_STUB_STATUS=7
+export DOCKER_STUB_EXIT_CODE=137
+export DOCKER_STUB_OOM=true
+DOCKER_STUB_ERROR="$(printf '%05000d' 0)"
+export DOCKER_STUB_ERROR
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/failure-stderr" || run_status="$?"
 test "\${run_status:-0}" = "7"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
 grep -qx "container-7" "$TMPDIR/docker-rm-seen"
+test "$(sed -n '1p' "$TMPDIR/docker-lifecycle")" = "run container-7"
+test "$(sed -n '2p' "$TMPDIR/docker-lifecycle")" = "inspect container-7"
+test "$(sed -n '3p' "$TMPDIR/docker-lifecycle")" = "rm container-7"
+grep -q '^Docker container state:$' "$TMPDIR/failure-stderr"
+grep -q '^ExitCode=137$' "$TMPDIR/failure-stderr"
+grep -q '^OOMKilled=true$' "$TMPDIR/failure-stderr"
+test "$(wc -c <"$TMPDIR/failure-stderr")" -lt 5000
 test -f "$TMPDIR/package-mount-seen"
 test ! -e "$pack_dir"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
@@ -1816,11 +1847,25 @@ external_dir="$TMPDIR/external-package"
 mkdir -p "$external_dir"
 printf fixture >"$external_dir/openclaw-current.tgz"
 docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
+export DOCKER_STUB_STATUS=23
+export DOCKER_STUB_INSPECT_STATUS=9
+export DOCKER_STUB_INSPECT_ERROR="daemon unavailable"
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/inspect-failure-stderr" || inspect_failure_status="$?"
+test "\${inspect_failure_status:-0}" = "23"
+grep -q "Docker container state unavailable (inspect exit 9): daemon unavailable" "$TMPDIR/inspect-failure-stderr"
+tail -n 3 "$TMPDIR/docker-lifecycle" >"$TMPDIR/inspect-failure-lifecycle"
+printf "run container-23\\ninspect container-23\\nrm container-23\\n" >"$TMPDIR/expected-inspect-failure-lifecycle"
+cmp "$TMPDIR/expected-inspect-failure-lifecycle" "$TMPDIR/inspect-failure-lifecycle"
+
+unset DOCKER_STUB_STATUS DOCKER_STUB_EXIT_CODE DOCKER_STUB_OOM DOCKER_STUB_ERROR
+unset DOCKER_STUB_INSPECT_STATUS DOCKER_STUB_INSPECT_ERROR
 unset DOCKER_COMMAND_TIMEOUT
 rm -f "$TMPDIR/docker-timeout-seen"
-docker_e2e_run_with_harness image-name bash -lc true
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/success-stderr"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
-grep -qx "container-" "$TMPDIR/docker-rm-seen"
+grep -qx "container-0" "$TMPDIR/docker-rm-seen"
+test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run container-0\\nrm container-0'
+test ! -s "$TMPDIR/success-stderr"
 test -f "$external_dir/openclaw-current.tgz"
 `,
     },
