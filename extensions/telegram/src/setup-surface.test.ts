@@ -80,6 +80,46 @@ describe("Telegram setup promotion contract", () => {
     ]);
     expect(next.channels?.telegram?.botToken).toBeUndefined();
   });
+
+  it("keeps the configured default's own entry when a shadowed alias is listed first", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "123:ROOT_TEST_TOKEN",
+          defaultAccount: "default",
+          accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+        },
+      },
+    };
+
+    // The same named add as the row above, with the configured default naming the canonical id.
+    // resolveTelegramAccount takes the exact "default" key for that id
+    // (src/routing/account-lookup.ts:35-37), so a promotion into the alias listed first would
+    // leave the resolved account with no token.
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "telegram",
+      setupSurface: telegramSetupContract as ChannelSetupAdapter,
+    });
+    const written = telegramSetupContract.applyAccountConfig({
+      cfg: promoted,
+      accountId: "new-account",
+      input: { token: "789:NEW_TEST_TOKEN" },
+    });
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(written);
+    const next = JSON.parse(persisted) as OpenClawConfig;
+
+    const account = resolveTelegramAccount({ cfg: next, accountId: "default" });
+    expect(account.token).toBe("123:ROOT_TEST_TOKEN");
+    expect(account.name).toBe("Canon");
+    expect(Object.keys(next.channels?.telegram?.accounts ?? {})).toEqual([
+      "Default",
+      "default",
+      "new-account",
+    ]);
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+  });
 });
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {

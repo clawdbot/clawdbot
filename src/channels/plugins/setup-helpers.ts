@@ -335,8 +335,8 @@ function resolveExistingAccountKey(
     // only keep a value with the entry that lookup already prefers, so accounts.default receives
     // the moved values even when accounts.Default is listed before it, and the scan still keeps an
     // alias such as accounts["Work.Bot"] from gaining a canonical twin that would shadow it. The
-    // target may be a raw existing key (the defaultAccount and sole-named-key paths return one),
-    // and Object.hasOwn returns it just as the scan's fallback would.
+    // target is still a raw existing key on the sole-named-key path, and Object.hasOwn returns it
+    // just as the scan's fallback would, since no second named key can carry the same id.
     if (Object.hasOwn(accounts, targetAccountId)) {
       return targetAccountId;
     }
@@ -372,11 +372,14 @@ function resolveSingleAccountPromotionTarget(params: {
       ? normalizeAccountId(params.channel.defaultAccount)
       : undefined;
   if (normalizedDefaultAccount) {
-    return (
-      Object.keys(accounts).find(
-        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
-      ) ?? DEFAULT_ACCOUNT_ID
-    );
+    // A configured default names an id, not a spelling, so this branch returns the canonical id
+    // and leaves the choice of key to resolveExistingAccountKey, whose exact-first step picks the
+    // entry the channel's own reader takes when the map holds both spellings.
+    return Object.keys(accounts).some(
+      (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+    )
+      ? normalizedDefaultAccount
+      : DEFAULT_ACCOUNT_ID;
   }
   const namedAccounts = Object.keys(accounts).filter(Boolean);
   return namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID;

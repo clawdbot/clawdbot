@@ -593,6 +593,34 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(channel.botToken).toBeUndefined();
   });
 
+  it("targets the exact key when defaultAccount names a shadowed alias and the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            defaultAccount: "default",
+            accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      } as ChannelSetupAdapter,
+    });
+
+    // The configured defaultAccount names the canonical id, and Telegram reads that id with
+    // resolveNormalizedAccountEntry, which takes the exact "default" key before any scan
+    // (src/routing/account-lookup.ts:35-37). Targeting the raw alias listed first would move the
+    // token into "Default" and leave the entry every reader takes without one.
+    const channel = channelRecord(next, "telegram");
+    expect(accountRecord(channel, "default")).toEqual({ name: "Canon", botToken: "root-tok" });
+    expect(accountRecord(channel, "Default")).toEqual({ name: "Alias" });
+    expect(channel.botToken).toBeUndefined();
+  });
+
   it("takes the exact key beside a dotted alias listed first when the channel declares nothing", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({
