@@ -1,18 +1,56 @@
+// Line tests cover bot message context plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  getSessionBindingService,
+  testing as sessionBindingTesting,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
   setActivePluginRegistry,
-} from "../../../test/helpers/plugins/plugin-registry.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const getUserProfileMock = vi.hoisted(() =>
+  vi.fn(async () => null as { displayName: string } | null),
+);
+const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
+const toInboundMediaFactsWithMetadataMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  toInboundMediaFactsWithMetadataMock.mockImplementation(actual.toInboundMediaFactsWithMetadata);
+  return {
+    ...actual,
+    toInboundMediaFactsWithMetadata: toInboundMediaFactsWithMetadataMock,
+  };
+});
+
+// Names are LINE API reads; the context under test only cares what it does with
+// the answers, so the two lookups are stubbed and the default answer is "unknown",
+// which is what an unreachable or unauthorized LINE account produces.
+vi.mock("./send.js", () => ({
+  getUserProfile: getUserProfileMock,
+  getLineGroupName: getLineGroupNameMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: () => true,
+  };
+});
 
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
@@ -72,6 +110,10 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
+    logVerboseMock.mockClear();
+    getUserProfileMock.mockClear();
+    getLineGroupNameMock.mockClear();
+    toInboundMediaFactsWithMetadataMock.mockClear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -107,13 +149,317 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    if (!context) {
-      throw new Error("context missing");
-    }
 
-    expect(context.ctxPayload.OriginatingTo).toBe("line:group:group-1");
-    expect(context.ctxPayload.To).toBe("line:group:group-1");
+    expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
+    expect(context?.ctxPayload.To).toBe("line:group:group-1");
+  });
+
+  const stickerEvent = (sticker: Partial<Record<string, unknown>>) =>
+    createMessageEvent({ type: "user", userId: "user-1" }, {
+      message: {
+        id: "m-sticker",
+        type: "sticker",
+        packageId: "6136",
+        stickerId: "10979904",
+        stickerResourceType: "STATIC",
+        quoteToken: "quote-token",
+        ...sticker,
+      },
+    } as Partial<MessageEvent>);
+
+  it("describes a sticker with the keywords LINE sent for it", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Only LINE's own sticker facts reach the agent; the package id names no
+    // package that a webhook carries.
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Thank you, Thanks, Grateful]");
+  });
+
+  it("projects a sticker webhook LINE actually sent", async () => {
+    // Observed payload from a real LINE sticker message (tokens redacted).
+    // Its package id is one the deleted table claimed to know, and LINE's own
+    // keywords identify the sticker as a different character than that entry
+    // named — so the shipped shape, not a hand-made one, pins this projection.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        id: "629316390784598646",
+        stickerId: "52002734",
+        packageId: "11537",
+        stickerResourceType: "ANIMATION",
+        keywords: [
+          "amaze",
+          "Congratulations",
+          ":o",
+          "!!",
+          "brown",
+          "Celebrate",
+          "Wow",
+          "Shock",
+          "jolt",
+          "astonish",
+          "OMG",
+          "Yay",
+          "bewildered",
+          "ohyeah",
+          "Surprised",
+        ],
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
+  });
+
+  it("uses the sender's own text for a message sticker", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text: "See you tomorrow" }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
+  });
+
+  it.each([
+    ["  See you tomorrow  ", "[Sent a sticker:   See you tomorrow  ]"],
+    ["   ", "[Sent a sticker:    ]"],
+  ])("preserves sender-authored sticker whitespace", async (text, expected) => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({ text, keywords: ["fallback"] }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe(expected);
+  });
+
+  it("prefers message-sticker text over experimental keywords", async () => {
+    // LINE's official message-sticker webhook example carries both properties.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        stickerId: "738839",
+        packageId: "12287",
+        stickerResourceType: "MESSAGE",
+        keywords: ["Anticipation", "Sparkle", "Straight face", "Staring", "Thinking"],
+        text: "Let's\nhang out\nthis weekend!",
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Let's\nhang out\nthis weekend!]");
+  });
+
+  it("still reports a sticker that carries neither keywords nor text", async () => {
+    const context = await buildLineMessageContext({
+      event: stickerEvent({}),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
+  });
+
+  it("drops the bot's own mention from the command body while the agent still reads the message as sent", async () => {
+    // LINE group chats require the mention before a message reaches the bot,
+    // and LINE writes it as the channel display name in plain text.
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-mention",
+        type: "text",
+        text: "@openclaw3 /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 10, userId: "Ubot", isSelf: true }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("/status");
+    expect(context?.ctxPayload.BodyForCommands).toBe("/status");
+    expect(context?.ctxPayload.RawBody).toBe("@openclaw3 /status");
+    expect(context?.ctxPayload.BodyForAgent).toBe("@openclaw3 /status");
+  });
+
+  it("keeps the command body when a message carries only another member's mention", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" }, {
+      message: {
+        id: "m-member-mention",
+        type: "text",
+        text: "@Alice look at /status",
+        quoteToken: "quote-token",
+        mention: {
+          mentionees: [{ type: "user", index: 0, length: 6, userId: "Ualice", isSelf: false }],
+        },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandBody).toBe("@Alice look at /status");
+  });
+
+  it("skips media metadata projection for text-only messages", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.media).toEqual([]);
+    expect(toInboundMediaFactsWithMetadataMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the caller-provided inbound history through to the context payload", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
+    });
+
+    expect(context?.ctxPayload.InboundHistory).toEqual([
+      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000 },
+    ]);
+  });
+
+  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
+    const timestamp = 1_700_000_000_000;
+    const logCfg: OpenClawConfig = {
+      ...cfg,
+      agents: { defaults: { envelopeTimestamp: "off" } },
+    };
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "baseline", type: "text", text: "BODY_MARKER" },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    // Identity lookups log their own misses, so select the preview line by shape
+    // rather than by call order.
+    const baselineLog =
+      logVerboseMock.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes('preview="')) ?? "";
+    const baselinePreview = baselineLog.match(/preview="(.*)"$/)?.[1] ?? "";
+    const markerIndex = baselinePreview.indexOf("BODY_MARKER");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    const rawBody = `${"x".repeat(199 - markerIndex)}🚀tail`;
+    logVerboseMock.mockClear();
+
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "1", type: "text", text: rawBody },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;
+    const formattedBodyLength = markerIndex + rawBody.length;
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      `line inbound: from=line:user-1 len=${formattedBodyLength} preview="${expectedPreview}"`,
+    );
+  });
+
+  it("keeps failed media-only command text empty and preserves its native media fact", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      mediaUnavailable: true,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: undefined,
+      kind: "image",
+    });
+  });
+
+  it("keeps materialized media-only text empty and projects structured media facts", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-2",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
+      cfg,
+      account,
+      commandAuthorized: false,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: "/tmp/line-image.png",
+      contentType: "image/png",
+      kind: "image",
+    });
   });
 
   it("routes group postback replies to the group id", async () => {
@@ -190,6 +536,69 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
   });
 
+  it("carries a group's configured skill scope on the inbound context", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: {
+        ...account,
+        config: {
+          groups: {
+            "group-1": { skills: ["triage"], systemPrompt: "Stay on triage" },
+          },
+        },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Stay on triage");
+  });
+
+  it("keeps an empty group skill scope as a scope rather than dropping it", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: [] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual([]);
+  });
+
+  it("carries the same group skill scope when a postback answers the group", async () => {
+    const event = createPostbackEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLinePostbackContext({
+      event,
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+  });
+
+  it("leaves a direct chat without a group skill scope", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toBeUndefined();
+  });
+
   it("keeps non-text message contexts fail-closed for command auth", async () => {
     const event = createMessageEvent(
       { type: "user", userId: "user-audio" },
@@ -206,7 +615,6 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: false,
     });
 
-    expect(context).not.toBeNull();
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
   });
 
@@ -224,6 +632,57 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.CommandAuthorized).toBe(true);
   });
 
+  // Shapes observed on a live channel: a datetime picker tapped in LINE for macOS,
+  // and LINE's documented rich-menu switch payload.
+  const postbackSelectionCases: {
+    name: string;
+    postback: PostbackEvent["postback"];
+    expected: string;
+  }[] = [
+    {
+      name: "datetime picker",
+      postback: { data: "probe_deadline", params: { datetime: "2026-08-15T01:48" } },
+      expected: "probe_deadline datetime=2026-08-15T01:48",
+    },
+    {
+      name: "rich menu switch",
+      postback: {
+        data: "menu",
+        params: { status: "SUCCESS", newRichMenuAliasId: "richmenu-alias-b" },
+      },
+      expected: "menu newRichMenuAliasId=richmenu-alias-b status=SUCCESS",
+    },
+    {
+      name: "picker dismissed without a value",
+      postback: { data: "probe_deadline", params: { date: "   " } },
+      expected: "probe_deadline",
+    },
+    {
+      name: "device control",
+      postback: { data: "line.action=volume_up&line.device=Living%20Room" },
+      expected: "line action volume_up device Living Room",
+    },
+  ];
+
+  it.each(postbackSelectionCases)(
+    "gives the agent what the user picked in a $name postback",
+    async ({ postback, expected }) => {
+      const event = createPostbackEvent({ type: "user", userId: "user-pb" }, { postback });
+
+      const context = await buildLinePostbackContext({
+        event,
+        cfg,
+        account,
+        commandAuthorized: true,
+      });
+
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      // The callback token stays verbatim so command gating keeps matching on it.
+      expect(context?.ctxPayload.RawBody).toBe(postback.data);
+      expect(context?.ctxPayload.CommandBody).toBe(postback.data);
+    },
+  );
+
   it("sets CommandAuthorized=false when not authorized", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-noauth" });
 
@@ -236,6 +695,32 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+  });
+
+  it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+    const directCfg: OpenClawConfig = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    };
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg: directCfg,
+      account: {
+        ...account,
+        config: { allowFrom: ["user-1"] },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.route.sessionKey).toBe("agent:main:line:direct:user-1");
+    const updateLastRoute = context?.turn.record.updateLastRoute;
+    expect(updateLastRoute?.sessionKey).toBe(context?.route.sessionKey);
+    expect(updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(updateLastRoute?.channel).toBe("line");
+    expect(updateLastRoute?.to).toBe("user-1");
+    expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("sets CommandAuthorized on postback context", async () => {
@@ -284,9 +769,8 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-group-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-group-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
   it("room peer binding matches raw roomId without prefix (#21907)", async () => {
@@ -322,12 +806,11 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-room-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-room-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
-  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
+  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:user:U1234567890abcdef1234567890abcdef",
     });
@@ -346,7 +829,7 @@ describe("buildLineMessageContext", () => {
     });
   });
 
-  it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
+  it("normalizes canonical LINE targets through the plugin bindings surface", () => {
     const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
@@ -397,9 +880,137 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("codex");
-    expect(context!.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-    expect(context!.route.matchedBy).toBe("binding.channel");
+    expect(context?.route.agentId).toBe("codex");
+    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+    expect(context?.route.matchedBy).toBe("binding.channel");
   });
+
+  it("gives the agent the sender's and the group's name instead of their ids", async () => {
+    getUserProfileMock.mockResolvedValueOnce({ displayName: "Sora" });
+    getLineGroupNameMock.mockResolvedValueOnce("Release Squad");
+
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.SenderName).toBe("Sora");
+    expect(context?.ctxPayload.GroupSubject).toBe("Release Squad");
+    expect(context?.ctxPayload.ConversationLabel).toBe("Release Squad");
+    // The envelope the agent reads names the speaker rather than their raw id.
+    expect(context?.ctxPayload.Body).toContain("Sora");
+    expect(context?.ctxPayload.Body).not.toContain("user:U47f0bbc534dc503c4e4cadc86e619b63");
+  });
+
+  it("falls back to the raw ids when LINE will not name the sender or the group", async () => {
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.SenderName).toBeUndefined();
+    expect(context?.ctxPayload.GroupSubject).toBe("C5aeb18d690759492f1a8c391c37549a0");
+  });
+
+  it("asks LINE for the sender's profile through the conversation they wrote in", async () => {
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(getUserProfileMock).toHaveBeenCalledWith(
+      "U47f0bbc534dc503c4e4cadc86e619b63",
+      expect.objectContaining({ groupId: "C5aeb18d690759492f1a8c391c37549a0" }),
+    );
+  });
+
+  it.each<{
+    text: string;
+    spans: [number, number][];
+    expected: string;
+    mention?: webhook.TextMessageContent["mention"];
+  }>([
+    { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
+    { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
+    {
+      text: "😂() (hello)",
+      spans: [
+        [2, 2],
+        [5, 7],
+      ],
+      expected: "😂[emoji] (hello)",
+    },
+    { text: "call foo()", spans: [], expected: "call foo()" },
+    {
+      text: "()a()",
+      spans: [
+        [0, 2],
+        [3, 2],
+      ],
+      expected: "[emoji]a[emoji]",
+    },
+    { text: "call foo() now ()", spans: [[15, 2]], expected: "call foo() now [emoji]" },
+    {
+      text: "@openclaw3 ()",
+      spans: [[11, 2]],
+      expected: "@openclaw3 [emoji]",
+      mention: { mentionees: [{ type: "user" as const, index: 0, length: 10, isSelf: true }] },
+    },
+  ])(
+    "projects LINE emoji metadata without losing text: $text",
+    async ({ text, spans, expected, mention }) => {
+      const context = await buildLineMessageContext({
+        event: createMessageEvent(
+          { type: "user", userId: "user-1" },
+          {
+            message: {
+              id: "emoji-message",
+              type: "text",
+              text,
+              quoteToken: "quote-token",
+              emojis: spans.map(([index, length]) => ({
+                index,
+                length,
+                productId: "emoji-set",
+                emojiId: "1",
+              })),
+              mention,
+            },
+          },
+        ),
+        allMedia: [],
+        cfg,
+        account,
+        commandAuthorized: true,
+      });
+
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.RawBody).toBe(expected);
+      expect(context?.ctxPayload.CommandBody).toBe(mention ? "()" : text);
+    },
+  );
 });

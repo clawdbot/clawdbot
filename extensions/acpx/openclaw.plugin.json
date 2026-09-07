@@ -1,8 +1,34 @@
 {
   "id": "acpx",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "state",
+      "relativePath": "acpx/codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "state",
+      "relativePath": "acpx/codex-home/.tmp/plugins"
+    }
+  ],
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [
+      { "id": "acpx-runtime-state-to-plugin-state" },
+      {
+        "id": "acpx-session-owner-resources",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
-  "description": "Embedded ACP runtime backend with plugin-owned session and transport management.",
+  "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
@@ -13,6 +39,10 @@
         "minLength": 1
       },
       "stateDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "probeAgent": {
         "type": "string",
         "minLength": 1
       },
@@ -27,7 +57,7 @@
       "pluginToolsMcpBridge": {
         "type": "boolean"
       },
-      "strictWindowsCmdWrapper": {
+      "openClawToolsMcpBridge": {
         "type": "boolean"
       },
       "timeoutSeconds": {
@@ -35,9 +65,15 @@
         "minimum": 0.001,
         "default": 120
       },
-      "queueOwnerTtlSeconds": {
-        "type": "number",
-        "minimum": 0
+      "piSessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
       },
       "mcpServers": {
         "type": "object",
@@ -67,10 +103,15 @@
         "type": "object",
         "additionalProperties": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "command": {
               "type": "string",
               "minLength": 1
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" }
             }
           },
           "required": ["command"]
@@ -100,19 +141,23 @@
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
       "advanced": true
     },
-    "strictWindowsCmdWrapper": {
-      "label": "Strict Windows cmd Wrapper",
-      "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
       "advanced": true
     },
     "timeoutSeconds": {
-      "label": "Prompt Timeout Seconds",
-      "help": "Timeout for each embedded runtime turn. Defaults to 120 seconds so slower Gemini CLI ACP startups have room to initialize.",
+      "label": "Runtime Operation Timeout Seconds",
+      "help": "Timeout for embedded ACP runtime startup and control operations. ACP turns use OpenClaw agent/run timeouts.",
       "advanced": true
     },
-    "queueOwnerTtlSeconds": {
-      "label": "Queue Owner TTL Seconds",
-      "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+    "piSessionCatalog.enabled": {
+      "label": "Pi Session Catalog",
+      "help": "Auto-detect Pi sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in probe agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {

@@ -1,12 +1,24 @@
-import { readStringValue } from "../shared/string-coerce.js";
+// Tool send helpers normalize model tool-send requests before provider dispatch.
+import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type { ChannelToolSend } from "../channels/plugins/types.public.js";
 
 /** Extract the canonical send target fields from tool arguments when the action matches. */
 export function extractToolSend(
+  /** Raw model tool arguments supplied to a channel action. */
   args: Record<string, unknown>,
+  /** Action name that should be treated as a send action. */
   expectedAction = "sendMessage",
-): { to: string; accountId?: string; threadId?: string } | null {
+): {
+  /** Canonical destination id used by core send routing. */
+  to: string;
+  /** Optional channel account/profile id when the action includes one. */
+  accountId?: string;
+  /** Optional thread/topic id, normalized to string for channel send adapters. */
+  threadId?: string;
+  /** True when the send explicitly opts out of ambient thread inheritance. */
+  threadSuppressed?: boolean;
+} | null {
   const action = readStringValue(args.action)?.trim() ?? "";
   if (action !== expectedAction) {
     return null;
@@ -21,5 +33,6 @@ export function extractToolSend(
       ? String(args.threadId)
       : (readStringValue(args.threadId)?.trim() ?? "");
   const threadId = threadIdRaw.length > 0 ? threadIdRaw : undefined;
-  return { to, accountId, threadId };
+  const threadSuppressed = args.topLevel === true || args.threadId === null;
+  return { to, accountId, threadId, ...(threadSuppressed ? { threadSuppressed: true } : {}) };
 }

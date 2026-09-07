@@ -12,6 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	localizedLinkPostprocessPending = "pending"
+	localizedLinkPostprocessVersion = "locale-links-v1"
+)
+
 func processFile(ctx context.Context, translator docsTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
@@ -65,8 +70,6 @@ func processFile(ctx context.Context, translator docsTranslator, tm *Translation
 			TextHash:   seg.TextHash,
 			Text:       seg.Text,
 			Translated: translated,
-			Provider:   docsPiProvider(),
-			Model:      docsPiModel(),
 			SrcLang:    srcLang,
 			TgtLang:    tgtLang,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -109,9 +112,7 @@ func splitFrontMatter(content string) (string, string) {
 	}
 	front := strings.Join(lines[1:endIndex], "\n")
 	body := strings.Join(lines[endIndex+1:], "\n")
-	if strings.HasPrefix(body, "\n") {
-		body = body[1:]
-	}
+	body = strings.TrimPrefix(body, "\n")
 	return front, body
 }
 
@@ -120,12 +121,12 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 		frontData = map[string]any{}
 	}
 	frontData["x-i18n"] = map[string]any{
-		"source_path":  relPath,
-		"source_hash":  hashBytes(source),
-		"provider":     docsPiProvider(),
-		"model":        docsPiModel(),
-		"workflow":     workflowVersion,
-		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"source_path":         relPath,
+		"source_hash":         hashBytes(source),
+		"workflow":            workflowVersion,
+		"prompt_version":      promptVersion,
+		"generated_at":        time.Now().UTC().Format(time.RFC3339),
+		"postprocess_version": localizedLinkPostprocessPending,
 	}
 	encoded, err := yaml.Marshal(frontData)
 	if err != nil {
@@ -214,7 +215,8 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 	}
 	translated, err := translator.Translate(ctx, textValue, srcLang, tgtLang)
 	if err != nil {
-		return "", err
+		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, err)
+		return textValue, nil
 	}
 	shouldCache := true
 	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {
@@ -222,15 +224,17 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		translated = textValue
 		shouldCache = false
 	}
+	sourcePath := segmentID
+	if path, _, ok := strings.Cut(segmentID, ":frontmatter:"); ok {
+		sourcePath = path
+	}
 	entry := TMEntry{
 		CacheKey:   ck,
 		SegmentID:  segmentID,
-		SourcePath: segmentID,
+		SourcePath: sourcePath,
 		TextHash:   textHash,
 		Text:       textValue,
 		Translated: translated,
-		Provider:   docsPiProvider(),
-		Model:      docsPiModel(),
 		SrcLang:    srcLang,
 		TgtLang:    tgtLang,
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -249,6 +253,9 @@ func validateFrontmatterScalarTranslation(source, translated string) error {
 	lower := strings.ToLower(trimmed)
 	if strings.Contains(lower, "<frontmatter>") || strings.Contains(lower, "</frontmatter>") || strings.Contains(lower, "<body>") || strings.Contains(lower, "</body>") {
 		return fmt.Errorf("tagged document wrapper detected")
+	}
+	if err := validateNoTranslationTranscriptArtifacts(source, trimmed); err != nil {
+		return err
 	}
 	if strings.Contains(trimmed, "[[[FM_") {
 		return fmt.Errorf("frontmatter marker leaked into scalar translation")

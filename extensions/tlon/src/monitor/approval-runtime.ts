@@ -1,3 +1,5 @@
+// Tlon plugin module implements approval runtime behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
@@ -47,7 +49,7 @@ export function createTlonApprovalRuntime(params: {
     refreshWatchedChannels,
   } = params;
 
-  const savePendingApprovals = async (): Promise<void> => {
+  const savePendingApprovals = async (required = false): Promise<void> => {
     try {
       await api.poke({
         app: "settings",
@@ -63,6 +65,9 @@ export function createTlonApprovalRuntime(params: {
       });
     } catch (err) {
       runtime.error?.(`[tlon] Failed to save pending approvals: ${String(err)}`);
+      if (required) {
+        throw err;
+      }
     }
   };
 
@@ -215,7 +220,7 @@ export function createTlonApprovalRuntime(params: {
     );
 
     if (existingIndex !== -1) {
-      const existing = approvals[existingIndex];
+      const existing = expectDefined(approvals[existingIndex], "located pending approval index");
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
@@ -223,13 +228,13 @@ export function createTlonApprovalRuntime(params: {
       runtime.log?.(
         `[tlon] Updated existing approval for ${approval.requestingShip} (${approval.type}) - re-sending notification`,
       );
-      await savePendingApprovals();
+      await savePendingApprovals(true);
       await sendOwnerNotification(formatApprovalRequest(existing));
       return;
     }
 
     setPendingApprovals([...approvals, approval]);
-    await savePendingApprovals();
+    await savePendingApprovals(true);
     await sendOwnerNotification(formatApprovalRequest(approval));
     runtime.log?.(
       `[tlon] Queued approval request: ${approval.id} (${approval.type} from ${approval.requestingShip})`,

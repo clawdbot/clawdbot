@@ -1,197 +1,108 @@
+// Gateway HTTP request helpers.
+// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  buildAllowedModelSet,
-  modelKey,
-  parseModelRef,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+} from "@openclaw/normalization-core/string-coerce";
 import {
-  authorizeHttpGatewayConnect,
-  type GatewayAuthResult,
-  type ResolvedGatewayAuth,
-} from "./auth.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
-import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import {
+  buildAgentMainSessionKey,
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+} from "../routing/session-key.js";
+import {
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../sessions/agent-harness-session-key.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
+import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+
+export {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
+  authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeGatewayHttpRequestOrReply,
+  authorizeScopedGatewayHttpRequestOrReply,
+  checkGatewayHttpRequestAuth,
+  getBearerToken,
+  getHeader,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
+  resolveSharedSecretHttpOperatorScopes,
+  resolveTrustedHttpOperatorScopes,
+  type AuthorizedGatewayHttpRequest,
+} from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
+/** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-export function getHeader(req: IncomingMessage, name: string): string | undefined {
-  const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
-  if (typeof raw === "string") {
-    return raw;
+class UnknownGatewayAgentError extends Error {
+  constructor(readonly agentId: string) {
+    super(`Unknown agent '${agentId}'.`);
+    this.name = "UnknownGatewayAgentError";
   }
-  if (Array.isArray(raw)) {
-    return raw[0];
+}
+
+class GatewaySessionKeyOverrideError extends Error {
+  constructor() {
+    super("`x-openclaw-session-key` cannot use reserved internal session namespaces.");
+    this.name = "GatewaySessionKeyOverrideError";
   }
-  return undefined;
 }
 
-export function getBearerToken(req: IncomingMessage): string | undefined {
-  const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
-  if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
-    return undefined;
+class InvalidGatewayModelError extends Error {
+  constructor() {
+    super("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+    this.name = "InvalidGatewayModelError";
   }
-  return normalizeOptionalString(raw.slice(7));
 }
 
-type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
-export type AuthorizedGatewayHttpRequest = {
-  authMethod?: GatewayAuthResult["method"];
-  trustDeclaredOperatorScopes: boolean;
-};
-
-export function resolveHttpBrowserOriginPolicy(
-  req: IncomingMessage,
-  cfg = loadConfig(),
-): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return {
-    requestHost: getHeader(req, "host"),
-    origin: getHeader(req, "origin"),
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  };
+export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
+  return err instanceof UnknownGatewayAgentError;
 }
 
-function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
-  return auth?.mode === "token" || auth?.mode === "password";
+export function isAgentSelectionRequiredError(err: unknown): err is AgentSelectionRequiredError {
+  return err instanceof AgentSelectionRequiredError;
 }
 
-function usesSharedSecretGatewayMethod(method: GatewayAuthResult["method"] | undefined): boolean {
-  return method === "token" || method === "password";
+export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
+  return err instanceof InvalidGatewayModelError;
 }
 
-function shouldTrustDeclaredHttpOperatorScopes(
-  req: IncomingMessage,
-  authOrRequest:
-    | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">
-    | undefined,
-): boolean {
-  if (authOrRequest && "trustDeclaredOperatorScopes" in authOrRequest) {
-    return authOrRequest.trustDeclaredOperatorScopes;
+export function isGatewaySessionKeyOverrideError(
+  err: unknown,
+): err is GatewaySessionKeyOverrideError {
+  return err instanceof GatewaySessionKeyOverrideError;
+}
+
+function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
+  if (!listAgentIds(cfg).includes(agentId)) {
+    throw new UnknownGatewayAgentError(agentId);
   }
-  return !isGatewayBearerHttpRequest(req, authOrRequest);
 }
 
-export async function authorizeGatewayHttpRequestOrReply(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<AuthorizedGatewayHttpRequest | null> {
-  const token = getBearerToken(params.req);
-  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: params.auth,
-    connectAuth: token ? { token, password: token } : null,
-    req: params.req,
-    trustedProxies: params.trustedProxies,
-    allowRealIpFallback: params.allowRealIpFallback,
-    rateLimiter: params.rateLimiter,
-    browserOriginPolicy,
-  });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(params.res, authResult);
-    return null;
-  }
-  return {
-    authMethod: authResult.method,
-    // Shared-secret bearer auth proves possession of the gateway secret, but it
-    // does not prove a narrower per-request operator identity. HTTP endpoints
-    // must opt in explicitly if they want to treat that shared-secret path as a
-    // full trusted-operator surface.
-    trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
-  };
-}
-
-export function isGatewayBearerHttpRequest(
-  req: IncomingMessage,
-  auth?: SharedSecretGatewayAuth,
-): boolean {
-  return usesSharedSecretHttpAuth(auth) && Boolean(getBearerToken(req));
-}
-
-export function resolveTrustedHttpOperatorScopes(
-  req: IncomingMessage,
-  authOrRequest?:
-    | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
-): string[] {
-  if (!shouldTrustDeclaredHttpOperatorScopes(req, authOrRequest)) {
-    // Gateway bearer auth only proves possession of the shared secret. Do not
-    // let HTTP clients self-assert operator scopes through request headers.
-    return [];
-  }
-
-  const headerValue = getHeader(req, "x-openclaw-scopes");
-  if (headerValue === undefined) {
-    // No scope header present — trusted clients without an explicit header
-    // get the default operator scopes (matching pre-#57783 behavior).
-    return [...CLI_DEFAULT_OPERATOR_SCOPES];
-  }
-  const raw = headerValue.trim();
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split(",")
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
-}
-
-export function resolveOpenAiCompatibleHttpOperatorScopes(
-  req: IncomingMessage,
-  requestAuth: AuthorizedGatewayHttpRequest,
-): string[] {
-  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
-    // Shared-secret HTTP bearer auth is a documented trusted-operator surface
-    // for the compat APIs and direct /tools/invoke. This is designed-as-is:
-    // token/password auth proves possession of the gateway operator secret, not
-    // a narrower per-request scope identity, so restore the normal defaults.
-    return [...CLI_DEFAULT_OPERATOR_SCOPES];
-  }
-  return resolveTrustedHttpOperatorScopes(req, requestAuth);
-}
-
-export function resolveHttpSenderIsOwner(
-  req: IncomingMessage,
-  authOrRequest?:
-    | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
-): boolean {
-  return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
-}
-
-export function resolveOpenAiCompatibleHttpSenderIsOwner(
-  req: IncomingMessage,
-  requestAuth: AuthorizedGatewayHttpRequest,
-): boolean {
-  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
-    // Shared-secret HTTP bearer auth also carries owner semantics on the compat
-    // APIs and direct /tools/invoke. This is intentional: there is no separate
-    // per-request owner primitive on that shared-secret path, so owner-only
-    // tool policy follows the documented trusted-operator contract.
-    return true;
-  }
-  return resolveHttpSenderIsOwner(req, requestAuth);
-}
-
-export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
     normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
@@ -199,12 +110,16 @@ export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefin
   if (!raw) {
     return undefined;
   }
+  if (!isValidAgentId(raw)) {
+    throw new UnknownGatewayAgentError(raw);
+  }
   return normalizeAgentId(raw);
 }
 
+/** Resolves the target agent encoded by an OpenAI-compatible model id. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
-  cfg = loadConfig(),
+  cfg = getRuntimeConfig(),
 ): string | undefined {
   const raw = model?.trim();
   if (!raw) {
@@ -225,13 +140,30 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  const raw = model?.trim();
+  if (!raw) {
+    return false;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
+    return true;
+  }
+  return (
+    /^openclaw[:/][a-z0-9][a-z0-9_-]{0,63}$/i.test(raw) ||
+    /^agent:[a-z0-9][a-z0-9_-]{0,63}$/i.test(raw)
+  );
+}
+
+/** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
   agentId: string;
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
-  if (requestModel && !resolveAgentIdFromModel(requestModel)) {
+  if (requestModel && !isOpenClawAgentModelId(requestModel)) {
     return {
       errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
     };
@@ -242,23 +174,41 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return {};
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const parsed = parseModelRef(raw, defaultProvider);
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: cfg,
+    env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot,
+  };
+  const parsed = parseModelRef(raw, defaultProvider, {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
+  });
   if (!parsed) {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
 
-  const catalog = await loadGatewayModelCatalog();
-  const allowed = buildAllowedModelSet({
+  // Overrides must pass the same visibility policy as model picker surfaces;
+  // otherwise API clients could target hidden plugin/provider models by header.
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
+  const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider,
     agentId: params.agentId,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
+  if (!policy.allowsKey(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -267,21 +217,32 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/** Resolves the request agent from headers, model alias, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
 }): string {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
+  if (params.model?.trim() && !isOpenClawAgentModelId(params.model)) {
+    throw new InvalidGatewayModelError();
+  }
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
+    assertKnownAgentId(fromHeader, cfg);
     return fromHeader;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
-  return fromModel ?? resolveDefaultAgentId(cfg);
+  if (fromModel) {
+    assertKnownAgentId(fromModel, cfg);
+    return fromModel;
+  }
+
+  return resolveDefaultAgentId(cfg);
 }
 
-export function resolveSessionKey(params: {
+function resolveSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;
@@ -289,6 +250,9 @@ export function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
+    if (isReservedSessionKeyOverride(explicit, params.agentId)) {
+      throw new GatewaySessionKeyOverrideError();
+    }
     return explicit;
   }
 
@@ -297,6 +261,32 @@ export function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+function isReservedSessionKeyOverride(sessionKey: string, agentId: string): boolean {
+  const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  const harnessLookupKey = sessionKey.startsWith("agent:")
+    ? sessionKey
+    : canonicalizeSessionKeyForAgent(agentId, sessionKey);
+  const harnessEntry = isAgentHarnessSessionKey(sessionKey)
+    ? resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: harnessLookupKey,
+      }).entry
+    : undefined;
+  const harnessKeyReserved =
+    isAgentHarnessSessionKey(sessionKey) &&
+    (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry));
+  return (
+    lowered.startsWith("subagent:") ||
+    lowered.startsWith("cron:") ||
+    lowered.startsWith("acp:") ||
+    harnessKeyReserved ||
+    isSubagentSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey)
+  );
+}
+
+/** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -319,4 +309,35 @@ export function resolveGatewayRequestContext(params: {
     : params.defaultMessageChannel;
 
   return { agentId, sessionKey, messageChannel };
+}
+
+export function authorizeOpenAiCompatibleHttpSession(params: {
+  agentId: string;
+  sessionKey: string;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  senderIsOwner: boolean;
+}): { allowed: true } | { allowed: false; message: string } {
+  const cfg = getRuntimeConfig();
+  const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
+  const authorizationError = authorizeResolvedSessionMutation({
+    cfg,
+    client: createSyntheticPluginRuntimeClient({
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
+      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
+    }),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (authorizationError) {
+    return { allowed: false, message: authorizationError.message };
+  }
+  if (
+    !params.senderIsOwner &&
+    !authenticatedUserProfile &&
+    isResolvedIncognitoSession({ cfg, sessionKey: params.sessionKey, agentId: params.agentId })
+  ) {
+    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+  }
+  return { allowed: true };
 }

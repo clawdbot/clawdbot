@@ -1,3 +1,7 @@
+// Gateway input allowlist helpers normalize optional hostname allowlists while
+// keeping "unset" distinct from "deny all".
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+
 /**
  * Normalize optional gateway URL-input hostname allowlists.
  *
@@ -11,6 +15,6 @@ export function normalizeInputHostnameAllowlist(
   if (!values || values.length === 0) {
     return undefined;
   }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const normalized = normalizeTrimmedStringList(values);
   return normalized.length > 0 ? normalized : undefined;
 }

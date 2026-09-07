@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth refresh timeout invariants.
+ * Guards the relationship between per-refresh hard timeout, stale lock window,
+ * and retry budget.
+ */
 import { describe, expect, it } from "vitest";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS } from "./constants.js";
 
@@ -15,15 +20,6 @@ function computeMinimumRetryBudgetMs(): number {
   }
   return total;
 }
-
-// Invariant tests for the two constants that together bound the OAuth
-// refresh critical section. Behavioural tests for the inner `setTimeout`
-// mechanics are deliberately omitted: the implementation is a thin
-// `Promise.race` around `setTimeout`, and exercising it end-to-end requires
-// stepping through nested file-lock I/O that mixes awkwardly with Vitest
-// fake timers. A regression in the timeout wiring would be caught by the
-// #26322 regression test (oauth.concurrent-20-agents.test.ts) because a
-// stuck refresh would time out the whole suite.
 
 describe("OAuth refresh call timeout (invariants)", () => {
   it("OAUTH_REFRESH_CALL_TIMEOUT_MS is strictly below OAUTH_REFRESH_LOCK_OPTIONS.stale", () => {

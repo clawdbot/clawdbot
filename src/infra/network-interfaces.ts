@@ -1,8 +1,10 @@
+// Normalizes local network interface snapshots for discovery.
 import os from "node:os";
 
+/** Raw `os.networkInterfaces()` snapshot used by gateway discovery helpers. */
 export type NetworkInterfacesSnapshot = ReturnType<typeof os.networkInterfaces>;
-export type NetworkInterfaceFamily = "IPv4" | "IPv6";
-export type ExternalNetworkInterfaceAddress = {
+type NetworkInterfaceFamily = "IPv4" | "IPv6";
+type ExternalNetworkInterfaceAddress = {
   name: string;
   address: string;
   family: NetworkInterfaceFamily;
@@ -11,6 +13,7 @@ export type ExternalNetworkInterfaceAddress = {
 function normalizeNetworkInterfaceFamily(
   family: string | number | undefined,
 ): NetworkInterfaceFamily | undefined {
+  // Node versions and test fixtures can expose family as either string or number.
   if (family === "IPv4" || family === 4) {
     return "IPv4";
   }
@@ -20,12 +23,14 @@ function normalizeNetworkInterfaceFamily(
   return undefined;
 }
 
+/** Reads the current network interface snapshot, allowing tests to inject a reader. */
 export function readNetworkInterfaces(
   networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
 ): NetworkInterfacesSnapshot {
   return networkInterfaces();
 }
 
+/** Best-effort interface read that returns undefined when OS inspection fails. */
 export function safeNetworkInterfaces(
   networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
 ): NetworkInterfacesSnapshot | undefined {
@@ -36,6 +41,7 @@ export function safeNetworkInterfaces(
   }
 }
 
+/** Lists non-internal interface addresses, optionally filtered by IP family. */
 export function listExternalInterfaceAddresses(
   snapshot: NetworkInterfacesSnapshot | undefined,
   family?: NetworkInterfaceFamily,
@@ -68,6 +74,7 @@ export function listExternalInterfaceAddresses(
   return addresses;
 }
 
+/** Picks a matching external address, honoring preferred interface names first. */
 export function pickMatchingExternalInterfaceAddress(
   snapshot: NetworkInterfacesSnapshot | undefined,
   params: {

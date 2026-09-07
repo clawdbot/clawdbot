@@ -1,3 +1,5 @@
+// Line plugin module implements schedule cards behavior.
+import { normalizeLineAction } from "../actions.js";
 import { attachFooterText } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 
@@ -96,16 +98,20 @@ export function createReceiptCard(params: {
             flex: 3,
             wrap: true,
           } as FlexText,
-          {
-            type: "text",
-            text: item.value,
-            size: "sm",
-            color: item.highlight ? "#06C755" : "#333333",
-            weight: item.highlight ? "bold" : "regular",
-            flex: 2,
-            align: "end",
-            wrap: true,
-          } as FlexText,
+          ...(item.value
+            ? [
+                {
+                  type: "text",
+                  text: item.value,
+                  size: "sm",
+                  color: item.highlight ? "#06C755" : "#333333",
+                  weight: item.highlight ? "bold" : "regular",
+                  flex: 2,
+                  align: "end",
+                  wrap: true,
+                } as FlexText,
+              ]
+            : []),
         ],
         paddingAll: "md",
         backgroundColor: index % 2 === 0 ? "#FFFFFF" : "#FAFAFA",
@@ -332,7 +338,7 @@ export function createEventCard(params: {
       contents: bodyContents,
       paddingAll: "xl",
       backgroundColor: "#FFFFFF",
-      action,
+      action: action === undefined ? undefined : normalizeLineAction(action, 40),
     },
   };
 }

@@ -1,3 +1,4 @@
+// Qa Lab tests cover discovery eval plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasDiscoveryLabels,
@@ -9,7 +10,7 @@ describe("qa discovery evaluation", () => {
   it("accepts rich discovery reports that explicitly confirm all required files were read", () => {
     const report = `
 Worked
-- Read all three requested files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.
+- Read all three requested files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.
 Failed
 - None.
 Blocked
@@ -28,7 +29,7 @@ The helper text mentions banned phrases like "not present", "missing files", "bl
   it("accepts numeric 'all 4 required files read' confirmations", () => {
     const report = `
 Worked
-- Source: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md
+- Source: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md
 - all 3 required files read.
 Failed
 - None.
@@ -49,7 +50,7 @@ The report may quote phrases like "not present" while describing the evaluator, 
     const report = `
 Worked
 - All three files retrieved. Now let me compile the protocol report.
-- All three mandated files read successfully: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
+- All three mandated files read successfully: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
 Failed
 - None.
 Blocked
@@ -83,7 +84,7 @@ Follow-up
   it("flags discovery replies that drift into unrelated suite wrap-up claims", () => {
     const report = `
 Worked
-- All three requested files were read: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
+- All three requested files were read: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
 Failed
 - None.
 Blocked

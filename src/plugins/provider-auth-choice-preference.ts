@@ -1,10 +1,7 @@
-import { normalizeLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
+/** Resolves preferred provider auth choices from config and plugin metadata. */
+import { resolveLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
-
-function normalizeLegacyAuthChoice(choice: string, env?: NodeJS.ProcessEnv): string {
-  return normalizeLegacyOnboardAuthChoice(choice, { env }) ?? choice;
-}
 
 export async function resolvePreferredProviderForAuthChoice(params: {
   choice: string;
@@ -13,7 +10,8 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
-  const choice = normalizeLegacyAuthChoice(params.choice, params.env) ?? params.choice;
+  const choice =
+    resolveLegacyOnboardAuthChoice(params.choice, { env: params.env }).authChoice ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
   if (manifestResolved) {
     return manifestResolved.providerId;

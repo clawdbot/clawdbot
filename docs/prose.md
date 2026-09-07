@@ -1,134 +1,58 @@
 ---
-summary: "OpenProse: .prose workflows, slash commands, and state in OpenClaw"
+title: "OpenProse removal and migration"
+sidebarTitle: "OpenProse migration"
+summary: "OpenClaw no longer bundles OpenProse or the /prose command. Move to the maintained upstream Agent Skill and clean stale plugin configuration."
 read_when:
-  - You want to run or write .prose workflows
-  - You want to enable the OpenProse plugin
-  - You need to understand state storage
-title: "OpenProse"
+  - You used the bundled OpenProse plugin or /prose command
+  - You need to clean OpenProse configuration after upgrading OpenClaw
+  - You want to install the maintained upstream OpenProse Agent Skill
 ---
 
-# OpenProse
+OpenClaw no longer bundles the OpenProse plugin or its `/prose` command. The
+v2026.8.1 release removed both. OpenProse
+continues as a maintained upstream Agent Skill. Existing `.prose` source files
+remain yours; the removed plugin did not store state in OpenClaw's SQLite database.
 
-OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
+## Migrate
 
-Official site: [https://www.prose.md](https://www.prose.md)
+1. Clean stale bundled-plugin configuration:
 
-## What it can do
+   ```bash
+   openclaw doctor --fix
+   ```
 
-- Multi-agent research + synthesis with explicit parallelism.
-- Repeatable approval-safe workflows (code review, incident triage, content pipelines).
-- Reusable `.prose` programs you can run across supported agent runtimes.
+   Doctor removes `open-prose` from plugin allowlists, denylists, and plugin
+   entries. No OpenClaw database migration is required.
 
-## Install + enable
+2. From your workspace root, install the upstream skill:
 
-Bundled plugins are disabled by default. Enable OpenProse:
+   ```bash
+   npx skills add openprose/prose --skill open-prose --agent codex --copy -y
+   ```
 
-```bash
-openclaw plugins enable open-prose
-```
+   `skills` is a third-party CLI from npm, not an OpenClaw command. Keep
+   `--agent codex`: that value writes the shared `.agents/skills` layout, which
+   OpenClaw reads even though the flag names another agent.
 
-Restart the Gateway after enabling the plugin.
+   The command copies the skill to `.agents/skills/open-prose`, which OpenClaw loads as
+   a project Agent Skill. It does not restore the removed bundled plugin or the
+   `/prose` command.
 
-Dev/local checkout: `openclaw plugins install ./path/to/local/open-prose-plugin`
+3. If you are upgrading older OpenProse source, start a new OpenClaw agent
+   session in the workspace and send:
 
-Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
+   ```text
+   prose upgrade --dry-run
+   ```
 
-## Slash command
+   This is an Agent Skill command, not a shell executable. Review the plan, then
+   send `prose upgrade` in the same session. The upstream upgrade does not
+   migrate old runtime ledgers or state, so retain your source files and begin
+   with a clean state directory.
 
-OpenProse registers `/prose` as a user-invocable skill command. It routes to the OpenProse VM instructions and uses OpenClaw tools under the hood.
+## Related
 
-Common commands:
-
-```
-/prose help
-/prose run <file.prose>
-/prose run <handle/slug>
-/prose run <https://example.com/file.prose>
-/prose compile <file.prose>
-/prose examples
-/prose update
-```
-
-## Example: a simple `.prose` file
-
-```prose
-# Research + synthesis with two agents running in parallel.
-
-input topic: "What should we research?"
-
-agent researcher:
-  model: sonnet
-  prompt: "You research thoroughly and cite sources."
-
-agent writer:
-  model: opus
-  prompt: "You write a concise summary."
-
-parallel:
-  findings = session: researcher
-    prompt: "Research {topic}."
-  draft = session: writer
-    prompt: "Summarize {topic}."
-
-session "Merge the findings + draft into a final answer."
-context: { findings, draft }
-```
-
-## File locations
-
-OpenProse keeps state under `.prose/` in your workspace:
-
-```
-.prose/
-├── .env
-├── runs/
-│   └── {YYYYMMDD}-{HHMMSS}-{random}/
-│       ├── program.prose
-│       ├── state.md
-│       ├── bindings/
-│       └── agents/
-└── agents/
-```
-
-User-level persistent agents live at:
-
-```
-~/.prose/agents/
-```
-
-## State modes
-
-OpenProse supports multiple state backends:
-
-- **filesystem** (default): `.prose/runs/...`
-- **in-context**: transient, for small programs
-- **sqlite** (experimental): requires `sqlite3` binary
-- **postgres** (experimental): requires `psql` and a connection string
-
-Notes:
-
-- sqlite/postgres are opt-in and experimental.
-- postgres credentials flow into subagent logs; use a dedicated, least-privileged DB.
-
-## Remote programs
-
-`/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
-Direct URLs are fetched as-is. This uses the `web_fetch` tool (or `exec` for POST).
-
-## OpenClaw runtime mapping
-
-OpenProse programs map to OpenClaw primitives:
-
-| OpenProse concept         | OpenClaw tool    |
-| ------------------------- | ---------------- |
-| Spawn session / Task tool | `sessions_spawn` |
-| File read/write           | `read` / `write` |
-| Web fetch                 | `web_fetch`      |
-
-If your tool allowlist blocks these tools, OpenProse programs will fail. See [Skills config](/tools/skills-config).
-
-## Security + approvals
-
-Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
-
-For deterministic, approval-gated workflows, compare with [Lobster](/tools/lobster).
+- [Skills](/tools/skills)
+- [Slash commands](/tools/slash-commands)
+- [Lobster workflows](/tools/lobster)
+- [OpenProse upstream](https://github.com/openprose/prose)

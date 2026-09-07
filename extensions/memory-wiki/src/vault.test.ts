@@ -1,10 +1,12 @@
+// Memory Wiki tests cover vault plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { configureMemoryWikiCompiledCacheStore } from "./compiled-cache.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { initializeMemoryWikiVault, WIKI_VAULT_DIRECTORIES } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 
-const { createVault } = createMemoryWikiTestHarness();
+const { configureCompiledCacheStore, createVault } = createMemoryWikiTestHarness();
 
 describe("initializeMemoryWikiVault", () => {
   it("creates the wiki layout and seed files", async () => {
@@ -23,8 +25,9 @@ describe("initializeMemoryWikiVault", () => {
 
     expect(result.created).toBe(true);
     await Promise.all(
-      WIKI_VAULT_DIRECTORIES.map(async (relativeDir) => {
-        await expect(fs.stat(path.join(rootDir, relativeDir))).resolves.toBeTruthy();
+      ["sources", "entities", "concepts", "syntheses", "reports"].map(async (relativeDir) => {
+        const dirStat = await fs.stat(path.join(rootDir, relativeDir));
+        expect(dirStat.isDirectory()).toBe(true);
       }),
     );
     await expect(fs.readFile(path.join(rootDir, "AGENTS.md"), "utf8")).resolves.toContain(
@@ -33,9 +36,18 @@ describe("initializeMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "WIKI.md"), "utf8")).resolves.toContain(
       "Render mode: `obsidian`",
     );
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "state.json"), "utf8"),
-    ).resolves.toContain('"renderMode": "obsidian"');
+    await expect(fs.readFile(path.join(rootDir, "WIKI.md"), "utf8")).resolves.toContain(
+      "snapshots live in OpenClaw plugin state",
+    );
+    await expect(fs.access(path.join(rootDir, ".openclaw-wiki", "cache"))).rejects.toThrow(
+      /ENOENT/,
+    );
+    await expect(fs.access(path.join(rootDir, ".openclaw-wiki", "state.json"))).rejects.toThrow(
+      /ENOENT/,
+    );
+    await expect(fs.access(path.join(rootDir, ".openclaw-wiki", "locks"))).rejects.toThrow(
+      /ENOENT/,
+    );
   });
 
   it("is idempotent when the vault already exists", async () => {
@@ -49,5 +61,24 @@ describe("initializeMemoryWikiVault", () => {
     expect(second.created).toBe(false);
     expect(second.createdDirectories).toHaveLength(0);
     expect(second.createdFiles).toHaveLength(0);
+  });
+
+  it("reactivates an existing vault without recreating scaffold or rewriting source pages", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-",
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const source = "# Preserved\n";
+    const removedScaffoldPath = path.join(rootDir, "AGENTS.md");
+    await fs.writeFile(sourcePath, source, "utf8");
+    await fs.rm(removedScaffoldPath);
+    configureMemoryWikiCompiledCacheStore(undefined);
+    configureCompiledCacheStore();
+
+    await activateExistingMemoryWikiVault(config);
+
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.access(removedScaffoldPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

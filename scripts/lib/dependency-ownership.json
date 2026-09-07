@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "dependencies": {
+    "@agentclientprotocol/sdk": {
+      "owner": "core:mcp-acp",
+      "class": "core-runtime",
+      "risk": ["protocol-client"]
+    },
+    "@anthropic-ai/sdk": {
+      "owner": "provider:anthropic",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@clack/core": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["interactive-cli"]
+    },
+    "@clack/prompts": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["interactive-cli"]
+    },
+    "@lydell/node-pty": {
+      "owner": "core:tui-terminal",
+      "class": "core-runtime",
+      "risk": ["native", "terminal"]
+    },
+    "@earendil-works/pi-tui": {
+      "owner": "capability:tui-pi",
+      "class": "tui-runtime",
+      "risk": ["tui-runtime"]
+    },
+    "@google/genai": {
+      "owner": "provider:google",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network", "realtime"]
+    },
+    "@grammyjs/runner": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "polling"]
+    },
+    "@grammyjs/transformer-throttler": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "rate-limiting"]
+    },
+    "@homebridge/ciao": {
+      "owner": "plugin:bonjour",
+      "class": "plugin-runtime",
+      "risk": ["mdns", "network"]
+    },
+    "@modelcontextprotocol/sdk": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
+    "@mozilla/readability": {
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
+      "risk": ["parser", "untrusted-html"]
+    },
+    "@mistralai/mistralai": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@openclaw/ai": {
+      "owner": "core:ai-runtime",
+      "class": "core-runtime",
+      "risk": ["provider-routing", "model-io"]
+    },
+    "@openclaw/fs-safe": {
+      "owner": "core:filesystem-safety",
+      "class": "core-runtime",
+      "risk": ["filesystem", "path-safety"]
+    },
+    "@silvia-odwyer/photon-node": {
+      "owner": "core:media",
+      "class": "core-runtime",
+      "activation": ["agent.tool.read.image.bmp"],
+      "risk": ["wasm", "parser", "untrusted-files"]
+    },
+    "@trycua/cua-driver": {
+      "owner": "plugin:cua-computer",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.cua-computer.enabled"],
+      "risk": ["native", "computer-control"]
+    },
+    "acorn": {
+      "owner": "core:code-mode-and-release-verification",
+      "class": "core-runtime",
+      "risk": ["parser", "untrusted-javascript"]
+    },
+    "chalk": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["formatting"]
+    },
+    "chokidar": {
+      "owner": "core:watch-mode",
+      "class": "core-runtime",
+      "risk": ["filesystem-watch"]
+    },
+    "commander": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["cli-parser"]
+    },
+    "croner": {
+      "owner": "core:scheduler",
+      "class": "core-runtime",
+      "risk": ["scheduler"]
+    },
+    "diff": {
+      "owner": "core:agent-editing",
+      "class": "core-runtime",
+      "risk": ["diff"]
+    },
+    "dotenv": {
+      "owner": "core:config",
+      "class": "core-runtime",
+      "risk": ["env-loading"]
+    },
+    "entities": {
+      "owner": "core:html-entities",
+      "class": "core-runtime",
+      "risk": ["parser", "untrusted-html"]
+    },
+    "execa": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["process-execution", "large-transitive-cone"]
+    },
+    "express": {
+      "owner": "capability:http-route-host",
+      "class": "default-runtime-initially",
+      "risk": ["http-server", "large-transitive-cone"]
+    },
+    "file-type": {
+      "owner": "core:media-admission",
+      "class": "core-runtime",
+      "risk": ["file-sniffing", "untrusted-files"]
+    },
+    "grammy": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "network"]
+    },
+    "highlight.js": {
+      "owner": "core:syntax-highlighting",
+      "class": "core-runtime",
+      "risk": ["syntax-highlighting"]
+    },
+    "hosted-git-info": {
+      "owner": "core:git-utils",
+      "class": "core-runtime",
+      "risk": ["git-metadata-parser"]
+    },
+    "iconv-lite": {
+      "owner": "core:windows-launcher",
+      "class": "core-runtime",
+      "risk": ["encoding", "windows-launcher"]
+    },
+    "ignore": {
+      "owner": "core:gitignore-matching",
+      "class": "core-runtime",
+      "risk": ["pattern-matching"]
+    },
+    "@openclaw/proxyline": {
+      "owner": "core:proxy",
+      "class": "core-runtime",
+      "risk": ["network", "proxy"]
+    },
+    "jiti": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["dynamic-code-loading"]
+    },
+    "json5": {
+      "owner": "core:config",
+      "class": "core-runtime",
+      "risk": ["config-parser"]
+    },
+    "jszip": {
+      "owner": "core:archive-handling",
+      "class": "core-runtime",
+      "risk": ["archive-parser", "untrusted-files"]
+    },
+    "koffi": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "ffi", "process-execution", "secret-input"]
+    },
+    "kysely": {
+      "owner": "core:sqlite-storage",
+      "class": "core-runtime",
+      "risk": ["database-query-builder"]
+    },
+    "linkedom": {
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
+      "risk": ["parser", "untrusted-html"]
+    },
+    "minimatch": {
+      "owner": "core:pattern-matching",
+      "class": "core-runtime",
+      "risk": ["pattern-matching"]
+    },
+    "ms": {
+      "owner": "core:duration-parsing",
+      "class": "core-runtime",
+      "risk": ["duration-parser"]
+    },
+    "node-edge-tts": {
+      "owner": "plugin:microsoft",
+      "class": "plugin-runtime",
+      "risk": ["tts", "network"]
+    },
+    "openai": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "p-limit": {
+      "owner": "core:concurrency",
+      "class": "core-runtime",
+      "risk": ["concurrency"]
+    },
+    "p-map": {
+      "owner": "core:concurrency",
+      "class": "core-runtime",
+      "risk": ["concurrency"]
+    },
+    "partial-json": {
+      "owner": "core:llm-json-parsing",
+      "class": "core-runtime",
+      "risk": ["streaming-json-parser"]
+    },
+    "playwright-core": {
+      "owner": "core:browser",
+      "class": "core-runtime",
+      "risk": ["browser-automation", "cdp"]
+    },
+    "pretty-ms": {
+      "owner": "core:duration-formatting",
+      "class": "core-runtime",
+      "risk": ["formatting"]
+    },
+    "quickjs-wasi": {
+      "owner": "core:code-mode",
+      "class": "core-runtime",
+      "risk": ["wasm", "sandboxed-js"]
+    },
+    "clawpdf": {
+      "owner": "plugin:document-extract",
+      "class": "plugin-runtime",
+      "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
+      "risk": ["wasm", "parser", "untrusted-files"]
+    },
+    "qrcode": {
+      "owner": "core:qr-setup",
+      "class": "default-runtime-initially",
+      "risk": ["terminal-rendering", "png-encoding"]
+    },
+    "rastermill": {
+      "owner": "core:media",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]
+    },
+    "semver": {
+      "owner": "core:versioning",
+      "class": "core-runtime",
+      "risk": ["version-parser"]
+    },
+    "sqlite-vec": {
+      "owner": "capability:memory-sqlite-vec",
+      "class": "default-runtime-initially",
+      "risk": ["native", "database-extension"]
+    },
+    "tar": {
+      "owner": "core:archive-handling",
+      "class": "core-runtime",
+      "risk": ["archive-parser", "untrusted-files"]
+    },
+    "tree-sitter-bash": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-shell"]
+    },
+    "tslog": {
+      "owner": "core:logging",
+      "class": "core-runtime",
+      "risk": ["logging"]
+    },
+    "typescript": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
+    "typebox": {
+      "owner": "core:json-schema-contracts",
+      "class": "core-runtime",
+      "risk": ["schema-generation"]
+    },
+    "undici": {
+      "owner": "core:http-client",
+      "class": "core-runtime",
+      "risk": ["network"]
+    },
+    "web-push": {
+      "owner": "core:web-push",
+      "class": "core-runtime",
+      "risk": ["network", "push-notifications", "crypto"]
+    },
+    "web-tree-sitter": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-shell"]
+    },
+    "ws": {
+      "owner": "core:gateway-websocket",
+      "class": "core-runtime",
+      "risk": ["network", "websocket"]
+    },
+    "yaml": {
+      "owner": "core:config-and-tooling",
+      "class": "core-runtime",
+      "risk": ["parser"]
+    },
+    "zod": {
+      "owner": "core:config-and-plugin-sdk-validation",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    }
+  }
+}

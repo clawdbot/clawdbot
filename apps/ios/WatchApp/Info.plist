@@ -20,9 +20,28 @@
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(OPENCLAW_BUILD_VERSION)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OpenClaw uses the microphone for voice conversations you start on Apple Watch.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>RedHatDisplay[wght].ttf</string>
+		<string>Inter[opsz,wght].ttf</string>
+		<string>Inter-Italic[opsz,wght].ttf</string>
+		<string>JetBrainsMono-Regular.ttf</string>
+		<string>JetBrainsMono-Medium.ttf</string>
+		<string>JetBrainsMono-SemiBold.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>WKApplication</key>
+	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
-	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
-	<key>WKWatchKitApp</key>
+	<string>$(OPENCLAW_COMPANION_APP_BUNDLE_ID)</string>
+	<key>WKPrefersNetworkUponForeground</key>
 	<true/>
 </dict>
 </plist>

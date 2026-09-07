@@ -1,3 +1,4 @@
+// Runtime task-flow types describe task-flow hooks and options for plugin runtimes.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { JsonValue, TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import type {
@@ -15,7 +16,11 @@ export type ManagedTaskFlowRecord = TaskFlowRecord & {
   controllerId: string;
 };
 
-export type ManagedTaskFlowMutationErrorCode = "not_found" | "not_managed" | "revision_conflict";
+type ManagedTaskFlowMutationErrorCode =
+  | "not_found"
+  | "not_managed"
+  | "revision_conflict"
+  | "persist_failed";
 
 export type ManagedTaskFlowMutationResult =
   | {
@@ -28,7 +33,21 @@ export type ManagedTaskFlowMutationResult =
       current?: TaskFlowRecord;
     };
 
-export type BoundTaskFlowTaskRunResult =
+type ManagedTaskFlowCreateParams = {
+  controllerId: string;
+  goal: string;
+  status?: ManagedTaskFlowRecord["status"];
+  notifyPolicy?: TaskNotifyPolicy;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+};
+
+type BoundTaskFlowTaskRunResult =
   | {
       created: true;
       flow: ManagedTaskFlowRecord;
@@ -41,7 +60,7 @@ export type BoundTaskFlowTaskRunResult =
       flow?: TaskFlowRecord;
     };
 
-export type BoundTaskFlowCancelResult = {
+type BoundTaskFlowCancelResult = {
   found: boolean;
   cancelled: boolean;
   reason?: string;
@@ -52,19 +71,8 @@ export type BoundTaskFlowCancelResult = {
 export type BoundTaskFlowRuntime = {
   readonly sessionKey: string;
   readonly requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  createManaged: (params: {
-    controllerId: string;
-    goal: string;
-    status?: ManagedTaskFlowRecord["status"];
-    notifyPolicy?: TaskNotifyPolicy;
-    currentStep?: string | null;
-    stateJson?: JsonValue | null;
-    waitJson?: JsonValue | null;
-    cancelRequestedAt?: number | null;
-    createdAt?: number;
-    updatedAt?: number;
-    endedAt?: number | null;
-  }) => ManagedTaskFlowRecord;
+  createManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord;
+  tryCreateManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord | null;
   get: (flowId: string) => TaskFlowRecord | undefined;
   list: () => TaskFlowRecord[];
   findLatest: () => TaskFlowRecord | undefined;

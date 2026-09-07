@@ -1,16 +1,24 @@
+/**
+ * Bundled channel package-state probes.
+ *
+ * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
+ */
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isBundledSourceOverlayPath } from "../../plugins/bundled-source-overlays.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import {
-  isJavaScriptModulePath,
-  loadChannelPluginModule,
-  resolveExistingPluginModulePath,
-} from "./module-loader.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
+import { isPluginSourceModulePath } from "../../plugins/native-module-require.js";
+import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
+import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
+import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;
@@ -20,18 +28,117 @@ type ChannelPackageStateChecker = (params: {
 type ChannelPackageStateMetadata = {
   specifier?: string;
   exportName?: string;
+  env?: {
+    allOf?: readonly string[];
+    anyOf?: readonly string[];
+  };
 };
 
-export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
+/**
+ * Metadata keys that can declare a lightweight package-state checker.
+ */
+const CHANNEL_PACKAGE_STATE_METADATA_KEYS = ["configuredState", "persistedAuthState"] as const;
+type ChannelPackageStateMetadataKey = (typeof CHANNEL_PACKAGE_STATE_METADATA_KEYS)[number];
 
-type ChannelPackageStateRegistry = {
-  catalog: PluginChannelCatalogEntry[];
-  entriesById: Map<string, PluginChannelCatalogEntry>;
-  checkerCache: Map<string, ChannelPackageStateChecker | null>;
+type ChannelPackageStateLoadFailure = {
+  detail: string;
+  metadataKey: ChannelPackageStateMetadataKey;
+  pluginId: string;
 };
 
 const log = createSubsystemLogger("channels");
-const registryCache = new Map<ChannelPackageStateMetadataKey, ChannelPackageStateRegistry>();
+
+type ChannelPackageStateModuleLocation = {
+  modulePath: string;
+  rootDir: string;
+};
+
+function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
+  if (!env || !isSafeChannelEnvVarTriggerName(key)) {
+    return false;
+  }
+  const normalized = key.trim();
+  const value = env[normalized] ?? env[normalized.toUpperCase()];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function resolveSourceBundledPluginRoot(rootDir: string): {
+  packageRoot: string;
+  dirName: string;
+} | null {
+  const pluginRoot = path.resolve(rootDir);
+  const extensionsDir = path.dirname(pluginRoot);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return null;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return null;
+  }
+  return {
+    packageRoot,
+    dirName: path.basename(pluginRoot),
+  };
+}
+
+function isBundledSourceOverlayPluginRoot(rootDir: string): boolean {
+  const pluginRoot = path.resolve(rootDir);
+  return (
+    isBundledSourceOverlayPath({ sourcePath: pluginRoot }) ||
+    (path.basename(path.dirname(pluginRoot)) === "extensions" &&
+      isBundledSourceOverlayPath({ sourcePath: path.dirname(pluginRoot) }))
+  );
+}
+
+function listBuiltBundledPackageStateModules(params: {
+  rootDir: string;
+  specifier: string;
+}): ChannelPackageStateModuleLocation[] {
+  if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
+    // Source overlays intentionally shadow built artifacts; probing dist would
+    // mix old built code with the active source overlay.
+    return [];
+  }
+  const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
+  if (!sourceRoot) {
+    return [];
+  }
+  const locations: ChannelPackageStateModuleLocation[] = [];
+  for (const rootDir of [
+    path.join(sourceRoot.packageRoot, "dist", "extensions", sourceRoot.dirName),
+    path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
+  ]) {
+    const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
+    if (pluginCacheExistsSync(modulePath) && !isPluginSourceModulePath(modulePath)) {
+      locations.push({ modulePath, rootDir });
+    }
+  }
+  return locations;
+}
+
+function resolveChannelPackageStateModuleLocation(params: {
+  entry: PluginChannelCatalogEntry;
+  specifier: string;
+}): ChannelPackageStateModuleLocation {
+  return {
+    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
+    rootDir: params.entry.rootDir,
+  };
+}
+
+function listChannelPackageStateModuleLocations(params: {
+  entry: PluginChannelCatalogEntry;
+  specifier: string;
+}): ChannelPackageStateModuleLocation[] {
+  const source = resolveChannelPackageStateModuleLocation(params);
+  // Prefer built bundled artifacts when present so probes match shipped runtime
+  // behavior, then fall back to source for local development.
+  const built = listBuiltBundledPackageStateModules({
+    rootDir: params.entry.rootDir,
+    specifier: params.specifier,
+  }).filter((location) => location.modulePath !== source.modulePath);
+  return [...built, source];
+}
 
 function resolveChannelPackageStateMetadata(
   entry: PluginChannelCatalogEntry,
@@ -43,88 +150,157 @@ function resolveChannelPackageStateMetadata(
   }
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
-  if (!specifier || !exportName) {
+  const envMetadata = "env" in metadata ? metadata.env : undefined;
+  const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
+  const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
+  const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
+  // A checker can be module-backed or env-backed. Ignore empty metadata so
+  // catalog entries without usable probes do not appear as state-capable.
+  if ((!specifier || !exportName) && !env) {
     return null;
   }
-  return { specifier, exportName };
+  return {
+    ...(specifier ? { specifier } : {}),
+    ...(exportName ? { exportName } : {}),
+    ...(env ? { env } : {}),
+  };
 }
 
-function getChannelPackageStateRegistry(
+function listChannelPackageStateCatalog(
   metadataKey: ChannelPackageStateMetadataKey,
-): ChannelPackageStateRegistry {
-  const cached = registryCache.get(metadataKey);
-  if (cached) {
-    return cached;
-  }
-  const catalog = listChannelCatalogEntries({ origin: "bundled" }).filter((entry) =>
-    Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)),
-  );
-  const registry = {
-    catalog,
-    entriesById: new Map(catalog.map((entry) => [entry.pluginId, entry] as const)),
-    checkerCache: new Map(),
-  } satisfies ChannelPackageStateRegistry;
-  registryCache.set(metadataKey, registry);
-  return registry;
+  discovery?: PluginDiscoveryResult,
+): PluginChannelCatalogEntry[] {
+  return listChannelCatalogEntries({
+    origin: "bundled",
+    discovery,
+  }).filter((entry) => Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)));
 }
 
 function resolveChannelPackageStateChecker(params: {
   entry: PluginChannelCatalogEntry;
+  emitWarning?: boolean;
   metadataKey: ChannelPackageStateMetadataKey;
+  onLoadError?: (detail: string) => void;
 }): ChannelPackageStateChecker | null {
-  const registry = getChannelPackageStateRegistry(params.metadataKey);
-  const cached = registry.checkerCache.get(params.entry.pluginId);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   const metadata = resolveChannelPackageStateMetadata(params.entry, params.metadataKey);
   if (!metadata) {
-    registry.checkerCache.set(params.entry.pluginId, null);
     return null;
   }
 
-  try {
-    const moduleExport = loadChannelPluginModule({
-      modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
-      rootDir: params.entry.rootDir,
-      shouldTryNativeRequire: isJavaScriptModulePath,
-    }) as Record<string, unknown>;
-    const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
-    if (typeof checker !== "function") {
-      throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
-    }
-    registry.checkerCache.set(params.entry.pluginId, checker);
-    return checker;
-  } catch (error) {
-    const detail = formatErrorMessage(error);
-    log.warn(
-      `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
-    );
-    registry.checkerCache.set(params.entry.pluginId, null);
-    return null;
+  if (metadata.env && (!metadata.specifier || !metadata.exportName)) {
+    return ({ env }) => {
+      const allOf = metadata.env?.allOf ?? [];
+      const anyOf = metadata.env?.anyOf ?? [];
+      // `allOf` expresses required credentials; `anyOf` expresses alternatives
+      // where at least one non-empty value proves package state.
+      return (
+        allOf.every((key) => hasNonEmptyEnvValue(env, key)) &&
+        (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
+      );
+    };
   }
+
+  let loadError: unknown;
+  for (const location of listChannelPackageStateModuleLocations({
+    entry: params.entry,
+    specifier: metadata.specifier!,
+  })) {
+    try {
+      const moduleExport = loadChannelPluginModule({
+        modulePath: location.modulePath,
+        rootDir: location.rootDir,
+      }) as Record<string, unknown>;
+      const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
+      if (typeof checker !== "function") {
+        throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
+      }
+      return checker;
+    } catch (error) {
+      loadError = error;
+    }
+  }
+
+  if (loadError) {
+    const detail = formatErrorMessage(loadError);
+    if (params.emitWarning !== false) {
+      log.warn(
+        `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
+      );
+    }
+    params.onLoadError?.(detail);
+  }
+  return null;
 }
 
+function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {
+  return normalizeOptionalString(entry.channel.id);
+}
+
+/**
+ * Lists bundled channel ids that declare the requested package-state metadata.
+ */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
+  discovery?: PluginDiscoveryResult,
 ): string[] {
-  return getChannelPackageStateRegistry(metadataKey).catalog.map((entry) => entry.pluginId);
+  return listChannelPackageStateCatalog(metadataKey, discovery)
+    .map((entry) => resolvePackageStateChannelId(entry))
+    .filter((channelId): channelId is string => Boolean(channelId))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Reports declared bundled channel package-state modules that cannot load. */
+export function collectBundledChannelPackageStateLoadFailures(
+  discovery?: PluginDiscoveryResult,
+): ChannelPackageStateLoadFailure[] {
+  const failures: ChannelPackageStateLoadFailure[] = [];
+  for (const metadataKey of CHANNEL_PACKAGE_STATE_METADATA_KEYS) {
+    for (const entry of listChannelPackageStateCatalog(metadataKey, discovery)) {
+      resolveChannelPackageStateChecker({
+        entry,
+        emitWarning: false,
+        metadataKey,
+        onLoadError: (detail) => failures.push({ detail, metadataKey, pluginId: entry.pluginId }),
+      });
+    }
+  }
+  return failures;
+}
+
+/**
+ * Returns whether a bundled channel reports configured/auth package state.
+ */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): boolean {
-  const registry = getChannelPackageStateRegistry(params.metadataKey);
-  const entry = registry.entriesById.get(params.channelId);
+  const requestedChannelId = normalizeOptionalString(params.channelId);
+  const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
+    (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
+  );
   if (!entry) {
     return false;
   }
-  const checker = resolveChannelPackageStateChecker({
+  return hasChannelPackageState({
     entry,
+    metadataKey: params.metadataKey,
+    cfg: params.cfg,
+    env: params.env,
+  });
+}
+
+/** Evaluates the exact channel package owner already selected and trusted by its caller. */
+export function hasChannelPackageState(params: {
+  entry: PluginChannelCatalogEntry;
+  metadataKey: ChannelPackageStateMetadataKey;
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const checker = resolveChannelPackageStateChecker({
+    entry: params.entry,
     metadataKey: params.metadataKey,
   });
   return checker ? checker({ cfg: params.cfg, env: params.env }) : false;

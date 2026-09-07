@@ -3,108 +3,89 @@ summary: "Date and time handling across envelopes, prompts, tools, and connector
 read_when:
   - You are changing how timestamps are shown to the model or users
   - You are debugging time formatting in messages or system prompt output
-title: "Date and Time"
+title: "Date and time"
 ---
 
-# Date & Time
-
-OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
-Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
+OpenClaw uses the configured **user timezone** for message envelopes, system events, and
+the system prompt. When `agents.defaults.userTimezone` is unset, those surfaces use the
+host timezone. Provider timestamps are preserved so tools keep their native semantics.
+When the agent needs the exact current time and `session_status` is available, it runs that tool.
 
 ## Message envelopes (local by default)
 
-Inbound messages are wrapped with a timestamp (minute precision):
+Inbound messages are wrapped with a weekday plus second-precision timestamp:
 
 ```
-[Provider ... 2026-01-05 16:26 PST] message text
+[WhatsApp +1555 Mon 2026-01-05 16:26:34 PST] message text
 ```
 
-This envelope timestamp is **host-local by default**, regardless of the provider timezone.
-
-You can override this behavior:
-
-```json5
-{
-  agents: {
-    defaults: {
-      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
-      envelopeTimestamp: "on", // "on" | "off"
-      envelopeElapsed: "on", // "on" | "off"
-    },
-  },
-}
-```
-
-- `envelopeTimezone: "utc"` uses UTC.
-- `envelopeTimezone: "local"` uses the host timezone.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
-- Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
-- `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
+Envelope timestamps use `agents.defaults.userTimezone` when configured, otherwise the
+host timezone. Absolute timestamps and elapsed-time suffixes are built in.
 
 ### Examples
 
 **Local (default):**
 
 ```
-[WhatsApp +1555 2026-01-18 00:19 PST] hello
+[WhatsApp +1555 Sun 2026-01-18 00:19:42 PST] hello
 ```
 
 **User timezone:**
 
 ```
-[WhatsApp +1555 2026-01-18 00:19 CST] hello
+[WhatsApp +1555 Sun 2026-01-18 00:19:42 CST] hello
 ```
 
-**Elapsed time enabled:**
+**Elapsed time:**
 
 ```
-[WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
+[WhatsApp +1555 +30s Sun 2026-01-18 00:20:12 CST] follow-up
 ```
 
-## System prompt: Current Date & Time
+## System prompt: temporal context
 
-If the user timezone is known, the system prompt includes a dedicated
-**Current Date & Time** section with the **time zone only** (no clock/time format)
-to keep prompt caching stable:
+The system prompt includes a volatile **Temporal Context** section with the local calendar date
+and time zone, but no live clock:
 
 ```
+Current date: 2026-01-05
 Time zone: America/Chicago
 ```
 
-When the agent needs the current time, use the `session_status` tool; the status
-card includes a timestamp line.
+The zone is `agents.defaults.userTimezone` when configured, otherwise the host timezone.
+The section lives below the prompt-cache boundary, so date rollover and timezone changes do not
+invalidate the stable prefix. When available, `session_status` remains the source for exact current time.
 
 ## System event lines (local by default)
 
-Queued system events inserted into agent context are prefixed with a timestamp using the
-same timezone selection as message envelopes (default: host-local).
+Queued system events inserted into agent context use `agents.defaults.userTimezone` when
+configured, otherwise the host timezone.
 
 ```
 System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
-### Configure user timezone + format
+### Configure user timezone
 
 ```json5
 {
   agents: {
     defaults: {
       userTimezone: "America/Chicago",
-      timeFormat: "auto", // auto | 12 | 24
     },
   },
 }
 ```
 
-- `userTimezone` sets the **user-local timezone** for prompt context.
-- `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
+- `userTimezone` sets the user-local timezone for message envelopes, system events,
+  and prompt context.
+- Use an IANA timezone such as `America/Chicago`, `Europe/Vienna`, or `Asia/Tokyo`.
 
-## Time format detection (auto)
+## Time format detection
 
-When `timeFormat: "auto"`, OpenClaw inspects the OS preference (macOS/Windows)
-and falls back to locale formatting. The detected value is **cached per process**
-to avoid repeated system calls.
+Rendered clock values follow the operating system and locale preference. OpenClaw
+detects 12-hour or 24-hour display on macOS and Windows, then falls back to locale
+formatting. The detected value is cached per process.
 
 ## Tool payloads + connectors (raw provider time + normalized fields)
 
@@ -115,8 +96,8 @@ Channel tools return **provider-native timestamps** and add normalized fields fo
 
 Raw provider fields are preserved so nothing is lost.
 
-- Slack: epoch-like strings from the API
 - Discord: UTC ISO timestamps
+- Slack: epoch-like strings from the API
 - Telegram/WhatsApp: provider-specific numeric/ISO timestamps
 
 If you need local time, convert it downstream using the known timezone.

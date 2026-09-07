@@ -1,17 +1,12 @@
+// Memory Wiki tests cover cli metadata plugin behavior.
 import { Command } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => {
-    throw new Error("loadConfig should not be called during CLI metadata registration");
-  }),
   registerWikiCli: vi.fn(),
+  resolveMemoryWikiAgentConfig: vi.fn(),
   resolveMemoryWikiConfig: vi.fn(),
-}));
-
-vi.mock("../../src/config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock("./src/cli.js", () => ({
@@ -19,10 +14,24 @@ vi.mock("./src/cli.js", () => ({
 }));
 
 vi.mock("./src/config.js", () => ({
+  resolveMemoryWikiAgentConfig: mocks.resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig: mocks.resolveMemoryWikiConfig,
 }));
 
 import plugin from "./cli-metadata.js";
+
+function requireFirstCliRegistrar(mock: ReturnType<typeof vi.fn>) {
+  const [call] = mock.mock.calls;
+  if (!call || typeof call[0] !== "function") {
+    throw new Error("expected memory-wiki CLI registrar to be registered");
+  }
+  return call[0] as (ctx: {
+    program: Command;
+    config: Record<string, unknown>;
+    workspaceDir: string;
+    logger: unknown;
+  }) => Promise<void>;
+}
 
 describe("memory-wiki cli metadata entry", () => {
   beforeEach(() => {
@@ -36,6 +45,7 @@ describe("memory-wiki cli metadata entry", () => {
       name: "Memory Wiki",
       registerCli,
     });
+    api.runtime = {} as typeof api.runtime;
     const program = new Command();
     const appConfig = {
       plugins: {
@@ -53,10 +63,8 @@ describe("memory-wiki cli metadata entry", () => {
 
     plugin.register(api);
 
-    const register = registerCli.mock.calls[0]?.[0];
-
     expect(registerCli).toHaveBeenCalledTimes(1);
-    expect(typeof register).toBe("function");
+    const register = requireFirstCliRegistrar(registerCli);
 
     await register({
       program,
@@ -65,10 +73,16 @@ describe("memory-wiki cli metadata entry", () => {
       logger: api.logger,
     });
 
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.resolveMemoryWikiConfig).toHaveBeenCalledWith(
       appConfig.plugins.entries["memory-wiki"].config,
     );
-    expect(mocks.registerWikiCli).toHaveBeenCalledWith(program, resolvedConfig, appConfig);
+    expect(mocks.registerWikiCli).toHaveBeenCalledWith(
+      program,
+      expect.objectContaining({
+        config: resolvedConfig,
+        getAppConfig: expect.any(Function),
+        resolveConfig: expect.any(Function),
+      }),
+    );
   });
 });

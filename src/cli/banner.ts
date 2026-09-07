@@ -1,34 +1,28 @@
+// CLI banner formatter and one-shot emitter.
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+  stripDecorativeEmojiForTerminal,
+  type DecorativeEmojiOptions,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
-import { visibleWidth } from "../terminal/ansi.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
+import { parseTaglineMode } from "./banner-config-lite.js";
+import { pickCliLobsterArt } from "./lobster-art.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
   commit?: string | null;
   columns?: number;
+  isTty?: boolean;
+  platform?: NodeJS.Platform;
   richTty?: boolean;
 };
 
 let bannerEmitted = false;
-
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function splitGraphemes(value: string): string[] {
-  if (!graphemeSegmenter) {
-    return Array.from(value);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(value), (seg) => seg.segment);
-  } catch {
-    return Array.from(value);
-  }
-}
 
 const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
@@ -41,17 +35,31 @@ function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
   if (explicit) {
     return explicit;
   }
-  return readCliBannerTaglineMode(options.env);
+  return undefined;
 }
 
+function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
+  return {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.isTty === undefined ? {} : { isTty: options.isTty }),
+    ...(options.platform ? { platform: options.platform } : {}),
+  };
+}
+
+/** Format the compact one-line CLI banner, wrapping tagline when terminal width requires it. */
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const tagline = pickTagline({ ...options, mode: resolveTaglineMode(options) });
+  const emojiOptions = resolveEmojiOptions(options);
+  const tagline = stripDecorativeEmojiForTerminal(
+    pickTagline({ ...options, mode: resolveTaglineMode(options) }),
+    emojiOptions,
+  );
   const rich = options.richTty ?? isRich();
-  const title = "🦞 OpenClaw";
-  const prefix = "🦞 ";
+  const title = decorativePrefix("🦞", "OpenClaw", emojiOptions);
+  const prefix = decorativeEmoji("🦞", emojiOptions);
+  const indent = prefix ? `${prefix} ` : "";
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;
   const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
@@ -71,7 +79,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
     if (!tagline) {
       return line1;
     }
-    const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
+    const line2 = `${" ".repeat(indent.length)}${theme.accentDim(tagline)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
@@ -81,60 +89,33 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   if (!tagline) {
     return line1;
   }
-  const line2 = `${" ".repeat(prefix.length)}${tagline}`;
+  const line2 = `${" ".repeat(indent.length)}${tagline}`;
   return `${line1}\n${line2}`;
 }
 
-const LOBSTER_ASCII = [
-  "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-  "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-  "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-  "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-  "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-  "                  🦞 OPENCLAW 🦞                    ",
-  " ",
-];
-
-export function formatCliBannerArt(options: BannerOptions = {}): string {
-  const rich = options.richTty ?? isRich();
-  if (!rich) {
-    return LOBSTER_ASCII.join("\n");
+// Rare day-seeded ASCII lobster above the banner: random-tagline mode only,
+// rich terminals only, never in CI (see lobster-art.ts for the odds).
+function resolveLobsterArt(options: BannerOptions): string | null {
+  const mode = resolveTaglineMode(options);
+  if (mode === "off" || mode === "default") {
+    return null;
   }
-
-  const colorChar = (ch: string) => {
-    if (ch === "█") {
-      return theme.accentBright(ch);
-    }
-    if (ch === "░") {
-      return theme.accentDim(ch);
-    }
-    if (ch === "▀") {
-      return theme.accent(ch);
-    }
-    return theme.muted(ch);
-  };
-
-  const colored = LOBSTER_ASCII.map((line) => {
-    if (line.includes("OPENCLAW")) {
-      return (
-        theme.muted("              ") +
-        theme.accent("🦞") +
-        theme.info(" OPENCLAW ") +
-        theme.accent("🦞")
-      );
-    }
-    return splitGraphemes(line).map(colorChar).join("");
-  });
-
-  return colored.join("\n");
+  if (!(options.richTty ?? isRich())) {
+    return null;
+  }
+  const now = options.now ? options.now() : new Date();
+  const art = pickCliLobsterArt(now, options.env ?? process.env);
+  return art ? theme.accentDim(art) : null;
 }
 
+/** Emit the CLI banner once for interactive, non-JSON, non-version invocations. */
 export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  if (!process.stdout.isTTY) {
+  const isTty = options.isTty ?? process.stdout.isTTY;
+  if (!isTty) {
     return;
   }
   if (hasJsonFlag(argv)) {
@@ -144,10 +125,12 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const line = formatCliBannerLine(version, options);
-  process.stdout.write(`\n${line}\n\n`);
+  const art = resolveLobsterArt(options);
+  process.stdout.write(`\n${art ? `${art}\n` : ""}${line}\n\n`);
   bannerEmitted = true;
 }
 
+/** Return whether the current process already emitted the CLI banner. */
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }

@@ -1,7 +1,31 @@
-import fsSync from "node:fs";
-import path from "node:path";
-import { openBoundaryFileSync } from "./boundary-file-read.js";
+// Inspects installed package metadata for update/install verification.
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver } from "./semver.js";
 
+/** Compare two package versions, preferring OpenClaw release ordering over plain semver. */
+export function comparePackageUpdateVersions(left: string, right: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareValidSemver(left, right) ?? 0;
+}
+
+/** Return whether an update replaced the installed version with an older one. */
+export function isPackageVersionDowngrade(
+  currentVersion: string | undefined,
+  nextVersion: string | undefined,
+): boolean {
+  if (!currentVersion || !nextVersion) {
+    return false;
+  }
+  return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
+}
+
+// Package update utilities inspect installed package metadata without trusting
+// paths outside the provided package root.
+/** Return expected integrity only for concrete semver package specs. */
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
@@ -24,23 +48,17 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
+    relativePath: "package.json",
     boundaryLabel: "installed package directory",
   });
-  if (!opened.ok) {
-    return undefined;
-  }
-  try {
-    const raw = fsSync.readFileSync(opened.fd, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    fsSync.closeSync(opened.fd);
-  }
+  return result.ok ? result.value : undefined;
+}
+
+/** Read the installed package version from a package root. */
+export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifest = readInstalledPackageManifest(dir);
+  return typeof manifest?.version === "string" ? manifest.version : undefined;
 }

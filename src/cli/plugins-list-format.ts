@@ -1,38 +1,42 @@
+// Text formatter for plugin list rows and verbose plugin details.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { PluginBundleFormat } from "../plugins/manifest-types.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomeInString } from "../utils.js";
 
-export function formatPluginLine(plugin: PluginRecord, verbose = false): string {
-  const status =
-    plugin.status === "loaded"
-      ? theme.success("loaded")
-      : plugin.status === "disabled"
-        ? theme.warn("disabled")
-        : theme.error("error");
+export function formatPluginBundleFormat(bundleFormat: PluginBundleFormat): string {
+  return bundleFormat === "agent" ? "agent (Agent Plugins)" : bundleFormat;
+}
+
+/** Snapshot status describes enablement; only explicit runtime inspection reports loading. */
+export function formatPluginStatus(
+  plugin: Pick<PluginRecord, "enabled" | "status">,
+  runtimeInspection = false,
+): string {
+  if (plugin.status === "error") {
+    return theme.error("error");
+  }
+  const enabled = runtimeInspection ? plugin.status === "loaded" : plugin.enabled;
+  return enabled ? theme.success(runtimeInspection ? "loaded" : "enabled") : theme.warn("disabled");
+}
+
+export function formatPluginLine(plugin: PluginRecord): string {
   const name = theme.command(plugin.name || plugin.id);
   const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
-  const desc = plugin.description
-    ? theme.muted(
-        plugin.description.length > 60
-          ? `${plugin.description.slice(0, 57)}...`
-          : plugin.description,
-      )
-    : theme.muted("(no description)");
   const format = plugin.format ?? "openclaw";
 
-  if (!verbose) {
-    return `${name}${idSuffix} ${status} ${theme.muted(`[${format}]`)} - ${desc}`;
-  }
-
   const parts = [
-    `${name}${idSuffix} ${status}`,
+    `${name}${idSuffix} ${formatPluginStatus(plugin)}`,
     `  format: ${format}`,
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.bundleFormat) {
-    parts.push(`  bundle format: ${plugin.bundleFormat}`);
+    parts.push(`  bundle format: ${formatPluginBundleFormat(plugin.bundleFormat)}`);
+  }
+  if (plugin.bundleCapabilities?.length) {
+    parts.push(`  bundle capabilities: ${plugin.bundleCapabilities.join(", ")}`);
   }
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);
@@ -62,7 +66,7 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
         : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
     parts.push(`  activation: ${activationSummary}`);
   }
-  if (plugin.error) {
+  if (plugin.status === "error" && plugin.error) {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }
   return parts.join("\n");

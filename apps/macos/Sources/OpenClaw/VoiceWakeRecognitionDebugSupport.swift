@@ -41,7 +41,28 @@ enum VoiceWakeRecognitionDebugSupport {
             minCommandLength: config.minCommandLength,
             trimWake: trimWake)
         else { return nil }
-        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
+        return WakeWordGateMatch(
+            triggerEndTime: 0,
+            postGap: 0,
+            command: command,
+            trigger: VoiceWakeTextUtils.matchedTriggerWord(transcript: transcript, triggers: triggers))
+    }
+
+    static func triggerOnlyFallbackMatch(
+        transcript: String,
+        triggers: [String],
+        trimWake: (String, [String]) -> String) -> WakeWordGateMatch?
+    {
+        guard VoiceWakeTextUtils.isTriggerOnly(
+            transcript: transcript,
+            triggers: triggers,
+            trimWake: trimWake)
+        else { return nil }
+        return WakeWordGateMatch(
+            triggerEndTime: 0,
+            postGap: 0,
+            command: "",
+            trigger: VoiceWakeTextUtils.matchedTriggerWord(transcript: transcript, triggers: triggers))
     }
 
     static func transcriptSummary(
@@ -52,6 +73,14 @@ enum VoiceWakeRecognitionDebugSupport {
         TranscriptSummary(
             textOnly: WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers),
             timingCount: segments.count(where: { $0.start > 0 || $0.duration > 0 }))
+    }
+
+    static func segmentSummary(_ segments: [WakeWordSegment]) -> String {
+        segments.map { seg in
+            let start = String(format: "%.2f", seg.start)
+            let end = String(format: "%.2f", seg.end)
+            return "\(seg.text)@\(start)-\(end)"
+        }.joined(separator: ", ")
     }
 
     static func matchSummary(_ match: WakeWordGateMatch?) -> String {

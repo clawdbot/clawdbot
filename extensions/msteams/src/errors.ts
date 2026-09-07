@@ -1,4 +1,12 @@
-import { isRecord } from "./attachments/shared.js";
+// Msteams plugin module implements errors behavior.
+import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isTransientNetworkError,
+  parseRetryAfterHeaderSeconds,
+} from "openclaw/plugin-sdk/retry-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -33,28 +41,31 @@ function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
   }
-  const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    return direct;
-  }
-  if (typeof direct === "string") {
-    const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  const parseStatusCode = (value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
     }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^\d{3}$/.test(trimmed)) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return parsed >= 100 && parsed <= 599 ? parsed : null;
+    }
+    return null;
+  };
+  const direct = err.statusCode ?? err.status;
+  const directStatus = parseStatusCode(direct);
+  if (directStatus !== null) {
+    return directStatus;
   }
 
   const response = err.response;
   if (isRecord(response)) {
-    const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      return status;
-    }
-    if (typeof status === "string") {
-      const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const responseStatus = parseStatusCode(response.status);
+    if (responseStatus !== null) {
+      return responseStatus;
     }
   }
 
@@ -93,17 +104,25 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   const direct = err.retryAfterMs ?? err.retry_after_ms;
-  if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
-    return direct;
+  const directMs = asFiniteNumberInRange(direct, {
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (directMs !== undefined) {
+    return directMs;
   }
 
   const retryAfter = err.retryAfter ?? err.retry_after;
-  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-    return retryAfter >= 0 ? retryAfter * 1000 : null;
+  const retryAfterSeconds = asFiniteNumberInRange(retryAfter, {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds * 1000;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
-    if (Number.isFinite(parsed) && parsed >= 0) {
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
+    if (parsed !== undefined) {
       return parsed * 1000;
     }
   }
@@ -121,8 +140,8 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseRetryAfterHeaderSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -137,8 +156,8 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseRetryAfterHeaderSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -147,22 +166,39 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+  return asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+}
 
-export type MSTeamsSendErrorClassification = {
-  kind: MSTeamsSendErrorKind;
+type MSTeamsSendErrorMetadata = {
   statusCode?: number;
-  retryAfterMs?: number;
   errorCode?: string;
 };
 
+type MSTeamsSendErrorClassification =
+  | (MSTeamsSendErrorMetadata & { kind: "auth" })
+  | (MSTeamsSendErrorMetadata & {
+      kind: "replay-safe";
+      statusCode: 429;
+      retryAfterMs?: number;
+    })
+  | (MSTeamsSendErrorMetadata & {
+      kind: "ambiguous";
+      source: "http" | "transport";
+    })
+  | (MSTeamsSendErrorMetadata & { kind: "permanent" })
+  | (MSTeamsSendErrorMetadata & { kind: "unknown" });
+
 /**
- * Classify outbound send errors for safe retries and actionable logs.
- *
- * Important: We only mark errors as retryable when we have an explicit HTTP
- * status code that indicates the message was not accepted (e.g. 429, 5xx).
- * For transport-level errors where delivery is ambiguous, we prefer to avoid
- * retries to reduce the chance of duplicate posts.
+ * Owns retry safety and delivery ambiguity for Teams send failures.
+ * Only Teams rate-limit rejection proves this unkeyed POST safe to replay.
  */
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
@@ -182,7 +218,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
 
   if (statusCode === 429) {
     return {
-      kind: "throttled",
+      kind: "replay-safe",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
@@ -191,9 +227,9 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
 
   if (statusCode === 408 || (statusCode != null && statusCode >= 500)) {
     return {
-      kind: "transient",
+      kind: "ambiguous",
+      source: "http",
       statusCode,
-      retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
     };
   }
@@ -202,10 +238,15 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
     return { kind: "permanent", statusCode, errorCode };
   }
 
+  // A transport failure can happen after the Connector accepted the POST.
+  // Preserve its code for diagnostics without implying replay is safe.
+  if (statusCode == null && isTransientNetworkError(err)) {
+    return { kind: "ambiguous", source: "transport", errorCode };
+  }
+
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
-    retryAfterMs: retryAfterMs ?? undefined,
     errorCode,
   };
 }
@@ -234,11 +275,26 @@ export function formatMSTeamsSendErrorHint(
   if (classification.errorCode === "ContentStreamNotAllowed") {
     return "Teams expired the content stream; stop streaming earlier and fall back to normal message delivery";
   }
-  if (classification.kind === "throttled") {
+  if (classification.kind === "replay-safe") {
     return "Teams throttled the bot; backing off may help";
   }
-  if (classification.kind === "transient") {
-    return "transient Teams/Bot Framework error; retry may succeed";
+  if (classification.kind === "ambiguous") {
+    if (classification.source === "transport") {
+      return "transport-level failure sending to Teams Bot Connector (smba.trafficmanager.net); the outcome is unknown, so check egress and conversation history before taking further action";
+    }
+    return "Teams/Bot Framework delivery outcome is unknown; inspect the conversation history before taking further action";
+  }
+  return undefined;
+}
+
+export function formatMSTeamsDeliveryFailureGuidance(
+  classification: MSTeamsSendErrorClassification,
+): string | undefined {
+  if (classification.kind === "replay-safe") {
+    return "The request was rate-limited before delivery; retrying later may succeed.";
+  }
+  if (classification.kind === "ambiguous") {
+    return "Delivery may already have succeeded; do not send the same content again without checking the conversation.";
   }
   return undefined;
 }

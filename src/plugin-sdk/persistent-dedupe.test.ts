@@ -1,193 +1,155 @@
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
-import { createPluginSdkTestHarness } from "./test-helpers.js";
+import { describe, expect, it, vi } from "vitest";
+import { createChannelReplayGuard } from "./persistent-dedupe.js";
 
-const { createTempDir } = createPluginSdkTestHarness();
+type ReplayEvent = {
+  accountId: string;
+  keys: readonly (string | null | undefined)[];
+};
 
-function createDedupe(root: string, overrides?: { ttlMs?: number }) {
-  return createPersistentDedupe({
-    ttlMs: overrides?.ttlMs ?? 24 * 60 * 60 * 1000,
-    memoryMaxSize: 100,
-    fileMaxEntries: 1000,
-    resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+function createGuard() {
+  return createChannelReplayGuard<ReplayEvent>({
+    dedupe: { ttlMs: 10_000, memoryMaxSize: 100 },
+    buildReplayKey: (event) => event.keys,
+    namespace: (event) => event.accountId,
   });
 }
 
-describe("createPersistentDedupe", () => {
-  it("deduplicates keys and persists across instances", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const first = createDedupe(root);
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
+async function expectClaimed(claim: Awaited<ReturnType<ReturnType<typeof createGuard>["claim"]>>) {
+  expect(claim.kind).toBe("claimed");
+  if (claim.kind !== "claimed") {
+    throw new Error(`expected claimed result, received ${claim.kind}`);
+  }
+  return claim.handle;
+}
 
-    const second = createDedupe(root);
-    expect(await second.checkAndRecord("m1", { namespace: "a" })).toBe(false);
-    expect(await second.checkAndRecord("m1", { namespace: "b" })).toBe(true);
+describe("createChannelReplayGuard", () => {
+  it("normalizes multi-key claims and mirrors commit state to in-flight waiters", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [" message-1 ", "message-1", "message-2"] };
+
+    const handle = await expectClaimed(await guard.claim(event));
+    expect(handle.keys).toEqual(["message-1", "message-2"]);
+    const inflight = await guard.claim(event);
+    expect(inflight.kind).toBe("inflight");
+    await expect(handle.commit()).resolves.toBe(true);
+    if (inflight.kind === "inflight") {
+      await expect(inflight.pending).resolves.toBe(true);
+    }
+    await expect(guard.claim(event)).resolves.toEqual({ kind: "duplicate" });
   });
 
-  it("guards concurrent calls for the same key", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const dedupe = createDedupe(root, { ttlMs: 10_000 });
+  it("fails open for invalid keys without recording them", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [" ", null, undefined] };
+    const process = vi.fn(async () => "handled");
 
-    const [first, second] = await Promise.all([
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-    ]);
-    expect(first).toBe(true);
-    expect(second).toBe(false);
-  });
-
-  it("falls back to memory-only behavior on disk errors", async () => {
-    const dedupe = createPersistentDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: () => path.join("/dev/null", "dedupe.json"),
+    await expect(guard.claim(event)).resolves.toEqual({ kind: "invalid" });
+    await expect(guard.shouldProcess(event)).resolves.toBe(true);
+    await expect(guard.processGuarded(event, process)).resolves.toEqual({
+      kind: "processed",
+      value: "handled",
     });
-
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
+    expect("commit" in guard).toBe(false);
+    expect("release" in guard).toBe(false);
+    expect(process).toHaveBeenCalledOnce();
   });
 
-  it("warmup loads persisted entries into memory", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
-    expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
+  it("releases failed claims and rejects their in-flight waiters", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: ["message-3"] };
 
-    const reader = createDedupe(root);
-    const loaded = await reader.warmup("acct");
-    expect(loaded).toBe(2);
-    expect(await reader.checkAndRecord("msg-1", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-2", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-3", { namespace: "acct" })).toBe(true);
+    const handle = await expectClaimed(await guard.claim(event));
+    const inflight = await guard.claim(event);
+    const failure = new Error("retry me");
+    handle.release({ error: failure });
+    if (inflight.kind === "inflight") {
+      await expect(inflight.pending).rejects.toThrow("retry me");
+    }
+    await expect(guard.claim(event)).resolves.toMatchObject({ kind: "claimed" });
   });
 
-  it("checks for recent keys without mutating the store", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("peek-me", { namespace: "acct" })).toBe(true);
+  it("does not let a mixed claim commit another claim's in-flight key", async () => {
+    const guard = createGuard();
+    const sharedOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    );
+    const mixedOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "second-only"] }),
+    );
+    expect(mixedOwner.keys).toEqual(["second-only"]);
+    const sharedWaiter = await guard.claim({ accountId: "work", keys: ["shared"] });
 
-    const reader = createDedupe(root);
-    expect(await reader.hasRecent("peek-me", { namespace: "acct" })).toBe(true);
-    expect(await reader.hasRecent("missing", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("peek-me", { namespace: "acct" })).toBe(false);
+    await expect(mixedOwner.commit()).resolves.toBe(true);
+    sharedOwner.release({ error: new Error("first handler failed") });
+
+    if (sharedWaiter.kind === "inflight") {
+      await expect(sharedWaiter.pending).rejects.toThrow("first handler failed");
+    }
+    await expect(guard.claim({ accountId: "work", keys: ["shared"] })).resolves.toMatchObject({
+      kind: "claimed",
+    });
+    await expect(guard.claim({ accountId: "work", keys: ["second-only"] })).resolves.toEqual({
+      kind: "duplicate",
+    });
+  });
+
+  it("does not let the first claim commit keys owned by a mixed second claim", async () => {
+    const guard = createGuard();
+    const firstOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    );
+    const secondOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "second-only"] }),
+    );
+    const sharedWaiter = await guard.claim({ accountId: "work", keys: ["shared"] });
+    const secondWaiter = await guard.claim({ accountId: "work", keys: ["second-only"] });
+
+    secondOwner.release({ error: new Error("second handler failed") });
+    await expect(firstOwner.commit()).resolves.toBe(true);
+
+    if (sharedWaiter.kind === "inflight") {
+      await expect(sharedWaiter.pending).resolves.toBe(true);
+    }
+    if (secondWaiter.kind === "inflight") {
+      await expect(secondWaiter.pending).rejects.toThrow("second handler failed");
+    }
+    await expect(
+      guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    ).resolves.toEqual({ kind: "duplicate" });
+    await expect(guard.claim({ accountId: "work", keys: ["second-only"] })).resolves.toMatchObject({
+      kind: "claimed",
+    });
   });
 
   it.each([
-    {
-      name: "returns 0 when no disk file exists",
-      setup: async (root: string) => createDedupe(root, { ttlMs: 10_000 }),
-      namespace: "nonexistent",
-      expectedLoaded: 0,
-      verify: async () => undefined,
-    },
-    {
-      name: "skips expired entries",
-      setup: async (root: string) => {
-        const writer = createDedupe(root, { ttlMs: 1000 });
-        const oldNow = Date.now() - 2000;
-        expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(
-          true,
-        );
-        expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
-        return createDedupe(root, { ttlMs: 1000 });
-      },
-      namespace: "acct",
-      expectedLoaded: 1,
-      verify: async (reader: ReturnType<typeof createDedupe>) => {
-        expect(await reader.checkAndRecord("old-msg", { namespace: "acct" })).toBe(true);
-        expect(await reader.checkAndRecord("new-msg", { namespace: "acct" })).toBe(false);
-      },
-    },
-  ])("warmup $name", async ({ setup, namespace, expectedLoaded, verify }) => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const reader = await setup(root);
-    const loaded = await reader.warmup(namespace);
-    expect(loaded).toBe(expectedLoaded);
-    await verify(reader);
-  });
-});
+    { errorMode: "release" as const, nextKind: "claimed" },
+    { errorMode: "commit" as const, nextKind: "duplicate" },
+  ])("uses $errorMode error settlement in processGuarded", async ({ errorMode, nextKind }) => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [`message-${errorMode}`] };
 
-describe("createClaimableDedupe", () => {
-  it("mirrors concurrent in-flight duplicates and records on commit", async () => {
-    const dedupe = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-
-    await expect(dedupe.claim("line:evt-1")).resolves.toEqual({ kind: "claimed" });
-    const duplicate = await dedupe.claim("line:evt-1");
-    expect(duplicate.kind).toBe("inflight");
-
-    const commit = dedupe.commit("line:evt-1");
-    await expect(commit).resolves.toBe(true);
-    if (duplicate.kind === "inflight") {
-      await expect(duplicate.pending).resolves.toBe(true);
-    }
-    await expect(dedupe.claim("line:evt-1")).resolves.toEqual({ kind: "duplicate" });
+    await expect(
+      guard.processGuarded(
+        event,
+        async () => {
+          throw new Error("handler failed");
+        },
+        { onError: errorMode },
+      ),
+    ).rejects.toThrow("handler failed");
+    await expect(guard.claim(event)).resolves.toMatchObject({ kind: nextKind });
   });
 
-  it("serializes concurrent first-claim races onto one in-flight owner", async () => {
-    const dedupe = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
+  it("scopes keys by namespace and supports recency cleanup", async () => {
+    const guard = createGuard();
+    const work = { accountId: "work", keys: ["message-4"] };
+    const home = { accountId: "home", keys: ["message-4"] };
 
-    const claims = await Promise.all([dedupe.claim("line:race-1"), dedupe.claim("line:race-1")]);
-    expect(claims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
-    expect(claims.filter((claim) => claim.kind === "inflight")).toHaveLength(1);
-
-    const waitingClaim = claims.find((claim) => claim.kind === "inflight");
-    await expect(dedupe.commit("line:race-1")).resolves.toBe(true);
-    if (waitingClaim?.kind === "inflight") {
-      await expect(waitingClaim.pending).resolves.toBe(true);
-    }
-    await expect(dedupe.claim("line:race-1")).resolves.toEqual({ kind: "duplicate" });
-  });
-
-  it("rejects waiting duplicates when the active claim releases with an error", async () => {
-    const dedupe = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-
-    await expect(dedupe.claim("line:evt-2")).resolves.toEqual({ kind: "claimed" });
-    const duplicate = await dedupe.claim("line:evt-2");
-    expect(duplicate.kind).toBe("inflight");
-
-    const failure = new Error("transient failure");
-    dedupe.release("line:evt-2", { error: failure });
-    if (duplicate.kind === "inflight") {
-      await expect(duplicate.pending).rejects.toThrow("transient failure");
-    }
-    await expect(dedupe.claim("line:evt-2")).resolves.toEqual({ kind: "claimed" });
-  });
-
-  it("supports persistent-backed recent checks and warmup", async () => {
-    const root = await createTempDir("openclaw-claimable-dedupe-");
-    const writer = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
-    });
-
-    await expect(writer.claim("m1", { namespace: "acct" })).resolves.toEqual({ kind: "claimed" });
-    await expect(writer.commit("m1", { namespace: "acct" })).resolves.toBe(true);
-
-    const reader = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
-    });
-
-    expect(await reader.hasRecent("m1", { namespace: "acct" })).toBe(true);
-    expect(await reader.warmup("acct")).toBe(1);
-    await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
-      kind: "duplicate",
-    });
+    await expect(guard.shouldProcess(work)).resolves.toBe(true);
+    await expect(guard.shouldProcess(work)).resolves.toBe(false);
+    await expect(guard.shouldProcess(home)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(true);
+    await expect(guard.forget(work)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(false);
   });
 });

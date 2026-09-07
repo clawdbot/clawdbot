@@ -1,3 +1,4 @@
+// Tests message preprocessing hooks before reply dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";

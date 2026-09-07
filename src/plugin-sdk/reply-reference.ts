@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for reply reference planning and reply threading policy.
+ */
 export {
   createReplyReferencePlanner,
   isSingleUseReplyToMode,

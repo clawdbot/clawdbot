@@ -1,3 +1,4 @@
+// Zalouser plugin entrypoint registers its OpenClaw integration.
 import {
   type AnyAgentTool,
   defineBundledChannelEntry,

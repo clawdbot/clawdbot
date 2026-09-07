@@ -1,4 +1,5 @@
-export type MatrixRoomKeyBackupStatusLike = {
+// Matrix plugin module implements backup health behavior.
+type MatrixRoomKeyBackupStatusLike = {
   serverVersion: string | null;
   activeVersion: string | null;
   trusted: boolean | null;
@@ -8,7 +9,7 @@ export type MatrixRoomKeyBackupStatusLike = {
   keyLoadError: string | null;
 };
 
-export type MatrixRoomKeyBackupIssueCode =
+type MatrixRoomKeyBackupIssueCode =
   | "missing-server-backup"
   | "key-load-failed"
   | "key-not-loaded"
@@ -18,7 +19,7 @@ export type MatrixRoomKeyBackupIssueCode =
   | "indeterminate"
   | "ok";
 
-export type MatrixRoomKeyBackupIssue = {
+type MatrixRoomKeyBackupIssue = {
   code: MatrixRoomKeyBackupIssueCode;
   summary: string;
   message: string | null;

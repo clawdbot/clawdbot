@@ -1,0 +1,303 @@
+name: Docs Agent
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] main-only docs repair after trusted CI; job gates repository, event, branch, actor, conclusion, exact current main SHA, and hourly cadence before using write token
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: docs-agent-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  update-docs:
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.actor.login != 'github-actions[bot]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Gate trusted main activity and hourly cadence
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          remote_main_file="$(mktemp "$RUNNER_TEMP/docs-agent-main.XXXXXX")"
+          trap 'rm -f -- "$remote_main_file" "$RUNNER_TEMP/docs-agent-runs.json"' EXIT
+          python3 -I -S "$CI_GIT_OWNER" --policy - "$remote_main_file" <<'PYTHON'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff, check_cancelled
+
+          workspace = os.getcwd()
+          if os.environ["EVENT_NAME"] != "workflow_run":
+              head_sha = git_output(workspace, "rev-parse", "HEAD").rstrip("\n")
+              try:
+                  with tempfile.TemporaryFile(dir=os.environ["RUNNER_TEMP"]) as parent:
+                      run_git(workspace, "rev-parse", f"{head_sha}^", stdout=parent, stderr=subprocess.DEVNULL)
+                      parent.seek(0)
+                      review_base = parent.read().decode().rstrip("\n")
+              except GitFailure:
+                  review_base = head_sha
+              check_cancelled()
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"run_agent=true\nbase_sha={head_sha}\nreview_base_sha={review_base}\nreview_head_sha={head_sha}\n")
+              raise SystemExit(0)
+
+          for attempt in range(1, 6):
+              try:
+                  run_git(workspace, "fetch", "--no-tags", "origin", "main", timeout=120, reclaim_locks=True)
+                  break
+              except (GitFailure, FetchTimeout):
+                  if attempt == 5:
+                      print("Failed to fetch main after retries.", file=sys.stderr)
+                      raise SystemExit(1)
+                  print(f"Fetch attempt {attempt} failed; retrying.", flush=True)
+                  backoff(attempt * 2)
+          remote_main = git_output(workspace, "rev-parse", "origin/main").rstrip("\n")
+          check_cancelled()
+          if remote_main != os.environ["WORKFLOW_HEAD_SHA"]:
+              print(f"CI run is superseded by {remote_main}; skipping docs agent for {os.environ['WORKFLOW_HEAD_SHA']}.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("run_agent=false\n")
+          else:
+              # Only a current, fully drained main read permits the shell cadence query.
+              with open(sys.argv[3], "w") as fact:
+                  fact.write(remote_main + "\n")
+          PYTHON
+          if [ ! -s "$remote_main_file" ]; then
+            exit 0
+          fi
+          remote_main="$(cat "$remote_main_file")"
+
+          runs_json="$RUNNER_TEMP/docs-agent-runs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/docs-agent.yml/runs" \
+            -f branch=main \
+            -f event=workflow_run \
+            -f per_page=100 > "$runs_json"
+
+          one_hour_ago="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+          recent_runs="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg one_hour_ago "$one_hour_ago" \
+              '.workflow_runs[]
+                | select(.id != $current_run_id)
+                | select(.created_at >= $one_hour_ago)
+                | select(.conclusion != "cancelled" and .conclusion != "skipped")
+                | [.id, .status, (.conclusion // ""), .created_at, .head_sha]
+                | @tsv' "$runs_json"
+          )"
+
+          if [ -n "$recent_runs" ]; then
+            echo "Docs agent already ran or is running within the last hour; skipping."
+            printf '%s\n' "$recent_runs"
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          review_base="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg remote_main "$remote_main" \
+              '.workflow_runs[]
+                | select(.id != $current_run_id)
+                | select(.conclusion != "cancelled" and .conclusion != "skipped")
+                | .head_sha
+                | select(. != null and . != "")
+                | select(. != $remote_main)
+              ' "$runs_json" | head -n 1
+          )"
+          python3 -I -S "$CI_GIT_OWNER" --policy - "$remote_main" "$review_base" <<'PYTHON'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from ci_git_owner import run_git, GitFailure, check_cancelled
+
+          remote_main, review_base = sys.argv[3:]
+          try:
+              if review_base:
+                  run_git(os.getcwd(), "cat-file", "-e", f"{review_base}^{{commit}}", stderr=subprocess.DEVNULL)
+          except GitFailure:
+              review_base = ""
+          if not review_base:
+              try:
+                  with tempfile.TemporaryFile(dir=os.environ["RUNNER_TEMP"]) as parent:
+                      run_git(os.getcwd(), "rev-parse", f"{remote_main}^", stdout=parent, stderr=subprocess.DEVNULL)
+                      parent.seek(0)
+                      review_base = parent.read().decode().rstrip("\n")
+              except GitFailure:
+                  review_base = remote_main
+          check_cancelled()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"run_agent=true\nbase_sha={remote_main}\nreview_base_sha={review_base}\nreview_head_sha={remote_main}\n")
+          PYTHON
+
+      - name: Setup Node environment
+        if: steps.gate.outputs.run_agent == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Ensure docs agent key exists
+        if: steps.gate.outputs.run_agent == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_DOCS_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex docs agent
+        if: steps.gate.outputs.run_agent == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        env:
+          DOCS_AGENT_BASE_SHA: ${{ steps.gate.outputs.review_base_sha }}
+          DOCS_AGENT_HEAD_SHA: ${{ steps.gate.outputs.review_head_sha }}
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/docs-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: medium
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce existing-docs-only patch
+        if: steps.gate.outputs.run_agent == 'true'
+        run: |
+          set -euo pipefail
+
+          untracked="$(python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 ls-files --others --exclude-standard)"
+          if [ -n "$untracked" ]; then
+            echo "Docs agent created untracked files; forbidden:"
+            printf '%s\n' "$untracked"
+            exit 1
+          fi
+
+          added_or_deleted="$(python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --name-status --diff-filter=AD)"
+          if [ -n "$added_or_deleted" ]; then
+            echo "Docs agent added or deleted tracked files; forbidden:"
+            printf '%s\n' "$added_or_deleted"
+            exit 1
+          fi
+
+          filter_bad_paths() {
+            while IFS= read -r path; do
+              case "$path" in
+                docs/*|README.md|CHANGELOG.md) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          }
+          bad_paths="$(
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --name-only | filter_bad_paths
+          )"
+          if [ -n "$bad_paths" ]; then
+            echo "Docs agent touched non-doc paths; forbidden:"
+            printf '%s\n' "$bad_paths"
+            exit 1
+          fi
+
+      - name: Restore Node 24 path
+        if: steps.gate.outputs.run_agent == 'true'
+        run: | # zizmor: ignore[github-env] NODE_BIN is set by the trusted local setup-node-env action in this same job
+          set -euo pipefail
+          export PATH="${NODE_BIN}:${PATH}"
+          echo "${NODE_BIN}" >> "$GITHUB_PATH"
+          node -v
+          corepack enable
+          pnpm -v
+
+      - name: Check docs
+        if: steps.gate.outputs.run_agent == 'true'
+        run: pnpm check:docs
+
+      - name: Commit docs updates
+        if: steps.gate.outputs.run_agent == 'true'
+        env:
+          BASE_SHA: ${{ steps.gate.outputs.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: main
+        run: |
+          set -euo pipefail
+
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import sys
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff
+
+          workspace = os.getcwd()
+          target = os.environ["TARGET_BRANCH"]
+          base_sha = os.environ["BASE_SHA"]
+          try:
+              run_git(workspace, "diff", "--quiet")
+          except GitFailure:
+              pass
+          else:
+              print("No docs changes.")
+              raise SystemExit(0)
+
+          run_git(workspace, "config", "user.name", "openclaw-docs-agent[bot]", reclaim_locks=True)
+          run_git(workspace, "config", "user.email", "openclaw-docs-agent[bot]@users.noreply.github.com", reclaim_locks=True)
+          run_git(workspace, "add", "docs", "README.md", "CHANGELOG.md", reclaim_locks=True)
+          run_git(workspace, "commit", "--no-verify", "-m", "docs: refresh documentation", reclaim_locks=True)
+          for attempt in range(1, 6):
+              try:
+                  run_git(workspace, "fetch", "--no-tags", "origin", target, timeout=120, reclaim_locks=True)
+              except (GitFailure, FetchTimeout):
+                  print(f"Fetch attempt {attempt} failed; retrying.", flush=True)
+                  backoff(attempt * 2)
+                  continue
+              try:
+                  run_git(workspace, "push",
+                          f"https://x-access-token:{os.environ['GITHUB_TOKEN']}@github.com/{os.environ['GITHUB_REPOSITORY']}.git",
+                          f"HEAD:{target}", reclaim_locks=True)
+                  raise SystemExit(0)
+              except GitFailure:
+                  # A push failure permits stale/retry decisions only after verified cleanup.
+                  remote_main = git_output(workspace, "rev-parse", f"origin/{target}").rstrip("\n")
+                  if remote_main != base_sha:
+                      print(f"main advanced from {base_sha} to {remote_main}; skipping stale docs update.")
+                      raise SystemExit(0)
+                  print(f"Docs update attempt {attempt} failed; retrying.", flush=True)
+                  backoff(attempt * 2)
+          print("Failed to push docs updates after retries.", file=sys.stderr)
+          raise SystemExit(1)
+          PYTHON

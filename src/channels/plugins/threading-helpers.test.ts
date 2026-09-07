@@ -1,3 +1,4 @@
+// Threading helper tests cover channel thread metadata and reply-thread helper behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

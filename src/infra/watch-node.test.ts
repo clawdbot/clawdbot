@@ -1,23 +1,21 @@
+// Tests watched node process restart and hashing behavior.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
-import { runWatchMain } from "../../scripts/watch-node.mjs";
-import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { runNodeWatchedPaths } from "../../scripts/run-node.mts";
+import { runWatchMain } from "../../scripts/watch-node.mts";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
 const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "openclaw.plugin.json");
 const VOICE_CALL_PACKAGE = bundledPluginFile("voice-call", "package.json");
 const VOICE_CALL_INDEX = bundledPluginFile("voice-call", "index.ts");
 const VOICE_CALL_RUNTIME = bundledPluginFile("voice-call", "src/runtime.ts");
-type WatchRunParams = NonNullable<Parameters<typeof runWatchMain>[0]> & {
-  lockDisabled?: boolean;
-  signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
-  sleep?: (ms: number) => Promise<void>;
-};
+type WatchRunParams = NonNullable<Parameters<typeof runWatchMain>[0]>;
 
 const runWatch = (params: WatchRunParams) => runWatchMain(params);
 const resolveTestWatchLockPath = (cwd: string, args: string[]) =>
@@ -34,10 +32,19 @@ const createFakeProcess = () =>
     execPath: "/usr/local/bin/node",
   }) as unknown as NodeJS.Process;
 
-const createWatchHarness = () => {
+const createKillableChild = () => {
   const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(() => {}),
+    kill: vi.fn(),
   });
+  child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
+    queueMicrotask(() => child.emit("exit", null, signal));
+    return true;
+  });
+  return child;
+};
+
+const createWatchHarness = () => {
+  const child = createKillableChild();
   const spawn = vi.fn(() => child);
   const watcher = Object.assign(new EventEmitter(), {
     close: vi.fn(async () => {}),
@@ -75,6 +82,7 @@ const startWatchRun = ({
     args,
     createWatcher,
     env,
+    fs: { existsSync: () => true },
     lockDisabled: true,
     process: fakeProcess,
     spawn,
@@ -82,10 +90,28 @@ const startWatchRun = ({
   return { watcher, createWatcher, fakeProcess, runPromise };
 };
 
+const requireRecord = createRequireRecord("object", "expected-label-object");
+
+function requireMockCall(mock: ReturnType<typeof vi.fn>, callIndex: number): unknown[] {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call;
+}
+
+function requireSpawnOptions(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
+  return requireRecord(requireMockCall(spawn, callIndex)[2], "spawn options");
+}
+
+function requireSpawnEnv(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
+  return requireRecord(requireSpawnOptions(spawn, callIndex).env, "spawn env");
+}
+
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
       fs.mkdirSync(path.join(cwd, "src", "infra"), { recursive: true });
       fs.mkdirSync(path.join(cwd, "extensions", "voice-call"), { recursive: true });
 
@@ -101,18 +127,37 @@ describe("watch-node script", () => {
       });
 
       expect(createWatcher).toHaveBeenCalledTimes(1);
-      const firstWatcherCall = createWatcher.mock.calls[0];
-      expect(firstWatcherCall).toBeDefined();
-      const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
+      const [watchPaths, watchOptions] = requireMockCall(createWatcher, 0) as unknown as [
         string[],
         { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
       ];
       expect(watchPaths).toEqual(runNodeWatchedPaths);
       expect(watchPaths).toContain("extensions");
+      expect(watchPaths).toContain("packages/gateway-client/src");
+      expect(watchPaths).toContain("packages/gateway-protocol/src");
+      expect(watchPaths).toContain("packages/markdown-core/src");
+      expect(watchPaths).toContain("packages/media-core/src");
+      expect(watchPaths).toContain("packages/media-generation-core/src");
+      expect(watchPaths).toContain("packages/acp-core/src");
+      expect(watchPaths).toContain("packages/net-policy/src");
       expect(watchPaths).toContain("tsdown.config.ts");
       expect(watchOptions.ignoreInitial).toBe(true);
       expect(watchOptions.ignored("src")).toBe(false);
       expect(watchOptions.ignored("src/infra")).toBe(false);
+      expect(watchOptions.ignored("packages/gateway-client/src/client.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/gateway-client/src/client.test.ts")).toBe(true);
+      expect(watchOptions.ignored("packages/gateway-protocol/src/schema/cron.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/markdown-core/src/ir.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/markdown-core/src/ir.test.ts")).toBe(true);
+      expect(watchOptions.ignored("packages/media-core/src/mime.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/media-core/src/mime.test.ts")).toBe(true);
+      expect(watchOptions.ignored("packages/media-generation-core/src/model-ref.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/media-generation-core/src/model-ref.test.ts")).toBe(
+        true,
+      );
+      expect(watchOptions.ignored("packages/acp-core/src/runtime/types.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/net-policy/src/ip.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/net-policy/src/ip.test.ts")).toBe(true);
       expect(watchOptions.ignored("extensions")).toBe(false);
       expect(watchOptions.ignored("extensions/voice-call")).toBe(false);
       expect(watchOptions.ignored("extensions/voice-call/dist")).toBe(true);
@@ -132,27 +177,132 @@ describe("watch-node script", () => {
       expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(spawn).toHaveBeenCalledWith(
-        "/usr/local/bin/node",
-        ["scripts/run-node.mjs", "gateway", "--force"],
-        expect.objectContaining({
-          cwd,
-          stdio: "inherit",
-          env: expect.objectContaining({
-            PATH: "/usr/bin",
-            OPENCLAW_WATCH_MODE: "1",
-            OPENCLAW_WATCH_SESSION: "1700000000000-4242",
-            OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_WATCH_COMMAND: "gateway --force",
-          }),
-        }),
-      );
+      const spawnCall = requireMockCall(spawn, 0);
+      expect(spawnCall[0]).toBe("/usr/local/bin/node");
+      expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+      const spawnOptions = requireSpawnOptions(spawn, 0);
+      expect(spawnOptions.cwd).toBe(cwd);
+      expect(spawnOptions.stdio).toBe("inherit");
+      const spawnEnv = requireSpawnEnv(spawn, 0);
+      expect(spawnEnv.PATH).toBe("/usr/bin");
+      expect(spawnEnv.OPENCLAW_WATCH_MODE).toBe("1");
+      expect(spawnEnv.OPENCLAW_WATCH_SESSION).toBe("1700000000000-4242");
+      expect(spawnEnv.OPENCLAW_NO_RESPAWN).toBe("1");
+      expect(spawnEnv.OPENCLAW_WATCH_COMMAND).toBe("gateway --force");
+      expect(spawnEnv.OPENCLAW_TRACE_SYNC_IO).toBeUndefined();
       fakeProcess.emit("SIGINT");
       const exitCode = await runPromise;
       expect(exitCode).toBe(130);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(watcher.close).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("preserves explicit sync I/O trace overrides for gateway watch", async () => {
+    const { child, spawn, createWatcher, fakeProcess } = createWatchHarness();
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        cwd,
+        createWatcher,
+        env: { OPENCLAW_TRACE_SYNC_IO: "0" },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+      });
+
+      const spawnCall = requireMockCall(spawn, 0);
+      expect(spawnCall[0]).toBe("/usr/local/bin/node");
+      expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+      expect(requireSpawnEnv(spawn, 0).OPENCLAW_TRACE_SYNC_IO).toBe("0");
+
+      fakeProcess.emit("SIGINT");
+      await runPromise;
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    });
+  });
+
+  it("starts the runner before loading chokidar", async () => {
+    const child = createKillableChild();
+    const spawn = vi.fn(() => child);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const watch = vi.fn(() => watcher);
+    let resolveLoadChokidar: (value: { watch: typeof watch }) => void = () => {};
+    const loadChokidar = vi.fn(
+      () =>
+        new Promise<{ watch: typeof watch }>((resolve) => {
+          resolveLoadChokidar = resolve;
+        }),
+    );
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      loadChokidar,
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(loadChokidar).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        loadChokidar.mock.invocationCallOrder[0],
+        "loadChokidar.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
+
+    resolveLoadChokidar({ watch });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(watch).toHaveBeenCalledTimes(1);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes generated asset paths before each runner start", async () => {
+    const childA = createAutoExitChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    const pathClassifier = {
+      refreshGeneratedPluginAssetPaths: vi.fn(),
+      isRestartRelevantRunNodePath: vi.fn(() => true),
+    };
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => true },
+      lockDisabled: true,
+      pathClassifier,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(1);
+    watcher.emit("change", "extensions/browser/package.json");
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
   });
 
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
@@ -201,7 +351,7 @@ describe("watch-node script", () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatch({
-      args: ["gateway", "--force", "--help"],
+      args: ["config", "validate"],
       createWatcher,
       lockDisabled: true,
       process: fakeProcess,
@@ -217,18 +367,83 @@ describe("watch-node script", () => {
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
+  it("runs doctor once and restarts when gateway exits nonzero", async () => {
+    const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayB = createKillableChild();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(gatewayA)
+      .mockReturnValueOnce(doctor)
+      .mockReturnValueOnce(gatewayB);
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ env: {}, spawn });
+
+    gatewayA.emit("exit", 1, null);
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const doctorSpawnCall = requireMockCall(spawn, 1);
+    expect(doctorSpawnCall[0]).toBe("/usr/local/bin/node");
+    expect(doctorSpawnCall[1]).toEqual([
+      "scripts/run-node.mjs",
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
+    expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
+
+    doctor.emit("exit", 0, null);
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(3);
+    const restartedGatewaySpawnCall = requireMockCall(spawn, 2);
+    expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
+    expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+    expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(gatewayB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run doctor after a gateway failure when auto doctor is disabled", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher,
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0" },
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+    });
+
+    child.emit("exit", 1, null);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
   it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(),
     });
-    const childB = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     childA.emit("exit", 143, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(2);
 
     fakeProcess.emit("SIGINT");
@@ -253,16 +468,12 @@ describe("watch-node script", () => {
       spawn,
     });
 
-    expect(spawn).toHaveBeenCalledWith(
-      "/usr/local/bin/node",
-      ["scripts/run-node.mjs", "gateway", "--force"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-          OPENCLAW_NO_RESPAWN: "1",
-        }),
-      }),
-    );
+    const spawnCall = requireMockCall(spawn, 0);
+    expect(spawnCall[0]).toBe("/usr/local/bin/node");
+    expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+    const spawnEnv = requireSpawnEnv(spawn, 0);
+    expect(spawnEnv.LAUNCH_JOB_LABEL).toBe("ai.openclaw.gateway");
+    expect(spawnEnv.OPENCLAW_NO_RESPAWN).toBe("1");
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
@@ -275,9 +486,7 @@ describe("watch-node script", () => {
     const childA = createAutoExitChild();
     const childB = createAutoExitChild();
     const childC = createAutoExitChild();
-    const childD = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childD = createKillableChild();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(childA)
@@ -287,43 +496,172 @@ describe("watch-node script", () => {
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     watcher.emit("change", "src/infra/watch-node.test.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", "src/infra/watch-node.test.tsx");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", VOICE_CALL_README);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", VOICE_CALL_MANIFEST);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(2);
 
     watcher.emit("change", VOICE_CALL_PACKAGE);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(3);
 
     watcher.emit("change", "src/infra/watch-node.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childC.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(4);
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
     expect(exitCode).toBe(130);
+  });
+
+  it("keeps the healthy child alive until a concurrently rebuilt dist entry returns", async () => {
+    const childA = createKillableChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let distEntryExists = false;
+    let resumePoll: (() => void) | undefined;
+    const sleep = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resumePoll = resolve;
+        }),
+    );
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => distEntryExists },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep,
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    watcher.emit("change", "src/infra/restart.ts");
+    expect(childA.kill).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(1);
+
+    distEntryExists = true;
+    resumePoll?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
+  });
+
+  it("does not resurrect a deferred child after watcher shutdown", async () => {
+    const child = createKillableChild();
+    const spawn = vi.fn(() => child);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let resumePoll: (() => void) | undefined;
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => false },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resumePoll = resolve;
+        }),
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
+    resumePoll?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the build entry when the healthy child exits during deferral", async () => {
+    const childA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let distEntryExists = false;
+    const resumePolls: Array<() => void> = [];
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => distEntryExists },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resumePolls.push(resolve);
+        }),
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    childA.emit("exit", 1, null);
+    watcher.emit("change", "src/infra/restart.ts");
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    distEntryExists = true;
+    for (const resume of resumePolls) {
+      resume();
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
   });
 
   it("kills child and exits when watcher emits an error", async () => {
@@ -345,9 +683,82 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
+  it("prints recovery guidance when chokidar fails with invalid package config", async () => {
+    const error = Object.assign(
+      new Error(
+        'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
+      ),
+      { code: "ERR_INVALID_PACKAGE_CONFIG" },
+    );
+    const child = createKillableChild();
+    const spawn = vi.fn(() => child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          args: ["gateway", "--force"],
+          cwd: "/tmp/openclaw",
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+          spawn,
+        }),
+      ).rejects.toBe(error);
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(errorSpy.mock.calls).toEqual([
+        [""],
+        [
+          "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+        ],
+        ["[openclaw] Invalid package config: /tmp/openclaw/.pnpm/chokidar/package.json"],
+        ["[openclaw] This usually means a file in node_modules is empty or truncated."],
+        ["[openclaw] Recommended recovery:"],
+        ["[openclaw]   rm -rf node_modules"],
+        ["[openclaw]   pnpm store prune"],
+        ["[openclaw]   pnpm install"],
+        [""],
+        ["[openclaw] Original error:"],
+        [error],
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not log non-package-config chokidar import errors before rethrowing", async () => {
+    const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    const child = createKillableChild();
+    const spawn = vi.fn(() => child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+          spawn,
+        }),
+      ).rejects.toBe(error);
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("replaces an existing watcher lock holder before starting", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    await withTempDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
+    await withTestDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
       const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
       fs.mkdirSync(path.dirname(lockPath), { recursive: true });
       fs.writeFileSync(
@@ -363,7 +774,7 @@ describe("watch-node script", () => {
       );
 
       let existingWatcherAlive = true;
-      const signalProcess = vi.fn((pid: number, signal: NodeJS.Signals | 0) => {
+      const signalProcess = vi.fn<NonNullable<WatchRunParams["signalProcess"]>>((pid, signal) => {
         if (signal === 0) {
           if (pid === 2121 && existingWatcherAlive) {
             return;
@@ -388,15 +799,16 @@ describe("watch-node script", () => {
         spawn,
       });
 
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(fs.readFileSync(lockPath, "utf8"))).toMatchObject({
-        pid: 4242,
-        command: "gateway --force",
-        watchSession: "1700000000000-4242",
-      });
+      const lockRecord = requireRecord(JSON.parse(fs.readFileSync(lockPath, "utf8")), "watch lock");
+      expect(lockRecord.pid).toBe(4242);
+      expect(lockRecord.command).toBe("gateway --force");
+      expect(lockRecord.watchSession).toBe("1700000000000-4242");
 
       fakeProcess.emit("SIGINT");
       const exitCode = await runPromise;

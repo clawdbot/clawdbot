@@ -1,0 +1,32 @@
+title: OpenAI-compatible chat tools HTTP API
+
+scenario:
+  id: openai-compatible-chat-tools
+  surface: runtime
+  coverage:
+    secondary:
+      - gateway.openai-compatible-apis
+      - agent-runtime.hosted-tool-use
+  objective: Verify the OpenAI-compatible chat-completions client and Docker lane preserve strict tool-call API behavior.
+  successCriteria:
+    - The Docker lane fails missing or placeholder OpenAI auth before Docker build work starts.
+    - The generated config preserves strict positive gateway port and timeout values.
+    - The chat-completions client posts to `/v1/chat/completions` with the expected gateway token and model header.
+    - Tool-call-only responses are accepted, visible content beside a tool call is rejected, and response bodies remain bounded.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/lib/openai-chat-tools/client.mjs
+    - scripts/e2e/lib/openai-chat-tools/write-config.mjs
+    - scripts/e2e/openai-chat-tools-docker.sh
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    - test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the OpenAI chat-tools Docker E2E lane against a real Gateway and the OpenAI-compatible chat-completions API.
+    args:
+      - --lane
+      - openai-chat-tools

@@ -1,13 +1,14 @@
-export type ReconnectOutcome = "resolved" | "rejected";
+// Mattermost plugin module implements reconnect behavior.
+type ReconnectOutcome = "resolved" | "rejected";
 
-export type ShouldReconnectParams = {
+type ShouldReconnectParams = {
   attempt: number;
   delayMs: number;
   outcome: ReconnectOutcome;
   error?: unknown;
 };
 
-export type RunWithReconnectOpts = {
+type RunWithReconnectOpts = {
   abortSignal?: AbortSignal;
   onError?: (err: unknown) => void;
   onReconnect?: (delayMs: number) => void;
@@ -33,16 +34,15 @@ export async function runWithReconnect(
   const { initialDelayMs = 2000, maxDelayMs = 60_000 } = opts;
   const jitterRatio = Math.max(0, opts.jitterRatio ?? 0);
   const random = opts.random ?? Math.random;
-  let retryDelay = initialDelayMs;
+  const backoff = createReconnectBackoff(initialDelayMs, maxDelayMs);
   let attempt = 0;
 
   while (!opts.abortSignal?.aborted) {
-    let shouldIncreaseDelay = false;
     let outcome: ReconnectOutcome = "resolved";
     let error: unknown;
     try {
       await connectFn();
-      retryDelay = initialDelayMs;
+      backoff.reset();
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         return;
@@ -50,12 +50,11 @@ export async function runWithReconnect(
       outcome = "rejected";
       error = err;
       opts.onError?.(err);
-      shouldIncreaseDelay = true;
     }
     if (opts.abortSignal?.aborted) {
       return;
     }
-    const delayMs = withJitter(retryDelay, jitterRatio, random);
+    const delayMs = withJitter(backoff.current(), jitterRatio, random);
     const shouldReconnect =
       opts.shouldReconnect?.({
         attempt,
@@ -68,11 +67,24 @@ export async function runWithReconnect(
     }
     opts.onReconnect?.(delayMs);
     await sleepAbortable(delayMs, opts.abortSignal);
-    if (shouldIncreaseDelay) {
-      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
+    if (outcome === "rejected") {
+      backoff.increase();
     }
     attempt++;
   }
+}
+
+function createReconnectBackoff(initialDelayMs: number, maxDelayMs: number) {
+  let retryDelay = initialDelayMs;
+  return {
+    current: () => retryDelay,
+    reset: () => {
+      retryDelay = initialDelayMs;
+    },
+    increase: () => {
+      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
+    },
+  };
 }
 
 function withJitter(baseMs: number, jitterRatio: number, random: () => number): number {

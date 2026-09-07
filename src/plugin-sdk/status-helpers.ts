@@ -1,20 +1,32 @@
+// Status helpers normalize plugin health and setup state into user-facing status summaries.
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import {
+  applyChannelAccountState,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Preserve the shipped Plugin SDK name while the implementation stays canonical.
+export { normalizeOptionalString as asString };
 export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,
-  asString,
   collectIssuesForEnabledAccounts,
   formatMatchMetadata,
   resolveEnabledConfiguredAccountId,
 } from "../channels/plugins/status-issues/shared.js";
+export {
+  resolveReactionLevel,
+  type ReactionLevel,
+  type ResolvedReactionLevel,
+} from "../utils/reaction-level.js";
 
 type RuntimeLifecycleSnapshot = {
+  linked?: boolean | null;
   running?: boolean | null;
   connected?: boolean | null;
   restartPending?: boolean | null;
@@ -30,12 +42,20 @@ type RuntimeLifecycleSnapshot = {
       }
     | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  lifecycle?: ChannelAccountSnapshot["lifecycle"] | null;
+  ingressUnavailable?: true | null;
+  terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean | null;
+  activeRuns?: number | null;
+  lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
 };
 
 type StatusSnapshotExtra = Record<string, unknown>;
@@ -62,6 +82,84 @@ type ConfigIssueAccount = {
   accountId?: string | null;
   configured?: boolean | null;
 } & Record<string, unknown>;
+
+const ACCOUNT_STATUS_SNAPSHOT_FIELDS = [
+  "accountId",
+  "enabled",
+  "configured",
+  "running",
+  "connected",
+] as const;
+
+export type AccountStatusSnapshot<TField extends string = never> = Record<
+  (typeof ACCOUNT_STATUS_SNAPSHOT_FIELDS)[number] | TField,
+  unknown
+>;
+
+/** Coerce a status row to the standard account fields plus channel-owned extras. */
+export function readAccountStatusSnapshot<TField extends string>(
+  value: unknown,
+  extraFields: readonly TField[],
+): AccountStatusSnapshot<TField> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const fields: readonly string[] = [...ACCOUNT_STATUS_SNAPSHOT_FIELDS, ...extraFields];
+  const result: Record<string, unknown> = {};
+  for (const field of fields) {
+    result[field] = record[field];
+  }
+  return result as AccountStatusSnapshot<TField>;
+}
+
+/** Build the standard warning for an enabled/configured account with open DM policy. */
+export function standardDmPolicyOpenIssue(params: {
+  channel: ChannelStatusIssue["channel"];
+  accountId: string;
+  channelLabel: string;
+  configPath: string;
+}): ChannelStatusIssue {
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: "config",
+    message: `${params.channelLabel} dmPolicy is "open", allowing any user to message the bot without pairing.`,
+    fix: `Set ${params.configPath}.dmPolicy to "pairing" or "allowlist" to restrict access.`,
+  };
+}
+
+/** Build a standard authentication issue for an enabled but unconfigured account. */
+export function standardNotConfiguredIssue(params: {
+  channel: ChannelStatusIssue["channel"];
+  accountId: string;
+  message: string;
+  fix: string;
+}): ChannelStatusIssue {
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: "auth",
+    message: params.message,
+    fix: params.fix,
+  };
+}
+
+function buildComputedAccountStatusAdapterBase<ResolvedAccount, Probe, Audit>(
+  options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot">,
+): Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> {
+  return {
+    defaultRuntime: options.defaultRuntime,
+    buildChannelSummary: options.buildChannelSummary,
+    probeAccount: options.probeAccount,
+    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
+    auditAccount: options.auditAccount,
+    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
+    logSelfId: options.logSelfId,
+    resolveAccountState: options.resolveAccountState,
+    collectStatusIssues: options.collectStatusIssues,
+  };
+}
 
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
@@ -95,6 +193,7 @@ export function buildBaseChannelStatusSummary<TExtra extends StatusSnapshotExtra
   },
   extra?: TExtra,
 ) {
+  // Channel summaries already consume projected account state; this helper only normalizes nulls.
   return {
     configured: snapshot.configured ?? false,
     ...(extra ?? ({} as TExtra)),
@@ -158,7 +257,7 @@ export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtr
   extra?: TExtra,
 ) {
   const { account, runtime, probe } = params;
-  return {
+  const snapshot = {
     accountId: account.accountId,
     name: account.name,
     enabled: account.enabled,
@@ -168,6 +267,14 @@ export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtr
     lastOutboundAt: runtime?.lastOutboundAt ?? null,
     ...(extra ?? ({} as TExtra)),
   };
+  const state = resolveChannelAccountState({
+    enabled: account.enabled !== false,
+    configured: account.configured === true,
+    linked: typeof snapshot.linked === "boolean" ? snapshot.linked : undefined,
+    runtime: snapshot,
+  });
+  applyChannelAccountState(snapshot, state);
+  return snapshot;
 }
 
 /** Convenience wrapper when the caller already has flattened account fields instead of an account object. */
@@ -198,6 +305,21 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
   );
 }
 
+function buildResolvedComputedAccountStatusSnapshot<
+  ResolvedAccount,
+  Probe,
+  Audit,
+  TExtra extends StatusSnapshotExtra,
+>(
+  params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+  { extra, ...snapshot }: ComputedAccountStatusSnapshot<TExtra>,
+) {
+  return buildComputedAccountStatusSnapshot(
+    { ...snapshot, runtime: params.runtime, probe: params.probe },
+    extra,
+  );
+}
+
 /** Build a full status adapter when only configured/extras vary per account. */
 export function createComputedAccountStatusAdapter<
   ResolvedAccount,
@@ -212,31 +334,9 @@ export function createComputedAccountStatusAdapter<
   },
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
-    defaultRuntime: options.defaultRuntime,
-    buildChannelSummary: options.buildChannelSummary,
-    probeAccount: options.probeAccount,
-    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
-    auditAccount: options.auditAccount,
-    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
-    logSelfId: options.logSelfId,
-    resolveAccountState: options.resolveAccountState,
-    collectStatusIssues: options.collectStatusIssues,
-    buildAccountSnapshot: (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    ...buildComputedAccountStatusAdapterBase(options),
+    buildAccountSnapshot: (params) =>
+      buildResolvedComputedAccountStatusSnapshot(params, options.resolveAccountSnapshot(params)),
   };
 }
 
@@ -254,31 +354,12 @@ export function createAsyncComputedAccountStatusAdapter<
   },
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
-    defaultRuntime: options.defaultRuntime,
-    buildChannelSummary: options.buildChannelSummary,
-    probeAccount: options.probeAccount,
-    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
-    auditAccount: options.auditAccount,
-    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
-    logSelfId: options.logSelfId,
-    resolveAccountState: options.resolveAccountState,
-    collectStatusIssues: options.collectStatusIssues,
-    buildAccountSnapshot: async (params) => {
-      const typedParams = params as ComputedAccountStatusAdapterParams<
-        ResolvedAccount,
-        Probe,
-        Audit
-      >;
-      const { extra, ...snapshot } = await options.resolveAccountSnapshot(typedParams);
-      return buildComputedAccountStatusSnapshot(
-        {
-          ...snapshot,
-          runtime: typedParams.runtime,
-          probe: typedParams.probe,
-        },
-        extra,
-      );
-    },
+    ...buildComputedAccountStatusAdapterBase(options),
+    buildAccountSnapshot: async (params) =>
+      buildResolvedComputedAccountStatusSnapshot(
+        params,
+        await options.resolveAccountSnapshot(params),
+      ),
   };
 }
 
@@ -297,6 +378,7 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
+    ...(typeof runtime?.linked === "boolean" ? { linked: runtime.linked } : {}),
     ...(typeof runtime?.connected === "boolean" ? { connected: runtime.connected } : {}),
     ...(typeof runtime?.restartPending === "boolean"
       ? { restartPending: runtime.restartPending }
@@ -309,7 +391,22 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       : {}),
     ...(runtime?.lastDisconnect ? { lastDisconnect: runtime.lastDisconnect } : {}),
     ...(typeof runtime?.lastEventAt === "number" ? { lastEventAt: runtime.lastEventAt } : {}),
+    ...(typeof runtime?.lastTransportActivityAt === "number"
+      ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
+      : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    ...(runtime?.lifecycle ? { lifecycle: runtime.lifecycle } : {}),
+    // Absence means unknown; only a recorded ingress failure crosses the projection.
+    ...(runtime?.ingressUnavailable === true ? { ingressUnavailable: true as const } : {}),
+    ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
+    ...(typeof runtime?.busy === "boolean" ? { busy: runtime.busy } : {}),
+    ...(typeof runtime?.activeRuns === "number" ? { activeRuns: runtime.activeRuns } : {}),
+    ...(typeof runtime?.lastRunActivityAt === "number"
+      ? { lastRunActivityAt: runtime.lastRunActivityAt }
+      : {}),
+    ...(typeof runtime?.activeRunStartedAt === "number"
+      ? { activeRunStartedAt: runtime.activeRunStartedAt }
+      : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

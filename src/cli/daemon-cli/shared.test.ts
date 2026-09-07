@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { theme } from "../../terminal/theme.js";
+// Daemon shared tests cover shared daemon CLI helpers and validation.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { applyCliProfileEnv } from "../profile.js";
 import {
   filterContainerGenericHints,
   renderGatewayServiceStartHints,
-  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
 } from "./shared.js";
 
@@ -21,28 +23,56 @@ describe("resolveRuntimeStatusColor", () => {
 });
 
 describe("renderGatewayServiceStartHints", () => {
-  it("resolves daemon container context from either env key", () => {
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
+  beforeEach(() => {
+    mockSystemAccountHome();
   });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("replaces only installation advice in Nix mode", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyCliProfileEnv({ profile: "work", env });
+    const existingHints = renderGatewayServiceStartHints(env);
+    const hints = renderGatewayServiceStartHints({ ...env, OPENCLAW_NIX_MODE: "1" });
+
+    expect(hints[0]).toContain("Nix mode detected; service install is disabled.");
+    expect(hints.slice(1)).toEqual(existingHints.slice(1));
+    expect(hints).toContain("openclaw --profile work gateway start");
+  });
+
+  it.each([
+    {
+      name: "the default profile",
+      profile: "default",
+      installCommand: "openclaw gateway install",
+      startCommand: "openclaw gateway start",
+    },
+    {
+      name: "a named profile",
+      profile: "work",
+      installCommand: "openclaw --profile work gateway install",
+      startCommand: "openclaw --profile work gateway start",
+    },
+  ])(
+    "recommends managed service commands for $name",
+    ({ profile, installCommand, startCommand }) => {
+      const env: NodeJS.ProcessEnv = {};
+      applyCliProfileEnv({ profile, env });
+      expect(renderGatewayServiceStartHints(env).slice(0, 2)).toEqual([
+        installCommand,
+        startCommand,
+      ]);
+    },
+  );
 
   it("prepends a single container restart hint when OPENCLAW_CONTAINER is set", () => {
     expect(
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER: "openclaw-demo-container",
       } as NodeJS.ProcessEnv),
-    ).toEqual(
-      expect.arrayContaining([
-        "Restart the container or the service that manages it for openclaw-demo-container.",
-      ]),
+    ).toContain(
+      "Restart the container or the service that manages it for openclaw-demo-container.",
     );
   });
 
@@ -50,12 +80,11 @@ describe("renderGatewayServiceStartHints", () => {
     expect(
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
+        OPENCLAW_PROFILE: "work",
       } as NodeJS.ProcessEnv),
-    ).toEqual(
-      expect.arrayContaining([
-        "Restart the container or the service that manages it for openclaw-demo-container.",
-      ]),
-    );
+    ).toEqual([
+      "Restart the container or the service that manages it for openclaw-demo-container.",
+    ]);
   });
 });
 
@@ -69,7 +98,7 @@ describe("filterContainerGenericHints", () => {
         ],
         { OPENCLAW_CONTAINER: "openclaw-demo-container" } as NodeJS.ProcessEnv,
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("drops the generic container foreground hint when OPENCLAW_CONTAINER_HINT is set", () => {
@@ -81,6 +110,6 @@ describe("filterContainerGenericHints", () => {
         ],
         { OPENCLAW_CONTAINER_HINT: "openclaw-demo-container" } as NodeJS.ProcessEnv,
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

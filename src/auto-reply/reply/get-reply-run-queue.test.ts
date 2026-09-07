@@ -1,3 +1,4 @@
+// Tests prepared reply queue state resolution before get-reply starts a run.
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 
@@ -15,7 +16,7 @@ describe("resolvePreparedReplyQueueState", () => {
       queueMode: "followup",
       sessionKey: "session-key",
       sessionId: "session-1",
-      abortActiveRun: vi.fn(),
+      interruptActiveRun: vi.fn(),
       waitForActiveRunEnd: vi.fn(),
       refreshPreparedState: vi.fn(),
       resolveBusyState,
@@ -29,8 +30,10 @@ describe("resolvePreparedReplyQueueState", () => {
   });
 
   it("aborts and waits for interrupt mode before continuing", async () => {
-    const abortActiveRun = vi.fn(() => true);
-    const waitForActiveRunEnd = vi.fn(async () => undefined);
+    const interruptActiveRun = vi.fn(async () => true);
+    const waitForActiveRunEnd = vi.fn(async () => {
+      throw new Error("interrupt mode must use session-work admission settling");
+    });
     const refreshPreparedState = vi.fn(async () => undefined);
     const resolveBusyState = vi.fn(() => ({
       activeSessionId: undefined,
@@ -44,14 +47,14 @@ describe("resolvePreparedReplyQueueState", () => {
       queueMode: "interrupt",
       sessionKey: "session-key",
       sessionId: "session-1",
-      abortActiveRun,
+      interruptActiveRun,
       waitForActiveRunEnd,
       refreshPreparedState,
       resolveBusyState,
     });
 
-    expect(abortActiveRun).toHaveBeenCalledWith("session-active");
-    expect(waitForActiveRunEnd).toHaveBeenCalledWith("session-active");
+    expect(interruptActiveRun).toHaveBeenCalledOnce();
+    expect(waitForActiveRunEnd).not.toHaveBeenCalled();
     expect(refreshPreparedState).toHaveBeenCalledOnce();
     expect(result).toEqual({
       kind: "continue",
@@ -66,7 +69,7 @@ describe("resolvePreparedReplyQueueState", () => {
       queueMode: "interrupt",
       sessionKey: "session-key",
       sessionId: "session-1",
-      abortActiveRun: vi.fn(() => true),
+      interruptActiveRun: vi.fn(async () => true),
       waitForActiveRunEnd: vi.fn(async () => undefined),
       refreshPreparedState: vi.fn(async () => undefined),
       resolveBusyState: () => ({

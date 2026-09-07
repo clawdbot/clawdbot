@@ -1,9 +1,17 @@
 {
   "id": "nostr",
-  "channels": ["nostr"],
-  "channelEnvVars": {
-    "nostr": ["NOSTR_PRIVATE_KEY"]
+  "doctorContract": {
+    "stateMigrations": [
+      { "id": "nostr-bus-state-json-to-plugin-state" },
+      { "id": "nostr-profile-state-json-to-plugin-state" }
+    ]
   },
+  "name": "Nostr",
+  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["nostr"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

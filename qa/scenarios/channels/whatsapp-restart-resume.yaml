@@ -1,0 +1,33 @@
+title: WhatsApp DM resumes after Gateway restart
+
+scenario:
+  id: whatsapp-restart-resume
+  surface: channels
+  coverage:
+    primary:
+      - channels.resumed-final-reply
+  objective: Verify channel delivery resumes after a Gateway restart without replaying completed delivery.
+  successCriteria:
+    - A reply is delivered before restart.
+    - Restart does not replay the completed reply.
+    - A fresh reply is delivered after restart.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+  execution:
+    kind: flow
+    channel: whatsapp
+    suiteIsolation: isolated
+    summary: Exercise normalized restart and continuation delivery.
+    config:
+      conversationKind: direct
+      conversationId: 15550000001@s.whatsapp.net
+      senderId: 15550000002@s.whatsapp.net
+      mentionPrefix: ""
+      firstPrefix: WHATSAPP_QA_RESTART_BEFORE
+      secondPrefix: WHATSAPP_QA_RESTART_AFTER
+      timeoutMs: 60000
+
+flow:
+  shared: channel-restart-resume

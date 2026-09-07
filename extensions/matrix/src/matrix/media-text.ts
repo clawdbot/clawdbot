@@ -1,9 +1,16 @@
+// Matrix plugin module implements media text behavior.
 import path from "node:path";
+import {
+  asNullableObjectRecord,
+  asNullableRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MatrixMessageAttachmentKind,
   MatrixMessageAttachmentSummary,
-  MatrixMessageSummary,
+  MatrixRawEvent,
+  RoomMessageEventContent,
 } from "./actions/types.js";
+import { getMatrixEventProjection } from "./sdk/event-helpers.js";
 
 const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
   "m.audio": "audio",
@@ -68,11 +75,58 @@ function resolveCaptionOrFilename(params: { body?: string; filename?: string }):
   return { caption: body };
 }
 
-export function resolveMatrixMessageAttachment(params: {
+export function resolveMatrixReplacementContent(
+  event: MatrixRawEvent,
+  replacementEvent: unknown = event.unsigned?.["m.relations"]?.["m.replace"],
+): Partial<RoomMessageEventContent> | undefined {
+  return resolveMatrixReplacement(event, replacementEvent)?.content;
+}
+
+export function resolveMatrixReplacement(
+  event: MatrixRawEvent,
+  replacementEvent: unknown = event.unsigned?.["m.relations"]?.["m.replace"],
+):
+  | { kind: "content"; content: Partial<RoomMessageEventContent> }
+  | { kind: "unreadable"; content?: never }
+  | undefined {
+  const replacement = asNullableObjectRecord(replacementEvent);
+  if (!replacement || event.state_key !== undefined || event.unsigned?.redacted_because) {
+    return undefined;
+  }
+  const content = asNullableObjectRecord(replacement.content);
+  const relation = asNullableObjectRecord(content?.["m.relates_to"]);
+  const unreadable =
+    getMatrixEventProjection(replacement)?.decryptionFailure === true ||
+    replacement.type === "m.room.encrypted";
+  if (
+    replacement.sender !== event.sender ||
+    (!unreadable && replacement.type !== event.type) ||
+    replacement.state_key !== undefined ||
+    asNullableObjectRecord(replacement.unsigned)?.redacted_because ||
+    !relation ||
+    relation.rel_type !== "m.replace" ||
+    relation.event_id !== event.event_id
+  ) {
+    return undefined;
+  }
+  // Ciphertext cannot establish its effective type or m.new_content. Keep that
+  // uncertainty separate from a decrypted replacement known to be invalid.
+  if (unreadable) {
+    return { kind: "unreadable" };
+  }
+  const newContent = asNullableRecord(content?.["m.new_content"]);
+  return newContent ? { kind: "content", content: newContent } : undefined;
+}
+
+type MatrixMessageContentInput = {
   body?: string;
   filename?: string;
   msgtype?: string;
-}): MatrixMessageAttachmentSummary | undefined {
+};
+
+export function resolveMatrixMessageAttachment(
+  params: MatrixMessageContentInput,
+): MatrixMessageAttachmentSummary | undefined {
   const kind = resolveMatrixMediaKind(params.msgtype);
   if (!kind) {
     return undefined;
@@ -85,20 +139,7 @@ export function resolveMatrixMessageAttachment(params: {
   };
 }
 
-export function resolveMatrixMessageBody(params: {
-  body?: string;
-  filename?: string;
-  msgtype?: string;
-}): string | undefined {
-  const attachment = resolveMatrixMessageAttachment(params);
-  if (!attachment) {
-    const body = params.body?.trim() ?? "";
-    return body || undefined;
-  }
-  return attachment.caption;
-}
-
-export function formatMatrixAttachmentText(params: {
+function formatMatrixAttachmentText(params: {
   attachment?: MatrixMessageAttachmentSummary;
   tooLarge?: boolean;
   unavailable?: boolean;
@@ -115,13 +156,15 @@ export function formatMatrixAttachmentText(params: {
 
 export function formatMatrixMessageText(params: {
   body?: string;
-  attachment?: MatrixMessageAttachmentSummary;
+  filename?: string;
+  msgtype?: string;
   tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
-  const body = params.body?.trim() ?? "";
+  const attachment = resolveMatrixMessageAttachment(params);
+  const body = attachment ? (attachment.caption ?? "") : (params.body?.trim() ?? "");
   const marker = formatMatrixAttachmentText({
-    attachment: params.attachment,
+    attachment,
     tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
@@ -134,24 +177,12 @@ export function formatMatrixMessageText(params: {
   return `${body}\n\n${marker}`;
 }
 
-export function formatMatrixMessageSummaryText(
-  summary: Pick<MatrixMessageSummary, "body" | "attachment">,
-): string | undefined {
-  return formatMatrixMessageText(summary);
-}
-
 export function formatMatrixMediaUnavailableText(params: {
   body?: string;
   filename?: string;
   msgtype?: string;
 }): string {
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody(params),
-      attachment: resolveMatrixMessageAttachment(params),
-      unavailable: true,
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ ...params, unavailable: true }) ?? "";
 }
 
 export function formatMatrixMediaTooLargeText(params: {
@@ -159,11 +190,5 @@ export function formatMatrixMediaTooLargeText(params: {
   filename?: string;
   msgtype?: string;
 }): string {
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody(params),
-      attachment: resolveMatrixMessageAttachment(params),
-      tooLarge: true,
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ ...params, tooLarge: true }) ?? "";
 }

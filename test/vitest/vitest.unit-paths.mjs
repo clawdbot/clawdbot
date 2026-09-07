@@ -1,3 +1,4 @@
+// Unit test routing globs and boundary/bundled-plugin exclusions.
 import path from "node:path";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
@@ -5,15 +6,6 @@ export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
-  "ui/src/ui/app-chat.test.ts",
-  "ui/src/ui/chat/**/*.test.ts",
-  "ui/src/ui/views/agents-utils.test.ts",
-  "ui/src/ui/views/channels.test.ts",
-  "ui/src/ui/views/chat.test.ts",
-  "ui/src/ui/views/dreams.test.ts",
-  "ui/src/ui/views/usage-render-details.test.ts",
-  "ui/src/ui/controllers/agents.test.ts",
-  "ui/src/ui/controllers/chat.test.ts",
 ];
 
 export const boundaryTestFiles = [
@@ -28,7 +20,6 @@ export const boundaryTestFiles = [
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
-  "test/web-provider-boundary.test.ts",
 ];
 
 export const bundledPluginDependentUnitTestFiles = [
@@ -39,6 +30,8 @@ export const bundledPluginDependentUnitTestFiles = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
+  "packages/gateway-client/**",
+  "packages/gateway-protocol/**",
   "src/hooks/**",
   "src/infra/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,

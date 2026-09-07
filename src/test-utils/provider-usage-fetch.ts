@@ -1,3 +1,4 @@
+// Mocks provider usage fetching for tests that assert accounting behavior.
 import { vi } from "vitest";
 import { withFetchPreconnect } from "./fetch-mock.js";
 
@@ -7,6 +8,7 @@ type UsageFetchMock = ReturnType<
   typeof vi.fn<(input: UsageFetchInput, init?: RequestInit) => Promise<Response>>
 >;
 
+/** Creates JSON usage-provider responses without depending on a real fetch implementation. */
 export function makeResponse(status: number, body: unknown): Response {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
   const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };

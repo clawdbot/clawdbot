@@ -4,22 +4,26 @@
 
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearNostrProfileRateLimitStateForTest,
-  createNostrProfileHttpHandler,
-  getNostrProfileRateLimitStateSizeForTest,
-  isNostrProfileRateLimitedForTest,
-  type NostrProfileHttpContext,
-} from "./nostr-profile-http.js";
+import { createNostrProfileHttpHandler } from "./nostr-profile-http.js";
+
+type NostrProfileHttpContext = Parameters<typeof createNostrProfileHttpHandler>[0];
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
+const clearProfileRateLimiterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./nostr-profile-http-runtime.js", async () => {
   const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
   const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
   return {
-    createFixedWindowRateLimiter: webhookIngress.createFixedWindowRateLimiter,
+    createFixedWindowRateLimiter: (
+      ...args: Parameters<typeof webhookIngress.createFixedWindowRateLimiter>
+    ) => {
+      const limiter = webhookIngress.createFixedWindowRateLimiter(...args);
+      clearProfileRateLimiterMock.mockImplementation(() => limiter.clear());
+      return limiter;
+    },
     readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
     requestBodyErrorToText: requestGuards.requestBodyErrorToText,
     getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
@@ -46,7 +50,7 @@ import { TEST_HEX_PUBLIC_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
 // Test Helpers
 // ============================================================================
 
-const TEST_PROFILE_RELAY_URL = TEST_SETUP_RELAY_URLS[0];
+const TEST_PROFILE_RELAY_URL = expectDefined(TEST_SETUP_RELAY_URLS[0], "Nostr profile relay URL");
 
 afterAll(() => {
   runtimeScopeMock.mockReset();
@@ -107,16 +111,21 @@ function createMockRequest(
   return req;
 }
 
-function createMockResponse(): ServerResponse & {
+type MockResponse = {
   _getData: () => string;
   _getStatusCode: () => number;
-} {
+  write: (chunk: unknown) => boolean;
+  end: (chunk?: unknown) => MockResponse;
+  statusCode: number;
+};
+
+function createMockResponse(): MockResponse {
   let data = "";
   let statusCode = 200;
   const res = Object.assign(new ServerResponse({} as IncomingMessage), {
     _getData: () => data,
     _getStatusCode: () => statusCode,
-  });
+  }) as MockResponse;
 
   res.write = function (chunk: unknown) {
     data += responseChunkText(chunk);
@@ -139,8 +148,6 @@ function createMockResponse(): ServerResponse & {
 
   return res;
 }
-
-type MockResponse = ReturnType<typeof createMockResponse>;
 
 function createMockContext(overrides?: Partial<NostrProfileHttpContext>): NostrProfileHttpContext {
   return {
@@ -177,13 +184,13 @@ function createProfileHttpHarness(
     ctx,
     req,
     res,
-    run: () => handler(req, res),
+    run: () => handler(req, res as unknown as ServerResponse),
   };
 }
 
 function expectOkResponse(res: MockResponse) {
-  expect(res._getStatusCode()).toBe(200);
-  const data = JSON.parse(res._getData());
+  expect(res["_getStatusCode"]()).toBe(200);
+  const data = JSON.parse(res["_getData"]());
   expect(data.ok).toBe(true);
   return data;
 }
@@ -205,6 +212,27 @@ function mockSuccessfulProfileImport() {
   });
 }
 
+async function expectAdminScopeRejected(params: {
+  scopes: readonly string[] | undefined;
+  method: string;
+  url: string;
+  body: unknown;
+  expectOperationNotCalled: () => void;
+}) {
+  setGatewayRuntimeScopes(params.scopes);
+  const { ctx, res, run } = createProfileHttpHarness(params.method, params.url, {
+    body: params.body,
+  });
+
+  await run();
+
+  expect(res["_getStatusCode"]()).toBe(403);
+  const data = JSON.parse(res["_getData"]());
+  expect(data.error).toBe("missing scope: operator.admin");
+  params.expectOperationNotCalled();
+  expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -212,7 +240,7 @@ function mockSuccessfulProfileImport() {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearNostrProfileRateLimitStateForTest();
+    clearProfileRateLimiterMock();
     setGatewayRuntimeScopes(["operator.admin"]);
   });
 
@@ -261,8 +289,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(200);
+      const data = JSON.parse(res["_getData"]());
       expect(data.ok).toBe(true);
       expect(data.profile.name).toBe("testuser");
       expect(data.publishState.lastPublishedAt).toBe(1234567890);
@@ -280,8 +308,8 @@ describe("nostr-profile-http", () => {
     }
 
     function expectBadRequestResponse(res: ReturnType<typeof createMockResponse>) {
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(400);
+      const data = JSON.parse(res["_getData"]());
       expect(data.ok).toBe(false);
       return data;
     }
@@ -331,7 +359,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects cross-origin profile mutation attempts", async () => {
@@ -341,7 +369,29 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
+    });
+
+    it.each([
+      ["http://localhost:18789", 200],
+      ["http://127.0.0.1:18789", 200],
+      ["http://127.0.0.2:18789", 200],
+      ["http://127.255.255.254:18789", 200],
+      ["http://[::1]:18789", 200],
+      ["http://[::ffff:127.0.0.2]:18789", 200],
+      ["http://128.0.0.1:18789", 403],
+      ["http://127.0.0.1.evil.com:18789", 403],
+    ] as const)("classifies profile mutation origin %s", async (origin, expectedStatusCode) => {
+      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
+        body: { name: "satoshi" },
+        req: { headers: { origin } },
+      });
+      if (expectedStatusCode === 200) {
+        mockPublishSuccess();
+      }
+
+      await run();
+      expect(res["_getStatusCode"]()).toBe(expectedStatusCode);
     });
 
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
@@ -351,7 +401,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
@@ -361,45 +411,27 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
-      setGatewayRuntimeScopes(["operator.read"]);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "PUT",
-        "/api/channels/nostr/default/profile",
-        {
-          body: { name: "attacker" },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(publishNostrProfile).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: ["operator.read"],
+        method: "PUT",
+        url: "/api/channels/nostr/default/profile",
+        body: { name: "attacker" },
+        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects profile mutation when gateway scope context is missing", async () => {
-      setGatewayRuntimeScopes(undefined);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "PUT",
-        "/api/channels/nostr/default/profile",
-        {
-          body: { name: "attacker" },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(publishNostrProfile).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: undefined,
+        method: "PUT",
+        url: "/api/channels/nostr/default/profile",
+        body: { name: "attacker" },
+        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects private IP in picture URL (SSRF protection)", async () => {
@@ -423,8 +455,8 @@ describe("nostr-profile-http", () => {
       const data = expectBadRequestResponse(res);
       // The schema validation catches non-https URLs before SSRF check
       expect(data.error).toBe("Validation failed");
-      expect(data.details).toBeDefined();
-      expect(data.details.some((d: string) => d.includes("https"))).toBe(true);
+      expect(Array.isArray(data.details)).toBe(true);
+      expect(data.details).toEqual(["picture: URL must use https:// protocol"]);
     });
 
     it("does not persist if all relays fail", async () => {
@@ -447,8 +479,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(200);
+      const data = JSON.parse(res["_getData"]());
       expect(data.persisted).toBe(false);
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
@@ -472,30 +504,11 @@ describe("nostr-profile-http", () => {
         if (i < 5) {
           expectOkResponse(res);
         } else {
-          expect(res._getStatusCode()).toBe(429);
-          const data = JSON.parse(res._getData());
+          expect(res["_getStatusCode"]()).toBe(429);
+          const data = JSON.parse(res["_getData"]());
           expect(data.error).toContain("Rate limit");
         }
       }
-    });
-
-    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
-      const now = 1_000_000;
-      for (let i = 0; i < 2_500; i += 1) {
-        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
-      }
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
-    });
-
-    it("prunes stale rate-limit keys after the window elapses", () => {
-      const now = 2_000_000;
-      for (let i = 0; i < 100; i += 1) {
-        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
-      }
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
-
-      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
     });
   });
 
@@ -532,7 +545,7 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects cross-origin import mutation attempts", async () => {
@@ -546,7 +559,7 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects import mutation when x-real-ip is non-loopback", async () => {
@@ -560,45 +573,27 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile import when gateway caller is missing operator.admin", async () => {
-      setGatewayRuntimeScopes(["operator.read"]);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: { autoMerge: true },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(importProfileFromRelays).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: ["operator.read"],
+        method: "POST",
+        url: "/api/channels/nostr/default/profile/import",
+        body: { autoMerge: true },
+        expectOperationNotCalled: () => expect(importProfileFromRelays).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects profile import when gateway scope context is missing", async () => {
-      setGatewayRuntimeScopes(undefined);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: { autoMerge: true },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(importProfileFromRelays).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: undefined,
+        method: "POST",
+        url: "/api/channels/nostr/default/profile/import",
+        body: { autoMerge: true },
+        expectOperationNotCalled: () => expect(importProfileFromRelays).not.toHaveBeenCalled(),
+      });
     });
 
     it("auto-merges when requested", async () => {
@@ -636,8 +631,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(404);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(404);
+      const data = JSON.parse(res["_getData"]());
       expect(data.error).toContain("not found");
     });
   });

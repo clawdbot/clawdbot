@@ -1,25 +1,29 @@
+/**
+ * Browser navigation SSRF guard.
+ *
+ * Validates page navigation URLs and redirect chains before or after browser
+ * navigation while accounting for browser proxy routing.
+ */
 import { isIP } from "node:net";
-import {
-  matchesHostnameAllowlist,
-  normalizeHostname,
-} from "openclaw/plugin-sdk/browser-security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
+const BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE =
+  "Navigation blocked: URL-embedded credentials are not supported for page navigation. Set HTTP Basic auth with `openclaw browser set credentials <username> <password>` or use an authenticated browser profile.";
 
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
 }
 
+/** Raised when a browser navigation URL fails syntax or policy validation. */
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -27,25 +31,61 @@ export class InvalidBrowserNavigationUrlError extends Error {
   }
 }
 
+/** Parse a page-navigation URL and reject credentials before any transport dispatch. */
+export function parseBrowserNavigationUrl(url: string): URL {
+  const rawUrl = url.trim();
+  if (!rawUrl) {
+    throw new InvalidBrowserNavigationUrlError("url is required");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    const diagnostic = rawUrl.includes("@") ? "[redacted credential-bearing URL]" : rawUrl;
+    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${diagnostic}`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new InvalidBrowserNavigationUrlError(BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE);
+  }
+  return parsed;
+}
+
+/** Policy inputs applied to browser page navigation checks. */
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationProxyMode;
 };
 
-export type BrowserNavigationRequestLike = {
+/** Describes whether the browser itself is routing page traffic through a proxy. */
+export type BrowserNavigationProxyMode = "direct" | "explicit-browser-proxy";
+
+/** Minimal request shape used to walk browser redirect chains. */
+type BrowserNavigationRequestLike = {
   url(): string;
   redirectedFrom(): BrowserNavigationRequestLike | null;
 };
 
+/** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
+  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
 ): BrowserNavigationPolicyOptions {
-  return ssrfPolicy ? { ssrfPolicy } : {};
+  return {
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+      ? { browserProxyMode: opts.browserProxyMode }
+      : {}),
+  };
 }
 
-export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
+/** Return true when strict policy requires redirect-chain inspection. */
+function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
   return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
+/** Return true when a URL needs redirect inspection under strict policy. */
 export function requiresInspectableBrowserNavigationRedirectsForUrl(
   url: string,
   ssrfPolicy?: SsrFPolicy,
@@ -67,35 +107,22 @@ function isIpLiteralHostname(hostname: string): boolean {
 
 function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
   const normalizedHostname = normalizeHostname(hostname);
-  const exactMatches = ssrfPolicy?.allowedHostnames ?? [];
-  if (exactMatches.some((value) => normalizeHostname(value) === normalizedHostname)) {
-    return true;
-  }
-  const hostnameAllowlist = (ssrfPolicy?.hostnameAllowlist ?? [])
+  const allowedHostnames = (ssrfPolicy?.allowedHostnames ?? [])
     .map((pattern) => normalizeHostname(pattern))
     .filter(Boolean);
-  return hostnameAllowlist.length > 0
-    ? matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist)
+  return allowedHostnames.length > 0
+    ? matchesHostnameAllowlist(normalizedHostname, allowedHostnames)
     : false;
 }
 
+/** Assert that a requested browser navigation URL is policy-allowed. */
 export async function assertBrowserNavigationAllowed(
   opts: {
     url: string;
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
-  if (!rawUrl) {
-    throw new InvalidBrowserNavigationUrlError("url is required");
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);
-  }
+  const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
     if (isAllowedNonNetworkNavigationUrl(parsed)) {
@@ -106,13 +133,15 @@ export async function assertBrowserNavigationAllowed(
     );
   }
 
-  // Browser network stacks may apply env proxy routing at connect-time, which
-  // can bypass strict destination-binding intent from pre-navigation DNS checks.
-  // In strict mode, fail closed unless private-network navigation is explicitly
-  // enabled by policy.
-  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
+  // Browser proxy routing hides the final connect target from this process.
+  // Only block when the browser profile is known to be proxy-routed; Gateway
+  // provider proxy env alone is not proof of browser page proxy behavior.
+  if (
+    opts.browserProxyMode === "explicit-browser-proxy" &&
+    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)
+  ) {
     throw new InvalidBrowserNavigationUrlError(
-      "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
+      "Navigation blocked: strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
     );
   }
 
@@ -150,7 +179,7 @@ export async function assertBrowserNavigationResultAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
+  const rawUrl = opts.url.trim();
   if (!rawUrl) {
     return;
   }
@@ -168,6 +197,7 @@ export async function assertBrowserNavigationResultAllowed(
   }
 }
 
+/** Assert that every URL in a browser redirect chain is policy-allowed. */
 export async function assertBrowserNavigationRedirectChainAllowed(
   opts: {
     request?: BrowserNavigationRequestLike | null;
@@ -185,6 +215,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       url,
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
     });
   }
 }

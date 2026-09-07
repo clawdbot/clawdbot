@@ -1,5 +1,46 @@
+// Tests channel plugin test registry helpers.
 import { describe, expect, it } from "vitest";
-import { createChannelTestPluginBase, createOutboundTestPlugin } from "./channel-plugins.js";
+import { getLoadedChannelPluginById } from "../channels/plugins/registry-loaded.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import {
+  activateTestChannelRegistry,
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "./channel-plugins.js";
+
+describe("activateTestChannelRegistry", () => {
+  it("publishes channels after a cached lookup while retaining the Gateway registry and host settings", async () => {
+    const previous = captureActivePluginRegistrySnapshot();
+    const existing = createChannelTestPluginBase({ id: "existing" });
+    const added = createChannelTestPluginBase({ id: "fixture" });
+    const registry = createTestRegistry([
+      { pluginId: "existing", plugin: existing, source: "test" },
+    ]);
+    try {
+      setActivePluginRegistry(registry, "gateway-cache", "gateway-bindable", "/gateway-workspace");
+      const gateway = captureActivePluginRegistrySnapshot();
+      expect(getLoadedChannelPluginById("existing")).toBe(existing);
+      expect(getLoadedChannelPluginById("fixture")).toBeUndefined();
+
+      await activateTestChannelRegistry(
+        createTestRegistry([{ pluginId: "fixture", plugin: added, source: "test" }]),
+      );
+
+      expect(getLoadedChannelPluginById("fixture")).toBe(added);
+      expect(getLoadedChannelPluginById("existing")).toBe(existing);
+      expect(captureActivePluginRegistrySnapshot()).toEqual(gateway);
+      expect(captureActivePluginRegistrySnapshot().activeRegistry).toBe(registry);
+      expect(registry.channelSetups.map((entry) => entry.plugin)).toEqual([existing, added]);
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
+});
 
 describe("createChannelTestPluginBase", () => {
   it("builds a plugin base with defaults", () => {
@@ -11,7 +52,7 @@ describe("createChannelTestPluginBase", () => {
     expect(base.meta.docsPath).toBe("/channels/demo-channel");
     expect(base.capabilities.chatTypes).toEqual(["direct"]);
     expect(base.config.listAccountIds(cfg)).toEqual(["default"]);
-    expect(base.config.resolveAccount(cfg)).toEqual({});
+    expect(base.config.resolveAccount(cfg)).toStrictEqual({});
   });
 
   it("honors config and metadata overrides", async () => {
@@ -45,6 +86,6 @@ describe("createOutboundTestPlugin", () => {
         sendText: async () => ({ channel: "demo-outbound", messageId: "m1" }),
       },
     });
-    expect(plugin.config.listAccountIds(cfg)).toEqual([]);
+    expect(plugin.config.listAccountIds(cfg)).toStrictEqual([]);
   });
 });

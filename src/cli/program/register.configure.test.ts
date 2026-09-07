@@ -1,3 +1,4 @@
+// Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerConfigureCommand } from "./register.configure.js";
@@ -13,12 +14,16 @@ const mocks = vi.hoisted(() => ({
 
 const { configureCommandFromSectionsArgMock, runtime } = mocks;
 
-vi.mock("../../commands/configure.js", () => ({
+vi.mock("../../commands/configure.shared.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: ["auth", "channels", "gateway", "agent"],
+}));
+
+vi.mock("../../commands/configure.commands.js", () => ({
   configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -40,12 +45,23 @@ describe("registerConfigureCommand", () => {
     expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth", "channels"], runtime);
   });
 
+  it.each([
+    ["an empty section", [""]],
+    ["a whitespace section", [" \t "]],
+    ["a valid and empty section", ["channels", ""]],
+    ["a valid and whitespace section", ["channels", "  "]],
+  ] as const)("preserves %s for shared section validation", async (_label, sections) => {
+    await runCli(["configure", ...sections.flatMap((section) => ["--section", section])]);
+
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime);
+  });
+
   it("reports errors through runtime when configure command fails", async () => {
     configureCommandFromSectionsArgMock.mockRejectedValueOnce(new Error("configure failed"));
 
     await runCli(["configure"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: configure failed");
+    expect(runtime.error).toHaveBeenCalledWith("configure failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

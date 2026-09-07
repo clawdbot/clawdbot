@@ -1,111 +1,26 @@
 ---
 name: feishu-wiki
 description: |
-  Feishu knowledge base navigation. Activate when user mentions knowledge base, wiki, or wiki links.
+  Feishu knowledge-base navigation workflows. Activate when the user mentions a knowledge base, wiki, or wiki link.
 ---
 
-# Feishu Wiki Tool
+# Feishu wiki
 
-Single tool `feishu_wiki` for knowledge base operations.
+Use the single `feishu_wiki` tool and its current action schema.
 
-## Token Extraction
+From `https://example.feishu.cn/wiki/ABC123def`, use `ABC123def` as `token`. Treat every `space_id` as an opaque quoted string, even when it contains only digits.
 
-From URL `https://xxx.feishu.cn/wiki/ABC123def` → `token` = `ABC123def`
+## Navigate
 
-## Actions
+- Use `spaces` to enumerate accessible knowledge spaces and `nodes` for a space or parent node.
+- Continue pagination with the returned `page_token` while `has_more` is true, keeping the same space and parent.
+- Use `search` when the user provides a query but not an exact node.
+- Use `get` to resolve a wiki token to its `node_token`, `obj_token`, and `obj_type`.
 
-### List Knowledge Spaces
+## Create and organize
 
-```json
-{ "action": "spaces" }
-```
+Wiki creation supports only `docx`, `sheet`, and `bitable`; `docx` is the default. Resolve an exact space and parent before create, move, or rename operations, and confirm ambiguous or destructive reorganizations.
 
-Returns all accessible wiki spaces.
+## Wiki content workflow
 
-### List Nodes
-
-```json
-{ "action": "nodes", "space_id": "7xxx" }
-```
-
-With parent:
-
-```json
-{ "action": "nodes", "space_id": "7xxx", "parent_node_token": "wikcnXXX" }
-```
-
-### Get Node Details
-
-```json
-{ "action": "get", "token": "ABC123def" }
-```
-
-Returns: `node_token`, `obj_token`, `obj_type`, etc. Use `obj_token` with `feishu_doc` to read/write the document.
-
-### Create Node
-
-```json
-{ "action": "create", "space_id": "7xxx", "title": "New Page" }
-```
-
-With type and parent:
-
-```json
-{
-  "action": "create",
-  "space_id": "7xxx",
-  "title": "Sheet",
-  "obj_type": "sheet",
-  "parent_node_token": "wikcnXXX"
-}
-```
-
-`obj_type`: `docx` (default), `sheet`, `bitable`, `mindnote`, `file`, `doc`, `slides`
-
-### Move Node
-
-```json
-{ "action": "move", "space_id": "7xxx", "node_token": "wikcnXXX" }
-```
-
-To different location:
-
-```json
-{
-  "action": "move",
-  "space_id": "7xxx",
-  "node_token": "wikcnXXX",
-  "target_space_id": "7yyy",
-  "target_parent_token": "wikcnYYY"
-}
-```
-
-### Rename Node
-
-```json
-{ "action": "rename", "space_id": "7xxx", "node_token": "wikcnXXX", "title": "New Title" }
-```
-
-## Wiki-Doc Workflow
-
-To edit a wiki page:
-
-1. Get node: `{ "action": "get", "token": "wiki_token" }` → returns `obj_token`
-2. Read doc: `feishu_doc { "action": "read", "doc_token": "obj_token" }`
-3. Write doc: `feishu_doc { "action": "write", "doc_token": "obj_token", "content": "..." }`
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      wiki: true # default: true
-      doc: true # required - wiki content uses feishu_doc
-```
-
-**Dependency:** This tool requires `feishu_doc` to be enabled. Wiki pages are documents - use `feishu_wiki` to navigate, then `feishu_doc` to read/edit content.
-
-## Permissions
-
-Required: `wiki:wiki` or `wiki:wiki:readonly`
+Wiki navigation is independent of the document tool. When `get` returns a `docx` object, use its `obj_token` as `doc_token` with `feishu_doc` to read or edit the page. Other object types require a currently available tool that supports that type; do not treat them as documents.

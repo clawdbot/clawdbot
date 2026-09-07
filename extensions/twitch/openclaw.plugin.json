@@ -1,9 +1,11 @@
 {
   "id": "twitch",
-  "channels": ["twitch"],
-  "channelEnvVars": {
-    "twitch": ["OPENCLAW_TWITCH_ACCESS_TOKEN"]
+  "name": "Twitch",
+  "description": "OpenClaw Twitch channel plugin for chat and moderation workflows.",
+  "activation": {
+    "onStartup": false
   },
+  "channels": ["twitch"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

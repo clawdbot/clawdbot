@@ -1,17 +1,30 @@
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
-  ResolvedApprovalView,
+// Matrix plugin module implements approval handler behavior.
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { buildPluginApprovalResolvedReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
+import {
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptPrimaryId,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -26,13 +39,20 @@ import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
+import {
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendSingleTextMessageMatrix,
+} from "./matrix/send.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
+// OpenClaw Matrix custom event content for capable clients; body and reactions remain fallback.
+const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval" as const;
+
 type PendingMessage = {
   roomId: string;
-  messageIds: readonly string[];
+  platformMessageIds: readonly string[];
   reactionEventId: string;
 };
 type PreparedMatrixTarget = {
@@ -40,12 +60,70 @@ type PreparedMatrixTarget = {
   roomId: string;
   threadId?: string;
 };
+type MatrixApprovalMetadataAction = {
+  decision: ExecApprovalReplyDecision;
+  label: string;
+  style: PendingApprovalView["actions"][number]["style"];
+  command: string;
+};
+type MatrixApprovalMetadataBase = {
+  version: 1;
+  type: "approval.request";
+  id: string;
+  state: "pending";
+  kind: PendingApprovalView["approvalKind"];
+  phase: "pending";
+  title: string;
+  description?: string;
+  expiresAtMs: number;
+  metadata: PendingApprovalView["metadata"];
+  allowedDecisions: ExecApprovalReplyDecision[];
+  actions: MatrixApprovalMetadataAction[];
+};
+type MatrixExecApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "exec";
+  ask?: string;
+  agentId?: string;
+  commandText: string;
+  commandPreview?: string;
+  cwd?: string;
+  envKeys?: readonly string[];
+  host?: string;
+  nodeId?: string;
+  sessionKey?: string;
+};
+type MatrixPluginApprovalSeverity = Extract<
+  PendingApprovalView,
+  { approvalKind: "plugin" }
+>["severity"];
+type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "plugin";
+  agentId?: string;
+  pluginId?: string;
+  toolName?: string;
+  severity: MatrixPluginApprovalSeverity;
+};
+type MatrixSystemAgentApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "system-agent";
+  agentId?: string;
+  commandText: string;
+  operationSummary: string;
+};
+type MatrixApprovalMetadata =
+  | MatrixExecApprovalMetadata
+  | MatrixPluginApprovalMetadata
+  | MatrixSystemAgentApprovalMetadata;
+type MatrixApprovalExtraContent = {
+  [MATRIX_APPROVAL_METADATA_KEY]: MatrixApprovalMetadata;
+};
 type PendingApprovalContent = {
   approvalId: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  extraContent: MatrixApprovalExtraContent;
 };
 type ReactionTargetRef = {
+  accountId: string;
   roomId: string;
   eventId: string;
 };
@@ -61,16 +139,20 @@ type MatrixPrepareTargetParams = {
   rawTarget: MatrixRawApprovalTarget;
 };
 
-export type MatrixApprovalHandlerDeps = {
+const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
+const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
+
+type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
+  sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
   reactMessage?: typeof reactMatrixMessage;
   editMessage?: typeof editMatrixMessage;
   deleteMessage?: typeof deleteMatrixMessage;
   repairDirectRooms?: typeof repairMatrixDirectRooms;
 };
 
-export type MatrixApprovalHandlerContext = {
+type MatrixApprovalHandlerContext = {
   client: MatrixClient;
   deps?: MatrixApprovalHandlerDeps;
 };
@@ -88,21 +170,43 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return Array.from(new Set(entry.messageIds.map((messageId) => messageId.trim()).filter(Boolean)));
+  return normalizeUniqueStringEntries(entry.platformMessageIds);
 }
 
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
+  const accountId = normalizeAccountId(params.accountId);
   const roomId = params.roomId.trim();
   const eventId = params.eventId.trim();
-  if (!roomId || !eventId) {
+  if (!accountId || !roomId || !eventId) {
     return null;
   }
-  return { roomId, eventId };
+  return { accountId, roomId, eventId };
 }
 
 function normalizeThreadId(value?: string | number | null): string | undefined {
   const trimmed = value == null ? "" : String(value).trim();
   return trimmed || undefined;
+}
+
+function isSingleMatrixMessageLimitError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("Matrix single-message text exceeds limit")
+  );
+}
+
+async function retryMatrixApprovalDelivery<T>(
+  operation: () => Promise<T>,
+  params: { shouldRetry?: (error: unknown) => boolean } = {},
+): Promise<T> {
+  // With a 3-attempt budget the core exponential schedule (250ms, 500ms)
+  // matches the previous linear attempt*250ms backoff exactly; revisit the
+  // delay curve if MATRIX_APPROVAL_DELIVERY_ATTEMPTS grows.
+  return await retryAsync(operation, {
+    attempts: MATRIX_APPROVAL_DELIVERY_ATTEMPTS,
+    minDelayMs: MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS,
+    // Deliveries default to retryable; callers opt out per error class.
+    shouldRetry: (error) => params.shouldRetry?.(error) !== false,
+  });
 }
 
 async function prepareTarget(
@@ -123,11 +227,14 @@ async function prepareTarget(
       accountId: resolved.accountId,
     });
     const repairDirectRooms = resolved.context.deps?.repairDirectRooms ?? repairMatrixDirectRooms;
-    const repaired = await repairDirectRooms({
-      client: resolved.context.client,
-      remoteUserId: target.id,
-      encrypted: account.config.encryption === true,
-    });
+    const repaired = await retryMatrixApprovalDelivery(
+      async () =>
+        await repairDirectRooms({
+          client: resolved.context.client,
+          remoteUserId: target.id,
+          encrypted: account.config.encryption === true,
+        }),
+    );
     if (!repaired.activeRoomId) {
       return null;
     }
@@ -144,51 +251,132 @@ async function prepareTarget(
   };
 }
 
+function buildMatrixApprovalMetadata(params: {
+  view: PendingApprovalView;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): MatrixApprovalMetadata {
+  const base: MatrixApprovalMetadataBase = {
+    version: 1,
+    type: "approval.request",
+    id: params.view.approvalId,
+    state: "pending",
+    kind: params.view.approvalKind,
+    phase: params.view.phase,
+    title: params.view.title,
+    expiresAtMs: params.view.expiresAtMs,
+    metadata: params.view.metadata,
+    allowedDecisions: Array.from(params.allowedDecisions),
+    actions: params.view.actions.map((action) => ({
+      decision: action.decision,
+      label: action.label,
+      style: action.style,
+      command: action.command,
+    })),
+    ...(params.view.description != null ? { description: params.view.description } : {}),
+  };
+
+  if (params.view.approvalKind === "plugin") {
+    return {
+      ...base,
+      kind: "plugin",
+      severity: params.view.severity,
+      ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+      ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
+      ...(params.view.toolName != null ? { toolName: params.view.toolName } : {}),
+    };
+  }
+
+  if (params.view.approvalKind === "system-agent") {
+    return {
+      ...base,
+      kind: "system-agent",
+      commandText: params.view.commandText,
+      operationSummary: params.view.operationSummary,
+      ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+    };
+  }
+
+  return {
+    ...base,
+    kind: "exec",
+    commandText: params.view.commandText,
+    ...(params.view.ask != null ? { ask: params.view.ask } : {}),
+    ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+    ...(params.view.commandPreview != null ? { commandPreview: params.view.commandPreview } : {}),
+    ...(params.view.cwd != null ? { cwd: params.view.cwd } : {}),
+    ...(params.view.envKeys != null ? { envKeys: params.view.envKeys } : {}),
+    ...(params.view.host != null ? { host: params.view.host } : {}),
+    ...(params.view.nodeId != null ? { nodeId: params.view.nodeId } : {}),
+    ...(params.view.sessionKey != null ? { sessionKey: params.view.sessionKey } : {}),
+  };
+}
+
 function buildPendingApprovalContent(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
   const allowedDecisions = params.view.actions.map((action) => action.decision);
-  const payload =
-    params.view.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: {
-            id: params.view.approvalId,
-            request: {
-              title: params.view.title,
-              description: params.view.description ?? "",
-              severity: params.view.severity,
-              toolName: params.view.toolName ?? undefined,
-              pluginId: params.view.pluginId ?? undefined,
-              agentId: params.view.agentId ?? undefined,
-            },
-            createdAtMs: 0,
-            expiresAtMs: params.view.expiresAtMs,
-          } satisfies PluginApprovalRequest,
-          nowMs: params.nowMs,
-          allowedDecisions,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.view.approvalId,
-          approvalSlug: params.view.approvalId.slice(0, 8),
-          approvalCommandId: params.view.approvalId,
-          ask: params.view.ask ?? undefined,
+  let payload;
+  if (params.view.approvalKind === "plugin") {
+    payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        approvalKind: "plugin",
+        id: params.view.approvalId,
+        request: {
+          title: params.view.title,
+          description: params.view.description ?? "",
+          severity: params.view.severity,
+          toolName: params.view.toolName ?? undefined,
+          pluginId: params.view.pluginId ?? undefined,
           agentId: params.view.agentId ?? undefined,
-          allowedDecisions,
-          command: params.view.commandText,
-          cwd: params.view.cwd ?? undefined,
-          host: params.view.host === "node" ? "node" : "gateway",
-          nodeId: params.view.nodeId ?? undefined,
-          sessionKey: params.view.sessionKey ?? undefined,
-          expiresAtMs: params.view.expiresAtMs,
-          nowMs: params.nowMs,
-        });
+          scope: params.view.scope ?? undefined,
+        },
+        createdAtMs: 0,
+        expiresAtMs: params.view.expiresAtMs,
+      } satisfies PluginApprovalRequest,
+      nowMs: params.nowMs,
+      allowedDecisions,
+    });
+  } else if (params.view.approvalKind === "system-agent") {
+    payload = buildApprovalPendingReplyPayload({
+      approvalKind: "system-agent",
+      approvalId: params.view.approvalId,
+      approvalSlug: params.view.approvalId.slice(0, 8),
+      text: `OpenClaw change requires approval:\n${params.view.operationSummary}`,
+      agentId: params.view.agentId,
+      allowedDecisions,
+      sessionKey: params.view.sessionKey,
+    });
+  } else {
+    payload = buildExecApprovalPendingReplyPayload({
+      approvalId: params.view.approvalId,
+      approvalSlug: params.view.approvalId.slice(0, 8),
+      approvalCommandId: params.view.approvalId,
+      ask: params.view.ask ?? undefined,
+      agentId: params.view.agentId ?? undefined,
+      allowedDecisions,
+      command: params.view.commandText,
+      cwd: params.view.cwd ?? undefined,
+      host: params.view.host === "node" ? "node" : "gateway",
+      nodeId: params.view.nodeId ?? undefined,
+      scope: params.view.scope ?? undefined,
+      sessionKey: params.view.sessionKey ?? undefined,
+      expiresAtMs: params.view.expiresAtMs,
+      nowMs: params.nowMs,
+    });
+  }
   const hint = buildMatrixApprovalReactionHint(allowedDecisions);
   const text = payload.text ?? "";
   return {
     approvalId: params.view.approvalId,
     text: hint ? (text ? `${hint}\n\n${text}` : hint) : text,
     allowedDecisions,
+    extraContent: {
+      [MATRIX_APPROVAL_METADATA_KEY]: buildMatrixApprovalMetadata({
+        view: params.view,
+        allowedDecisions,
+      }),
+    },
   };
 }
 
@@ -205,16 +393,11 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
       }).text ?? ""
     );
   }
-  const decisionLabel =
-    view.decision === "allow-once"
-      ? "Allowed once"
-      : view.decision === "allow-always"
-        ? "Allowed always"
-        : "Denied";
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   return [
-    `Exec approval: ${decisionLabel}`,
+    `${view.approvalKind === "system-agent" ? "OpenClaw change" : "Exec approval"}: ${decisionLabel}`,
     "",
-    "Command",
+    view.approvalKind === "system-agent" ? "Change" : "Command",
     buildMarkdownCodeBlock(view.commandText),
   ].join("\n");
 }
@@ -232,7 +415,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   ReactionTargetRef,
   string
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ cfg, accountId, context }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
@@ -244,7 +427,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: resolved.accountId,
       });
     },
-    shouldHandle: ({ cfg, accountId, request, context }) => {
+    shouldHandle: ({ cfg, accountId, approvalKind, request, context }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return false;
@@ -252,6 +435,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       return shouldHandleMatrixApprovalRequest({
         cfg,
         accountId: resolved.accountId,
+        approvalKind,
         request: request as ExecApprovalRequest | PluginApprovalRequest,
       });
     },
@@ -287,28 +471,61 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           : null,
       );
     },
-    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
+    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload, view }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
       }
-      const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+      const sendSingleTextMessage =
+        resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
-      const result = await sendMessage(preparedTarget.to, pendingPayload.text, {
-        cfg: cfg as CoreConfig,
-        accountId: resolved.accountId,
-        client: resolved.context.client,
-        threadId: preparedTarget.threadId,
-      });
-      const messageIds = Array.from(
-        new Set(
-          (result.messageIds ?? [result.messageId])
-            .map((messageId) => messageId.trim())
-            .filter(Boolean),
-        ),
-      );
+      let result;
+      try {
+        result = await retryMatrixApprovalDelivery(
+          async () =>
+            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, {
+              cfg: cfg as CoreConfig,
+              accountId: resolved.accountId,
+              client: resolved.context.client,
+              threadId: preparedTarget.threadId,
+              extraContent: pendingPayload.extraContent,
+            }),
+          { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
+        );
+      } catch (error) {
+        if (!isSingleMatrixMessageLimitError(error)) {
+          throw error;
+        }
+        const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+        result = await retryMatrixApprovalDelivery(
+          async () =>
+            await sendMessage(preparedTarget.to, pendingPayload.text, {
+              cfg: cfg as CoreConfig,
+              accountId: resolved.accountId,
+              client: resolved.context.client,
+              threadId: preparedTarget.threadId,
+              extraContent: pendingPayload.extraContent,
+            }),
+        );
+      }
+      const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);
+      const platformMessageIds = receiptMessageIds.length
+        ? receiptMessageIds
+        : [result.messageId.trim()].filter(Boolean);
       const reactionEventId =
-        result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+        resolveMessageReceiptPrimaryId(result.receipt) ||
+        result.primaryMessageId?.trim() ||
+        platformMessageIds[0] ||
+        result.messageId.trim();
+      registerMatrixApprovalReactionTarget({
+        accountId: resolved.accountId,
+        roomId: result.roomId,
+        eventId: reactionEventId,
+        approvalId: pendingPayload.approvalId,
+        approvalKind: view.approvalKind,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        ttlMs: view.expiresAtMs - Date.now(),
+      });
       await Promise.allSettled(
         listMatrixApprovalReactionBindings(pendingPayload.allowedDecisions).map(
           async ({ emoji }) => {
@@ -322,7 +539,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       );
       return {
         roomId: result.roomId,
-        messageIds,
+        platformMessageIds,
         reactionEventId,
       };
     },
@@ -373,24 +590,47 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, pendingPayload }) => {
+    bindPending: (params) => {
+      const accountId = params.accountId?.trim();
+      if (!accountId) {
+        return null;
+      }
       const target = normalizeReactionTargetRef({
-        roomId: entry.roomId,
-        eventId: entry.reactionEventId,
+        accountId,
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
       });
       if (!target) {
         return null;
       }
       registerMatrixApprovalReactionTarget({
+        accountId: target.accountId,
         roomId: target.roomId,
         eventId: target.eventId,
-        approvalId: pendingPayload.approvalId,
-        allowedDecisions: pendingPayload.allowedDecisions,
+        approvalId: params.pendingPayload.approvalId,
+        approvalKind: params.view.approvalKind,
+        allowedDecisions: params.pendingPayload.allowedDecisions,
+        ttlMs: params.view.expiresAtMs - Date.now(),
       });
       return target;
     },
-    unbindPending: ({ binding }) => {
-      const target = normalizeReactionTargetRef(binding);
+    unbindPending: (params) => {
+      const target = normalizeReactionTargetRef(params.binding);
+      if (!target) {
+        return;
+      }
+      unregisterMatrixApprovalReactionTarget(target);
+    },
+    cancelDelivered: (params) => {
+      const accountId = params.accountId?.trim();
+      if (!accountId) {
+        return;
+      }
+      const target = normalizeReactionTargetRef({
+        accountId,
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
+      });
       if (!target) {
         return;
       }

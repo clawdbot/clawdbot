@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements status behavior.
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
   createComputedAccountStatusAdapter,

@@ -1,6 +1,8 @@
+// Dependency tests cover CLI dependency imports and cold-start safety.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createOutboundSendDeps } from "./outbound-send-deps.js";
 
 const runtimeFactories = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -85,6 +87,29 @@ describe("createDefaultDeps", () => {
     expectUnusedRuntimeFactoriesNotLoaded("telegram");
   });
 
+  it("does not create channel senders for Discord voice helper keys", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("discord-voice-helper");
+    const deps = createDefaultDeps();
+
+    expect(deps.discordVoice).toBeUndefined();
+    expect(deps.sendDiscordVoice).toBeUndefined();
+    expect(runtimeFactories.discord).not.toHaveBeenCalled();
+  });
+
+  it("does not expose lazy channel senders as low-level outbound transports", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("outbound-transport-boundary");
+    const deps = createDefaultDeps();
+
+    const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
+    await sendTelegram("chat", "hello", { verbose: false });
+
+    const outbound = createOutboundSendDeps(deps);
+    expect(outbound.telegram).toBeUndefined();
+    expect(outbound.sendTelegram).toBeUndefined();
+    expect(runtimeFactories.telegram).toHaveBeenCalledOnce();
+    expect(sendFns.telegram).toHaveBeenCalledOnce();
+  });
+
   it("reuses cached runtime send surfaces after first lazy load", async () => {
     const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
     const deps = createDefaultDeps();
@@ -95,5 +120,25 @@ describe("createDefaultDeps", () => {
 
     expect(runtimeFactories.discord).toHaveBeenCalledTimes(1);
     expect(sendFns.discord).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a channel runtime after a transient load failure", async () => {
+    runtimeFactories.telegram.mockImplementationOnce(() => {
+      throw new Error("transient channel load");
+    });
+    const createDefaultDeps = await loadCreateDefaultDeps("module-retry");
+    const deps = createDefaultDeps();
+    const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
+
+    await expect(sendTelegram("chat", "first", { verbose: false })).rejects.toThrow(
+      "transient channel load",
+    );
+    await expect(sendTelegram("chat", "second", { verbose: false })).resolves.toEqual({
+      messageId: "t1",
+      chatId: "telegram:1",
+    });
+
+    expect(runtimeFactories.telegram).toHaveBeenCalledTimes(2);
+    expect(sendFns.telegram).toHaveBeenCalledOnce();
   });
 });

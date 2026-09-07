@@ -1,3 +1,4 @@
+// Status-all report table tests cover agent, channel detail, and overview row construction.
 import { describe, expect, it } from "vitest";
 import {
   buildStatusAgentTableRows,
@@ -56,11 +57,9 @@ describe("status-all report tables", () => {
         {
           title: "Channel detail",
           columns: ["Channel", "Status", "Notes"],
-          rows: [{ Channel: "telegram", Status: "WARN", Notes: "setup" }],
+          rows: [{ Channel: "quietchat", Status: "WARN", Notes: "setup" }],
         },
       ],
-      width: 120,
-      renderTable: ({ rows }) => `rows:${rows.length}`,
       ok: (value) => `ok(${value})`,
       warn: (value) => `warn(${value})`,
     });
@@ -68,14 +67,12 @@ describe("status-all report tables", () => {
     expect(section).toEqual({
       kind: "table",
       title: "Channel detail",
-      width: 120,
-      renderTable: expect.any(Function),
       columns: [
         { key: "Channel", header: "Channel", flex: false, minWidth: 10 },
         { key: "Status", header: "Status", flex: false, minWidth: 10 },
         { key: "Notes", header: "Notes", flex: true, minWidth: 28 },
       ],
-      rows: [{ Channel: "telegram", Status: "warn(WARN)", Notes: "setup" }],
+      rows: [{ Channel: "quietchat", Status: "warn(WARN)", Notes: "setup" }],
     });
   });
 

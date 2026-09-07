@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs."
 homepage: https://gogcli.sh
 metadata:
   {
@@ -13,7 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
-              "formula": "steipete/tap/gogcli",
+              "formula": "gogcli",
               "bins": ["gog"],
               "label": "Install gog (brew)",
             },

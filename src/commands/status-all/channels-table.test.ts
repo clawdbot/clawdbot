@@ -1,3 +1,4 @@
+// Status-all channels table tests verify gateway issue overlays and channel row rendering.
 import { describe, expect, it } from "vitest";
 import { buildStatusChannelsTableRows } from "./channels-table.js";
 

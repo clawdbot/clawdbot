@@ -4,18 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Session Export</title>
-    <style>
-      {{CSS}}
-    </style>
+    <style data-openclaw-export-placeholder="CSS"></style>
   </head>
   <body>
-    <button id="hamburger" title="Open sidebar">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-        <circle cx="6" cy="6" r="2.5" />
-        <circle cx="6" cy="18" r="2.5" />
-        <circle cx="18" cy="12" r="2.5" />
-        <rect x="5" y="6" width="2" height="12" />
-        <path d="M6 12h10c1 0 2 0 2-2V8" />
+    <button id="hamburger" class="sidebar-menu-trigger" title="Open sidebar" aria-label="Open sidebar">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <line x1="4" x2="20" y1="6" y2="6" />
+        <line x1="4" x2="20" y1="12" y2="12" />
+        <line x1="4" x2="20" y1="18" y2="18" />
       </svg>
     </button>
     <div id="sidebar-overlay"></div>
@@ -54,35 +50,19 @@
       </div>
     </div>
 
-    <script id="session-data" type="application/json">
-      {{SESSION_DATA}}
-    </script>
+    <script
+      id="session-data"
+      type="application/json"
+      data-openclaw-export-placeholder="SESSION_DATA"
+    ></script>
 
     <!-- Vendored libraries -->
-    <script>
-      {
-        {
-          MARKED_JS;
-        }
-      }
-    </script>
+    <script data-openclaw-export-placeholder="MARKED_JS"></script>
 
     <!-- highlight.js -->
-    <script>
-      {
-        {
-          HIGHLIGHT_JS;
-        }
-      }
-    </script>
+    <script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>
 
     <!-- Main application code -->
-    <script>
-      {
-        {
-          JS;
-        }
-      }
-    </script>
+    <script data-openclaw-export-placeholder="JS"></script>
   </body>
 </html>

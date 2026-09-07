@@ -1,6 +1,7 @@
+// Zalo API module exposes the plugin public contract.
 import { loadBundledEntryExportSync } from "openclaw/plugin-sdk/channel-entry-contract";
 
-type SetupSurfaceModule = typeof import("./src/setup-surface.js");
+type SetupSurfaceModule = typeof import("./setup-surface.js");
 
 function createLazyObjectValue<T extends object>(load: () => T): T {
   return new Proxy({} as T, {
@@ -22,12 +23,12 @@ function createLazyObjectValue<T extends object>(load: () => T): T {
 
 function loadSetupSurfaceModule(): SetupSurfaceModule {
   return loadBundledEntryExportSync<SetupSurfaceModule>(import.meta.url, {
-    specifier: "./src/setup-surface.js",
+    specifier: "./setup-surface.js",
   });
 }
 
 export { zaloDmPolicy, zaloSetupAdapter, createZaloSetupWizardProxy } from "./src/setup-core.js";
-export { evaluateZaloGroupAccess, resolveZaloRuntimeGroupPolicy } from "./src/group-access.js";
+export { resolveZaloRuntimeGroupPolicy } from "./src/group-access.js";
 
 export const zaloSetupWizard: SetupSurfaceModule["zaloSetupWizard"] = createLazyObjectValue(
   () => loadSetupSurfaceModule().zaloSetupWizard as object,

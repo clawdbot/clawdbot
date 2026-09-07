@@ -1,11 +1,18 @@
+// SecretRef-aware Gateway config string resolver.
+// Resolves configured secret inputs and fallback values without leaking values.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
+import {
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+} from "../secrets/resolve-errors.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
-export type ConfiguredSecretInputSource =
+type ConfiguredSecretInputSource =
   | "config"
   | "secretRef" // pragma: allowlist secret
   | "fallback";
@@ -33,10 +40,13 @@ export async function resolveConfiguredSecretInputString(params: {
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{ value?: string; unresolvedRefReason?: string }> {
   const style = params.unresolvedReasonStyle ?? "generic";
-  const { ref } = resolveSecretInputRef({
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });
@@ -49,6 +59,7 @@ export async function resolveConfiguredSecretInputString(params: {
     const resolved = await resolveSecretRefValues([ref], {
       config: params.config,
       env: params.env,
+      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
     });
     const resolvedValue = resolved.get(secretRefKey(ref));
     if (typeof resolvedValue !== "string") {
@@ -73,16 +84,54 @@ export async function resolveConfiguredSecretInputString(params: {
       };
     }
     return { value: trimmed };
-  } catch {
+  } catch (error) {
+    const operatorDiagnostic =
+      style === "detailed" ? describeSecretResolutionOperatorDiagnostic(error) : undefined;
+    const operatorRecovery =
+      style === "detailed" ? describeSecretResolutionOperatorRecovery(error) : undefined;
+    const unresolvedReason = buildUnresolvedReason({
+      path: params.path,
+      style,
+      kind: "unresolved",
+      refLabel,
+    });
+    const operatorDetail = [operatorDiagnostic, operatorRecovery].filter(Boolean).join(". ");
     return {
-      unresolvedRefReason: buildUnresolvedReason({
-        path: params.path,
-        style,
-        kind: "unresolved",
-        refLabel,
-      }),
+      unresolvedRefReason: operatorDetail
+        ? `${unresolvedReason} ${operatorDetail}.`
+        : unresolvedReason,
     };
   }
+}
+
+async function resolveConfiguredSecretRefOnlyInputString(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  value: unknown;
+  path: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
+}): Promise<{ refConfigured: boolean; value?: string; unresolvedRefReason?: string }> {
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
+    value: params.value,
+    defaults: params.config.secrets?.defaults,
+  });
+  if (!ref) {
+    return { refConfigured: false };
+  }
+  return {
+    refConfigured: true,
+    ...(await resolveConfiguredSecretInputString({
+      config: params.config,
+      env: params.env,
+      value: params.value,
+      path: params.path,
+      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+      unresolvedReasonStyle: params.unresolvedReasonStyle,
+    })),
+  };
 }
 
 export async function resolveConfiguredSecretInputWithFallback(params: {
@@ -90,6 +139,7 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
   readFallback?: () => string | undefined;
 }): Promise<{
@@ -98,11 +148,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   unresolvedRefReason?: string;
   secretRefConfigured: boolean;
 }> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.config.secrets?.defaults,
-  });
-  const configValue = !ref ? normalizeOptionalString(params.value) : undefined;
+  const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
+  const configValue = !resolved.refConfigured ? normalizeOptionalString(params.value) : undefined;
   if (configValue) {
     return {
       value: configValue,
@@ -110,9 +157,11 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
       secretRefConfigured: false,
     };
   }
-  if (!ref) {
-    const fallback = params.readFallback?.();
+  if (!resolved.refConfigured) {
+    const fallback = normalizeOptionalString(params.readFallback?.());
     if (fallback) {
+      // Fallbacks are only returned after direct config is absent, preserving
+      // explicit config precedence while still allowing credential stores.
       return {
         value: fallback,
         source: "fallback",
@@ -122,26 +171,10 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     return { secretRefConfigured: false };
   }
 
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: params.env,
-    value: params.value,
-    path: params.path,
-    unresolvedReasonStyle: params.unresolvedReasonStyle,
-  });
   if (resolved.value) {
     return {
       value: resolved.value,
       source: "secretRef",
-      secretRefConfigured: true,
-    };
-  }
-
-  const fallback = params.readFallback?.();
-  if (fallback) {
-    return {
-      value: fallback,
-      source: "fallback",
       secretRefConfigured: true,
     };
   }
@@ -157,23 +190,13 @@ export async function resolveRequiredConfiguredSecretRefInputString(params: {
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<string | undefined> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.config.secrets?.defaults,
-  });
-  if (!ref) {
+  const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
+  if (!resolved.refConfigured) {
     return undefined;
   }
-
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: params.env,
-    value: params.value,
-    path: params.path,
-    unresolvedReasonStyle: params.unresolvedReasonStyle,
-  });
   if (resolved.value) {
     return resolved.value;
   }

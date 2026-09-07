@@ -1,6 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
-import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+/** Reconciles ACP runtime identity observations back into persisted session metadata. */
 import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
@@ -8,23 +6,34 @@ import {
   mergeSessionIdentity,
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
-} from "../runtime/session-identity.js";
-import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeStatus } from "../runtime/types.js";
-import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
+} from "@openclaw/acp-core/runtime/session-identity";
+import type {
+  AcpRuntime,
+  AcpRuntimeHandle,
+  AcpRuntimeStatus,
+} from "@openclaw/acp-core/runtime/types";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
+/** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
-  setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
+  setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    agentId: string;
     mutate: (
       current: SessionAcpMeta | undefined,
       entry: SessionEntry | undefined,
@@ -48,7 +57,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         fallbackMessage: "Could not read ACP runtime status.",
       });
     } catch (error) {
-      if (params.failOnStatusError) {
+      if (params.failOnStatusError || isAcpOwnerRepairRequired(error)) {
         throw error;
       }
       logVerbose(
@@ -99,7 +108,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       }
     : params.handle;
   if (handleChanged) {
-    params.setCachedHandle(params.sessionKey, nextHandle);
+    params.setCachedHandle(params, nextHandle);
   }
 
   const metaChanged =
@@ -140,11 +149,12 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     mutate: (current, entry) => {
       if (!entry) {
         return null;
       }
-      const base = current ?? entry.acp;
+      const base = current;
       if (!base) {
         return null;
       }

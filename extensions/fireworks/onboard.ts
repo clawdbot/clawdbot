@@ -1,34 +1,22 @@
-import {
-  createDefaultModelsPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+import { createDefaultModelsPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildFireworksCatalogModels,
   buildFireworksProvider,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 
-export const FIREWORKS_DEFAULT_MODEL_REF = `fireworks/${FIREWORKS_DEFAULT_MODEL_ID}`;
-
-const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
+export const { applyConfig: applyFireworksConfig } = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: FIREWORKS_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => {
+  resolveParams: (cfg) => {
     const defaultProvider = buildFireworksProvider();
     return {
       providerId: "fireworks",
       api: defaultProvider.api ?? "openai-completions",
       baseUrl: defaultProvider.baseUrl,
-      defaultModels: buildFireworksCatalogModels(),
+      defaultModels: cfg.models?.mode === "replace" ? buildFireworksCatalogModels() : [],
       defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "Kimi K2.5 Turbo" }],
+      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.2 Fast" }],
     };
   },
 });
-
-export function applyFireworksProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return fireworksPresetAppliers.applyProviderConfig(cfg);
-}
-
-export function applyFireworksConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return fireworksPresetAppliers.applyConfig(cfg);
-}

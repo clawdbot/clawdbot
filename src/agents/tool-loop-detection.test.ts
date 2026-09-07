@@ -1,18 +1,33 @@
-import { describe, expect, it } from "vitest";
+// Tool loop detection tests cover repeated-call hashing, ping-pong detection,
+// unknown-tool thresholds, and circuit-breaker escalation.
+import { describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+import { wrapExternalContent } from "../security/external-content.js";
+
+// Recognize a provider-docked send tool by name (only "telegram" here) so the
+// volatility strip applies to it without pulling in the channel-plugin registry; the
+// real detector is covered by embedded-agent-messaging's own tests.
+const isMessagingToolSendActionMock = vi.hoisted(() =>
+  vi.fn((toolName: string): boolean => toolName === "telegram"),
+);
+vi.mock("./embedded-agent-messaging.js", () => ({
+  isMessagingToolSendAction: isMessagingToolSendActionMock,
+}));
+import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
-  CRITICAL_THRESHOLD,
-  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-  TOOL_CALL_HISTORY_SIZE,
   UNKNOWN_TOOL_THRESHOLD,
-  WARNING_THRESHOLD,
   detectToolCallLoop,
-  getToolCallStats,
-  hashToolCall,
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { protectNetworkToolExecutionError } from "./tool-result-error.js";
+import { jsonResult } from "./tools/common.js";
+
+const TOOL_CALL_HISTORY_SIZE = 30;
+const WARNING_THRESHOLD = 10;
+const CRITICAL_THRESHOLD = 20;
+const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
 function createState(): SessionState {
   return {
@@ -22,12 +37,17 @@ function createState(): SessionState {
   };
 }
 
-const enabledLoopDetectionConfig: ToolLoopDetectionConfig = { enabled: true };
+function recordArgsHash(toolName: string, params: unknown): string {
+  const state = createState();
+  recordToolCall(state, toolName, params, "hash-test");
+  const hash = state.toolCallHistory?.[0]?.argsHash;
+  if (!hash) {
+    throw new Error("recordToolCall did not record an argument hash");
+  }
+  return hash;
+}
 
-const shortHistoryLoopConfig: ToolLoopDetectionConfig = {
-  enabled: true,
-  historySize: 4,
-};
+const enabledLoopDetectionConfig: ToolLoopDetectionConfig = { enabled: true };
 
 function recordSuccessfulCall(
   state: SessionState,
@@ -61,6 +81,24 @@ function recordFailedCall(
     toolCallId,
     error,
   });
+}
+
+function createExecLoopResult(params: {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  output: string;
+  aggregated?: string;
+  timedOut?: boolean;
+}) {
+  return {
+    content: [{ type: "text", text: params.output }],
+    details: {
+      status: params.status,
+      exitCode: params.exitCode,
+      aggregated: params.aggregated ?? params.output,
+      ...(params.timedOut === undefined ? {} : { timedOut: params.timedOut }),
+    },
+  };
 }
 
 function recordRepeatedSuccessfulCalls(params: {
@@ -142,6 +180,8 @@ function recordSuccessfulPingPongCalls(params: {
   count: number;
   textAtIndex: (toolName: "read" | "list", index: number) => string;
 }) {
+  // Alternating successful calls with unchanged output exercise the ping-pong
+  // detector independently from same-tool repetition.
   for (let i = 0; i < params.count; i += 1) {
     if (i % 2 === 0) {
       recordSuccessfulCall(
@@ -180,42 +220,66 @@ function expectPingPongLoop(
 }
 
 describe("tool-loop-detection", () => {
-  describe("hashToolCall", () => {
+  describe("recordToolCall argument hashing", () => {
     it("creates consistent hash for same tool and params", () => {
-      const hash1 = hashToolCall("read", { path: "/file.txt" });
-      const hash2 = hashToolCall("read", { path: "/file.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file.txt" });
+      const hash2 = recordArgsHash("read", { path: "/file.txt" });
       expect(hash1).toBe(hash2);
     });
 
     it("creates different hashes for different params", () => {
-      const hash1 = hashToolCall("read", { path: "/file1.txt" });
-      const hash2 = hashToolCall("read", { path: "/file2.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file1.txt" });
+      const hash2 = recordArgsHash("read", { path: "/file2.txt" });
       expect(hash1).not.toBe(hash2);
     });
 
     it("creates different hashes for different tools", () => {
-      const hash1 = hashToolCall("read", { path: "/file.txt" });
-      const hash2 = hashToolCall("write", { path: "/file.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file.txt" });
+      const hash2 = recordArgsHash("write", { path: "/file.txt" });
       expect(hash1).not.toBe(hash2);
     });
 
-    it("handles non-object params", () => {
-      expect(() => hashToolCall("tool", "string-param")).not.toThrow();
-      expect(() => hashToolCall("tool", 123)).not.toThrow();
-      expect(() => hashToolCall("tool", null)).not.toThrow();
+    it("hashes non-object params with the same digest shape", () => {
+      const hashes = [
+        recordArgsHash("tool", "string-param"),
+        recordArgsHash("tool", 123),
+        recordArgsHash("tool", null),
+      ];
+      expect(hashes).toHaveLength(3);
+      for (const hash of hashes) {
+        expect(hash.startsWith("tool:")).toBe(true);
+        expect(hash.length).toBe("tool:".length + 64);
+        expect(/^[a-f0-9]+$/.test(hash.slice("tool:".length))).toBe(true);
+      }
     });
 
     it("produces deterministic hashes regardless of key order", () => {
-      const hash1 = hashToolCall("tool", { a: 1, b: 2 });
-      const hash2 = hashToolCall("tool", { b: 2, a: 1 });
+      const hash1 = recordArgsHash("tool", { a: 1, b: 2 });
+      const hash2 = recordArgsHash("tool", { b: 2, a: 1 });
       expect(hash1).toBe(hash2);
     });
 
     it("keeps hashes fixed-size even for large params", () => {
       const payload = { data: "x".repeat(20_000) };
-      const hash = hashToolCall("read", payload);
+      const hash = recordArgsHash("read", payload);
       expect(hash.startsWith("read:")).toBe(true);
       expect(hash.length).toBe("read:".length + 64);
+    });
+
+    it("hashes circular params without collapsing repeated references", () => {
+      const shared = { id: "shared" };
+      const payload: Record<string, unknown> = { first: shared, second: shared };
+      payload.self = payload;
+
+      const equivalentShared = { id: "shared" };
+      const equivalentPayload: Record<string, unknown> = {
+        second: equivalentShared,
+        first: equivalentShared,
+      };
+      equivalentPayload.self = equivalentPayload;
+
+      expect(recordArgsHash("tool", payload)).toBe(recordArgsHash("tool", equivalentPayload));
+      expect(recordArgsHash("tool", payload)).toEqual(expect.stringMatching(/^tool:[a-f0-9]{64}$/));
     });
   });
 
@@ -240,7 +304,7 @@ describe("tool-loop-detection", () => {
       expect(state.toolCallHistory).toHaveLength(TOOL_CALL_HISTORY_SIZE);
 
       const oldestCall = state.toolCallHistory?.[0];
-      expect(oldestCall?.argsHash).toBe(hashToolCall("tool", { iteration: 10 }));
+      expect(oldestCall?.argsHash).toBe(recordArgsHash("tool", { iteration: 10 }));
     });
 
     it("records timestamp for each call", () => {
@@ -254,15 +318,14 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeLessThanOrEqual(after);
     });
 
-    it("respects configured historySize", () => {
+    it("records run id when provided", () => {
       const state = createState();
 
-      for (let i = 0; i < 10; i += 1) {
-        recordToolCall(state, "tool", { iteration: i }, `call-${i}`, shortHistoryLoopConfig);
-      }
+      recordToolCall(state, "tool", { arg: 1 }, "call-run", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
 
-      expect(state.toolCallHistory).toHaveLength(4);
-      expect(state.toolCallHistory?.[0]?.argsHash).toBe(hashToolCall("tool", { iteration: 6 }));
+      expect(state.toolCallHistory?.[0]?.runId).toBe("run-1");
     });
   });
 
@@ -294,6 +357,59 @@ describe("tool-loop-detection", () => {
       expect(result.stuck).toBe(false);
     });
 
+    it("ignores repeated history from other runs", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `old-run-${i}`, enabledLoopDetectionConfig, {
+          runId: "heartbeat-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig, {
+        runId: "heartbeat-2",
+      });
+
+      expect(result.stuck).toBe(false);
+    });
+
+    it("detects repeated history within the same run", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `same-run-${i}`, enabledLoopDetectionConfig, {
+          runId: "run-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.detector).toBe("generic_repeat");
+        expect(result.count).toBe(WARNING_THRESHOLD);
+      }
+    });
+
+    it("keeps scoped and unscoped history isolated", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", params, `scoped-${i}`, enabledLoopDetectionConfig, {
+          runId: "run-1",
+        });
+      }
+
+      const result = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
+
+      expect(result.stuck).toBe(false);
+    });
+
     it("warns on generic repeated tool+args calls", () => {
       const state = createState();
       for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
@@ -317,7 +433,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps generic loops warn-only below global breaker threshold", () => {
+    it("blocks generic no-progress loops at critical threshold", () => {
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({
         toolName: fixture.toolName,
@@ -327,76 +443,207 @@ describe("tool-loop-detection", () => {
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.message).toContain("identical outcomes");
       }
     });
 
-    it("applies custom thresholds when detection is enabled", () => {
-      const state = createState();
-      const { params, result } = createNoProgressPollFixture("sess-custom");
-      const config: ToolLoopDetectionConfig = {
-        enabled: true,
-        warningThreshold: 2,
-        criticalThreshold: 4,
-        detectors: {
-          genericRepeat: false,
-          knownPollNoProgress: true,
-          pingPong: false,
-        },
-      };
+    it.each(["thrown", "returned", 0, 1, 2, 3, 4] as const)(
+      "blocks repeated external outcomes with fresh nonces (%s)",
+      (shape) => {
+        const state = createState();
+        const params = { action: "act", request: { kind: "press", key: "NotAKey" } };
+        const delivered = new Set<string>();
+        for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+          const payload = 'keyboard.press: Unknown key: "NotAKey"';
+          if (shape === "thrown") {
+            const error = protectNetworkToolExecutionError(new Error(payload), "Failed");
+            delivered.add((error as Error).message);
+            recordFailedCall(state, "browser", params, error, index);
+          } else {
+            let text = wrapExternalContent(payload, { source: "browser" });
+            delivered.add(text);
+            if (typeof shape === "number") {
+              for (let depth = 0; depth < shape; depth += 1) {
+                text = JSON.stringify({ text });
+              }
+            }
+            const result =
+              shape === "returned"
+                ? { content: [{ type: "text", text }], details: { ok: false } }
+                : jsonResult({ text, fetchedAt: "2026-08-26T00:00:00Z", tookMs: 10 });
+            recordSuccessfulCall(state, "browser", params, result, index);
+          }
+        }
+        expect(delivered.size).toBe(CRITICAL_THRESHOLD);
+        expect(
+          detectToolCallLoop(state, "browser", params, enabledLoopDetectionConfig),
+        ).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+        });
+        const [first, second] = [...delivered];
+        expect(recordArgsHash("browser", { text: first })).not.toBe(
+          recordArgsHash("browser", { text: second }),
+        );
+      },
+    );
 
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: 2,
+    it.each([
+      ["payload", (index: number) => ({ text: `page ${index}` })],
+      ["status", (index: number) => ({ status: index === 0 ? "loading" : "ready" })],
+      ["timestamp", (index: number) => ({ fetchedAt: `2026-08-26T00:00:0${index}Z` })],
+      ["duration", (index: number) => ({ tookMs: index })],
+      ["ordinary id", (index: number) => ({ id: `${index}`.repeat(16) })],
+      [
+        "malformed marker",
+        (index: number) => ({ text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}">>>` }),
+      ],
+      [
+        "uppercase nonce",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}ABCDEF012345678">>>`,
+        }),
+      ],
+      ["unrelated id text", (index: number) => ({ text: `id="${index.toString().repeat(16)}"` })],
+      [
+        "unpaired start marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "unpaired end marker",
+        (index: number) => ({
+          text: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "mismatched marker pair",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id="abcdef0123456789">>>`,
+        }),
+      ],
+      [
+        "intervening marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>before<<<EXTERNAL_UNTRUSTED_CONTENT>>>after<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "markers split across fields",
+        (index: number) => ({
+          start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+          end: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+    ] as const)("retains changing %s in outcome hashes", (_label, details) => {
+      const hashes = [0, 1].map((index) => {
+        const state = createState();
+        return recordToolCallOutcome(state, {
+          toolName: "web_fetch",
+          toolParams: { url: "https://example.test" },
+          result: jsonResult({
+            content: wrapExternalContent("same page", { source: "web_fetch" }),
+            ...details(index),
+          }),
+        })?.resultHash;
       });
-      const warningResult = detectToolCallLoop(state, "process", params, config);
-      expect(warningResult.stuck).toBe(true);
-      if (warningResult.stuck) {
-        expect(warningResult.level).toBe("warning");
-      }
-
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: 2,
-        startIndex: 2,
-      });
-      const criticalResult = detectToolCallLoop(state, "process", params, config);
-      expect(criticalResult.stuck).toBe(true);
-      if (criticalResult.stuck) {
-        expect(criticalResult.level).toBe("critical");
-        expect(criticalResult.detector).toBe("known_poll_no_progress");
-      }
+      expect(hashes[0]).not.toBe(hashes[1]);
     });
 
-    it("can disable specific detectors", () => {
-      const state = createState();
-      const { params, result } = createNoProgressPollFixture("sess-no-detectors");
-      const config: ToolLoopDetectionConfig = {
-        enabled: true,
-        detectors: {
-          genericRepeat: false,
-          knownPollNoProgress: false,
-          pingPong: false,
-        },
-      };
+    it.each([0, 1, 2, 3, 4])(
+      "preserves marker pairs split across encoded JSON fields (depth %s)",
+      (depth) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          let text = JSON.stringify({
+            start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\nSource: Browser\n---\npayload`,
+            end: `\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`,
+          });
+          for (let level = 0; level < depth; level += 1) {
+            text = JSON.stringify({ text });
+          }
+          return recordToolCallOutcome(createState(), {
+            toolName: "browser",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
 
-      recordRepeatedSuccessfulCalls({
-        state,
-        toolName: "process",
-        toolParams: params,
-        result,
-        count: CRITICAL_THRESHOLD,
+    it("preserves long backslash payloads while normalizing paired wrapper nonces", () => {
+      const hashes = ["same", "same", "changed"].map((suffix) => {
+        const text = wrapExternalContent(`${"\\".repeat(20_000)}"${suffix}"`, {
+          source: "browser",
+        });
+        return recordToolCallOutcome(createState(), {
+          toolName: "browser",
+          toolParams: {},
+          result: jsonResult({ text: JSON.stringify({ text }) }),
+        })?.resultHash;
       });
-
-      const loopResult = detectToolCallLoop(state, "process", params, config);
-      expect(loopResult.stuck).toBe(false);
+      expect(hashes[0]).toBe(hashes[1]);
+      expect(hashes[0]).not.toBe(hashes[2]);
     });
+
+    it.each([0, 1, 2, 3, 4])("distinguishes malformed empty-ID envelopes (depth %s)", (depth) => {
+      const valid = wrapExternalContent("same page", { source: "browser" });
+      const malformed = valid.replace(/id="[a-f0-9]{16}"/g, 'id=""');
+      const zero = valid.replace(/id="[a-f0-9]{16}"/g, 'id="0000000000000000"');
+      const hashes = [valid, malformed, zero].map((sourceText) => {
+        let text = sourceText;
+        for (let level = 0; level < depth; level += 1) {
+          text = JSON.stringify({ text });
+        }
+        return recordToolCallOutcome(createState(), {
+          toolName: "read",
+          toolParams: {},
+          result: jsonResult({ text }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).not.toBe(hashes[1]);
+      expect(hashes[0]).toBe(hashes[2]);
+    });
+
+    it.each([2, 4, 5, 6, 8, 14])(
+      "preserves malformed marker quote escaping (%s slashes)",
+      (count) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(count) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
+
+    it.each([1, 3, 7])(
+      "preserves shallower quotes after encoded backslashes (%s marker slashes)",
+      (escapeCount) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(escapeCount) + '"';
+          const boundary = "\\".repeat(escapeCount + 1) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>before${boundary}after<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
 
     it("warns for known polling no-progress loops", () => {
       const { params, result } = createNoProgressPollFixture("sess-1");
@@ -453,12 +700,994 @@ describe("tool-loop-detection", () => {
         toolParams: fixture.params,
         result: fixture.result,
         count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+        config: enabledLoopDetectionConfig,
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("global_circuit_breaker");
         expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("warns on repeated stable argument churn without vetoing the next call", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("argument_churn");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
+        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+        expect(loopResult.message).toContain("tool call remains allowed");
+      }
+
+      const escapeResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(escapeResult.stuck).toBe(false);
+    });
+
+    it("normalizes built-in write no-ops that only differ by echoed path", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `No changes made to ${targetPath}. The file already has identical content.`,
+              },
+            ],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+
+      const hashes = state.toolCallHistory?.map((record) => record.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+      expect(state.toolCallHistory?.every((record) => record.noProgress === true)).toBe(true);
+    });
+
+    it("preserves target identity for successful write outcomes", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
+          },
+          index,
+        );
+      }
+
+      const history = state.toolCallHistory ?? [];
+      expect(history[0]?.resultHash).not.toBe(history[1]?.resultHash);
+      expect(history.every((record) => record.noProgress === undefined)).toBe(true);
+    });
+
+    it("uses the supplied warning threshold when reconciling rewritten calls", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+      for (let index = 0; index < 6; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/original.md", content: "same content" },
+        "rewritten-call",
+      );
+
+      const reconciled = reconcileToolCallExecutionParams(state, {
+        toolName: "write",
+        toolParams: { path: "/tmp/a.md", content: "same content" },
+        toolCallId: "rewritten-call",
+        warningThreshold: 6,
+      });
+
+      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+    });
+
+    it("does not reconcile a completed loop veto as a pending call", () => {
+      const state = createState();
+      state.toolCallHistory = [
+        {
+          toolName: "write",
+          argsHash: "pending-args",
+          timestamp: 1,
+        },
+        {
+          toolName: "write",
+          argsHash: "vetoed-args",
+          outcomeKind: "tool-loop-veto",
+          timestamp: 2,
+        },
+      ];
+
+      expect(
+        reconcileToolCallExecutionParams(state, {
+          toolName: "write",
+          toolParams: { path: "/tmp/rewritten.md", content: "same content" },
+          warningThreshold: 6,
+        }),
+      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
+      expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
+    });
+
+    it("keeps completed churn evidence across a pending same-tool sibling", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        "pending-sibling",
+      );
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/b.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+      });
+    });
+
+    it("does not treat generic stable successes as semantic no-progress", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "side_effect",
+          { path: targetPath },
+          {
+            content: [{ type: "text", text: "done" }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "side_effect",
+        { path: "/tmp/a.md" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+      if (loopResult.stuck) {
+        expect(loopResult.livenessSignal).toBeUndefined();
+      }
+    });
+
+    it("keeps repeated stable errors eligible for argument-churn liveness", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        const toolCallId = `failed-${index}`;
+        const params = { path: targetPath };
+        recordToolCall(state, "side_effect", params, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: "side_effect",
+          toolParams: params,
+          toolCallId,
+          error: new Error("permission denied"),
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "side_effect",
+        { path: "/tmp/a.md" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+        livenessSignal: "argument_churn",
+      });
+    });
+
+    it("keeps generic critical repeats ahead of warning-only argument churn", () => {
+      const state = createState();
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/a.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/a.md" }],
+            details: { ok: true, path: "/tmp/a.md" },
+          },
+          index,
+        );
+      }
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/b.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/b.md" }],
+            details: { ok: true, path: "/tmp/b.md" },
+          },
+          CRITICAL_THRESHOLD + index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("preserves churn liveness when strict alternation owns the primary warning", () => {
+      const state = createState();
+
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("ping_pong");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
+      }
+    });
+
+    it("does not carry argument-churn liveness across singleton probes", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath =
+          index === 8 || index === 19 ? `/tmp/probe-${index}.md` : `/tmp/${index % 2}.md`;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block a one-shot batch of distinct arguments", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: `/tmp/file-${index}.md`, content: "same content" },
+          {
+            content: [{ type: "text", text: "write complete" }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block a legitimate two-pass batch", () => {
+      const state = createState();
+      const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+      const content = "same content";
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block argument churn when a repeated variant makes progress", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `write ${targetPath} revision ${index}` }],
+            details: { ok: true, revision: index },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it.each([
+      {
+        label: "completed normal process failures",
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      },
+      {
+        label: "failed non-executable commands",
+        status: "failed",
+        exitCode: 126,
+        output: "Command not executable (permission denied)",
+        aggregated: "",
+      },
+      {
+        label: "failed missing commands",
+        status: "failed",
+        exitCode: 127,
+        output: "Command not found",
+        aggregated: "",
+      },
+    ] as const)("blocks repeated $label across changing exec arguments", (testCase) => {
+      const state = createState();
+      const result = createExecLoopResult(testCase);
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "ISO timestamps",
+        output: (index: number) => `failed at 2026-08-30T10:20:${10 + index}Z`,
+      },
+      { label: "clock timestamps", output: (index: number) => `failed at 12:00:${10 + index}` },
+      { label: "attempt counters", output: (index: number) => `failed on attempt ${index}` },
+      { label: "retry counters", output: (index: number) => `failed on retry=${index}` },
+      { label: "elapsed durations", output: (index: number) => `failed after ${index + 1}ms` },
+      { label: "short elapsed durations", output: (index: number) => `failed after ${index + 1}s` },
+      { label: "process ids", output: (index: number) => `failed in pid=${1000 + index}` },
+    ])("blocks terminal exec failures with drifting $label", ({ output }) => {
+      const state = createState();
+      const params = { command: "node retry.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({ status: "completed", exitCode: 1, output: output(index) }),
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "exit code",
+        beforeExitCode: 1,
+        beforeOutput: () => "command failed",
+        afterExitCode: 2,
+        afterOutput: "command failed",
+      },
+      {
+        label: "diagnostic text",
+        beforeExitCode: 1,
+        beforeOutput: () => "dependency missing",
+        afterExitCode: 1,
+        afterOutput: "syntax error",
+      },
+      {
+        label: "diagnostic number",
+        beforeExitCode: 1,
+        beforeOutput: (index: number) => `errno 111 at 12:00:${10 + index}`,
+        afterExitCode: 1,
+        afterOutput: "errno 113 at 12:00:39",
+      },
+      {
+        label: "calendar date",
+        beforeExitCode: 1,
+        beforeOutput: () => "certificate becomes valid on 2026-08-30",
+        afterExitCode: 1,
+        afterOutput: "certificate becomes valid on 2026-08-31",
+      },
+    ])(
+      "resets a drifting terminal-failure streak after a new $label",
+      ({ beforeExitCode, beforeOutput, afterExitCode, afterOutput }) => {
+        const state = createState();
+        const params = { command: "node retry.js" };
+
+        for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            createExecLoopResult({
+              status: "completed",
+              exitCode: beforeExitCode,
+              output: beforeOutput(index),
+            }),
+            index,
+          );
+        }
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: afterExitCode,
+            output: afterOutput,
+          }),
+          CRITICAL_THRESHOLD,
+        );
+
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "warning",
+            detector: "generic_repeat",
+          },
+        );
+      },
+    );
+
+    it("keeps an intervening command as a reset after the first command resumes", () => {
+      const state = createState();
+      const first = { command: "node first.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          first,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: 1,
+            output: `failed in pid=${1000 + index}`,
+          }),
+          index,
+        );
+      }
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "node second.js" },
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=2000" }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+
+      recordSuccessfulCall(
+        state,
+        "exec",
+        first,
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=3000" }),
+        CRITICAL_THRESHOLD + 1,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+      for (let index = CRITICAL_THRESHOLD; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "critical",
+            detector: "generic_repeat",
+            count: index,
+          },
+        );
+        expect(
+          recordToolCallOutcome(state, {
+            toolName: "exec",
+            toolParams: params,
+            toolCallId: `exec-veto-${index}`,
+            result: {
+              content: [{ type: "text", text: "blocked" }],
+              details: { status: "blocked", deniedReason: "tool-loop" },
+            },
+            config: enabledLoopDetectionConfig,
+          }),
+        ).toMatchObject({ outcomeKind: "tool-loop-veto", resultHash: undefined });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python final-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "synthetic exit-code-only output",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "successful command batches",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "timed-out executions",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "non-finite exit codes",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: Number.POSITIVE_INFINITY,
+          output: "process failed",
+        }),
+      },
+      {
+        label: "failures without an exit code",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: null,
+          output: "process failed before spawning",
+        }),
+      },
+    ])("does not semantically block $label", ({ result }) => {
+      const state = createState();
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `grep target-${index}` }, result, index);
+      }
+
+      expect(state.toolCallHistory?.every((record) => record.outcomeKind === undefined)).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "grep next-target" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it.each([
+      {
+        label: "a distinct terminal failure",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: different package\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "a successful execution",
+        toolName: "exec",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "a timed-out execution",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "another tool",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "read complete" }], details: { ok: true } },
+      },
+    ])("resets the semantic exec failure tail after $label", ({ toolName, result }) => {
+      const state = createState();
+      const failure = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, failure, index);
+      }
+      recordSuccessfulCall(state, toolName, { command: "interruption" }, result, 19);
+      recordSuccessfulCall(state, "exec", { command: "python latest.py" }, failure, 20);
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("does not carry semantic exec failures into another run", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        const toolCallId = `exec-old-run-${index}`;
+        recordToolCall(state, "exec", params, toolCallId, enabledLoopDetectionConfig, {
+          runId: "old-run",
+        });
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result,
+          config: enabledLoopDetectionConfig,
+          runId: "old-run",
+        });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+          { runId: "new-run" },
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("blocks repeated completed exec calls despite volatile runtime details", () => {
+      const state = createState();
+      const params = { command: "grafana-api.sh datasources" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: "Loki\nPrometheus" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + index,
+              cwd: `/tmp/run-${index}`,
+              aggregated: "Loki\nPrometheus",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("blocks repeated running exec calls despite volatile session details and text", () => {
+      const state = createState();
+      const params = { command: "tail -f /var/log/app.log", yieldMs: 1000 };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [
+              {
+                type: "text",
+                text: `Command still running (session sess-${index}, pid ${1000 + index})`,
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: `sess-${index}`,
+              pid: 1000 + index,
+              startedAt: Date.now() + index,
+              cwd: `/tmp/run-${index}`,
+              tail: "(no new output)",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("keeps changing exec output below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "date" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `tick ${index}` }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + index,
+              aggregated: `tick ${index}`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "openclaw flaky-helper" };
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `Runtime failed before spawn: attempt ${index}` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              durationMs: 100 + index,
+              aggregated: "",
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
       }
     });
 
@@ -620,6 +1849,68 @@ describe("tool-loop-detection", () => {
       expect(entry?.resultHash?.length).toBe(64);
     });
 
+    it("returns the recorded call when a pre-recorded tool call receives its result", () => {
+      const state = createState();
+      const params = { action: "lookup", path: "cron.enabled" };
+
+      recordToolCall(state, "gateway", params, "call-1");
+
+      const recorded = recordToolCallOutcome(state, {
+        toolName: "gateway",
+        toolParams: params,
+        toolCallId: "call-1",
+        result: { content: [{ type: "text", text: "same schema" }] },
+      });
+
+      expect(recorded?.toolCallId).toBe("call-1");
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBeTypeOf("string");
+    });
+
+    it("returns the recorded call while trimming production call/outcome records", () => {
+      const state = createState();
+      let lastRecordedToolCallId: string | undefined;
+
+      for (let i = 0; i < TOOL_CALL_HISTORY_SIZE + 3; i += 1) {
+        const params = { action: "lookup", path: `config.${i}` };
+        const toolCallId = `call-${i}`;
+        recordToolCall(state, "gateway", params, toolCallId);
+        const recorded = recordToolCallOutcome(state, {
+          toolName: "gateway",
+          toolParams: params,
+          toolCallId,
+          result: { content: [{ type: "text", text: `schema-${i}` }] },
+        });
+        lastRecordedToolCallId = recorded?.toolCallId;
+      }
+
+      expect(lastRecordedToolCallId).toBe(`call-${TOOL_CALL_HISTORY_SIZE + 2}`);
+      expect(state.toolCallHistory).toHaveLength(TOOL_CALL_HISTORY_SIZE);
+      expect(state.toolCallHistory?.[0]?.toolCallId).toBe("call-3");
+    });
+
+    it("does not attach outcomes to matching calls from other runs", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+      recordToolCall(state, "read", params, "call-1", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+
+      recordToolCallOutcome(state, {
+        toolName: "read",
+        toolParams: params,
+        toolCallId: "call-1",
+        result: { content: [{ type: "text", text: "same output" }] },
+        config: enabledLoopDetectionConfig,
+        runId: "run-2",
+      });
+
+      expect(state.toolCallHistory).toHaveLength(2);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBeUndefined();
+      expect(state.toolCallHistory?.[1]?.runId).toBe("run-2");
+      expect(state.toolCallHistory?.[1]?.resultHash).toBeTypeOf("string");
+    });
+
     it("handles empty history", () => {
       const state = createState();
 
@@ -628,50 +1919,404 @@ describe("tool-loop-detection", () => {
     });
   });
 
-  describe("getToolCallStats", () => {
-    it("returns zero stats for empty history", () => {
-      const state = createState();
+  describe("message send loop detection (#89090)", () => {
+    // Mirror jsonResult(payload): text is the stringified payload (so it carries the
+    // volatile id too) and details is the payload — the shape a real send returns.
+    function sendResult(payload: Record<string, unknown>) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        details: payload,
+      };
+    }
 
-      const stats = getToolCallStats(state);
-      expect(stats.totalCalls).toBe(0);
-      expect(stats.uniquePatterns).toBe(0);
-      expect(stats.mostFrequent).toBeNull();
+    function recordSend(
+      state: SessionState,
+      toolName: string,
+      params: unknown,
+      payload: Record<string, unknown>,
+      index: number,
+    ): void {
+      const toolCallId = `${toolName}-${index}`;
+      recordToolCall(state, toolName, params, toolCallId, enabledLoopDetectionConfig);
+      recordToolCallOutcome(state, {
+        toolName,
+        toolParams: params,
+        toolCallId,
+        result: sendResult(payload),
+        config: enabledLoopDetectionConfig,
+      });
+    }
+
+    function sendPayload(index: number): Record<string, unknown> {
+      return {
+        ok: true,
+        channel: "feishu",
+        chatId: "oc_chat",
+        runId: `run_${index}`,
+        messageId: `om_${index}`,
+        receipt: { platformMessageId: `p_${index}` },
+      };
+    }
+
+    it("gives duplicate sends a stable result hash despite per-call ids in details and text", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      recordSend(state, "message", params, sendPayload(0), 0);
+      recordSend(state, "message", params, sendPayload(1), 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
     });
 
-    it("counts total calls and unique patterns", () => {
+    it("strips nested ids so broadcast results with per-call ids share a result hash", () => {
       const state = createState();
+      const params = { action: "broadcast", text: "ping" };
+      const broadcast = (index: number) => ({
+        results: [
+          { channel: "feishu", ok: true, result: { messageId: `om_${index}`, receipt: index } },
+        ],
+      });
+      recordSend(state, "message", params, broadcast(0), 0);
+      recordSend(state, "message", params, broadcast(1), 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+    });
 
+    it("escalates identical-arg send loops to critical even though every id differs", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("also blocks sessions_send loops whose result carries a fresh runId", () => {
+      const state = createState();
+      const params = { sessionKey: "agent:main:peer", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "sessions_send", params, { ok: true, runId: `run_${i}` }, i);
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "sessions_send",
+        params,
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates provider-docked send-tool loops (e.g. telegram) whose result carries fresh ids", () => {
+      const state = createState();
+      const params = { to: "telegram:123", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "telegram", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "telegram", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates sibling delivery actions (reply) the same as send", () => {
+      const state = createState();
+      const params = { action: "reply", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("blocks upload-file loops whose result carries a fresh file id", () => {
+      const state = createState();
+      const params = { action: "upload-file", target: "feishu:oc_chat", media: "img.png" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          { ok: true, channel: "feishu", fileId: `f_${i}`, messageId: `om_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("blocks poll loops whose result carries a fresh poll id", () => {
+      const state = createState();
+      const params = { action: "poll", target: "tg:chat-1", question: "?" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          { ok: true, channel: "telegram", messageId: `om_${i}`, chatId: "c1", pollId: `pl_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("does not flag distinct messages (different args) as a no-progress loop", () => {
+      const state = createState();
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          { action: "send", target: "feishu:oc_chat", text: `line ${i}` },
+          sendPayload(i),
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "message",
+        { action: "send", target: "feishu:oc_chat", text: "line final" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("keeps full result hashing for non-send message actions so id/timestamp progress is not masked", () => {
+      const state = createState();
+      const params = { action: "read", target: "feishu:oc_chat" };
+      // Results differ only in id/timestamp: a non-send action must still treat that as
+      // progress (distinct hashes), unlike a send where those are stripped as volatile.
+      recordSend(state, "message", params, { ok: true, messageId: "m_0", ts: 1000 }, 0);
+      recordSend(state, "message", params, { ok: true, messageId: "m_1", ts: 2000 }, 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("keeps full result hashing for administrative message mutations", () => {
+      const state = createState();
+      const params = { action: "channel-create", name: "support" };
+      recordSend(state, "message", params, { ok: true, messageId: "m_0", timestamp: 1000 }, 0);
+      recordSend(state, "message", params, { ok: true, messageId: "m_1", timestamp: 2000 }, 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("preserves stable nested route ids so distinct routes stay distinguishable", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      // messageId is volatile (stripped); a nested route id is a stable fact that must survive,
+      // so two sends resolving to different routes keep distinct hashes.
+      recordSend(
+        state,
+        "message",
+        params,
+        { ok: true, messageId: "om_0", route: { id: "conv-A" } },
+        0,
+      );
+      recordSend(
+        state,
+        "message",
+        params,
+        { ok: true, messageId: "om_1", route: { id: "conv-B" } },
+        1,
+      );
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("counts loop vetoes until the global circuit breaker becomes reachable", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const before = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+        expect(before).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+          count: i,
+        });
+        const recorded = recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `message-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+        expect(recorded).toMatchObject({
+          toolCallId: `message-veto-${i}`,
+          outcomeKind: "tool-loop-veto",
+          resultHash: undefined,
+        });
+      }
+      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(after).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it("does not count unrelated hashless calls as no-progress outcomes", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        recordToolCall(state, "message", params, `pending-${i}`, enabledLoopDetectionConfig);
+      }
+
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("does not carry older loop vetoes across a later progressing outcome", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
       for (let i = 0; i < 5; i += 1) {
-        recordToolCall(state, "read", { path: "/file.txt" }, `same-${i}`);
+        recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `old-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
       }
+      recordSend(state, "message", params, { ...sendPayload(25), route: { id: "new-route" } }, 25);
 
-      recordToolCall(state, "write", { path: "/output.txt" }, "write-1");
-      recordToolCall(state, "list", { dir: "/home" }, "list-1");
-      recordToolCall(state, "read", { path: "/other.txt" }, "read-other");
-
-      const stats = getToolCallStats(state);
-      expect(stats.totalCalls).toBe(8);
-      expect(stats.uniquePatterns).toBe(4);
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+        count: 26,
+      });
     });
 
-    it("identifies most frequent pattern", () => {
+    it("still escalates repeated plugin/approval vetoes to a critical loop", () => {
       const state = createState();
-
-      for (let i = 0; i < 3; i += 1) {
-        recordToolCall(state, "read", { path: "/file1.txt" }, `p1-${i}`);
+      const params = { action: "read", target: "feishu:oc_chat" };
+      // A non-loop veto (plugin/approval) keeps a stable result hash, so repeated identical
+      // denials still accumulate a no-progress streak and reach a critical block.
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordToolCall(state, "message", params, `veto-${i}`, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "plugin-before-tool-call" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
       }
-
-      for (let i = 0; i < 7; i += 1) {
-        recordToolCall(state, "read", { path: "/file2.txt" }, `p2-${i}`);
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
       }
+    });
 
-      for (let i = 0; i < 2; i += 1) {
-        recordToolCall(state, "write", { path: "/output.txt" }, `p3-${i}`);
+    it("blocks plugin-shaped send results whose message object carries a bare per-send id", () => {
+      const state = createState();
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        // The volatile id is the message object's own `id`; conversation.id is stable.
+        recordSend(
+          state,
+          "message",
+          params,
+          {
+            message: {
+              id: `qa_${i}`,
+              accountId: "default",
+              direction: "outbound",
+              conversation: { id: "loop-room", chatType: "channel" },
+              senderId: "openclaw",
+              text: "hello",
+              timestamp: 1_800_000_000_000 + i,
+            },
+          },
+          i,
+        );
       }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
 
-      const stats = getToolCallStats(state);
-      expect(stats.mostFrequent?.toolName).toBe("read");
-      expect(stats.mostFrequent?.count).toBe(7);
+    it("does not escalate when a stable conversation id changes between sends", () => {
+      const state = createState();
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          {
+            message: {
+              id: `qa_${i}`,
+              direction: "outbound",
+              conversation: { id: `loop-room-${i}`, chatType: "channel" },
+              text: "hello",
+            },
+          },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

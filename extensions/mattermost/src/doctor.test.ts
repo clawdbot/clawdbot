@@ -1,13 +1,20 @@
+// Mattermost tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { mattermostDoctor } from "./doctor.js";
 
+function getMattermostCompatibilityNormalizer(): NonNullable<
+  typeof mattermostDoctor.normalizeCompatibilityConfig
+> {
+  const normalize = mattermostDoctor.normalizeCompatibilityConfig;
+  if (!normalize) {
+    throw new Error("Expected mattermost doctor to expose normalizeCompatibilityConfig");
+  }
+  return normalize;
+}
+
 describe("mattermost doctor", () => {
   it("normalizes legacy private-network aliases", () => {
-    const normalize = mattermostDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
+    const normalize = getMattermostCompatibilityNormalizer();
 
     const result = normalize({
       cfg: {
@@ -24,16 +31,20 @@ describe("mattermost doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.mattermost?.network).toEqual({
+    const mattermostConfig = result.config.channels?.mattermost;
+    if (!mattermostConfig) {
+      throw new Error("expected normalized Mattermost config");
+    }
+    expect(mattermostConfig.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(
-      (
-        result.config.channels?.mattermost?.accounts?.work as
-          | { network?: Record<string, unknown> }
-          | undefined
-      )?.network,
-    ).toEqual({
+    const workAccount = mattermostConfig.accounts?.work as
+      | { network?: Record<string, unknown> }
+      | undefined;
+    if (!workAccount) {
+      throw new Error("expected Mattermost work account config");
+    }
+    expect(workAccount.network).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
   });

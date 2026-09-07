@@ -1,10 +1,34 @@
+// Supervisor adapter test support builds mock process handles for adapter tests.
+import fs from "node:fs";
 import { expect, vi } from "vitest";
 
+/**
+ * Shared supervisor adapter assertions for the SIGTERM -> SIGKILL fallback
+ * contract. Kept outside individual adapter tests so child and pty backends
+ * prove the same timer semantics.
+ */
 type WaitResult = {
   code: number | null;
   signal: number | NodeJS.Signals | null;
 };
 
+/** Keep Linux adapter wiring tests deterministic on hosts without `/bin/sh`. */
+export function mockLinuxOomWrapperShell(): () => void {
+  const statSync = fs.statSync.bind(fs);
+  const fileStats = statSync(process.execPath);
+  const statSyncMock = vi
+    .spyOn(fs, "statSync")
+    .mockImplementation((target, options) =>
+      String(target) === "/bin/sh" ? fileStats : statSync(target, options as never),
+    );
+  return () => {
+    statSyncMock.mockRestore();
+    // The production helper memoizes shell availability; clear it for later tests.
+    vi.resetModules();
+  };
+}
+
+/** Assert fallback SIGKILL resolves only after the grace timer expires. */
 export async function expectWaitStaysPendingUntilSigkillFallback(
   waitPromise: Promise<WaitResult>,
   triggerKill: () => void,
@@ -24,6 +48,7 @@ export async function expectWaitStaysPendingUntilSigkillFallback(
   await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
 }
 
+/** Assert a real process exit beats the fallback timer and stays idempotent. */
 export async function expectRealExitWinsOverSigkillFallback(params: {
   waitPromise: Promise<WaitResult>;
   triggerKill: () => void;

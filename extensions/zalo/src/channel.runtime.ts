@@ -1,25 +1,11 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+// Zalo plugin module implements channel behavior.
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelPlugin } from "../runtime-api.js";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
-import {
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
-export async function notifyZaloPairingApproval(params: { cfg: OpenClawConfig; id: string }) {
-  const { resolveZaloAccount } = await import("./accounts.js");
-  const account = resolveZaloAccount({ cfg: params.cfg });
-  if (!account.token) {
-    throw new Error("Zalo token not configured");
-  }
-  await sendMessageZalo(params.id, PAIRING_APPROVED_MESSAGE, {
-    token: account.token,
-  });
-}
 
 export async function sendZaloText(
   params: Parameters<typeof sendMessageZalo>[2] & {
@@ -53,7 +39,7 @@ export async function startZaloGatewayAccount(
   const fetcher = resolveZaloProxyFetch(account.config.proxy);
   try {
     const probe = await probeZalo(token, 2500, fetcher);
-    const name = probe.ok ? probe.bot?.name?.trim() : null;
+    const name = probe.ok ? probe.bot?.account_name?.trim() : null;
     if (name) {
       zaloBotLabel = ` (${name})`;
     }

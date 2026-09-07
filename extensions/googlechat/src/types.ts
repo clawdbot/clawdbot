@@ -1,7 +1,12 @@
+// Googlechat type declarations define plugin contracts.
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
   type?: string;
+  /** Current Google Chat field that replaces the deprecated `type` field. */
+  spaceType?: string;
+  /** True when the space is a 1:1 DM between a user and the Chat app. */
+  singleUserBotDm?: boolean;
 };
 
 export type GoogleChatUser = {
@@ -11,12 +16,12 @@ export type GoogleChatUser = {
   type?: string;
 };
 
-export type GoogleChatThread = {
+type GoogleChatThread = {
   name?: string;
   threadKey?: string;
 };
 
-export type GoogleChatAttachmentDataRef = {
+type GoogleChatAttachmentDataRef = {
   resourceName?: string;
   attachmentUploadToken?: string;
 };
@@ -32,7 +37,7 @@ export type GoogleChatAttachment = {
   driveDataRef?: Record<string, unknown>;
 };
 
-export type GoogleChatUserMention = {
+type GoogleChatUserMention = {
   user?: GoogleChatUser;
   type?: string;
 };
@@ -53,8 +58,19 @@ export type GoogleChatMessage = {
   argumentText?: string;
   sender?: GoogleChatUser;
   thread?: GoogleChatThread;
+  cardsV2?: GoogleChatCardV2[];
   attachment?: GoogleChatAttachment[];
   annotations?: GoogleChatAnnotation[];
+};
+
+export type GoogleChatActionParameter = {
+  key?: string;
+  value?: string;
+};
+
+export type GoogleChatAction = {
+  actionMethodName?: string;
+  parameters?: GoogleChatActionParameter[];
 };
 
 export type GoogleChatEvent = {
@@ -64,10 +80,58 @@ export type GoogleChatEvent = {
   space?: GoogleChatSpace;
   user?: GoogleChatUser;
   message?: GoogleChatMessage;
+  action?: GoogleChatAction;
+  common?: {
+    invokedFunction?: string;
+    parameters?: Record<string, string>;
+  };
+  commonEventObject?: {
+    invokedFunction?: string;
+    parameters?: Record<string, string>;
+  };
 };
 
-export type GoogleChatReaction = {
-  name?: string;
-  user?: GoogleChatUser;
-  emoji?: { unicode?: string };
+type GoogleChatTextParagraphWidget = {
+  textParagraph: {
+    text: string;
+  };
+};
+
+type GoogleChatButtonWidget = {
+  buttonList: {
+    buttons: Array<{
+      text: string;
+      onClick: {
+        action: {
+          function: string;
+          parameters?: GoogleChatActionParameter[];
+          loadIndicator?: "SPINNER" | "NONE";
+        };
+      };
+    }>;
+  };
+};
+
+type GoogleChatDividerWidget = { divider: Record<string, never> };
+
+type GoogleChatWidget =
+  | GoogleChatTextParagraphWidget
+  | GoogleChatButtonWidget
+  | GoogleChatDividerWidget;
+
+export type GoogleChatCardV2 = {
+  cardId?: string;
+  card: {
+    header?: {
+      title?: string;
+      subtitle?: string;
+      imageType?: "SQUARE" | "CIRCLE";
+    };
+    sections?: Array<{
+      header?: string;
+      collapsible?: boolean;
+      uncollapsibleWidgetsCount?: number;
+      widgets?: GoogleChatWidget[];
+    }>;
+  };
 };

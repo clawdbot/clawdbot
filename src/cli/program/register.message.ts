@@ -1,6 +1,7 @@
+// Message command registration: core send/read/manage actions plus channel-specific admin helpers.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatHelpExamples } from "../help-format.js";
 import type { ProgramContext } from "./context.js";
 import { createMessageCliHelpers } from "./message/helpers.js";
@@ -20,7 +21,9 @@ import { registerMessageReactionsCommands } from "./message/register.reactions.j
 import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
+import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
+/** Register the `message` command group with shared channel option helpers. */
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")
@@ -47,12 +50,9 @@ ${formatHelpExamples([
 ])}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
-    )
-    .action(() => {
-      message.help({ error: true });
-    });
+    );
 
-  const helpers = createMessageCliHelpers(message, ctx.messageChannelOptions);
+  const helpers = createMessageCliHelpers(ctx.messageChannelOptions);
   registerMessageSendCommand(message, helpers);
   registerMessageBroadcastCommand(message, helpers);
   registerMessagePollCommand(message, helpers);
@@ -65,4 +65,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
   registerMessageEmojiCommands(message, helpers);
   registerMessageStickerCommands(message, helpers);
   registerMessageDiscordAdminCommands(message, helpers);
+
+  for (const command of message.commands) {
+    if (command.commands.length > 0) {
+      applyParentDefaultHelpAction(command);
+    }
+  }
+  applyParentDefaultHelpAction(message);
 }

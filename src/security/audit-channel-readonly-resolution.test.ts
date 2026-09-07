@@ -1,7 +1,8 @@
+// Verifies readonly channel audit resolution behavior.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubChannelPlugin(params: {
   id: "zalouser";
@@ -23,11 +24,24 @@ function stubChannelPlugin(params: {
     security: {},
     config: {
       listAccountIds: () => ["default"],
+      inspectAccount: () => null,
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: () => true,
       isConfigured: () => true,
     },
   };
+}
+
+function requireReadOnlyResolutionFinding(
+  findings: Awaited<ReturnType<typeof collectChannelSecurityFindingsCore>>,
+) {
+  const finding = findings.find(
+    (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+  );
+  if (!finding) {
+    throw new Error("Expected Zalo read-only resolution warning");
+  }
+  return finding;
 }
 
 describe("security audit channel read-only resolution", () => {
@@ -48,17 +62,15 @@ describe("security audit channel read-only resolution", () => {
       },
     };
 
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg,
       plugins: [plugin],
     });
 
-    const finding = findings.find(
-      (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
-    );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.title).toContain("could not be fully resolved");
-    expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
-    expect(finding?.detail).toContain("missing SecretRef");
+    const finding = requireReadOnlyResolutionFinding(findings);
+    expect(finding.severity).toBe("warn");
+    expect(finding.title).toContain("could not be fully resolved");
+    expect(finding.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding.detail).toContain("missing SecretRef");
   });
 });

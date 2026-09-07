@@ -8,7 +8,7 @@ const DEFAULT_PROMPT_STARTERS = [
   "Help me draft an email",
 ];
 
-export type WelcomeCardOptions = {
+type WelcomeCardOptions = {
   /** Bot display name. Falls back to "OpenClaw". */
   botName?: string;
   /** Custom prompt starters. Falls back to defaults. */
@@ -31,8 +31,10 @@ export function buildWelcomeCard(options?: WelcomeCardOptions): Record<string, u
       {
         type: "TextBlock",
         text: `Hi! I'm ${botName}.`,
-        weight: "bolder",
-        size: "medium",
+        // Adaptive Card TextWeight/TextSize enums are PascalCase ("Bolder"/"Medium"); lowercase
+        // values fall back to Default, so the greeting rendered unstyled (matches polls/presentation).
+        weight: "Bolder",
+        size: "Medium",
       },
       {
         type: "TextBlock",

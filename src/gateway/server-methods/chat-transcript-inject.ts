@@ -1,20 +1,44 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+// Chat transcript injection appends gateway-authored assistant rows while
+// preserving agent-session parent links and transcript update notifications.
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  projectAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
-export type GatewayInjectedAbortMeta = {
+/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
+type GatewayInjectedAbortMeta = {
   aborted: true;
-  origin: "rpc" | "stop-command";
+  origin: "rpc" | "stop-command" | "placement-abandon";
   runId: string;
 };
 
-export type GatewayInjectedTranscriptAppendResult = {
+/** Result shape returned after appending an assistant row to a session transcript. */
+type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
+};
+
+/** Hash marker used to dedupe companion TTS text/audio supplements. */
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
 };
 
 function resolveInjectedAssistantContent(params: {
@@ -23,6 +47,8 @@ function resolveInjectedAssistantContent(params: {
   content?: Array<Record<string, unknown>>;
 }): Array<Record<string, unknown>> {
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  // Preserve rich content arrays when callers already prepared media blocks;
+  // only the first text block is rewritten so block ordering stays intact.
   if (params.content && params.content.length > 0) {
     if (!labelPrefix) {
       return params.content;
@@ -41,16 +67,26 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
-export function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath: string;
+/** Append a gateway-authored assistant message while preserving transcript parent links. */
+export async function appendInjectedAssistantMessageToTranscript(params: {
+  transcriptPath?: string;
+  storePath?: string;
+  sessionId?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+  sessionKey?: string;
+  agentId?: string;
   message: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
-}): GatewayInjectedTranscriptAppendResult {
+  config?: OpenClawConfig;
+}): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
     input: 0,
@@ -71,23 +107,34 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
-  const messageBody: AppendMessageArg & Record<string, unknown> = {
+  const displayMessage: {
+    role: "assistant";
+    content: Array<Record<string, unknown>>;
+    openclawDelivery?: unknown;
+  } = {
     role: "assistant",
-    // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent as unknown as Extract<
-      AppendMessageArg,
-      { role: "assistant" }
-    >["content"],
+    content: resolvedContent.map((block) => Object.assign({}, block)),
+  };
+  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage);
+  const displayContent = preparedDisplayMessage.content;
+  const canonicalContent = retainAssistantModelContent(displayContent);
+  const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
+  const abortRunId = params.abortMeta?.runId;
+  const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
+    role: "assistant",
+    content: canonicalContent,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
-    // normal assistant message so it participates in the session parentId chain.
-    stopReason: "stop",
+    // Runtime projections retain their terminal state; host-authored partials
+    // keep their replayable default and carry cancellation in openclawAbort.
+    stopReason: params.stopReason ?? "stop",
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -97,19 +144,73 @@ export function appendInjectedAssistantMessageToTranscript(params: {
           },
         }
       : {}),
-  };
+  });
+  if (rawDeliveryFacts && messageBody.openclawDelivery === undefined) {
+    messageBody.openclawDelivery = rawDeliveryFacts;
+  }
 
   try {
-    // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
-    // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
-    const sessionManager = SessionManager.open(params.transcriptPath);
-    const messageId = sessionManager.appendMessage(messageBody);
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: messageBody,
-      messageId,
-    });
-    return { ok: true, messageId, message: messageBody };
+    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
+      return { ok: false, error: "transcript identity not resolved" };
+    }
+    let predicateDeclined = false;
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionKey: params.sessionKey ?? "",
+        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        updateMode: "inline",
+        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
+        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
+        ...(params.config ? { config: params.config } : {}),
+        messages: [
+          {
+            message: messageBody,
+            idempotencyLookup: "scan-assistant",
+            ...(params.abortMeta
+              ? {
+                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
+                      latestAssistantMessage,
+                      readSessionTranscriptRunId(latestAssistantMessage),
+                    );
+                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
+                    // The same run can commit before its live buffer clears. Recheck after
+                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
+                    predicateDeclined =
+                      committedRunId === abortRunId && committedText === params.message.trim();
+                    return !predicateDeclined;
+                  },
+                }
+              : {}),
+            now,
+            useRawWhenLinear: true,
+          },
+        ],
+      },
+    );
+    if (turn.rejectedReason) {
+      return { ok: false, error: turn.rejectedReason };
+    }
+    const appended = turn.messages[0];
+    if (!appended) {
+      // A declined predicate is a decision, not a failure: no row was wanted.
+      if (predicateDeclined) {
+        return { ok: true, skipped: true };
+      }
+      return { ok: false, error: "gateway-injected assistant message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: projectAssistantDisplayContent(appended.message as Record<string, unknown>),
+    };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

@@ -1,27 +1,32 @@
+// Provides shared assertions for provider plugin runtime tests.
 import { expect } from "vitest";
 
-export const openaiCodexCatalogEntries = [
+const openaiCodexCatalogEntries = [
+  { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },
+  { provider: "openai", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
+  { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+  { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
   { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
   { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
   { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
   { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
-  { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+  { provider: "openai", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
 ];
 
-export const expectedAugmentedOpenaiCodexCatalogEntries = [
+const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
   { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-  { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-  { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-  {
-    provider: "openai-codex",
-    id: "gpt-5.3-codex-spark",
-    name: "gpt-5.3-codex-spark",
-  },
 ];
+
+export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
+  { provider: "openai", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
+  ...expectedAugmentedOpenaiCodexCatalogEntries,
+];
+
+export const expectedOpenaiPluginCodexCatalogEntriesWithGpt55 =
+  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55;
 
 export function expectCodexMissingAuthHint(
   buildProviderMissingAuthMessageWithPlugin: (params: {
@@ -33,6 +38,7 @@ export function expectCodexMissingAuthHint(
       listProfileIds: (providerId: string) => string[];
     };
   }) => string | undefined,
+  expectedModel = "openai/gpt-5.5",
 ) {
   expect(
     buildProviderMissingAuthMessageWithPlugin({
@@ -41,35 +47,10 @@ export function expectCodexMissingAuthHint(
       context: {
         env: process.env,
         provider: "openai",
-        listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
+        listProfileIds: (providerId) => (providerId === "openai" ? ["p1"] : []),
       },
     }),
-  ).toContain("openai-codex/gpt-5.4");
-}
-
-export function expectCodexBuiltInSuppression(
-  resolveProviderBuiltInModelSuppression: (params: {
-    env: NodeJS.ProcessEnv;
-    context: {
-      env: NodeJS.ProcessEnv;
-      provider: string;
-      modelId: string;
-    };
-  }) => unknown,
-) {
-  expect(
-    resolveProviderBuiltInModelSuppression({
-      env: process.env,
-      context: {
-        env: process.env,
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.3-codex-spark",
-      },
-    }),
-  ).toMatchObject({
-    suppress: true,
-    errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
-  });
+  ).toContain(expectedModel);
 }
 
 export async function expectAugmentedCodexCatalog(
@@ -80,6 +61,7 @@ export async function expectAugmentedCodexCatalog(
       entries: typeof openaiCodexCatalogEntries;
     };
   }) => Promise<unknown>,
+  expectedEntries = expectedAugmentedOpenaiCodexCatalogEntries,
 ) {
   const result = (await augmentModelCatalogWithProviderPlugins({
     env: process.env,
@@ -88,8 +70,8 @@ export async function expectAugmentedCodexCatalog(
       entries: openaiCodexCatalogEntries,
     },
   })) as Array<Record<string, unknown>>;
-  expect(result).toHaveLength(expectedAugmentedOpenaiCodexCatalogEntries.length);
-  for (const entry of expectedAugmentedOpenaiCodexCatalogEntries) {
+  expect(result).toHaveLength(expectedEntries.length);
+  for (const entry of expectedEntries) {
     expect(result).toContainEqual(expect.objectContaining(entry));
   }
 }

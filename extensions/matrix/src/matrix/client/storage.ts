@@ -1,75 +1,60 @@
+// Matrix plugin module implements storage behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import {
-  requiresExplicitMatrixDefaultAccount,
-  resolveMatrixDefaultOrOnlyAccountId,
-} from "../../account-selection.js";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
+  isMatrixActiveTokenRootDirectory,
   resolveMatrixAccountStorageRoot,
-  resolveMatrixLegacyFlatStoragePaths,
 } from "../../storage-paths.js";
-import type { MatrixAuth } from "./types.js";
-import type { MatrixStoragePaths } from "./types.js";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  MATRIX_RECOVERY_KEY_FILENAME,
+  migrateLegacyMatrixLegacyCryptoMigrationFileToStore,
+  migrateLegacyMatrixRecoveryKeyFileToStore,
+  scoreMatrixCryptoStateInStore,
+} from "../crypto-state-store.js";
+import {
+  normalizeMatrixStorageMetadata,
+  openMatrixStorageMetaStoreOptions,
+  STORAGE_META_STATE_KEY,
+  type MatrixStorageMetadata,
+} from "./storage-metadata.js";
+import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 
-export const DEFAULT_ACCOUNT_KEY = "default";
+const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
-const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
-const RECOVERY_KEY_FILENAME = "recovery-key.json";
-const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
-const STARTUP_VERIFICATION_FILENAME = "startup-verification.json";
-
 type LegacyMoveRecord = {
   sourcePath: string;
   targetPath: string;
   label: string;
 };
 
-type StoredRootMetadata = {
-  homeserver?: string;
-  userId?: string;
-  accountId?: string;
-  accessTokenHash?: string;
-  deviceId?: string | null;
-  currentTokenStateClaimed?: boolean;
-  createdAt?: string;
+type LegacyArchiveRecord = {
+  sourcePath: string;
+  label: string;
 };
 
-function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
-  storagePath: string;
-  cryptoPath: string;
-} {
-  const stateDir = getMatrixRuntime().state.resolveStateDir(env, os.homedir);
-  const legacy = resolveMatrixLegacyFlatStoragePaths(stateDir);
-  return { storagePath: legacy.storagePath, cryptoPath: legacy.cryptoPath };
+function openStorageMetaStore(rootDir: string): PluginStateSyncKeyedStore<MatrixStorageMetadata> {
+  return getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
+    openMatrixStorageMetaStoreOptions(rootDir),
+  );
 }
 
-function assertLegacyMigrationAccountSelection(params: { accountKey: string }): void {
-  const cfg = getMatrixRuntime().config.loadConfig();
-  if (!cfg.channels?.matrix || typeof cfg.channels.matrix !== "object") {
-    return;
-  }
-  if (requiresExplicitMatrixDefaultAccount(cfg)) {
-    throw new Error(
-      "Legacy Matrix client storage cannot be migrated automatically because multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set.",
-    );
-  }
-
-  const selectedAccountId = normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
-  const currentAccountId = normalizeAccountId(params.accountKey);
-  if (selectedAccountId !== currentAccountId) {
-    throw new Error(
-      `Legacy Matrix client storage targets account "${selectedAccountId}", but the current client is starting account "${currentAccountId}". Start the selected account first so flat legacy storage is not migrated into the wrong account directory.`,
-    );
-  }
-}
-
-function scoreStorageRoot(rootDir: string): number {
+function scoreStorageRoot(
+  rootDir: string,
+  metadata: MatrixStorageMetadata = readStoredRootMetadata(rootDir),
+): number {
   let score = 0;
-  if (fs.existsSync(path.join(rootDir, "bot-storage.json"))) {
+  if (Object.keys(metadata).length > 0) {
+    score += 1;
+  }
+  if (metadata.currentTokenStateClaimed === true) {
     score += 8;
   }
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
@@ -78,18 +63,16 @@ function scoreStorageRoot(rootDir: string): number {
   if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
     score += 4;
   }
-  if (fs.existsSync(path.join(rootDir, LEGACY_CRYPTO_MIGRATION_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME))) {
     score += 3;
   }
-  if (fs.existsSync(path.join(rootDir, RECOVERY_KEY_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME))) {
     score += 2;
   }
-  if (fs.existsSync(path.join(rootDir, IDB_SNAPSHOT_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME))) {
     score += 2;
   }
-  if (fs.existsSync(path.join(rootDir, STORAGE_META_FILENAME))) {
-    score += 1;
-  }
+  score += scoreMatrixCryptoStateInStore(rootDir);
   return score;
 }
 
@@ -101,50 +84,29 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
   }
 }
 
-function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
-  const metadata: StoredRootMetadata = {};
+type PopulatedMatrixStorageRoot = {
+  tokenHash: string;
+  rootDir: string;
+  score: number;
+  mtimeMs: number;
+};
 
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STORAGE_META_FILENAME), "utf8"),
-    ) as Partial<StoredRootMetadata>;
-    if (typeof parsed.homeserver === "string" && parsed.homeserver.trim()) {
-      metadata.homeserver = parsed.homeserver.trim();
+function readStoredRootMetadata(rootDir: string): MatrixStorageMetadata {
+  if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
+    try {
+      const stored = normalizeMatrixStorageMetadata(
+        openStorageMetaStore(rootDir).lookup(STORAGE_META_STATE_KEY),
+      );
+      if (stored) {
+        return stored;
+      }
+    } catch {
+      // Root selection remains best-effort; a write path will surface SQLite failures.
     }
-    if (typeof parsed.userId === "string" && parsed.userId.trim()) {
-      metadata.userId = parsed.userId.trim();
-    }
-    if (typeof parsed.accountId === "string" && parsed.accountId.trim()) {
-      metadata.accountId = parsed.accountId.trim();
-    }
-    if (typeof parsed.accessTokenHash === "string" && parsed.accessTokenHash.trim()) {
-      metadata.accessTokenHash = parsed.accessTokenHash.trim();
-    }
-    if (typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
-      metadata.deviceId = parsed.deviceId.trim();
-    }
-    if (parsed.currentTokenStateClaimed === true) {
-      metadata.currentTokenStateClaimed = true;
-    }
-    if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
-      metadata.createdAt = parsed.createdAt.trim();
-    }
-  } catch {
-    // ignore missing or malformed storage metadata
   }
-
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STARTUP_VERIFICATION_FILENAME), "utf8"),
-    ) as { deviceId?: unknown };
-    if (!metadata.deviceId && typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
-      metadata.deviceId = parsed.deviceId.trim();
-    }
-  } catch {
-    // ignore missing or malformed verification state
-  }
-
-  return metadata;
+  return (
+    normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ?? {}
+  );
 }
 
 function isCompatibleStorageRoot(params: {
@@ -197,37 +159,41 @@ function resolvePreferredMatrixStorageRoot(params: {
   rootDir: string;
   tokenHash: string;
 } {
+  const canonical = {
+    rootDir: params.canonicalRootDir,
+    tokenHash: params.canonicalTokenHash,
+  };
+  const deviceId = params.deviceId?.trim();
+
+  // Without a confirmed device identity, reusing a populated sibling root after
+  // token rotation can silently bind this run to the wrong Matrix device state.
+  if (!deviceId) {
+    return canonical;
+  }
+
+  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
+  const canonicalRootOwnsCurrentToken =
+    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
+    canonicalMetadata.deviceId?.trim() === deviceId &&
+    canonicalMetadata.currentTokenStateClaimed === true;
+
+  // A claimed canonical root is authoritative. Scanning token-history siblings
+  // would synchronously open and retain every per-root SQLite store during startup.
+  if (canonicalRootOwnsCurrentToken) {
+    return canonical;
+  }
+
   const parentDir = path.dirname(params.canonicalRootDir);
-  const bestCurrentScore = scoreStorageRoot(params.canonicalRootDir);
+  const bestCurrentScore = scoreStorageRoot(params.canonicalRootDir, canonicalMetadata);
+  const bestCurrentMtimeMs = resolveStorageRootMtimeMs(params.canonicalRootDir);
   let best = {
     rootDir: params.canonicalRootDir,
     tokenHash: params.canonicalTokenHash,
     score: bestCurrentScore,
-    mtimeMs: resolveStorageRootMtimeMs(params.canonicalRootDir),
+    mtimeMs: bestCurrentMtimeMs,
   };
 
-  // Without a confirmed device identity, reusing a populated sibling root after
-  // token rotation can silently bind this run to the wrong Matrix device state.
-  if (!params.deviceId?.trim()) {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
-
-  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
-  if (
-    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
-    canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
-    canonicalMetadata.currentTokenStateClaimed === true
-  ) {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
-
-  let siblingEntries: fs.Dirent[] = [];
+  let siblingEntries: fs.Dirent[];
   try {
     siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
   } catch {
@@ -237,11 +203,18 @@ function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  for (const entry of siblingEntries) {
+  const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
+  const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
+  for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) {
       continue;
     }
     if (entry.name === params.canonicalTokenHash) {
+      continue;
+    }
+    // Sibling reuse is only defined for exact token-hash roots. Filtering here
+    // keeps archived SQLite state out of compatibility checks and scoring.
+    if (!isMatrixActiveTokenRootDirectory(entry.name)) {
       continue;
     }
     const candidateRootDir = path.join(parentDir, entry.name);
@@ -251,10 +224,10 @@ function resolvePreferredMatrixStorageRoot(params: {
         homeserver: params.homeserver,
         userId: params.userId,
         accountKey: params.accountKey,
-        deviceId: params.deviceId,
+        deviceId,
         // Once auth resolves a concrete device, only sibling roots that explicitly
         // declare that same device are safe to reuse across token rotations.
-        requireExplicitDeviceMatch: Boolean(params.deviceId),
+        requireExplicitDeviceMatch: true,
       })
     ) {
       continue;
@@ -263,20 +236,42 @@ function resolvePreferredMatrixStorageRoot(params: {
     if (candidateScore <= 0) {
       continue;
     }
-    const candidateMtimeMs = resolveStorageRootMtimeMs(candidateRootDir);
+    populatedTokenHashes.push(entry.name);
+    compatiblePopulatedSiblings.push({
+      rootDir: candidateRootDir,
+      tokenHash: entry.name,
+      score: candidateScore,
+      mtimeMs: resolveStorageRootMtimeMs(candidateRootDir),
+    });
+  }
+
+  for (const candidate of compatiblePopulatedSiblings) {
     if (
-      candidateScore > best.score ||
+      candidate.score > best.score ||
       (best.rootDir !== params.canonicalRootDir &&
-        candidateScore === best.score &&
-        candidateMtimeMs > best.mtimeMs)
+        candidate.score === best.score &&
+        candidate.mtimeMs > best.mtimeMs)
     ) {
       best = {
-        rootDir: candidateRootDir,
-        tokenHash: entry.name,
-        score: candidateScore,
-        mtimeMs: candidateMtimeMs,
+        rootDir: candidate.rootDir,
+        tokenHash: candidate.tokenHash,
+        score: candidate.score,
+        mtimeMs: candidate.mtimeMs,
       };
     }
+  }
+
+  if (populatedTokenHashes.length > 1) {
+    getMatrixRuntime()
+      .logging.getChildLogger({ module: "matrix-storage" })
+      .warn("matrix: multiple populated token-hash storage roots detected", {
+        parentDir,
+        canonicalTokenHash: params.canonicalTokenHash,
+        selectedTokenHash: best.tokenHash,
+        populatedTokenHashes,
+        populatedSiblingTokenHashes: compatiblePopulatedSiblings.map((root) => root.tokenHash),
+        populatedRootCount: populatedTokenHashes.length,
+      });
   }
 
   return {
@@ -315,9 +310,8 @@ export function resolveMatrixStoragePaths(params: {
     rootDir,
     storagePath: path.join(rootDir, "bot-storage.json"),
     cryptoPath: path.join(rootDir, "crypto"),
-    metaPath: path.join(rootDir, STORAGE_META_FILENAME),
-    recoveryKeyPath: path.join(rootDir, "recovery-key.json"),
-    idbSnapshotPath: path.join(rootDir, IDB_SNAPSHOT_FILENAME),
+    recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
+    idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
     tokenHash,
   };
@@ -346,59 +340,56 @@ export async function maybeMigrateLegacyStorage(params: {
   storagePaths: MatrixStoragePaths;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const legacy = resolveLegacyStoragePaths(params.env);
-  const hasLegacyStorage = fs.existsSync(legacy.storagePath);
-  const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
-  if (!hasLegacyStorage && !hasLegacyCrypto) {
+  const hasAccountScopedLegacyStorageFile = fs.existsSync(params.storagePaths.storagePath);
+  const syncCache = hasAccountScopedLegacyStorageFile
+    ? await import("./sync-cache-state.js")
+    : null;
+  const hasAccountScopedLegacyStorage =
+    hasAccountScopedLegacyStorageFile &&
+    (await syncCache?.readLegacyMatrixSyncCacheState(params.storagePaths.rootDir)) !== null;
+  const hasAccountScopedRecoveryKey = fs.existsSync(params.storagePaths.recoveryKeyPath);
+  const hasAccountScopedLegacyCryptoMigration = fs.existsSync(
+    path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
+  );
+  if (
+    !hasAccountScopedLegacyStorage &&
+    !hasAccountScopedRecoveryKey &&
+    !hasAccountScopedLegacyCryptoMigration
+  ) {
     return;
   }
-  const hasTargetStorage = fs.existsSync(params.storagePaths.storagePath);
-  const hasTargetCrypto = fs.existsSync(params.storagePaths.cryptoPath);
-  // Continue partial migrations one artifact at a time; only skip items whose targets already exist.
-  const shouldMigrateStorage = hasLegacyStorage && !hasTargetStorage;
-  const shouldMigrateCrypto = hasLegacyCrypto && !hasTargetCrypto;
-  if (!shouldMigrateStorage && !shouldMigrateCrypto) {
-    return;
-  }
-
-  assertLegacyMigrationAccountSelection({
-    accountKey: params.storagePaths.accountKey,
-  });
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
-  const { maybeCreateMatrixMigrationSnapshot } = await import("./migration-snapshot.runtime.js");
-  await maybeCreateMatrixMigrationSnapshot({
-    trigger: "matrix-client-fallback",
-    env: params.env,
-    log: logger,
-  });
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
   const moved: LegacyMoveRecord[] = [];
+  const pendingArchives: LegacyArchiveRecord[] = [];
   const skippedExistingTargets: string[] = [];
   try {
-    if (shouldMigrateStorage) {
-      moveLegacyStoragePathOrThrow({
-        sourcePath: legacy.storagePath,
-        targetPath: params.storagePaths.storagePath,
-        label: "sync store",
+    if (hasAccountScopedLegacyStorage) {
+      await migrateLegacySyncCacheToSqlite({
+        sourceRootDir: params.storagePaths.rootDir,
+        sourcePath: params.storagePaths.storagePath,
+        targetRootDir: params.storagePaths.rootDir,
+        label: "account sync cache",
         moved,
+        pendingArchives,
       });
-    } else if (hasLegacyStorage) {
-      skippedExistingTargets.push(
-        `- sync store remains at ${legacy.storagePath} because ${params.storagePaths.storagePath} already exists`,
-      );
     }
-    if (shouldMigrateCrypto) {
-      moveLegacyStoragePathOrThrow({
-        sourcePath: legacy.cryptoPath,
-        targetPath: params.storagePaths.cryptoPath,
-        label: "crypto store",
-        moved,
+    if (hasAccountScopedRecoveryKey) {
+      migrateLegacyMatrixRecoveryKeyFileToStore(params.storagePaths.rootDir);
+      moved.push({
+        sourcePath: params.storagePaths.recoveryKeyPath,
+        targetPath: `${params.storagePaths.rootDir} SQLite recovery key state`,
+        label: "recovery key",
       });
-    } else if (hasLegacyCrypto) {
-      skippedExistingTargets.push(
-        `- crypto store remains at ${legacy.cryptoPath} because ${params.storagePaths.cryptoPath} already exists`,
-      );
+    }
+    if (hasAccountScopedLegacyCryptoMigration) {
+      migrateLegacyMatrixLegacyCryptoMigrationFileToStore(params.storagePaths.rootDir);
+      moved.push({
+        sourcePath: path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
+        targetPath: `${params.storagePaths.rootDir} SQLite legacy crypto migration state`,
+        label: "legacy crypto migration",
+      });
     }
   } catch (err) {
     const rollbackError = rollbackLegacyMoves(moved);
@@ -409,6 +400,12 @@ export async function maybeMigrateLegacyStorage(params: {
       { cause: err },
     );
   }
+  for (const archive of pendingArchives) {
+    archiveLegacyStoragePath({
+      ...archive,
+      skippedExistingTargets,
+    });
+  }
   if (moved.length > 0) {
     logger.info(
       `matrix: migrated legacy client storage into ${params.storagePaths.rootDir}\n${moved
@@ -418,31 +415,66 @@ export async function maybeMigrateLegacyStorage(params: {
   }
   if (skippedExistingTargets.length > 0) {
     logger.warn?.(
-      `matrix: legacy client storage still exists in the flat path because some account-scoped targets already existed.\n${skippedExistingTargets.join("\n")}`,
+      `matrix: legacy client storage files were left in place because their migrated targets already existed.\n${skippedExistingTargets.join("\n")}`,
     );
   }
 }
 
-function moveLegacyStoragePathOrThrow(params: {
+async function migrateLegacySyncCacheToSqlite(params: {
+  sourceRootDir: string;
   sourcePath: string;
-  targetPath: string;
+  targetRootDir: string;
   label: string;
   moved: LegacyMoveRecord[];
-}): void {
-  if (!fs.existsSync(params.sourcePath)) {
+  pendingArchives: LegacyArchiveRecord[];
+}): Promise<void> {
+  const syncCache = await import("./sync-cache-state.js");
+  const persisted = await syncCache.readLegacyMatrixSyncCacheState(params.sourceRootDir);
+  if (!persisted) {
     return;
   }
-  if (fs.existsSync(params.targetPath)) {
-    throw new Error(
-      `legacy Matrix ${params.label} target already exists (${params.targetPath}); refusing to overwrite it automatically`,
-    );
+  const store = getMatrixRuntime().state.openKeyedStore<
+    import("./sync-cache-state.js").MatrixSyncCacheRecord
+  >(syncCache.openMatrixSyncCacheStoreOptions(params.targetRootDir));
+  if (
+    !(await syncCache.hasMatrixSyncCacheStateInStore({
+      storageRootDir: params.targetRootDir,
+      store,
+    }))
+  ) {
+    await syncCache.writeMatrixSyncCacheStateToStore({
+      storageRootDir: params.targetRootDir,
+      payload: persisted,
+      store,
+    });
+    claimCurrentTokenStorageState({
+      rootDir: params.targetRootDir,
+    });
+    params.moved.push({
+      sourcePath: params.sourcePath,
+      targetPath: `${params.targetRootDir} SQLite sync cache`,
+      label: params.label,
+    });
   }
-  fs.renameSync(params.sourcePath, params.targetPath);
-  params.moved.push({
+  params.pendingArchives.push({
     sourcePath: params.sourcePath,
-    targetPath: params.targetPath,
     label: params.label,
   });
+}
+
+function archiveLegacyStoragePath(params: {
+  sourcePath: string;
+  label: string;
+  skippedExistingTargets: string[];
+}): void {
+  const archivedLegacyStoragePath = `${params.sourcePath}.migrated`;
+  if (fs.existsSync(archivedLegacyStoragePath)) {
+    params.skippedExistingTargets.push(
+      `- ${params.label} remains at ${params.sourcePath} because ${archivedLegacyStoragePath} already exists`,
+    );
+    return;
+  }
+  fs.renameSync(params.sourcePath, archivedLegacyStoragePath);
 }
 
 function rollbackLegacyMoves(moved: LegacyMoveRecord[]): string | null {
@@ -460,7 +492,7 @@ function rollbackLegacyMoves(moved: LegacyMoveRecord[]): string | null {
 }
 
 function writeStoredRootMetadata(
-  metaPath: string,
+  rootDir: string,
   payload: {
     homeserver?: string;
     userId?: string;
@@ -472,8 +504,11 @@ function writeStoredRootMetadata(
   },
 ): boolean {
   try {
-    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-    fs.writeFileSync(metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    const normalized = normalizeMatrixStorageMetadata(payload);
+    if (!normalized) {
+      return false;
+    }
+    openStorageMetaStore(rootDir).register(STORAGE_META_STATE_KEY, normalized);
     return true;
   } catch {
     return false;
@@ -489,7 +524,7 @@ export function writeStorageMeta(params: {
   currentTokenStateClaimed?: boolean;
 }): boolean {
   const existing = readStoredRootMetadata(params.storagePaths.rootDir);
-  return writeStoredRootMetadata(params.storagePaths.metaPath, {
+  return writeStoredRootMetadata(params.storagePaths.rootDir, {
     homeserver: params.homeserver,
     userId: params.userId,
     accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
@@ -506,13 +541,36 @@ export function claimCurrentTokenStorageState(params: { rootDir: string }): bool
   if (!metadata.accessTokenHash?.trim()) {
     return false;
   }
-  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+  return writeStoredRootMetadata(params.rootDir, {
     homeserver: metadata.homeserver,
     userId: metadata.userId,
     accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
     accessTokenHash: metadata.accessTokenHash,
     deviceId: metadata.deviceId ?? null,
     currentTokenStateClaimed: true,
+    createdAt: metadata.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export function recordCurrentStorageMetaDeviceId(params: {
+  rootDir: string;
+  deviceId: string;
+}): boolean {
+  const deviceId = params.deviceId.trim();
+  if (!deviceId) {
+    return false;
+  }
+  const metadata = readStoredRootMetadata(params.rootDir);
+  if (!metadata.accessTokenHash?.trim()) {
+    return false;
+  }
+  return writeStoredRootMetadata(params.rootDir, {
+    homeserver: metadata.homeserver,
+    userId: metadata.userId,
+    accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+    accessTokenHash: metadata.accessTokenHash,
+    deviceId,
+    currentTokenStateClaimed: metadata.currentTokenStateClaimed === true,
     createdAt: metadata.createdAt ?? new Date().toISOString(),
   });
 }

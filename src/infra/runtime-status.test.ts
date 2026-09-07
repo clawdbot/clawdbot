@@ -1,3 +1,4 @@
+// Covers runtime status formatting.
 import { describe, expect, it } from "vitest";
 import { formatRuntimeStatusWithDetails } from "./runtime-status.js";
 

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="_图层_2" data-name="图层 2" viewBox="0 0 84.47 84.47">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#_未命名的渐变_64);
+      }
+      .cls-1, .cls-4 {
+        stroke-width: 0px;
+      }
+      .cls-4 {
+        fill: #999999;
+      }
+    </style>
+    <radialGradient id="_未命名的渐变_64" data-name="未命名的渐变 64" cx="25.5" cy="102.67" fx="25.5" fy="102.67" r="51.59" gradientTransform="translate(-112.31 94.12) rotate(-75.81) scale(1 1.32)" gradientUnits="userSpaceOnUse">
+      <stop offset=".4" stop-color="#888888"/>
+      <stop offset=".43" stop-color="#878787" stop-opacity=".92"/>
+      <stop offset=".52" stop-color="#868686" stop-opacity=".68"/>
+      <stop offset=".61" stop-color="#858585" stop-opacity=".47"/>
+      <stop offset=".69" stop-color="#858585" stop-opacity=".3"/>
+      <stop offset=".78" stop-color="#848484" stop-opacity=".17"/>
+      <stop offset=".86" stop-color="#848484" stop-opacity=".08"/>
+      <stop offset=".94" stop-color="#848484" stop-opacity=".02"/>
+      <stop offset="1" stop-color="#848484" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="_图层_1-2" data-name="图层 1">
+    <g>
+      <path class="cls-4" d="m42.23,0C18.91,0,0,18.91,0,42.23s18.91,42.23,42.23,42.23,42.23-18.91,42.23-42.23S65.56,0,42.23,0Zm-11.35,69.03h-15.44v-15.44h15.44v15.44Zm19.07,0h-15.44v-15.44h15.44v15.44Zm0-19.08h-15.44v-15.44h15.44v15.44Zm0-19.07h-15.44v-15.44h15.44v15.44Zm19.07,0h-15.44v-15.44h15.44v15.44Z"/>
+      <path class="cls-1" d="m47.24.3C24.08-2.46,3.07,14.07.3,37.23c-2.76,23.16,13.77,44.17,36.92,46.94,23.16,2.76,44.17-13.77,46.94-36.92C86.93,24.08,70.4,3.07,47.24.3Zm-16.36,68.73h-15.44v-15.44h15.44v15.44Zm19.07,0h-15.44v-15.44h15.44v15.44Zm0-19.08h-15.44v-15.44h15.44v15.44Zm0-19.07h-15.44v-15.44h15.44v15.44Zm19.07,0h-15.44v-15.44h15.44v15.44Z"/>
+    </g>
+  </g>
+</svg>

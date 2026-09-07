@@ -1,9 +1,20 @@
+// Duration formatting helpers produce compact, precise, and human display
+// strings from millisecond values.
+import prettyMilliseconds from "pretty-ms";
+import {
+  formatDurationParts,
+  formatSingleUnitDuration,
+  resolveCompactDurationParts,
+} from "./format-duration-internal.js";
+
 export type FormatDurationSecondsOptions = {
   decimals?: number;
   unit?: "s" | "seconds";
 };
 
 export type FormatDurationCompactOptions = {
+  /** Show year units instead of folding them into days. Default: false */
+  showYears?: boolean;
   /** Add space between units: "2m 5s" instead of "2m5s". Default: false */
   spaced?: boolean;
 };
@@ -31,8 +42,9 @@ export function formatDurationPrecise(
   if (!Number.isFinite(ms)) {
     return "unknown";
   }
-  if (ms < 1000) {
-    return `${Math.max(0, Math.round(ms))}ms`;
+  const roundedMs = Math.max(0, Math.round(ms));
+  if (roundedMs < 1000) {
+    return prettyMilliseconds(roundedMs);
   }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,
@@ -50,29 +62,9 @@ export function formatDurationCompact(
   ms?: number | null,
   options?: FormatDurationCompactOptions,
 ): string | undefined {
-  if (ms == null || !Number.isFinite(ms) || ms <= 0) {
-    return undefined;
-  }
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
-  }
-  const sep = options?.spaced ? " " : "";
-  const totalSeconds = Math.round(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours >= 24) {
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    return remainingHours > 0 ? `${days}d${sep}${remainingHours}h` : `${days}d`;
-  }
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h${sep}${minutes}m` : `${hours}h`;
-  }
-  if (minutes > 0) {
-    return seconds > 0 ? `${minutes}m${sep}${seconds}s` : `${minutes}m`;
-  }
-  return `${seconds}s`;
+  const parts = resolveCompactDurationParts(ms, options?.showYears);
+  const formatted = parts && formatDurationParts(parts);
+  return options?.spaced ? formatted : formatted?.replaceAll(" ", "");
 }
 
 /**
@@ -83,21 +75,5 @@ export function formatDurationHuman(ms?: number | null, fallback = "n/a"): strin
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
-  }
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) {
-    return `${sec}s`;
-  }
-  const min = Math.round(sec / 60);
-  if (min < 60) {
-    return `${min}m`;
-  }
-  const hr = Math.round(min / 60);
-  if (hr < 24) {
-    return `${hr}h`;
-  }
-  const day = Math.round(hr / 24);
-  return `${day}d`;
+  return formatSingleUnitDuration(ms);
 }

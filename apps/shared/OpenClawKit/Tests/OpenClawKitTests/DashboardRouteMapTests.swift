@@ -1,0 +1,95 @@
+import Foundation
+import OpenClawKit
+import Testing
+
+struct DashboardRouteMapTests {
+    @Test func `route constants match Control UI paths`() {
+        #expect(DashboardRouteMap.settingsPath == "/settings")
+        #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
+        #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
+        #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
+        #expect(DashboardRouteMap.skillsPagePath == "/skills")
+        #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
+        #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
+        #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
+    }
+
+    @Test(arguments: [
+        DashboardRouteMap.channelsSettingsPath,
+        DashboardRouteMap.skillsPagePath, DashboardRouteMap.cronJobsPagePath,
+        DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
+    ])
+    func `same-app path validation accepts rooted paths`(_ path: String) {
+        #expect(DashboardRouteMap.isValidSameAppPath(path))
+    }
+
+    @Test(arguments: [
+        "",
+        "settings/channels",
+        "//example.com/settings/channels",
+        "https://example.com/settings/channels",
+        "/settings/channels?section=telegram",
+        "/settings/channels#telegram",
+    ])
+    func `same-app path validation rejects external or compound locations`(_ path: String) {
+        #expect(!DashboardRouteMap.isValidSameAppPath(path))
+    }
+
+    @Test func `Dashboard URL appends route and preserves token fragment`() throws {
+        let baseURL = try #require(URL(string: "http://127.0.0.1:18789/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.channelsSettingsPath,
+            to: baseURL))
+
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/settings/channels#token=test-token")
+    }
+
+    @Test(arguments: [
+        DashboardRouteMap.settingsPath,
+        DashboardRouteMap.deviceSettingsPath,
+        DashboardRouteMap.devicePermissionsSettingsPath,
+        DashboardRouteMap.activityPagePath,
+        DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath,
+        DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath,
+        DashboardRouteMap.usagePagePath,
+        DashboardRouteMap.cronJobsPagePath,
+    ])
+    func `device settings routes preserve the Gateway base path and auth fragment`(_ path: String) throws {
+        let baseURL = try #require(URL(string: "https://gateway.example.test/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(byAppendingSameAppPath: path, to: baseURL))
+        #expect(url.path == "/control" + path)
+        #expect(url.fragment == "token=test-token")
+        #expect(url.host == "gateway.example.test")
+    }
+
+    @Test func `Dashboard URL carries a same-app search alongside the token fragment`() throws {
+        let baseURL = try #require(URL(string: "http://127.0.0.1:18789/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.custodianPagePath,
+            search: DashboardRouteMap.custodianOnboardingSearch,
+            to: baseURL))
+
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/custodian?onboarding=1#token=test-token")
+    }
+
+    @Test(arguments: [
+        "", "onboarding=1", "?onboarding=1#x", "?a=b#frag",
+        "?session=%", "?session=%2", "?session=%GG", "?session=has space",
+    ])
+    func `same-app search validation rejects non-query input`(_ search: String) throws {
+        #expect(!DashboardRouteMap.isValidSameAppSearch(search))
+        #expect(try DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.custodianPagePath,
+            search: search,
+            to: #require(URL(string: "http://127.0.0.1:18789/control/"))) == nil)
+    }
+
+    @Test(arguments: ["?onboarding=1", "?session=%E2%9C%93%2Ffoo%25"])
+    func `same-app search validation accepts a plain query`(_ search: String) {
+        #expect(DashboardRouteMap.isValidSameAppSearch(search))
+    }
+}

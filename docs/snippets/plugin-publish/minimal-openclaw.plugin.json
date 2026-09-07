@@ -2,6 +2,9 @@
   "id": "my-plugin",
   "name": "My Plugin",
   "description": "Adds a custom tool to OpenClaw",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false

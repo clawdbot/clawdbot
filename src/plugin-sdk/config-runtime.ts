@@ -1,16 +1,49 @@
-// Shared config/runtime boundary for plugins that need config loading,
-// config writes, or session-store helpers without importing src internals.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer narrower config subpaths such as plugin-config-runtime,
+ * config-mutation, and runtime-config-snapshot.
+ */
+
+export {
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  readSessionUpdatedAt,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "./session-store-runtime.js";
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  requireRuntimeConfig,
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
+} from "./plugin-config-runtime.js";
+export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  /**
+   * @deprecated Use getRuntimeConfig(), runtime.config.current(), or pass the
+   * already loaded config through the call path. Runtime code must not reload
+   * config on demand. Bundled plugins and repo code are blocked from using
+   * this by the deprecated-internal-config-api architecture guard.
+   */
   loadConfig,
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
+  /**
+   * @deprecated Use mutateConfigFile() or replaceConfigFile() with an explicit
+   * afterWrite intent so restart behavior stays under host control. Bundled
+   * plugins and repo code are blocked from using this by the
+   * deprecated-internal-config-api architecture guard.
+   */
   writeConfigFile,
 } from "../config/io.js";
+export { mutateConfigFile, replaceConfigFile } from "../config/mutate.js";
+export type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -26,6 +59,7 @@ export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
@@ -40,11 +74,6 @@ export {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-export {
-  TELEGRAM_COMMAND_NAME_PATTERN,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
@@ -68,12 +97,18 @@ export type {
   DiscordSlashCommandConfig,
   DmConfig,
   DmPolicy,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
   ContextVisibilityMode,
   GroupPolicy,
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  MSTeamsChannelConfig,
+  MSTeamsConfig,
+  MSTeamsReplyStyle,
+  MSTeamsTeamConfig,
   OpenClawConfig,
   ReplyToMode,
   SignalReactionNotificationMode,
@@ -89,24 +124,24 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  ResolvedTtsPersona,
   TtsAutoMode,
   TtsConfig,
   TtsMode,
   TtsModelOverrideConfig,
+  TtsPersonaConfig,
+  TtsPersonaFallbackPolicy,
   TtsProvider,
 } from "../config/types.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  saveSessionStore,
-  updateLastRoute,
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
-export { resolveStorePath } from "../config/sessions/paths.js";
+export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";
 export type { SessionScope } from "../config/sessions/types.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";

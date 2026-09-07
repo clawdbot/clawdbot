@@ -1,0 +1,127 @@
+title: Thread follow-up and native relation
+
+scenario:
+  id: thread-follow-up
+  surface: channels
+  coverage:
+    primary:
+      - channels.thread-parent-child-placement
+      - channels.native-threads
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify a follow-up sent inside a thread receives one reply in the same thread.
+  successCriteria:
+    - The transport accepts a normalized threaded inbound message.
+    - The visible reply carries the same normalized thread id.
+    - No matching reply leaks into the top-level conversation.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - extensions/buzz/src/qa/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    kind: flow
+    channels: [qa-channel, buzz, slack, matrix]
+    summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
+    config:
+      rootMarker: QA-THREAD-ROOT-OK
+      replyMarker: QA-THREAD-FOLLOW-UP-OK
+
+flow:
+  steps:
+    - name: replies inside the originating thread
+      actions:
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "transport.id !== 'crabline' ? 'main' : transport.label.includes('telegram') ? '-1001234567890' : transport.label.includes('slack') ? 'C12345678' : '!qa:matrix.test'"
+        - set: senderId
+          value:
+            expr: "transport.id !== 'crabline' ? 'driver' : transport.label.includes('telegram') ? '100001' : transport.label.includes('slack') ? 'U12345678' : '@driver:matrix.test'"
+        - set: conversationKind
+          value:
+            expr: "transport.id === 'crabline' ? 'group' : 'channel'"
+        - if:
+            expr: transport.id === 'qa-channel'
+            then:
+              - call: handleQaAction
+                saveAs: threadPayload
+                args:
+                  - env:
+                      ref: env
+                    action: thread-create
+                    args:
+                      channelId:
+                        ref: conversationId
+                      title: QA thread follow-up
+              - set: threadId
+                value:
+                  expr: threadPayload?.thread?.id
+            else:
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind:
+                      ref: conversationKind
+                  senderId:
+                    ref: senderId
+                  senderName: QA Driver
+                  text:
+                    expr: "`@openclaw Reply exactly: ${config.rootMarker}`"
+                saveAs: rootInbound
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind:
+                      ref: conversationKind
+                  textIncludes:
+                    ref: config.rootMarker
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 45000)
+              - set: threadId
+                value:
+                  expr: rootInbound.id
+        - assert:
+            expr: Boolean(threadId)
+            message: missing thread id
+        - set: outboundStartIndex
+          value:
+            expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            senderId:
+              ref: senderId
+            senderName: QA Driver
+            text:
+              expr: "`${transport.id === 'qa-channel' ? '' : '@openclaw '}Reply exactly: ${config.replyMarker}`"
+            threadId:
+              ref: threadId
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.replyMarker
+            threadId:
+              ref: threadId
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+          saveAs: outbound
+        - assert:
+            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.replyMarker) && candidate.threadId !== threadId)"
+            message:
+              expr: "`thread reply leaked outside ${threadId}; transcript=${formatTransportTranscript(state, { conversationId })}`"
+      detailsExpr: "`${outbound.threadId}: ${outbound.text}`"

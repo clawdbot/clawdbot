@@ -1,6 +1,9 @@
+// Windows command shim helpers create test shims for Windows command execution.
 import fs from "node:fs/promises";
 import path from "node:path";
 
+// Creates a tiny Windows .cmd shim plus target script for command-resolution
+// tests that need to verify shim parsing without invoking npm-installed bins.
 export async function createWindowsCmdShimFixture(params: {
   shimPath: string;
   scriptPath: string;

@@ -1,51 +1,60 @@
+// Delivers ACP turn results through reply payload routing.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
-import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+  buildCaptionedFinalTextFallback,
+  cleanDeferredFinalText,
+  isCaptionedFinalTextPayload,
+  mergeDeferredFinalText,
+} from "../../tts/captioned-final.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import {
+  copyReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  isReplyPayloadTtsSupplement,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { maybeApplyAcpTts, prepareAcpDeliveryPayload } from "./dispatch-acp-payload.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
+import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
+import {
+  attachReplyDispatchUndeliveredFallback,
+  captureReplyDispatchDeliveryOutcome,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import {
+  createReplyDeliveryContext,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
-  null;
-let channelPluginRuntimePromise: Promise<typeof import("../../channels/plugins/index.js")> | null =
-  null;
-let messageActionRuntimePromise: Promise<
-  typeof import("../../infra/outbound/message-action-runner.js")
-> | null = null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const channelPluginRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/plugins/index.js"),
+);
+const messageActionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/message-action-runner.js"),
+);
 
-function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
-}
-
-function loadDispatchAcpTtsRuntime() {
-  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
-  return dispatchAcpTtsRuntimePromise;
-}
-
-function loadChannelPluginRuntime() {
-  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
-  return channelPluginRuntimePromise;
-}
-
-function loadMessageActionRuntime() {
-  messageActionRuntimePromise ??= import("../../infra/outbound/message-action-runner.js");
-  return messageActionRuntimePromise;
-}
-
-export type AcpDispatchDeliveryMeta = {
+type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
   skipTts?: boolean;
+  /** Transport-only finals retain their runtime source instead of adding final text. */
+  transcriptSource?: { kind: "blocks" | "fallback" } | { kind: "final"; text: string };
 };
 
 type ToolMessageHandle = {
@@ -60,7 +69,6 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
   text: string | undefined;
-  routed: boolean;
 }): Promise<boolean> {
   if (!normalizeOptionalString(params.text)) {
     return false;
@@ -72,7 +80,7 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   if (!channelId) {
     return false;
   }
-  const { getChannelPlugin } = await loadChannelPluginRuntime();
+  const { getChannelPlugin } = await channelPluginRuntimeLoader.load();
   const outbound = getChannelPlugin(channelId)?.outbound;
   const visibilityOverride =
     outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
@@ -82,132 +90,161 @@ async function shouldTreatDeliveredTextAsVisible(params: {
       text: params.text,
     });
   }
-  if (!params.routed) {
-    return channelId === "telegram";
-  }
   return false;
 }
 
-async function maybeApplyAcpTts(params: {
-  payload: ReplyPayload;
-  cfg: OpenClawConfig;
-  channel?: string;
-  kind: ReplyDispatchKind;
-  inboundAudio: boolean;
-  ttsAuto?: TtsAutoMode;
-  skipTts?: boolean;
-}): Promise<ReplyPayload> {
-  if (params.skipTts) {
-    return params.payload;
-  }
-  const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: params.cfg,
-    sessionAuto: params.ttsAuto,
-  });
-  if (!ttsStatus) {
-    return params.payload;
-  }
-  if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
-    return params.payload;
-  }
-  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg) === "final") {
-    return params.payload;
-  }
-  const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
-  return await maybeApplyTtsToPayload({
-    payload: params.payload,
-    cfg: params.cfg,
-    channel: params.channel,
-    kind: params.kind,
-    inboundAudio: params.inboundAudio,
-    ttsAuto: params.ttsAuto,
-  });
-}
+type AcpBlockText = {
+  text: string;
+  transcriptText?: string;
+  needsFinalDelivery: boolean;
+  // A terminal-only surface can confirm a block yet still need final delivery.
+  delivered?: true;
+};
 
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
-  accumulatedBlockText: string;
-  blockCount: number;
+  blockTexts: AcpBlockText[];
+  accumulatedBlockTtsText: string;
+  accumulatedFinalText: string;
+  accumulatedDeliveredFinalText: string;
+  pendingTranscriptOutcomes: Promise<void>[];
+  cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   deliveredFinalReply: boolean;
+  pendingAnswerDelivery: boolean;
+  pendingFinalTtsMedia: boolean;
+  deliveredAnswerFinalToUser: boolean;
+  deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
-  queuedDirectVisibleTextDeliveries: number;
-  settledDirectVisibleText: boolean;
+  queuedUntrackedVisibleTextDeliveries: number;
+  settledUntrackedVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
+  suppressionReason?: NormalizeReplySkipReason;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
-export type AcpDispatchDeliveryCoordinator = {
-  startReplyLifecycle: () => Promise<void>;
-  deliver: (
-    kind: ReplyDispatchKind,
-    payload: ReplyPayload,
-    meta?: AcpDispatchDeliveryMeta,
-  ) => Promise<boolean>;
-  getBlockCount: () => number;
-  getAccumulatedBlockText: () => string;
-  settleVisibleText: () => Promise<void>;
-  hasDeliveredFinalReply: () => boolean;
-  hasDeliveredVisibleText: () => boolean;
-  hasFailedVisibleTextDelivery: () => boolean;
-  getRoutedCounts: () => Record<ReplyDispatchKind, number>;
-  applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
-};
+export type AcpDispatchDeliveryCoordinator = ReturnType<
+  typeof createAcpDispatchDeliveryCoordinator
+>;
 
 export function createAcpDispatchDeliveryCoordinator(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
+  sessionKey?: string;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressBlockUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   onReplyStart?: () => Promise<void> | void;
-}): AcpDispatchDeliveryCoordinator {
+  abortSignal?: AbortSignal;
+  runId?: string;
+}) {
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
+  const explicitAccountId =
+    normalizeOptionalString(params.originatingAccountId) ??
+    normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId = resolveReplyDeliveryAccountId(
+    params.cfg,
+    routedChannel ?? directChannel,
+    explicitAccountId,
+  );
+  const routedReplyDelivery = params.originatingChannel
+    ? createReplyDeliveryContext(
+        resolveReplyToMode(
+          params.cfg,
+          params.originatingChannel,
+          resolvedAccountId,
+          params.originatingChatType ?? params.ctx.ChatType,
+        ),
+        params.originatingChatType ?? params.ctx.ChatType,
+      )
+    : undefined;
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
-    accumulatedBlockText: "",
-    blockCount: 0,
+    blockTexts: [],
+    accumulatedBlockTtsText: "",
+    accumulatedFinalText: "",
+    accumulatedDeliveredFinalText: "",
+    pendingTranscriptOutcomes: [],
+    cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
+      cfg: params.cfg,
+      ttsAuto: params.sessionTtsAuto,
+      agentId: params.agentId,
+      channelId: params.ttsChannel,
+      accountId: resolvedAccountId,
+    })
+      ? createTtsDirectiveTextStreamCleaner()
+      : undefined,
     deliveredFinalReply: false,
+    pendingAnswerDelivery: false,
+    pendingFinalTtsMedia: false,
+    deliveredAnswerFinalToUser: false,
+    deliveredFinalTtsMedia: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
-    queuedDirectVisibleTextDeliveries: 0,
-    settledDirectVisibleText: false,
+    queuedUntrackedVisibleTextDeliveries: 0,
+    settledUntrackedVisibleText: false,
     routedCounts: {
       tool: 0,
       block: 0,
       final: 0,
     },
+    suppressionReason: undefined,
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const resolvedAccountId =
-    explicitAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
-    );
+  let hasPendingDirectBlockReplyDelivery = false;
 
-  const settleDirectVisibleText = async () => {
-    if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
+  const waitForPendingDirectBlockReplyDelivery = async () => {
+    if (!hasPendingDirectBlockReplyDelivery) {
       return;
     }
-    state.settledDirectVisibleText = true;
-    await params.dispatcher.waitForIdle();
-    const failedCounts = params.dispatcher.getFailedCounts();
-    const failedVisibleCount = failedCounts.block + failedCounts.final;
-    if (failedVisibleCount > 0) {
-      state.failedVisibleTextDelivery = true;
+    // ACP direct block replies should not block the common visible-reply path.
+    // Defer the idle wait until a later tool delivery would otherwise overtake
+    // that block reply in user-visible ordering.
+    hasPendingDirectBlockReplyDelivery = false;
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+  };
+  const settleDirectVisibleText = async () => {
+    // Exact payload settlements own custody and coverage before final fallback reads them.
+    await waitForReplyDispatcherIdle(
+      {
+        waitForIdle: async () => {
+          await Promise.all(state.pendingTranscriptOutcomes);
+        },
+      },
+      params.abortSignal,
+    );
+    if (params.abortSignal?.aborted) {
+      return;
     }
-    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
-      state.deliveredVisibleText = true;
+    hasPendingDirectBlockReplyDelivery = false;
+    if (state.settledUntrackedVisibleText || state.queuedUntrackedVisibleTextDeliveries === 0) {
+      return;
     }
+    state.settledUntrackedVisibleText = true;
+    const receipt = await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+    if (!receipt) {
+      return;
+    }
+    const visibleCounts = [receipt.counts.block, receipt.counts.final];
+    state.failedVisibleTextDelivery ||= visibleCounts.some(
+      (counts) => counts.failedBeforeSend + counts.failedAfterSend > 0,
+    );
+    state.deliveredVisibleText ||= visibleCounts.some(
+      (counts) => counts.delivered + counts.failedAfterSend > 0,
+    );
   };
 
   const startReplyLifecycleOnce = async () => {
@@ -215,14 +252,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
-    // onReplyStart callback — channels wire it to typing indicators / lifecycle
-    // notifications that should not leak outbound events while the session is
-    // under a deny policy. See #53328.
-    if (params.suppressUserDelivery) {
+    // Delivery and lifecycle suppression are separate: message-tool-only turns
+    // suppress automatic user delivery but still need typing/lifecycle signals.
+    if (params.suppressReplyLifecycle) {
       return;
     }
-    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+    void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -246,18 +281,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
 
     try {
-      const { runMessageAction } = await loadMessageActionRuntime();
+      const { runMessageAction } = await messageActionRuntimeLoader.load();
       await runMessageAction({
         cfg: params.cfg,
         action: "edit",
         params: {
           channel: handle.channel,
-          accountId: handle.accountId,
           to: handle.to,
           threadId: handle.threadId,
           messageId: handle.messageId,
           message,
         },
+        defaultAccountId: handle.accountId,
         sessionKey: params.ctx.SessionKey,
         requesterAccountId: params.ctx.AccountId,
       });
@@ -276,31 +311,210 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && normalizeOptionalString(payload.text)) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
+    const transcriptSource = meta?.transcriptSource;
+    // Snapshot coverage before preparation/TTS can yield to another payload.
+    const coveredBlocks =
+      kind === "final"
+        ? state.blockTexts.filter(
+            (block) => transcriptSource?.kind === "blocks" || block.needsFinalDelivery,
+          )
+        : [];
+    const coverFinalBlockText = (source: ReplyPayload) => {
+      if (
+        !source.text?.trim() ||
+        source.isCommentary ||
+        source.isReasoning ||
+        isReplyPayloadStatusNotice(source)
+      ) {
+        return;
       }
-      state.accumulatedBlockText += payload.text;
-      state.blockCount += 1;
+      for (const block of coveredBlocks) {
+        block.needsFinalDelivery = false;
+      }
+    };
+    let visiblePayload = payload;
+    if (!params.suppressUserDelivery) {
+      const routed = params.shouldRouteToOriginating && routedChannel !== undefined;
+      const messaging = routed
+        ? (await channelPluginRuntimeLoader.load()).getChannelPlugin(routedChannel)?.messaging
+        : undefined;
+      const prepared = prepareAcpDeliveryPayload({
+        cfg: params.cfg,
+        dispatcher: params.dispatcher,
+        kind,
+        payload,
+        routed,
+        ...(messaging ? { messaging } : {}),
+        accountId: resolvedAccountId,
+      });
+      if (prepared.kind === "suppress") {
+        if (prepared.reason === "channel_transform") {
+          state.suppressionReason = prepared.reason;
+          coverFinalBlockText(payload);
+        }
+        return false;
+      }
+      visiblePayload = prepared.payload;
     }
+    const isStatusNotice = isReplyPayloadStatusNotice(visiblePayload);
+    const rawBlockPayloadText =
+      kind === "block" ? normalizeOptionalString(visiblePayload.text) : undefined;
+    const rawBlockText = isStatusNotice ? undefined : rawBlockPayloadText;
+    let blockText: AcpBlockText | undefined;
+    if (rawBlockPayloadText) {
+      const joinsBufferedTtsDirective =
+        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
+      if (rawBlockText) {
+        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+          state.accumulatedBlockTtsText += "\n";
+        }
+        state.accumulatedBlockTtsText += rawBlockText;
+      }
 
-    if (hasOutboundReplyContent(payload, { trimText: true })) {
-      await startReplyLifecycleOnce();
+      if (state.cleanBlockTtsDirectiveText && rawBlockText) {
+        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        visiblePayload = copyReplyPayloadMetadata(visiblePayload, {
+          ...visiblePayload,
+          text: text.trim() ? text : undefined,
+        });
+      }
+      if (visiblePayload.text || rawBlockText) {
+        blockText = {
+          text: visiblePayload.text ?? "",
+          transcriptText: rawBlockText,
+          needsFinalDelivery: Boolean(visiblePayload.text),
+        };
+        state.blockTexts.push(blockText);
+      }
     }
+    const rawFinalText =
+      kind === "final" && !isStatusNotice
+        ? normalizeOptionalString(visiblePayload.text)
+        : undefined;
+    if (rawFinalText && !transcriptSource) {
+      if (state.accumulatedFinalText.length > 0) {
+        state.accumulatedFinalText += "\n";
+      }
+      state.accumulatedFinalText += rawFinalText;
+    }
+    const transcriptFinalText = !transcriptSource
+      ? rawFinalText
+      : transcriptSource.kind === "final"
+        ? transcriptSource.text
+        : undefined;
+
+    if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
+      return false;
+    }
+    await startReplyLifecycleOnce();
 
     if (params.suppressUserDelivery) {
       return false;
     }
+    if (
+      kind === "block" &&
+      params.suppressBlockUserDelivery &&
+      !isStatusNotice &&
+      !visiblePayload.isReasoning &&
+      !visiblePayload.isCommentary
+    ) {
+      const hasNonTextContent = Boolean(
+        visiblePayload.mediaUrl ||
+        visiblePayload.mediaUrls?.length ||
+        visiblePayload.presentation ||
+        visiblePayload.interactive ||
+        visiblePayload.channelData,
+      );
+      if (!hasNonTextContent) {
+        return false;
+      }
+      visiblePayload = copyReplyPayloadMetadata(visiblePayload, {
+        ...visiblePayload,
+        text: undefined,
+      });
+    }
 
-    const ttsPayload = await maybeApplyAcpTts({
-      payload,
+    const appliedTtsPayload = await maybeApplyAcpTts({
+      payload: visiblePayload,
       cfg: params.cfg,
+      agentId: params.agentId,
       channel: params.ttsChannel,
+      accountId: resolvedAccountId,
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,
       skipTts: meta?.skipTts,
     });
+    const finalVisibleTextSource =
+      kind === "final" && params.suppressBlockUserDelivery && state.cleanBlockTtsDirectiveText
+        ? meta?.skipTts || visiblePayload.isError || isReplyPayloadTtsSupplement(visiblePayload)
+          ? visiblePayload.text
+          : mergeDeferredFinalText(state.accumulatedBlockTtsText, visiblePayload.text)
+        : undefined;
+    const ttsPayload =
+      finalVisibleTextSource !== undefined
+        ? copyReplyPayloadMetadata(appliedTtsPayload, {
+            ...appliedTtsPayload,
+            text: cleanDeferredFinalText(finalVisibleTextSource) || undefined,
+          })
+        : appliedTtsPayload;
+    const hasFinalTtsMedia = kind === "final" && isReplyPayloadTtsSupplement(ttsPayload);
+    const isAnswerBearingFinal =
+      kind === "final" &&
+      (isCaptionedFinalTextPayload(visiblePayload) ||
+        (hasFinalTtsMedia && Boolean(ttsPayload.text?.trim())));
+
+    const recordPendingDelivery = (tracksVisibleText: boolean) => {
+      if (blockText && tracksVisibleText) {
+        blockText.needsFinalDelivery = false;
+      }
+      // Coverage belongs to this payload. Hidden text and independent final audio
+      // remain deliverable, and commentary never stands in for an answer.
+      const pendingAnswer =
+        tracksVisibleText &&
+        kind !== "tool" &&
+        !isStatusNotice &&
+        !ttsPayload.isCommentary &&
+        !ttsPayload.isReasoning;
+      state.pendingAnswerDelivery ||= pendingAnswer;
+      coverFinalBlockText(ttsPayload);
+      state.pendingFinalTtsMedia ||= hasFinalTtsMedia;
+    };
+    const recordFinalReply = () => {
+      if (kind === "final") {
+        state.deliveredFinalReply = true;
+        // A generated final owns the answer; a block-derived send owns only its snapshot.
+        state.deliveredAnswerFinalToUser ||=
+          isAnswerBearingFinal && (!transcriptSource || transcriptSource.kind === "final");
+        state.deliveredFinalTtsMedia ||= hasFinalTtsMedia;
+        coverFinalBlockText(ttsPayload);
+      }
+    };
+    const recordDeliveredReply = (tracksVisibleText: boolean) => {
+      if (blockText) {
+        blockText.delivered = true;
+      }
+      if (
+        (rawFinalText || hasFinalTtsMedia) &&
+        transcriptSource &&
+        transcriptSource.kind !== "final"
+      ) {
+        for (const block of coveredBlocks) {
+          block.delivered = true;
+        }
+      } else if (transcriptFinalText) {
+        state.accumulatedDeliveredFinalText = state.accumulatedDeliveredFinalText
+          ? `${state.accumulatedDeliveredFinalText}\n${transcriptFinalText}`
+          : transcriptFinalText;
+      }
+      recordFinalReply();
+      if (tracksVisibleText) {
+        state.deliveredVisibleText = true;
+        if (blockText) {
+          blockText.needsFinalDelivery = false;
+        }
+      }
+    };
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = normalizeOptionalString(meta?.toolCallId);
@@ -315,23 +529,60 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         channel: routedChannel,
         kind,
         text: ttsPayload.text,
-        routed: true,
       });
-      const { routeReply } = await loadRouteReplyRuntime();
+      const { routeReply } = await routeReplyRuntimeLoader.load();
+      const threadId =
+        params.originatingThreadId ??
+        resolveRoutedDeliveryThreadId({
+          ctx: params.ctx,
+          sessionKey: deliverySessionKey,
+        });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
+        agentId: params.agentId,
+        sessionKey: deliverySessionKey,
+        ...(deliverySessionKey !== params.ctx.SessionKey
+          ? { policySessionKey: params.ctx.SessionKey }
+          : {}),
         accountId: resolvedAccountId,
         requesterSenderId: params.ctx.SenderId,
         requesterSenderName: params.ctx.SenderName,
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
-        threadId: params.ctx.MessageThreadId,
+        threadId,
+        replyDelivery: routedReplyDelivery,
         cfg: params.cfg,
+        abortSignal: params.abortSignal,
+        mirror: false,
+        replyKind: kind,
+        runId: params.runId,
       });
-      if (!result.ok) {
+      const pending = !result.delivered && (result.queueCustody === "held" || result.ambiguous);
+      if (blockText && tracksVisibleText && result.suppressed) {
+        blockText.needsFinalDelivery = false;
+      }
+      if (pending) {
+        recordPendingDelivery(tracksVisibleText);
+        return true;
+      }
+      if (!result.delivered && hasFinalTtsMedia && ttsPayload.text?.trim()) {
+        if (!result.suppressed) {
+          logVerbose(
+            `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        return await deliver(
+          "final",
+          { text: ttsPayload.text },
+          {
+            skipTts: true,
+            transcriptSource: transcriptSource ?? { kind: "final", text: rawFinalText ?? "" },
+          },
+        );
+      }
+      if (!result.delivered && !result.suppressed) {
         if (tracksVisibleText) {
           state.failedVisibleTextDelivery = true;
         }
@@ -340,60 +591,146 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         );
         return false;
       }
+      if (result.suppressed) {
+        if (kind === "final") {
+          state.deliveredFinalReply = true;
+        }
+        if (tracksVisibleText) {
+          state.deliveredVisibleText = true;
+        }
+        return true;
+      }
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-acp: route-reply (acp/${kind}) partially failed after delivery: ${
+            result.error ?? "unknown error"
+          }`,
+        );
+      }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: params.originatingChannel,
           accountId: resolvedAccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(threadId != null ? { threadId } : {}),
           messageId: result.messageId,
         });
       }
-      if (kind === "final") {
-        state.deliveredFinalReply = true;
-      }
-      if (tracksVisibleText) {
-        state.deliveredVisibleText = true;
-      }
+      recordDeliveredReply(tracksVisibleText);
       state.routedCounts[kind] += 1;
       return true;
+    }
+
+    if (kind === "tool") {
+      await waitForPendingDirectBlockReplyDelivery();
     }
 
     const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
       channel: directChannel,
       kind,
       text: ttsPayload.text,
-      routed: false,
     });
+    const transcriptOutcome =
+      kind !== "tool" ? captureReplyDispatchDeliveryOutcome(ttsPayload) : undefined;
+    if (hasFinalTtsMedia && ttsPayload.text?.trim()) {
+      attachReplyDispatchUndeliveredFallback(
+        ttsPayload,
+        buildCaptionedFinalTextFallback(ttsPayload),
+      );
+    }
     const delivered =
       kind === "tool"
         ? params.dispatcher.sendToolResult(ttsPayload)
         : kind === "block"
           ? params.dispatcher.sendBlockReply(ttsPayload)
           : params.dispatcher.sendFinalReply(ttsPayload);
-    if (kind === "final" && delivered) {
-      state.deliveredFinalReply = true;
-    }
-    if (delivered && tracksVisibleText) {
-      state.queuedDirectVisibleTextDeliveries += 1;
-      state.settledDirectVisibleText = false;
+    if (delivered && transcriptOutcome?.isTracked()) {
+      const settlement = transcriptOutcome.promise.then((outcome) => {
+        if (transcriptOutcome.hasPendingDelivery()) {
+          recordPendingDelivery(tracksVisibleText);
+        } else if (outcome === "delivered") {
+          recordDeliveredReply(tracksVisibleText);
+        } else {
+          if (!shouldRetryReplyDispatch(outcome)) {
+            // The dispatcher's terminal decision covers only text included in this attempt.
+            if (blockText && ttsPayload.text?.trim()) {
+              blockText.needsFinalDelivery = false;
+            }
+            coverFinalBlockText(ttsPayload);
+          }
+          if (tracksVisibleText) {
+            state.failedVisibleTextDelivery ||=
+              outcome === "failed-before-deliver" || outcome === "failed-deliver";
+            state.deliveredVisibleText ||= outcome === "failed-deliver";
+          }
+        }
+      });
+      state.pendingTranscriptOutcomes.push(settlement);
+      if (kind === "final") {
+        // Outer dispatch races cancellation. This owner retains the admitted final
+        // until its receipt can safely decide fallback and cancelled-turn history.
+        await settlement;
+      }
+    } else if (delivered) {
+      recordFinalReply();
+      if (tracksVisibleText) {
+        state.queuedUntrackedVisibleTextDeliveries += 1;
+        state.settledUntrackedVisibleText = false;
+      }
     } else if (!delivered && tracksVisibleText) {
       state.failedVisibleTextDelivery = true;
+    }
+    if (kind === "block" && delivered) {
+      hasPendingDirectBlockReplyDelivery = true;
     }
     return delivered;
   };
 
+  const getBlockTranscriptText = (confirmedOnly = false) =>
+    state.blockTexts
+      .flatMap((block) =>
+        block.transcriptText && (!confirmedOnly || block.delivered) ? [block.transcriptText] : [],
+      )
+      .join("\n");
+
   return {
     startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
-    getBlockCount: () => state.blockCount,
-    getAccumulatedBlockText: () => state.accumulatedBlockText,
+    getAccumulatedVisibleBlockText: () =>
+      state.blockTexts.flatMap((block) => (block.text ? [block.text] : [])).join("\n"),
+    getBlockTextForFallback: () => {
+      if (
+        state.deliveredAnswerFinalToUser ||
+        (!params.shouldRouteToOriginating &&
+          state.queuedUntrackedVisibleTextDeliveries > 0 &&
+          !params.suppressBlockUserDelivery &&
+          state.deliveredVisibleText &&
+          !state.failedVisibleTextDelivery)
+      ) {
+        return "";
+      }
+      const blocks = state.blockTexts.filter((block) => block.needsFinalDelivery);
+      return params.suppressBlockUserDelivery && blocks.length > 0
+        ? cleanDeferredFinalText(state.accumulatedBlockTtsText)
+        : blocks.map((block) => block.text).join("\n");
+    },
+    getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
+    getAccumulatedTranscriptText: () => state.accumulatedFinalText || getBlockTranscriptText(),
+    resolveAccumulatedDeliveredTranscriptText: async () => {
+      await Promise.all(state.pendingTranscriptOutcomes.splice(0));
+      return state.accumulatedDeliveredFinalText || getBlockTranscriptText(true);
+    },
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasPendingAnswerDelivery: () => state.pendingAnswerDelivery,
+    hasPendingFinalTtsMedia: () => state.pendingFinalTtsMedia,
+    hasDeliveredAnswerFinalToUser: () => state.deliveredAnswerFinalToUser,
+    hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
+    getDeliverySuppressionReason: () => state.suppressionReason,
     getRoutedCounts: () => ({ ...state.routedCounts }),
-    applyRoutedCounts: (counts) => {
+    applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
       counts.final += state.routedCounts.final;

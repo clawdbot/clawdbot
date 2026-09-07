@@ -1,0 +1,7 @@
+<resources>
+    <string-array name="ask_openclaw_query_patterns">
+        <item>"OpenClaw से पूछें %1$s"</item>
+        <item>"OpenClaw से %1$s करने को कहें"</item>
+        <item>"OpenClaw खोलें और पूछें %1$s"</item>
+    </string-array>
+</resources>

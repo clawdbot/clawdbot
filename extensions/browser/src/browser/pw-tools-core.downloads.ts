@@ -1,255 +1,298 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
+/**
+ * File chooser, dialog, and download helpers for Playwright-backed browser
+ * tools.
+ */
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
+import type { BrowserDownloadResult } from "./download-types.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
+  armObservedDialogResponseOnPage,
   ensurePageState,
   getPageForTargetId,
   refLocator,
+  respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
 import {
-  bumpDialogArmId,
+  clickViaPlaywright,
+  setFileChooserFilesViaPlaywright,
+} from "./pw-tools-core.interactions.js";
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+  type NavigationTargetOptions,
+} from "./pw-tools-core.interactions.navigation.js";
+import {
   bumpDownloadArmId,
   bumpUploadArmId,
   normalizeTimeoutMs,
   requireRef,
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
-function buildTempDownloadPath(fileName: string): string {
-  const id = crypto.randomUUID();
-  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
-  return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
+async function dismissFileChooser(page: Page): Promise<void> {
+  await page.keyboard.press("Escape").catch(() => {});
 }
 
-function createPageDownloadWaiter(page: Page, timeoutMs: number) {
-  let done = false;
-  let timer: NodeJS.Timeout | undefined;
-  let handler: ((download: unknown) => void) | undefined;
-
-  const cleanup = () => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    timer = undefined;
-    if (handler) {
-      page.off("download", handler as never);
-      handler = undefined;
-    }
-  };
-
-  const promise = new Promise<unknown>((resolve, reject) => {
-    handler = (download: unknown) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      resolve(download);
-    };
-
-    page.on("download", handler as never);
-    timer = setTimeout(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      reject(new Error("Timeout waiting for download"));
-    }, timeoutMs);
-  });
-
-  return {
-    promise,
-    cancel: () => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-    },
-  };
-}
-
-type DownloadPayload = {
-  url?: () => string;
-  suggestedFilename?: () => string;
-  saveAs?: (outPath: string) => Promise<void>;
+type ActiveUpload = {
+  controller: AbortController;
+  settled: Promise<void>;
 };
 
-async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
-  const suggested = download.suggestedFilename?.() || "download.bin";
-  const requestedPath = outPath?.trim();
-  const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
-  await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
+const activeUploads = new WeakMap<Page, ActiveUpload>();
 
-  if (!requestedPath) {
-    await download.saveAs?.(resolvedOutPath);
-  } else {
-    await writeViaSiblingTempPath({
-      rootDir: path.dirname(resolvedOutPath),
-      targetPath: resolvedOutPath,
-      writeTemp: async (tempPath) => {
-        await download.saveAs?.(tempPath);
-      },
-    });
-  }
-
-  return {
-    url: download.url?.() || "",
-    suggestedFilename: suggested,
-    path: resolvedOutPath,
-  };
-}
-
-async function awaitDownloadPayload(params: {
-  waiter: ReturnType<typeof createPageDownloadWaiter>;
+function createExplicitDownloadCapture(params: {
+  page: Page;
   state: ReturnType<typeof ensurePageState>;
-  armId: number;
+  timeoutMs: number;
   outPath?: string;
+  rootDir?: string;
+  signal?: AbortSignal;
 }) {
-  try {
-    const download = (await params.waiter.promise) as DownloadPayload;
-    if (params.state.armIdDownload !== params.armId) {
-      throw new Error("Download was superseded by another waiter");
-    }
-    return await saveDownloadPayload(download, params.outPath ?? "");
-  } catch (err) {
-    params.waiter.cancel();
-    throw err;
-  }
+  params.state.armIdDownload = bumpDownloadArmId();
+  const armId = params.state.armIdDownload;
+  return createDownloadCaptureForPage(params.page, params.state, params.timeoutMs, {
+    mode: "explicit",
+    outputPath: params.outPath,
+    outputRoot: params.rootDir,
+    signal: params.signal,
+    beforeSave: () => {
+      if (params.state.armIdDownload !== armId) {
+        throw new Error("Download was superseded by another waiter");
+      }
+    },
+  });
 }
 
-export async function armFileUploadViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
+function resolveImplicitDownloadRoot(): string {
+  return path.join(resolvePreferredOpenClawTmpDir(), "downloads");
+}
+
+type UploadOptions = NavigationTargetOptions & {
+  ref?: string;
   paths?: string[];
   timeoutMs?: number;
-}): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  const state = ensurePageState(page);
-  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 120_000));
+  signal?: AbortSignal;
+};
 
-  state.armIdUpload = bumpUploadArmId();
-  const armId = state.armIdUpload;
-
-  void page
-    .waitForEvent("filechooser", { timeout })
-    .then(async (fileChooser) => {
-      if (state.armIdUpload !== armId) {
-        return;
+async function runFileUpload(opts: UploadOptions): Promise<void> {
+  opts.signal?.throwIfAborted();
+  const atomic = opts.ref !== undefined;
+  const armId = bumpUploadArmId();
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  const controller = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  const armed = createDeferred<void>();
+  let started = false;
+  let deadline = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const startDeadline = () => {
+    deadline = Date.now() + timeout;
+    timer = setTimeout(
+      () =>
+        controller.abort(new Error(`Timeout ${timeout}ms exceeded while completing file upload`)),
+      timeout,
+    );
+  };
+  if (atomic) {
+    startDeadline();
+  }
+  const completion = (async () => {
+    const page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
+    signal.throwIfAborted();
+    const state = ensurePageState(page);
+    // Page lookup may finish out of order. Only a newer request can replace
+    // this page's owner; unrelated tabs share no chooser or cleanup queue.
+    if (state.armIdUpload > armId) {
+      throw new Error("File upload was superseded by another waiter");
+    }
+    state.armIdUpload = armId;
+    const previous = activeUploads.get(page);
+    const execution = Promise.resolve().then(async () => {
+      // A cancelled queued caller may return early, but its successor must
+      // still join every older native action before installing a new waiter.
+      await previous?.settled;
+      signal.throwIfAborted();
+      started = true;
+      if (!atomic) {
+        startDeadline();
       }
-      if (!opts.paths?.length) {
-        // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
-        try {
-          await page.keyboard.press("Escape");
-        } catch {
-          // Best-effort.
-        }
-        return;
-      }
-      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-        rootDir: DEFAULT_UPLOAD_DIR,
-        requestedPaths: opts.paths,
-        scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-      });
-      if (!uploadPathsResult.ok) {
-        try {
-          await page.keyboard.press("Escape");
-        } catch {
-          // Best-effort.
-        }
-        return;
-      }
-      await fileChooser.setFiles(uploadPathsResult.paths);
+      const chooser = page.waitForEvent("filechooser", { timeout: 0, signal });
+      void chooser.catch(() => {});
+      armed.resolve();
       try {
-        const input =
-          typeof fileChooser.element === "function"
-            ? await Promise.resolve(fileChooser.element())
-            : null;
-        if (input) {
-          await input.evaluate((el) => {
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
+        if (atomic) {
+          await clickViaPlaywright({
+            ...opts,
+            ref: opts.ref!,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            resolvedPage: page,
+            signal,
           });
         }
-      } catch {
-        // Best-effort for sites that don't react to setFiles alone.
+        const fileChooser = await chooser;
+        signal.throwIfAborted();
+        let paths = opts.paths ?? [];
+        if (!atomic) {
+          const resolved = await awaitActionWithAbort(
+            resolveStrictExistingUploadPaths({ requestedPaths: paths }),
+            abortPromise,
+          );
+          signal.throwIfAborted();
+          if (!paths.length || !resolved.ok) {
+            await dismissFileChooser(page);
+            return;
+          }
+          paths = resolved.paths;
+        }
+        await setFileChooserFilesViaPlaywright({
+          ...opts,
+          page,
+          fileChooser,
+          paths,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          signal,
+        });
+        signal.throwIfAborted();
+      } catch (error) {
+        controller.abort(error);
+        if (
+          error instanceof Error &&
+          error.name === "AbortError" &&
+          error.cause === signal.reason
+        ) {
+          signal.throwIfAborted();
+        }
+        throw error;
+      } finally {
+        await chooser.catch(() => {});
       }
-    })
-    .catch(() => {
-      // Ignore timeouts; the chooser may never appear.
     });
+    const active = {
+      controller,
+      settled: execution.then(
+        () => {},
+        () => {},
+      ),
+    };
+    activeUploads.set(page, active);
+    previous?.controller.abort(new Error("File upload was superseded by another waiter"));
+    try {
+      await execution;
+    } finally {
+      if (activeUploads.get(page) === active) {
+        activeUploads.delete(page);
+      }
+    }
+  })().finally(() => {
+    clearTimeout(timer);
+    cleanup();
+  });
+  // Passive arming intentionally outlives this call; its errors are contained.
+  void completion.catch(() => {});
+  try {
+    await awaitActionWithAbort(
+      atomic ? completion : Promise.race([armed.promise, completion]),
+      abortPromise,
+    );
+  } catch (error) {
+    if (atomic && started) {
+      await completion;
+    }
+    throw error;
+  }
 }
 
+/** Arms the next page file chooser and fills it with strict existing paths. */
+export async function armFileUploadViaPlaywright(
+  opts: Omit<UploadOptions, "ref" | "signal">,
+): Promise<void> {
+  await runFileUpload(opts);
+}
+
+/** Clicks a ref and completes its file chooser as one request-owned operation. */
+export async function uploadViaPlaywright(
+  opts: UploadOptions & { ref: string; paths: string[] },
+): Promise<void> {
+  await runFileUpload(opts);
+}
+
+/** Accepts or dismisses a pending dialog, or arms the next matching dialog response. */
 export async function armDialogViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  dialogId?: string;
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  const state = ensurePageState(page);
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
-
-  state.armIdDialog = bumpDialogArmId();
-  const armId = state.armIdDialog;
-
-  void page
-    .waitForEvent("dialog", { timeout })
-    .then(async (dialog) => {
-      if (state.armIdDialog !== armId) {
-        return;
-      }
-      if (opts.accept) {
-        await dialog.accept(opts.promptText);
-      } else {
-        await dialog.dismiss();
-      }
-    })
-    .catch(() => {
-      // Ignore timeouts; the dialog may never appear.
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  try {
+    await respondToObservedDialogOnPage({
+      page,
+      accept: opts.accept,
+      closedBy: "agent",
+      ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+      ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
     });
+    return;
+  } catch (err) {
+    if (opts.dialogId || (err instanceof Error && !err.message.includes("No dialog is pending"))) {
+      throw err;
+    }
+  }
+
+  armObservedDialogResponseOnPage({
+    page,
+    accept: opts.accept,
+    timeoutMs: timeout,
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+  });
 }
 
+/** Waits for the next page download and writes it under the configured output root. */
 export async function waitForDownloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path?: string;
+  rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
-}): Promise<{
-  url: string;
-  suggestedFilename: string;
-  path: string;
-}> {
+}): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
-  state.armIdDownload = bumpDownloadArmId();
-  const armId = state.armIdDownload;
-
-  const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
+  const capture = createExplicitDownloadCapture({
+    page,
+    state,
+    timeoutMs: timeout,
+    outPath: opts.path,
+    rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
+    signal: opts.signal,
+  });
+  return await capture.promise;
 }
 
+/** Clicks an element ref and saves the download triggered by that click. */
 export async function downloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ref: string;
   path: string;
+  rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
-}): Promise<{
-  url: string;
-  suggestedFilename: string;
-  path: string;
-}> {
+}): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -261,20 +304,23 @@ export async function downloadViaPlaywright(opts: {
     throw new Error("path is required");
   }
 
-  state.armIdDownload = bumpDownloadArmId();
-  const armId = state.armIdDownload;
-
-  const waiter = createPageDownloadWaiter(page, timeout);
+  const capture = createExplicitDownloadCapture({
+    page,
+    state,
+    timeoutMs: timeout,
+    outPath,
+    rootDir: opts.rootDir,
+    signal: opts.signal,
+  });
+  void capture.promise.catch(() => {});
   try {
     const locator = refLocator(page, ref);
-    try {
-      await locator.click({ timeout });
-    } catch (err) {
-      throw toAIFriendlyError(err, ref);
-    }
-    return await awaitDownloadPayload({ waiter, state, armId, outPath });
+    await locator.click({ timeout, signal: opts.signal });
   } catch (err) {
-    waiter.cancel();
-    throw err;
+    capture.cancel();
+    throw opts.signal?.aborted && opts.signal.reason instanceof Error
+      ? opts.signal.reason
+      : toAIFriendlyError(err, ref);
   }
+  return await capture.promise;
 }

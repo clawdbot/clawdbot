@@ -1,11 +1,19 @@
+// Msteams tests cover graph teams plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 import { getChannelInfoMSTeams, listChannelsMSTeams } from "./graph-teams.js";
 
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return { ...actual, fetchWithSsrFGuard: mockState.fetchWithSsrFGuard };
+});
 
 vi.mock("./graph.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph.js")>();
@@ -18,12 +26,23 @@ vi.mock("./graph.js", async (importOriginal) => {
 
 const TOKEN = "test-graph-token";
 
-describe("listChannelsMSTeams", () => {
-  beforeEach(() => {
-    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
-    mockState.fetchGraphJson.mockReset();
-  });
+function graphFetchPathAt(index: number): string | undefined {
+  const call = mockState.fetchGraphJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Graph fetch call ${index}`);
+  }
+  return call[0]?.path;
+}
 
+beforeEach(() => {
+  mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
+  mockState.fetchGraphJson.mockReset();
+  mockState.fetchWithSsrFGuard
+    .mockReset()
+    .mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
+});
+
+describe("listChannelsMSTeams", () => {
   it("returns channels with all fields mapped", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
@@ -75,7 +94,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-empty",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("returns empty array when value is undefined", async () => {
@@ -86,7 +105,7 @@ describe("listChannelsMSTeams", () => {
       teamId: "team-no-value",
     });
 
-    expect(result.channels).toEqual([]);
+    expect(result.channels).toStrictEqual([]);
   });
 
   it("follows @odata.nextLink across multiple pages", async () => {
@@ -122,8 +141,7 @@ describe("listChannelsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(3);
 
     // Second call should use the relative path stripped from the nextLink
-    const secondCallPath = mockState.fetchGraphJson.mock.calls[1]?.[0]?.path;
-    expect(secondCallPath).toBe(
+    expect(graphFetchPathAt(1)).toBe(
       "/teams/team-paged/channels?$select=id,displayName,description,membershipType&$skip=1",
     );
   });
@@ -153,14 +171,33 @@ describe("listChannelsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
     expect(result.truncated).toBe(true);
   });
+
+  it("does not report truncation when page 10 ends the collection", async () => {
+    for (let i = 0; i < 10; i++) {
+      mockState.fetchGraphJson.mockResolvedValueOnce({
+        value: [{ id: `ch-${i}` }],
+        ...(i < 9
+          ? {
+              "@odata.nextLink": `https://graph.microsoft.com/v1.0/teams/team-full/channels?$skip=${i + 1}`,
+            }
+          : {}),
+      });
+    }
+
+    const result = await listChannelsMSTeams({
+      cfg: {} as OpenClawConfig,
+      teamId: "team-full",
+    });
+
+    expect(result.channels.map((channel) => channel.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `ch-${index}`),
+    );
+    expect(result.truncated).toBe(false);
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
+  });
 });
 
 describe("getChannelInfoMSTeams", () => {
-  beforeEach(() => {
-    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
-    mockState.fetchGraphJson.mockReset();
-  });
-
   it("returns channel with all fields", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "ch-1",

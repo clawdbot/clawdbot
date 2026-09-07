@@ -1,35 +1,28 @@
+// Matrix tests cover client bootstrap plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
+  setAcquiredMatrixClient,
 } from "./client-resolver.test-helpers.js";
 
 const {
   getMatrixRuntimeMock,
-  getActiveMatrixClientMock,
   acquireSharedMatrixClientMock,
-  releaseSharedClientInstanceMock,
-  isBunRuntimeMock,
+  sharedLeaseReleaseMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
+
+const TEST_CFG = {};
 
 vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
-vi.mock("./active-client.js", () => ({
-  getActiveMatrixClient: (...args: unknown[]) => getActiveMatrixClientMock(...args),
-}));
-
 vi.mock("./client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  isBunRuntime: () => isBunRuntimeMock(),
   resolveMatrixAuthContext: resolveMatrixAuthContextMock,
-}));
-
-vi.mock("./client/shared.js", () => ({
-  releaseSharedClientInstance: (...args: unknown[]) => releaseSharedClientInstanceMock(...args),
 }));
 
 let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
@@ -50,28 +43,32 @@ describe("client bootstrap", () => {
   });
 
   it("releases leased shared clients when readiness setup fails", async () => {
-    const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.prepareForOneOff).mockRejectedValue(new Error("prepare failed"));
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+    const prepareForOneOff = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { prepareForOneOff });
+    prepareForOneOff.mockRejectedValue(new Error("prepare failed"));
+    setAcquiredMatrixClient(sharedClient);
 
     await expect(
       resolveRuntimeMatrixClientWithReadiness({
+        cfg: TEST_CFG,
         accountId: "default",
         readiness: "prepared",
       }),
     ).rejects.toThrow("prepare failed");
 
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
   });
 
-  it("releases leased shared clients when the wrapped action throws during readiness", async () => {
-    const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.start).mockRejectedValue(new Error("start failed"));
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+  it("starts through the shared lease and releases when startup fails", async () => {
+    const start = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { start });
+    start.mockRejectedValue(new Error("start failed"));
+    setAcquiredMatrixClient(sharedClient);
 
     await expect(
       withResolvedRuntimeMatrixClient(
         {
+          cfg: TEST_CFG,
           accountId: "default",
           readiness: "started",
         },
@@ -79,6 +76,58 @@ describe("client bootstrap", () => {
       ),
     ).rejects.toThrow("start failed");
 
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+  });
+
+  it("borrows every non-injected client from the shared owner", async () => {
+    const sharedClient = createMockMatrixClient();
+    setAcquiredMatrixClient(sharedClient);
+
+    await withResolvedRuntimeMatrixClient(
+      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
+      async (client) => {
+        expect(client).toBe(sharedClient);
+      },
+      "persist",
+    );
+
+    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+      cfg: TEST_CFG,
+      timeoutMs: undefined,
+      accountId: "default",
+      startClient: false,
+      role: "transient",
+    });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
+  });
+
+  it("passes the transient retirement signal to admitted work", async () => {
+    const sharedClient = createMockMatrixClient();
+    const lease = setAcquiredMatrixClient(sharedClient);
+
+    await withResolvedRuntimeMatrixClient(
+      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
+      async (client, abortSignal) => {
+        expect(client).toBe(sharedClient);
+        expect(abortSignal).toBe(lease.abortSignal);
+      },
+    );
+  });
+
+  it("does not borrow or stop an explicitly injected client", async () => {
+    const start = vi.fn(async () => undefined);
+    const injected = Object.assign(createMockMatrixClient(), { start });
+
+    await withResolvedRuntimeMatrixClient(
+      { client: injected, readiness: "started" },
+      async (client) => {
+        expect(client).toBe(injected);
+      },
+      "persist",
+    );
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
+    expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
 });

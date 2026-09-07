@@ -1,9 +1,74 @@
+/**
+ * Tests agent creation event emission from gateway agent methods.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testState, writeSessionStore } from "../test-helpers.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import {
+  forgetActiveSessionForShutdown,
+  listActiveSessionsForShutdown,
+} from "../active-sessions-shutdown-tracker.js";
+
+const configMocks = vi.hoisted(() => ({
+  storePath: "",
+  workspaceDir: "",
+  getRuntimeConfig: vi.fn(() => ({
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        workspace: configMocks.workspaceDir || "/tmp/openclaw-agent-create-event",
+      },
+    },
+    session: {
+      mainKey: "main",
+      store: configMocks.storePath,
+    },
+  })),
+}));
+
+const agentIngressMocks = vi.hoisted(() => ({
+  agentCommandFromIngress: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: configMocks.getRuntimeConfig,
+}));
+
+vi.mock("../../commands/agent.js", () => ({
+  agentCommandFromGatewayIngress: agentIngressMocks.agentCommandFromIngress,
+  agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
+}));
+
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    agentDir: configMocks.workspaceDir,
+    config: configMocks.getRuntimeConfig(),
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: configMocks.workspaceDir,
+  })),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: {},
+}));
+
+vi.mock("../../tasks/detached-task-runtime.js", () => ({
+  createRunningTaskRun: vi.fn(),
+}));
+
 import { agentHandlers } from "./agent.js";
+
+function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
+  return mock.mock.calls[0];
+}
 
 describe("agent handler session create events", () => {
   let tempDir: string;
@@ -12,11 +77,18 @@ describe("agent handler session create events", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
     storePath = path.join(tempDir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeSessionStore({ entries: {} });
+    configMocks.storePath = storePath;
+    configMocks.workspaceDir = tempDir;
+    configMocks.getRuntimeConfig.mockClear();
+    agentIngressMocks.agentCommandFromIngress.mockClear();
+    agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+    await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
   afterEach(async () => {
+    for (const entry of listActiveSessionsForShutdown()) {
+      forgetActiveSessionForShutdown(entry.sessionId);
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -25,45 +97,62 @@ describe("agent handler session create events", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
 
-    await agentHandlers.agent({
-      params: {
-        message: "hi",
-        sessionKey: "agent:main:subagent:create-test",
-        idempotencyKey: "idem-agent-create-event",
+    await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
+      agentHandlers,
+      {
+        params: {
+          message: "hi",
+          sessionKey: "agent:main:subagent:create-test",
+          idempotencyKey: "idem-agent-create-event",
+        },
+        respond,
+        context: {
+          trackExecution: trackAsyncWork,
+          dedupe: new Map(),
+          deps: {} as never,
+          logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
+          chatAbortControllers: new Map(),
+          addChatRun: vi.fn(),
+          registerToolEventRecipient: vi.fn(),
+          getRuntimeConfig: configMocks.getRuntimeConfig,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          broadcastToConnIds,
+        } as never,
+        client: null,
+        isWebchatConnect: () => false,
+        req: { id: "req-agent-create-event" } as never,
       },
-      respond,
-      context: {
-        dedupe: new Map(),
-        deps: {} as never,
-        logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
-        chatAbortControllers: new Map(),
-        addChatRun: vi.fn(),
-        registerToolEventRecipient: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-        broadcastToConnIds,
-      } as never,
-      client: null,
-      isWebchatConnect: () => false,
-      req: { id: "req-agent-create-event" } as never,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        status: "accepted",
-        runId: "idem-agent-create-event",
-      }),
-      undefined,
-      { runId: "idem-agent-create-event" },
     );
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:create-test",
-        reason: "create",
-      }),
-      new Set(["conn-1"]),
-      { dropIfSlow: true },
+
+    const responseCall = firstMockCall(respond) as
+      | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
+      | undefined;
+    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[1]?.status).toBe("accepted");
+    expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
+    expect(responseCall?.[2]).toBeUndefined();
+    expect(responseCall?.[3]?.runId).toBe("idem-agent-create-event");
+    await vi.waitFor(
+      () => {
+        const call = firstMockCall(broadcastToConnIds) as
+          | [
+              string,
+              { sessionKey?: string; reason?: string },
+              Set<string>,
+              { dropIfSlow?: boolean; sessionKeys?: string[] },
+            ]
+          | undefined;
+        expect(call?.[0]).toBe("sessions.changed");
+        expect(call?.[1]?.sessionKey).toBe("agent:main:subagent:create-test");
+        expect(call?.[1]?.reason).toBe("create");
+        expect(call?.[2]).toEqual(new Set(["conn-1"]));
+        expect(call?.[3]).toEqual({
+          agentId: "main",
+          dropIfSlow: true,
+          sessionKeys: ["agent:main:subagent:create-test"],
+        });
+      },
+      { timeout: 2_000, interval: 5 },
     );
   });
 });

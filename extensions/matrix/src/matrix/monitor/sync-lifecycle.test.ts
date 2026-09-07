@@ -1,3 +1,4 @@
+// Matrix tests cover sync lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixMonitorStatusController } from "./status.js";
@@ -11,181 +12,247 @@ function createClientEmitter() {
   };
 }
 
+function createSyncLifecycleHarness(options?: { withStopping?: boolean }) {
+  const client = createClientEmitter();
+  const setStatus = vi.fn();
+  let stopping = false;
+  const statusController = createMatrixMonitorStatusController({
+    accountId: "default",
+    statusSink: setStatus,
+  });
+  const lifecycle = createMatrixMonitorSyncLifecycle({
+    client: client as never,
+    statusController,
+    ...(options?.withStopping ? { isStopping: () => stopping } : {}),
+  });
+
+  return {
+    client,
+    lifecycle,
+    setStatus,
+    statusController,
+    setStopping: (value: boolean) => {
+      stopping = value;
+    },
+  };
+}
+
+function statusCalls(setStatus: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
+  return setStatus.mock.calls.map(([status]) => status as Record<string, unknown>);
+}
+
+function lastStatus(setStatus: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const status = statusCalls(setStatus).at(-1);
+  if (!status) {
+    throw new Error("Expected monitor status");
+  }
+  return status;
+}
+
+function expectLastStatusFields(
+  setStatus: ReturnType<typeof vi.fn>,
+  fields: Record<string, unknown>,
+): void {
+  const status = lastStatus(setStatus);
+  for (const [key, value] of Object.entries(fields)) {
+    expect(status[key]).toEqual(value);
+  }
+}
+
 describe("createMatrixMonitorSyncLifecycle", () => {
-  it("rejects the channel wait on unexpected sync errors", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-        statusSink: setStatus,
-      }),
+  it("publishes blocked for an invalidated token and preserves it through cleanup", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+    const tokenError = Object.assign(new Error("Unknown token"), {
+      statusCode: 401,
+      data: { errcode: "M_UNKNOWN_TOKEN" },
     });
+
+    statusController.noteSyncState("RECONNECTING", tokenError);
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteUnexpectedError(new Error("startup readiness timed out"));
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "Unknown token",
+    });
+
+    statusController.markStopped();
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteSyncState("SYNCING", undefined);
+    expectLastStatusFields(setStatus, {
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
+    });
+  });
+
+  it("publishes recovering for transient disconnects", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+    statusController.noteSyncState("RECONNECTING", new Error("network reset"));
+    expectLastStatusFields(setStatus, { lifecycle: "recovering" });
+  });
+
+  it("rejects the channel wait on unexpected sync errors", async () => {
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 
     const waitPromise = lifecycle.waitForFatalStop();
     client.emit("sync.unexpected_error", new Error("sync exploded"));
 
     await expect(waitPromise).rejects.toThrow("sync exploded");
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "error",
+      lastError: "sync exploded",
+    });
+  });
+
+  it("treats missing-key-shaped unexpected sync errors as fatal", async () => {
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    const error = new Error(
+      "Error decrypting event (id=$event type=m.room.encrypted): DecryptionError[msg: The sender's device has not sent us the keys for this message.]",
+    );
+    try {
+      client.emit("sync.unexpected_error", error);
+      await Promise.resolve();
+
+      expectLastStatusFields(setStatus, {
         accountId: "default",
         healthState: "error",
-        lastError: "sync exploded",
-      }),
-    );
+        lastError: error.message,
+      });
+      await expect(waitPromise).rejects.toThrow(error.message);
+    } finally {
+      lifecycle.dispose();
+      await waitPromise.catch(() => undefined);
+    }
   });
 
   it("ignores STOPPED emitted during intentional shutdown", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    let stopping = false;
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-        statusSink: setStatus,
-      }),
-      isStopping: () => stopping,
+    const { client, lifecycle, setStatus, setStopping } = createSyncLifecycleHarness({
+      withStopping: true,
     });
 
     const waitPromise = lifecycle.waitForFatalStop();
-    stopping = true;
+    setStopping(true);
     client.emit("sync.state", "STOPPED", "SYNCING", undefined);
     lifecycle.dispose();
 
     await expect(waitPromise).resolves.toBeUndefined();
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "stopped",
-      }),
-    );
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "stopped",
+    });
   });
 
   it("marks unexpected STOPPED sync as an error state", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-        statusSink: setStatus,
-      }),
-    });
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 
     const waitPromise = lifecycle.waitForFatalStop();
     client.emit("sync.state", "STOPPED", "SYNCING", undefined);
 
     await expect(waitPromise).rejects.toThrow("Matrix sync stopped unexpectedly");
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "error",
-        lastError: "Matrix sync stopped unexpectedly",
-      }),
-    );
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "error",
+      lastError: "Matrix sync stopped unexpectedly",
+    });
   });
 
   it("ignores unexpected sync errors emitted during intentional shutdown", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    let stopping = false;
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-        statusSink: setStatus,
-      }),
-      isStopping: () => stopping,
+    const { client, lifecycle, setStatus, setStopping } = createSyncLifecycleHarness({
+      withStopping: true,
     });
 
     const waitPromise = lifecycle.waitForFatalStop();
-    stopping = true;
+    setStopping(true);
     client.emit("sync.unexpected_error", new Error("shutdown noise"));
     lifecycle.dispose();
 
     await expect(waitPromise).resolves.toBeUndefined();
-    expect(setStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "error",
-      }),
-    );
+    expect(
+      statusCalls(setStatus).some(
+        (status) => status.accountId === "default" && status.healthState === "error",
+      ),
+    ).toBe(false);
   });
 
   it("ignores non-terminal sync states emitted during intentional shutdown", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    let stopping = false;
-    const statusController = createMatrixMonitorStatusController({
-      accountId: "default",
-      statusSink: setStatus,
-    });
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController,
-      isStopping: () => stopping,
-    });
+    const { client, lifecycle, setStatus, setStopping, statusController } =
+      createSyncLifecycleHarness({
+        withStopping: true,
+      });
 
     const waitPromise = lifecycle.waitForFatalStop();
-    stopping = true;
+    setStopping(true);
     client.emit("sync.state", "ERROR", "RECONNECTING", new Error("shutdown noise"));
     lifecycle.dispose();
     statusController.markStopped();
 
     await expect(waitPromise).resolves.toBeUndefined();
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "stopped",
-        lastError: null,
-      }),
-    );
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "stopped",
+      lastError: null,
+    });
+  });
+
+  it("only refreshes transport liveness for successful sync responses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+    try {
+      setStatus.mockClear();
+
+      client.emit("sync.state", "PREPARED", null, undefined);
+      expect(lastStatus(setStatus).lastTransportActivityAt).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      client.emit("sync.state", "SYNCING", "PREPARED", undefined);
+      const syncAt = Date.now();
+      expect(lastStatus(setStatus).lastTransportActivityAt).toBe(syncAt);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      client.emit("sync.state", "CATCHUP", "SYNCING", undefined);
+      expect(lastStatus(setStatus).lastTransportActivityAt).toBe(syncAt);
+    } finally {
+      lifecycle.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("does not downgrade a fatal error to stopped during shutdown", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    let stopping = false;
-    const statusController = createMatrixMonitorStatusController({
-      accountId: "default",
-      statusSink: setStatus,
-    });
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController,
-      isStopping: () => stopping,
-    });
+    const { client, lifecycle, setStatus, setStopping, statusController } =
+      createSyncLifecycleHarness({
+        withStopping: true,
+      });
 
     const waitPromise = lifecycle.waitForFatalStop();
     client.emit("sync.unexpected_error", new Error("sync exploded"));
     await expect(waitPromise).rejects.toThrow("sync exploded");
 
-    stopping = true;
+    setStopping(true);
     client.emit("sync.state", "STOPPED", "SYNCING", undefined);
     lifecycle.dispose();
     statusController.markStopped();
 
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "error",
-        lastError: "sync exploded",
-      }),
-    );
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "error",
+      lastError: "sync exploded",
+    });
   });
 
   it("ignores follow-up sync states after a fatal sync error", async () => {
-    const client = createClientEmitter();
-    const setStatus = vi.fn();
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-        statusSink: setStatus,
-      }),
-    });
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 
     const waitPromise = lifecycle.waitForFatalStop();
     client.emit("sync.unexpected_error", new Error("sync exploded"));
@@ -194,23 +261,15 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("late reconnect"));
     lifecycle.dispose();
 
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        healthState: "error",
-        lastError: "sync exploded",
-      }),
-    );
+    expectLastStatusFields(setStatus, {
+      accountId: "default",
+      healthState: "error",
+      lastError: "sync exploded",
+    });
   });
 
   it("rejects a second concurrent fatal-stop waiter", async () => {
-    const client = createClientEmitter();
-    const lifecycle = createMatrixMonitorSyncLifecycle({
-      client: client as never,
-      statusController: createMatrixMonitorStatusController({
-        accountId: "default",
-      }),
-    });
+    const { lifecycle } = createSyncLifecycleHarness();
 
     const firstWait = lifecycle.waitForFatalStop();
 

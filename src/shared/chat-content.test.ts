@@ -61,22 +61,4 @@ describe("shared/chat-content", () => {
       }),
     ).toBeNull();
   });
-
-  it("tolerates sanitize and normalize hooks that return non-string values", () => {
-    expect(
-      extractTextFromChatContent("hello", {
-        sanitizeText: () => undefined as unknown as string,
-      }),
-    ).toBeNull();
-    expect(
-      extractTextFromChatContent([{ type: "text", text: "hello" }], {
-        sanitizeText: () => 42 as unknown as string,
-      }),
-    ).toBe("42");
-    expect(
-      extractTextFromChatContent("hello", {
-        normalizeText: () => undefined as unknown as string,
-      }),
-    ).toBeNull();
-  });
 });

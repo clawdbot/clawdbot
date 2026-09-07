@@ -1,8 +1,25 @@
-import { parseFenceSpans } from "../markdown/fences.js";
+// Renders chat canvas payloads into text and metadata for transcript output.
+import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
-export type CanvasSurface = "assistant_message";
+// Extracts assistant-message canvas previews from tool JSON or markdown embed
+// shortcodes. The returned text strips consumed shortcodes for channel delivery.
+type CanvasSurface = "assistant_message" | "node_panel";
+type CanvasSandbox = "strict" | "scripts";
 
-export type CanvasPreview = {
+type McpAppPreviewDescriptor = {
+  viewId: string;
+  serverName?: string;
+  toolName?: string;
+  uiResourceUri?: string;
+  toolCallId?: string;
+  originSessionKey?: string;
+  resultMetaState?: "unavailable";
+};
+
+type CanvasPreview = {
   kind: "canvas";
   surface: CanvasSurface;
   render: "url";
@@ -12,21 +29,10 @@ export type CanvasPreview = {
   viewId?: string;
   className?: string;
   style?: string;
+  sandbox?: CanvasSandbox;
+  boardWidgetName?: string;
+  mcpApp?: McpAppPreviewDescriptor;
 };
-
-function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function getRecordStringField(
   record: Record<string, unknown> | undefined,
@@ -41,7 +47,7 @@ function getRecordNumberField(
   key: string,
 ): number | undefined {
   const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function getNestedRecord(
@@ -49,19 +55,61 @@ function getNestedRecord(
   key: string,
 ): Record<string, unknown> | undefined {
   const value = record?.[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(value);
+}
+
+function coerceMcpAppDescriptor(
+  record: Record<string, unknown> | undefined,
+): McpAppPreviewDescriptor | undefined {
+  const viewId = getRecordStringField(record, "viewId");
+  if (!viewId || viewId.length > 128) {
+    return undefined;
+  }
+  const serverName = getRecordStringField(record, "serverName");
+  const toolName = getRecordStringField(record, "toolName");
+  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
+  const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
+  const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
+  const hasCompleteDescriptor = Boolean(
+    serverName &&
+    serverName.length <= 256 &&
+    toolName &&
+    toolName.length <= 256 &&
+    uiResourceUri?.startsWith("ui://") &&
+    uiResourceUri.length <= 2048 &&
+    toolCallId &&
+    toolCallId.length <= 512,
+  );
+  return hasCompleteDescriptor
+    ? {
+        viewId,
+        serverName,
+        toolName,
+        uiResourceUri,
+        toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
+        ...(resultMetaState ? { resultMetaState } : {}),
+      }
+    : { viewId };
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" ? value : undefined;
+  return value === "assistant_message" || value === "node_panel" ? value : undefined;
+}
+
+function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
+  return value === "strict" || value === "scripts" ? value : undefined;
 }
 
 function normalizePreferredHeight(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
     : undefined;
+}
+
+export function isCanvasBoardWidgetName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
 function coerceCanvasPreview(
@@ -77,6 +125,9 @@ function coerceCanvasPreview(
   const presentation = getNestedRecord(record, "presentation");
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
+  const mcpAppRecord = getNestedRecord(record, "mcpApp");
+  const mcpApp = coerceMcpAppDescriptor(mcpAppRecord);
+  const mcpAppViewId = mcpApp?.viewId;
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -94,8 +145,25 @@ function coerceCanvasPreview(
     getRecordStringField(presentation, "class_name") ??
     getRecordStringField(presentation, "className");
   const style = getRecordStringField(presentation, "style");
+  const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+  const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
+    ? requestedBoardWidgetName
+    : undefined;
+  if (mcpAppViewId && viewId === mcpAppViewId) {
+    return {
+      kind: "canvas",
+      surface,
+      render: "url",
+      viewId,
+      ...(title ? { title } : {}),
+      ...(preferredHeight ? { preferredHeight } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      mcpApp,
+    };
+  }
   if (viewUrl) {
     return {
       kind: "canvas",
@@ -107,6 +175,9 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      ...(boardWidgetName ? { boardWidgetName } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -124,9 +195,17 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   return undefined;
+}
+
+/** Extracts an MCP App Canvas preview from sanitized tool-result details. */
+export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
+  const details = asOptionalRecord(value);
+  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
@@ -167,7 +246,7 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
       kind: "canvas",
       surface,
       render: "url",
-      url: url ?? defaultCanvasEntryUrl(ref),
+      url: url ?? defaultCanvasEntryUrl(expectDefined(ref, "canvas reference")),
       ...(ref ? { viewId: ref } : {}),
       ...(title ? { title } : {}),
       ...(preferredHeight ? { preferredHeight } : {}),
@@ -178,14 +257,16 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
   return undefined;
 }
 
+/** Extracts a canvas preview from a JSON-shaped tool or assistant payload. */
 export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = tryParseJsonRecord(outputText);
+  const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
   return coerceCanvasPreview(parsed);
 }
 
+/** Extracts [embed ...] shortcodes outside code fences and returns stripped text. */
 export function extractCanvasShortcodes(text: string | undefined): {
   text: string;
   previews: CanvasPreview[];
@@ -200,13 +281,24 @@ export function extractCanvasShortcodes(text: string | undefined): {
     attrs: Record<string, string>;
     body?: string;
   }> = [];
-  const blockRe = /\[embed\s+([^\]]*?)\]([\s\S]*?)\[\/embed\]/gi;
+  // Exclude a self-closing open tag ("[embed ... /]") from starting a block
+  // match by requiring the attrs group not to end with a slash; otherwise the
+  // block regex greedily swallows visible text up to a later stray [/embed].
+  const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
+    // Each regex starts a new ascending pass over the ordered fence spans.
+    let fenceIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(text))) {
       const start = match.index ?? 0;
-      if (fenceSpans.some((span) => start >= span.start && start < span.end)) {
+      let fence = fenceSpans[fenceIndex];
+      while (fence && start >= fence.end) {
+        fenceIndex += 1;
+        fence = fenceSpans[fenceIndex];
+      }
+      if (fence && start >= fence.start) {
+        // Literal embed examples in code blocks must remain visible text.
         continue;
       }
       matches.push({
@@ -226,6 +318,8 @@ export function extractCanvasShortcodes(text: string | undefined): {
   let stripped = "";
   for (const match of matches) {
     if (match.start < cursor) {
+      // Prefer the first non-overlapping shortcode so nested/overlapping input
+      // cannot strip arbitrary text outside the matched span.
       continue;
     }
     stripped += text.slice(cursor, match.start);
@@ -239,7 +333,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
   }
   stripped += text.slice(cursor);
   return {
-    text: stripped.replace(/\n{3,}/g, "\n\n").trim(),
+    text: stripped,
     previews,
   };
 }

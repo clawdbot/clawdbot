@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+/** Tests secrets plan normalization, target validation, and ref conversion. */
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
@@ -9,8 +10,24 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan, resolveValidatedPlanTarget } from "./plan.js";
+import { resolveConfigSecretTargetByPath } from "./target-registry.js";
+
+type ValidatedPlanTarget = NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
+
+function requireValidatedPlanTarget(
+  resolved: ReturnType<typeof resolveValidatedPlanTarget>,
+): ValidatedPlanTarget {
+  if (!resolved) {
+    throw new Error("expected validated secrets plan target");
+  }
+  return resolved;
+}
 
 describe("secrets plan validation", () => {
+  beforeAll(() => {
+    resolveConfigSecretTargetByPath(["channels", "telegram", "botToken"]);
+  });
+
   it("accepts legacy provider target types", () => {
     const resolved = resolveValidatedPlanTarget({
       type: "models.providers.apiKey",
@@ -18,7 +35,12 @@ describe("secrets plan validation", () => {
       pathSegments: ["models", "providers", "openai", "apiKey"],
       providerId: "openai",
     });
-    expect(resolved?.pathSegments).toEqual(["models", "providers", "openai", "apiKey"]);
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
+      "models",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
   });
 
   it("accepts expanded target types beyond legacy surface", () => {
@@ -27,7 +49,11 @@ describe("secrets plan validation", () => {
       path: "channels.telegram.botToken",
       pathSegments: ["channels", "telegram", "botToken"],
     });
-    expect(resolved?.pathSegments).toEqual(["channels", "telegram", "botToken"]);
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
+      "channels",
+      "telegram",
+      "botToken",
+    ]);
   });
 
   it("accepts model provider header targets with wildcard-backed paths", () => {
@@ -37,7 +63,7 @@ describe("secrets plan validation", () => {
       pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
       providerId: "openai",
     });
-    expect(resolved?.pathSegments).toEqual([
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
       "models",
       "providers",
       "openai",
@@ -55,6 +81,16 @@ describe("secrets plan validation", () => {
     expect(resolved).toBeNull();
   });
 
+  it("rejects path-like channel ids without throwing", () => {
+    expect(
+      resolveValidatedPlanTarget({
+        type: "channels.foo/bar.token",
+        path: "channels.foo/bar.token",
+        pathSegments: ["channels", "foo/bar", "token"],
+      }),
+    ).toBeNull();
+  });
+
   it("validates plan files with non-legacy target types", () => {
     const isValid = isSecretsApplyPlan({
       version: 1,
@@ -70,6 +106,26 @@ describe("secrets plan validation", () => {
           ref: { source: "env", provider: "default", id: "TALK_API_KEY" },
         },
       ],
+    });
+    expect(isValid).toBe(true);
+  });
+
+  it("accepts plugin-managed exec provider upserts in plan files", () => {
+    const isValid = isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-02-28T00:00:00.000Z",
+      generatedBy: "manual",
+      providerUpserts: {
+        "team-secrets": {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "acme-secrets",
+            integrationId: "secret-store",
+          },
+        },
+      },
+      targets: [],
     });
     expect(isValid).toBe(true);
   });

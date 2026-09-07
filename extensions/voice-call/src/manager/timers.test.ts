@@ -1,13 +1,6 @@
+// Voice Call tests cover timers plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { persistCallRecordMock } = vi.hoisted(() => ({
-  persistCallRecordMock: vi.fn(),
-}));
-
-vi.mock("./store.js", () => ({
-  persistCallRecord: persistCallRecordMock,
-}));
-
 import {
   clearMaxDurationTimer,
   clearTranscriptWaiter,
@@ -27,15 +20,15 @@ describe("voice-call manager timers", () => {
     vi.useRealTimers();
   });
 
-  it("starts and clears max duration timers, persisting timeout metadata before delegation", async () => {
+  it("delegates max-duration termination and logs typed failure", async () => {
     const call = { id: "call-1", state: "active" };
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
     };
-    const onTimeout = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onTimeout = vi.fn(async () => ({ success: false, error: "carrier unavailable" }));
 
     startMaxDurationTimer({
       ctx: ctx as never,
@@ -47,9 +40,11 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call", call);
+    expect(call).toEqual({ id: "call-1", state: "active" });
     expect(onTimeout).toHaveBeenCalledWith("call-1");
+    expect(warn).toHaveBeenCalledWith(
+      "[voice-call] Failed to end max-duration call call-1: carrier unavailable",
+    );
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 
     startMaxDurationTimer({
@@ -66,9 +61,8 @@ describe("voice-call manager timers", () => {
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
     };
-    const onTimeout = vi.fn(async () => {});
+    const onTimeout = vi.fn(async () => ({ success: true }));
 
     startMaxDurationTimer({
       ctx: ctx as never,
@@ -78,8 +72,38 @@ describe("voice-call manager timers", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(persistCallRecordMock).not.toHaveBeenCalled();
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("caps oversized max duration and transcript timers", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const ctx = {
+      activeCalls: new Map([["call-1", { id: "call-1", state: "active" }]]),
+      maxDurationTimers: new Map(),
+      transcriptWaiters: new Map(),
+      config: {
+        maxDurationSeconds: Number.MAX_SAFE_INTEGER,
+        transcriptTimeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+    };
+
+    try {
+      startMaxDurationTimer({
+        ctx: ctx as never,
+        callId: "call-1",
+        onTimeout: vi.fn(async () => ({ success: true })),
+      });
+      const transcript = waitForFinalTranscript(ctx as never, "call-2");
+
+      expect(
+        timeoutSpy.mock.calls.filter(([, delay]) => delay === MAX_TIMER_TIMEOUT_MS),
+      ).toHaveLength(2);
+      clearMaxDurationTimer(ctx as never, "call-1");
+      rejectTranscriptWaiter(ctx as never, "call-2", "done");
+      void transcript.catch(() => {});
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("waits for transcripts, resolves matching tokens, rejects mismatches and timeouts", async () => {
@@ -99,13 +123,13 @@ describe("voice-call manager timers", () => {
     rejectTranscriptWaiter(ctx as never, "call-2", "provider failed");
     await expect(another).rejects.toThrow("provider failed");
 
-    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch((error) => error);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(timedOut).resolves.toEqual(
-      expect.objectContaining({
-        message: "Timed out waiting for transcript after 1000ms",
-      }),
+    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch(
+      (error: unknown) => error,
     );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const timeoutError = await timedOut;
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect((timeoutError as Error).message).toBe("Timed out waiting for transcript after 1000ms");
 
     const toClear = waitForFinalTranscript(ctx as never, "call-4");
     clearTranscriptWaiter(ctx as never, "call-4");

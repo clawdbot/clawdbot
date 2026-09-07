@@ -1,15 +1,22 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { formatCliCommand } from "../cli/command-format.js";
+/**
+ * Response-body retrieval for Playwright-backed browser tools.
+ */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { Response } from "playwright-core";
+import { toErrorObject } from "../infra/errors.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
+/** Waits for a response URL pattern and returns a bounded text body. */
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   url: string;
   timeoutMs?: number;
   maxChars?: number;
+  signal?: AbortSignal;
 }): Promise<{
   url: string;
   status?: number;
@@ -26,84 +33,70 @@ export async function responseBodyViaPlaywright(opts: {
       ? Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars)))
       : 200_000;
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
+  const maxBytes = maxChars * 4;
 
+  opts.signal?.throwIfAborted();
   const page = await getPageForTargetId(opts);
+  opts.signal?.throwIfAborted();
   ensurePageState(page);
 
-  const promise = new Promise<unknown>((resolve, reject) => {
-    let done = false;
-    let timer: NodeJS.Timeout | undefined;
-    let handler: ((resp: unknown) => void) | undefined;
-
-    const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
+  let cleanup!: () => void;
+  const promise = new Promise<{ response: Response; buffer: Buffer }>((resolve, reject) => {
+    let matched = false;
+    const handler = (response: Response) => {
+      if (matched || !matchBrowserUrlPattern(pattern, response.url())) {
+        return;
       }
-      timer = undefined;
-      if (handler) {
-        page.off("response", handler as never);
-      }
+      matched = true;
+      page.off("response", handler);
+      // Response headers arrive before the body completes. Keep the same
+      // deadline and cancellation owner until those bytes are available.
+      void response.body().then(
+        (buffer) => resolve({ response, buffer }),
+        (error: unknown) =>
+          reject(
+            new Error(`Failed to read response body for "${response.url()}": ${String(error)}`, {
+              cause: error,
+            }),
+          ),
+      );
     };
-
-    handler = (resp: unknown) => {
-      if (done) {
-        return;
-      }
-      const r = resp as { url?: () => string };
-      const u = r.url?.() || "";
-      if (!matchBrowserUrlPattern(pattern, u)) {
-        return;
-      }
-      done = true;
-      cleanup();
-      resolve(resp);
-    };
-
-    page.on("response", handler as never);
-    timer = setTimeout(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
+    const onAbort = () => reject(toErrorObject(opts.signal?.reason, "Response request aborted."));
+    const onClose = () => reject(new Error("Page closed before response body was available."));
+    const timer = setTimeout(() => {
       reject(
         new Error(
-          `Response not found for url pattern "${pattern}". Run '${formatCliCommand("openclaw browser requests")}' to inspect recent network activity.`,
+          matched
+            ? `Response body timed out after ${timeout}ms for url pattern "${pattern}".`
+            : `Response not found for url pattern "${pattern}". Run 'openclaw browser requests' to inspect recent network activity.`,
         ),
       );
     }, timeout);
+    cleanup = () => {
+      clearTimeout(timer);
+      page.off("response", handler);
+      page.off("close", onClose);
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+    page.on("response", handler);
+    page.on("close", onClose);
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
   });
 
-  const resp = (await promise) as {
-    url?: () => string;
-    status?: () => number;
-    headers?: () => Record<string, string>;
-    body?: () => Promise<Buffer>;
-    text?: () => Promise<string>;
-  };
-
-  const url = resp.url?.() || "";
-  const status = resp.status?.();
-  const headers = resp.headers?.();
-
-  let bodyText = "";
   try {
-    if (typeof resp.text === "function") {
-      bodyText = await resp.text();
-    } else if (typeof resp.body === "function") {
-      const buf = await resp.body();
-      bodyText = new TextDecoder("utf-8").decode(buf);
-    }
-  } catch (err) {
-    throw new Error(`Failed to read response body for "${url}": ${String(err)}`, { cause: err });
+    const { response, buffer } = await promise;
+    // Playwright exposes only a full-body Buffer. Bound the second allocation
+    // while preserving the existing response-prefix contract.
+    const bodyText = new TextDecoder("utf-8").decode(buffer.subarray(0, maxBytes));
+    const body = bodyText.length > maxChars ? truncateUtf16Safe(bodyText, maxChars) : bodyText;
+    return {
+      url: response.url(),
+      status: response.status(),
+      headers: response.headers(),
+      body,
+      truncated: buffer.byteLength > maxBytes || bodyText.length > maxChars ? true : undefined,
+    };
+  } finally {
+    cleanup();
   }
-
-  const trimmed = bodyText.length > maxChars ? bodyText.slice(0, maxChars) : bodyText;
-  return {
-    url,
-    status,
-    headers,
-    body: trimmed,
-    truncated: bodyText.length > maxChars ? true : undefined,
-  };
 }

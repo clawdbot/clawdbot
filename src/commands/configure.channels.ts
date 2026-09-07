@@ -1,11 +1,12 @@
+// Configure wizard helper for removing channel config sections safely.
+import { note } from "../../packages/terminal-core/src/note.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
-import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { shortenHomePath } from "../utils.js";
 import { confirm, select } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
@@ -66,11 +67,12 @@ function compareChannelRemovalChoices(
   );
 }
 
+/** Prompt for configured channel sections to remove from openclaw.json. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
-  let next = { ...cfg };
+  const next = { ...cfg };
 
   while (true) {
     const configured = listConfiguredChannelRemovalChoices(next);
@@ -98,6 +100,7 @@ export async function removeChannelConfigWizard(
         options,
       }),
       runtime,
+      1,
     );
 
     if (choice.kind === "done") {
@@ -112,6 +115,7 @@ export async function removeChannelConfigWizard(
         initialValue: false,
       }),
       runtime,
+      1,
     );
     if (!confirmed) {
       continue;
@@ -126,10 +130,11 @@ export async function removeChannelConfigWizard(
     }
 
     note(
-      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
-        "\n",
-      ),
-      "Channel removed",
+      [
+        `${label} selected for removal from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Channel removal",
     );
   }
 }

@@ -1,0 +1,391 @@
+// Control UI tests cover agents utils behavior.
+import { describe, expect, it } from "vitest";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+  resolveAgentAvatarUrl,
+  resolveAssistantTextAvatar,
+  resolveChatAvatarRenderUrl,
+} from "../avatar.ts";
+import {
+  buildAgentContext,
+  buildModelOptions,
+  formatBytes,
+  listSelectableAgents,
+  normalizeAgentLabel,
+  normalizeAgentTargetLabel,
+  resolveAgentSkillsFilter,
+  resolveEffectiveModelFallbacks,
+} from "./display.ts";
+
+describe("buildModelOptions", () => {
+  const model = "openai/gpt-5.6-luna";
+  const catalog = [
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT 5.6 Luna",
+      provider: "openai",
+      alias: "gateway-alias",
+      tags: ["default", "configured"],
+    },
+  ];
+
+  it.each([
+    {
+      name: "inherits the default alias when agent metadata omits alias",
+      agentMetadata: { agentRuntime: { id: "codex" } },
+      label: "GPT 5.6 Luna · global-luna",
+    },
+    {
+      name: "lets an explicit empty agent alias disable the inherited alias",
+      agentMetadata: { alias: "" },
+      label: "GPT 5.6 Luna",
+    },
+  ])("$name", ({ agentMetadata, label }) => {
+    const config = {
+      agents: {
+        defaults: { models: { [model]: { alias: "global-luna" } } },
+        entries: { worker: { models: { [model]: agentMetadata } } },
+      },
+    };
+
+    expect(buildModelOptions(config, null, catalog, "worker")).toContainEqual({
+      value: model,
+      label,
+      provider: "openai",
+      tags: ["default", "configured"],
+    });
+  });
+});
+
+describe("normalizeAgentTargetLabel", () => {
+  it("uses resolved configured names but preserves ids for synthesized defaults", () => {
+    expect(
+      normalizeAgentTargetLabel({ id: "main" }, { name: "Pacino", nameSource: "workspace" }),
+    ).toBe("Pacino");
+    expect(
+      normalizeAgentTargetLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
+    ).toBe("research");
+  });
+
+  it("prefers the authoritative resolved name over unresolved roster fields", () => {
+    expect(
+      normalizeAgentTargetLabel(
+        { id: "main", name: "Roster name", identity: { name: "Roster identity" } },
+        { name: "Configured assistant", nameSource: "config" },
+      ),
+    ).toBe("Configured assistant");
+  });
+
+  it("uses roster names when hydration only produced the synthesized default", () => {
+    expect(
+      normalizeAgentTargetLabel(
+        { id: "research", name: "Research roster" },
+        { name: "Assistant", nameSource: "default" },
+      ),
+    ).toBe("Research roster");
+  });
+
+  it("preserves the id when an older Gateway omits name provenance", () => {
+    expect(normalizeAgentTargetLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
+  });
+
+  it("keeps the shared hydrated-name fallback for existing callers", () => {
+    expect(normalizeAgentLabel({ id: "legacy" }, { name: "Workspace Molty" })).toBe(
+      "Workspace Molty",
+    );
+  });
+});
+
+describe("listSelectableAgents", () => {
+  it("excludes semantic system rows without depending on identity", () => {
+    const agents = [
+      { id: "main", kind: "agent" as const },
+      { id: "ordinary-looking-id", kind: "system" as const },
+      { id: "legacy-gateway-row" },
+    ];
+
+    expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
+    expect(agents).toHaveLength(3);
+  });
+});
+
+describe("formatBytes", () => {
+  it("preserves the Control UI byte-size display contract", () => {
+    expect(formatBytes(undefined)).toBe("-");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(12 * 1024)).toBe("12 KB");
+    expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+  });
+
+  it("supports caller-owned fallback, unit cap, and precision", () => {
+    const options = {
+      fallback: "0 B",
+      maxUnit: "kilo" as const,
+      fractionDigits: (_value: number, unit: "byte" | "kilo" | "mega" | "giga" | "tera") =>
+        unit === "byte" ? null : 1,
+    };
+    expect(formatBytes(Number.NaN, options)).toBe("0 B");
+    expect(formatBytes(12 * 1024, options)).toBe("12.0 KB");
+    expect(formatBytes(1024 * 1024, options)).toBe("1024.0 KB");
+  });
+});
+
+describe("resolveEffectiveModelFallbacks", () => {
+  it("inherits defaults when no entry fallbacks are configured", () => {
+    const entryModel = undefined;
+    const defaultModel = {
+      primary: "openai/gpt-5-nano",
+      fallbacks: ["google/gemini-2.0-flash"],
+    };
+
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([
+      "google/gemini-2.0-flash",
+    ]);
+  });
+
+  it("prefers entry fallbacks over defaults", () => {
+    const entryModel = {
+      primary: "openai/gpt-5-mini",
+      fallbacks: ["openai/gpt-5-nano"],
+    };
+    const defaultModel = {
+      primary: "openai/gpt-5",
+      fallbacks: ["google/gemini-2.0-flash"],
+    };
+
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(["openai/gpt-5-nano"]);
+  });
+
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not inherit global fallbacks for $name", ({ model }) => {
+    expect(
+      resolveEffectiveModelFallbacks(model, {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps explicit empty entry fallback lists", () => {
+    const entryModel = {
+      primary: "openai/gpt-5-mini",
+      fallbacks: [],
+    };
+    const defaultModel = {
+      primary: "openai/gpt-5",
+      fallbacks: ["google/gemini-2.0-flash"],
+    };
+
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toStrictEqual([]);
+  });
+});
+
+describe("assistantAvatarFallbackUrl", () => {
+  it("uses the bundled Molty png for assistant profile fallbacks", () => {
+    expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
+    expect(assistantAvatarFallbackUrl("")).toBe("/apple-touch-icon.png");
+  });
+});
+
+describe("resolveAssistantTextAvatar", () => {
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
+  });
+});
+
+describe("resolveAgentAvatarUrl", () => {
+  it("accepts image data URLs only through the shared encoded-size boundary", () => {
+    const prefix = "data:image/svg+xml;base64,";
+    const exact = `${prefix}${"A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length)}`;
+
+    expect(isRenderableControlUiAvatarUrl(exact)).toBe(true);
+    expect(isRenderableControlUiAvatarUrl(`${exact}A`)).toBe(false);
+    expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
+  });
+
+  it("prefers a runtime avatar URL over non-URL identity avatars", () => {
+    expect(
+      resolveAgentAvatarUrl(
+        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        {
+          agentId: "main",
+          avatar: "A",
+          name: "Main",
+        },
+      ),
+    ).toBe("/avatar/main");
+  });
+
+  it("ignores remote http avatars so the control UI falls back to a local badge", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "https://example.com/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores protocol-relative avatars so the control UI cannot be tricked into a cross-origin fetch", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "//evil.example/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for initials or emoji avatar values without a URL", () => {
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("resolveChatAvatarRenderUrl", () => {
+  it("accepts a blob: URL produced by an authenticated avatar fetch", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/uuid-123", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("blob:http://localhost/uuid-123");
+  });
+
+  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
+    expect(
+      resolveChatAvatarRenderUrl(null, {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+
+  it("rejects remote URLs passed as the render candidate", () => {
+    expect(
+      resolveChatAvatarRenderUrl("https://example.com/avatar.png", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+});
+
+describe("resolveAgentSkillsFilter", () => {
+  it("inherits the default filter when the agent has no override", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: [" github ", "weather"] },
+            entries: { main: { default: true } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual(["github", "weather"]);
+  });
+
+  it("prefers an explicit empty agent filter over inherited defaults", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { skills: [] } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("buildAgentContext", () => {
+  it("falls back to agent payload workspace/model when config form is unavailable", () => {
+    const context = buildAgentContext(
+      {
+        id: "main",
+        workspace: "/tmp/agent-workspace",
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["openai/gpt-5.2-codex"],
+        },
+        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+      },
+      null,
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/agent-workspace");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.runtime).toBe("claude-cli (fallback none)");
+    expect(context.isDefault).toBe(true);
+  });
+
+  it("uses configured defaults when agent-specific overrides are absent", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: {
+            workspace: "/tmp/default-workspace",
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["openai/gpt-5.2-codex"],
+            },
+          },
+          entries: { main: { default: true } },
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/default-workspace");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+  });
+
+  it("shows inherited skill filters in the agent context", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: { skills: ["github", "weather"] },
+          entries: { main: { default: true } },
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.skillsLabel).toBe("2 selected");
+  });
+
+  it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
+    const context = buildAgentContext(
+      {
+        id: "fs-daying",
+        name: "File-system agent",
+        identity: { name: "大颖", emoji: "⚙️" },
+      },
+      null,
+      null,
+      "main",
+      {
+        agentId: "fs-daying",
+        name: "AI大管家",
+        avatar: "M",
+        emoji: "🤖",
+      },
+    );
+
+    expect(context.identityName).toBe("大颖");
+    expect(context.identityAvatar).toBe("⚙️");
+  });
+});

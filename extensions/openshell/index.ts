@@ -1,3 +1,4 @@
+// Openshell plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -16,13 +17,26 @@ export default definePluginEntry({
       return;
     }
     const pluginConfig = resolveOpenShellPluginConfig(api.pluginConfig);
-    registerSandboxBackend("openshell", {
+    const unregister = registerSandboxBackend("openshell", {
       factory: createOpenShellSandboxBackendFactory({
         pluginConfig,
       }),
       manager: createOpenShellSandboxBackendManager({
         pluginConfig,
       }),
+      resolveWorkdir: () => pluginConfig.remoteWorkspaceDir,
+    });
+    // Eager CLI registrations must retire even if Gateway services never start.
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "openshell-sandbox-cleanup",
+      cleanup: ({ reason, sessionKey, runId }) => {
+        if (sessionKey !== undefined || runId !== undefined) {
+          return;
+        }
+        if (reason === "disable" || reason === "restart") {
+          unregister();
+        }
+      },
     });
   },
 });

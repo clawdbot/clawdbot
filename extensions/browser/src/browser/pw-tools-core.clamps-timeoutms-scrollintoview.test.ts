@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.clamps timeoutms scrollintoview plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
@@ -6,7 +7,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("clamps timeoutMs for scrollIntoView", async () => {
@@ -21,7 +22,10 @@ describe("pw-tools-core", () => {
       timeoutMs: 50,
     });
 
-    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 500 });
+    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({
+      timeout: 500,
+      signal: expect.any(AbortSignal),
+    });
   });
   it.each([
     {
@@ -58,6 +62,12 @@ describe("pw-tools-core", () => {
     {
       name: "not-visible timeouts into snapshot hints",
       errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
+      expectedMessage: /not found or not visible/i,
+    },
+    {
+      name: "bare locator timeouts into snapshot hints",
+      errorMessage:
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('aria-ref=ax13')",
       expectedMessage: /not found or not visible/i,
     },
   ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {

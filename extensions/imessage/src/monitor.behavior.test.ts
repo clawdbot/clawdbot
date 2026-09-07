@@ -1,0 +1,19 @@
+// Real-timer helpers with no module mocks or file-wide hooks share one graph safely.
+import "./monitor.gating.test-support.js";
+import "./monitor.shutdown.unhandled-rejection.test-support.js";
+import "./monitor/catchup.test-support.js";
+import "./monitor/coalesce.test-support.js";
+import "./monitor/conversation-repair.test-support.js";
+import "./monitor/dm-history.test-support.js";
+import "./monitor/group-allowlist-warnings.test-support.js";
+import "./monitor/inbound-dedupe.test-support.js";
+import "./monitor/inbound-processing.systemPrompt.test-support.js";
+import "./monitor/media-staging.test-utils.js";
+import "./monitor/parse-notification.test-support.js";
+import "./monitor/poll-comment.test-support.js";
+import "./monitor/poll-render.test-support.js";
+import "./monitor/recovery-cursor.test-support.js";
+import "./monitor/reflection-guard.test-support.js";
+import "./monitor/sanitize-outbound.test-support.js";
+import "./monitor/strip-imsg-length-prefixed-text.test-support.js";
+import "./monitor/watch-error-log.test-support.js";

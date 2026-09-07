@@ -1,20 +1,32 @@
 {
   "id": "matrix",
-  "channels": ["matrix"],
-  "channelEnvVars": {
-    "matrix": [
-      "MATRIX_HOMESERVER",
-      "MATRIX_USER_ID",
-      "MATRIX_ACCESS_TOKEN",
-      "MATRIX_PASSWORD",
-      "MATRIX_DEVICE_ID",
-      "MATRIX_DEVICE_NAME",
-      "MATRIX_OPS_HOMESERVER",
-      "MATRIX_OPS_ACCESS_TOKEN",
-      "MATRIX_OPS_DEVICE_ID",
-      "MATRIX_OPS_DEVICE_NAME"
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [
+      { "id": "matrix-account-sqlite-schema" },
+      { "id": "matrix-credentials-json-to-plugin-state" },
+      { "id": "matrix-inbound-dedupe-to-claimable-dedupe" },
+      { "id": "matrix-storage-meta-json-to-plugin-state" },
+      { "id": "matrix-sync-cache-json-to-plugin-state" },
+      { "id": "matrix-recovery-key-json-to-plugin-state" },
+      { "id": "matrix-legacy-crypto-migration-json-to-plugin-state" }
     ]
   },
+  "name": "Matrix",
+  "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
+  "cliCommands": [
+    {
+      "name": "matrix",
+      "description": "Manage Matrix accounts, verification, devices, and profile state",
+      "hasSubcommands": true
+    }
+  ],
+  "commandAliases": [{ "name": "matrix" }],
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["matrix"]
+  },
+  "channels": ["matrix"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

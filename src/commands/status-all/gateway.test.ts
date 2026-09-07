@@ -1,14 +1,174 @@
-import { describe, expect, it } from "vitest";
-import { summarizeLogTail } from "./gateway.js";
+// Status-all gateway tests cover log-tail summaries for auth and runtime diagnostic lines.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { readFileTailLines, summarizeLogTail } from "./gateway.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("summarizeLogTail", () => {
+  it.each([
+    {
+      name: "ordinary whitespace and adjacent duplicates",
+      input: ["  first \t", "", " \t", "  first", "second  ", "  first"],
+      expected: ["  first", "second", "  first"],
+    },
+    {
+      name: "orphan JSON fragments without dropping bracketed or comment lines",
+      input: ['  "field": "value",', "  } trailing", " {", "[gateway] {kept}", "# {kept}"],
+      expected: ["[gateway] {kept}", "# {kept}"],
+    },
+    {
+      name: "reordered request identifiers and error suffixes",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed runId=r1 conn=c1 id=i1 error=Error: first",
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed id=i2 runId=r2 conn=c2 error=Error: second",
+      ],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed ×2"],
+    },
+    {
+      name: "case-sensitive identifier names",
+      input: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed RunId=r CONN=c ID=i"],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed RunId=r CONN=c ID=i"],
+    },
+    {
+      name: "field-like text without a whitespace boundary",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed/runId=keep note=conn=keep xid=keep id=drop",
+      ],
+      expected: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed/runId=keep note=conn=keep xid=keep",
+      ],
+    },
+    {
+      name: "field-like text inside identifier values",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed runId=id=conn=value conn=runId=value id=conn=value",
+      ],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed"],
+    },
+    {
+      name: "nonqualifying gateway errors",
+      input: ["[gws] errorCode=OTHER OAuth token refresh failed id=keep"],
+      expected: ["[gws] errorCode=OTHER OAuth token refresh failed id=keep"],
+    },
+  ])("preserves $name", ({ input, expected }) => {
+    expect(summarizeLogTail(input)).toEqual(expected);
+  });
+
   it("marks permanent OAuth refresh failures as reauth-required", () => {
     const lines = summarizeLogTail([
-      "[openai-codex] Token refresh failed: 401 {",
+      "[openai] Token refresh failed: 401 {",
       '"error":{"code":"invalid_grant","message":"Session invalidated due to signing in again"}',
       "}",
     ]);
 
-    expect(lines).toEqual(["[openai-codex] token refresh 401 invalid_grant · re-auth required"]);
+    expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
+  });
+
+  it.each([
+    ["closing brace", "Session invalidated } due to signing in again"],
+    ["opening brace", "Session invalidated { due to signing in again"],
+    ["escaped quote before a brace", 'Session invalidated after "}" signing in again'],
+  ])("keeps OAuth JSON diagnostics with a %s", (_caseName, message) => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      `"error":${JSON.stringify({ code: "invalid_grant", message })}`,
+      "}",
+      sentinel,
+    ]);
+
+    expect(lines).toEqual([
+      "[openai] token refresh 401 invalid_grant · re-auth required",
+      sentinel,
+    ]);
+  });
+
+  it("parses the first complete OAuth JSON object before an adjacent object", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      '"error":{"code":"invalid_grant","message":"Session invalidated due to signing in again"}}{"ignored":true}',
+    ]);
+
+    expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
+  });
+
+  it("summarizes single-line OAuth JSON diagnostics", () => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      `[openai] Token refresh failed: 401 ${JSON.stringify({
+        error: {
+          code: "invalid_grant",
+          message: "Session invalidated due to signing in again",
+        },
+      })}`,
+      sentinel,
+    ]);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("token refresh 401 invalid_grant");
+    expect(lines[0]).toContain("re-auth required");
+    expect(lines[1]).toBe(sentinel);
+  });
+
+  it("keeps later logs after single-line OAuth JSON string braces", () => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      `[openai] Token refresh failed: 401 ${JSON.stringify({
+        error: {
+          code: "invalid_grant",
+          message: "Session invalidated { due to signing in again",
+        },
+      })}`,
+      sentinel,
+    ]);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("token refresh 401 invalid_grant");
+    expect(lines[0]).toContain("re-auth required");
+    expect(lines[1]).toBe(sentinel);
+  });
+
+  it("consumes an incomplete OAuth JSON block through the end of the tail", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      '"error":{"code":"invalid_grant","message":"Session invalidated due to signing in again"}',
+      "unrelated-looking trailing line",
+    ]);
+
+    expect(lines).toEqual(["[openai] token refresh 401"]);
+  });
+
+  it("keeps bounded OAuth diagnostics UTF-16 well-formed", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 500 {",
+      `"error":${JSON.stringify({ code: "upstream", message: `${"x".repeat(50)}🚀tail` })}`,
+      "}",
+    ]);
+
+    expect(lines).toEqual([`[openai] token refresh 500 upstream · ${"x".repeat(50)}…`]);
+  });
+});
+
+describe("readFileTailLines", () => {
+  it("returns complete recent lines from a bounded large-file tail", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-log-tail-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "gateway.log");
+    fs.writeFileSync(
+      file,
+      `${"x".repeat(300_000)} partial stale line\nrecent one\nrecent two\n`,
+      "utf8",
+    );
+
+    await expect(readFileTailLines(file, 2)).resolves.toEqual(["recent one", "recent two"]);
   });
 });

@@ -1,0 +1,37 @@
+{
+  "enabled": true,
+  "domain": "feishu",
+  "connectionMode": "webhook",
+  "defaultAccount": "default",
+  "verificationToken": "upgrade-survivor-feishu-verification",
+  "encryptKey": "upgrade-survivor-feishu-encrypt",
+  "webhookPath": "/feishu/events",
+  "webhookHost": "127.0.0.1",
+  "webhookPort": 3000,
+  "accounts": {
+    "default": {
+      "enabled": true,
+      "name": "Upgrade Survivor Feishu",
+      "appId": "cli_upgrade_survivor",
+      "appSecret": {
+        "source": "env",
+        "provider": "default",
+        "id": "FEISHU_APP_SECRET"
+      }
+    }
+  },
+  "dmPolicy": "allowlist",
+  "allowFrom": ["ou_upgrade_survivor"],
+  "groupPolicy": "allowlist",
+  "groupAllowFrom": ["oc_upgrade_survivor"],
+  "groups": {
+    "oc_upgrade_survivor": {
+      "enabled": true,
+      "requireMention": true,
+      "tools": {
+        "allow": ["message_send"],
+        "deny": ["exec"]
+      }
+    }
+  }
+}

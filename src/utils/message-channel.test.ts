@@ -1,11 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+// Message channel tests cover channel id normalization and routing helpers.
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
+  isDeliverableMessageChannel,
+  isEphemeralGatewayClient,
+  isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
+  isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
+
+const INTERNAL_NON_DELIVERY_CHANNELS = [
+  "heartbeat",
+  "cron",
+  "webhook",
+  "voice",
+  "sessions_send",
+] as const;
 
 const emptyRegistry = createTestRegistry([]);
 const demoAliasPlugin: ChannelPlugin = {
@@ -45,8 +61,32 @@ describe("message-channel", () => {
   it("normalizes gateway message channels and rejects unknown values", () => {
     expect(resolveGatewayMessageChannel("discord")).toBe("discord");
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
+    expect(resolveGatewayMessageChannel("webchat")).toBe("webchat");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+    expect(isDeliverableMessageChannel("discord")).toBe(true);
+    expect(isDeliverableMessageChannel("imsg")).toBe(false);
+    expect(isDeliverableMessageChannel("webchat")).toBe(false);
+    expect(isDeliverableMessageChannel("nope")).toBe(false);
+  });
+
+  it("classifies ephemeral Gateway client modes", () => {
+    for (const mode of ["cli", "backend", "probe", " CLI "]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(true);
+    }
+    // "test" stays tracked: suites use test-mode clients as real-client stand-ins.
+    for (const mode of ["ui", "webchat", "node", "test", "unknown", undefined]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(false);
+    }
+  });
+
+  it("classifies the browser copilot as a dedicated browser operator UI", () => {
+    const client = { id: "openclaw-browser-copilot", mode: "ui" };
+    expect(isBrowserCopilotClient(client)).toBe(true);
+    expect(isBrowserOperatorUiClient(client)).toBe(true);
+    expect(isOperatorUiClient(client)).toBe(true);
+    expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
+    expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
   });
 
   it("normalizes plugin aliases when registered", () => {
@@ -56,6 +96,20 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
+    expect(isDeliverableMessageChannel("workspace-chat")).toBe(false);
+  });
+
+  it("recognises internal non-delivery channel sources", () => {
+    for (const channel of INTERNAL_NON_DELIVERY_CHANNELS) {
+      expect(isInternalNonDeliveryChannel(channel)).toBe(true);
+    }
+    expect(isInternalNonDeliveryChannel("telegram")).toBe(false);
+    expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
+    expect(isInternalNonDeliveryChannel("")).toBe(false);
+    expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
+    expect(isInternalNonDeliveryChannel("cron-event")).toBe(false);
+    expect(isInternalNonDeliveryChannel("exec-event")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {
@@ -67,5 +121,40 @@ describe("message-channel", () => {
       ]),
     );
     expect(isMarkdownCapableMessageChannel("demo-markdown-channel")).toBe(true);
+  });
+
+  it("reads Matrix markdown capability from bundled channel catalog metadata", async () => {
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
+    vi.resetModules();
+    try {
+      const module = await import("./message-channel.js");
+      expect(module.isMarkdownCapableMessageChannel("matrix")).toBe(true);
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      vi.resetModules();
+    }
+  });
+
+  it("treats registered plugin channels without markdown metadata as plain text", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qa-channel",
+          plugin: createChannelTestPluginBase({
+            id: "qa-channel",
+            label: "QA Channel",
+            docsPath: "/channels/qa-channel",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(isMarkdownCapableMessageChannel("qa-channel")).toBe(false);
   });
 });

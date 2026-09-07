@@ -1,7 +1,6 @@
+// Installs shared runtime mocks used by get-reply test modules.
 import { vi } from "vitest";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
-
-registerGetReplyCommonMocks();
+import "./get-reply.test-mocks.js";
 
 vi.mock("../../link-understanding/apply.runtime.js", () => ({
   applyLinkUnderstanding: vi.fn(async () => undefined),

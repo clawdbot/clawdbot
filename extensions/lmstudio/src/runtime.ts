@@ -1,4 +1,3 @@
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -8,6 +7,9 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+// Lmstudio plugin module implements runtime behavior.
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -42,7 +44,9 @@ export function buildLmstudioAuthHeaders(
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-function sanitizeStringHeaders(headers: unknown): Record<string, string> | undefined {
+export function sanitizeLmstudioStringHeaders(
+  headers: unknown,
+): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
@@ -70,53 +74,57 @@ function shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(
   return /^profile:|^(?:shell )?env(?::|$)/.test(source);
 }
 
-export async function resolveLmstudioConfiguredApiKey(params: {
+export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
+  providerId: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   path?: string;
+  allowUnresolved?: boolean;
 }): Promise<string | undefined> {
-  const providerConfig = params.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+  const config = params.config;
+  const providerConfig = config?.models?.providers?.[params.providerId];
   const apiKeyInput = providerConfig?.apiKey;
-  if (apiKeyInput === undefined || apiKeyInput === null) {
+  if (apiKeyInput === undefined || apiKeyInput === null || !config) {
     return undefined;
   }
 
+  const path = params.path ?? `models.providers.${params.providerId}.apiKey`;
+  const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
-  if (directApiKey !== undefined) {
-    const trimmed = normalizeApiKeyConfig(directApiKey).trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    if (isKnownEnvApiKeyMarker(trimmed)) {
-      const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[trimmed]);
-      return envValue;
-    }
-    return isNonSecretApiKeyMarker(trimmed) ? undefined : trimmed;
-  }
-
-  if (!params.config) {
-    return undefined;
-  }
-  const path = params.path ?? "models.providers.lmstudio.apiKey";
   const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: params.env ?? process.env,
-    value: apiKeyInput,
+    config,
+    env,
+    value: directApiKey ?? apiKeyInput,
     path,
     unresolvedReasonStyle: "detailed",
   });
   if (resolved.unresolvedRefReason) {
+    if (params.allowUnresolved) {
+      return undefined;
+    }
     throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
-  const trimmedResolvedValue = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
-  if (!trimmedResolvedValue) {
+  const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
+  if (!trimmed) {
     return undefined;
   }
-  if (isNonSecretApiKeyMarker(trimmedResolvedValue)) {
-    return undefined;
+  if (directApiKey !== undefined && isKnownEnvApiKeyMarker(trimmed)) {
+    return normalizeOptionalSecretInput(env[trimmed]);
   }
-  return trimmedResolvedValue;
+  return isNonSecretApiKeyMarker(trimmed) ? undefined : trimmed;
+}
+
+export async function resolveLmstudioConfiguredApiKey(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  path?: string;
+  allowUnresolved?: boolean;
+}): Promise<string | undefined> {
+  return await resolveLmstudioConfiguredApiKeyForProvider({
+    ...params,
+    providerId: LMSTUDIO_PROVIDER_ID,
+  });
 }
 
 export async function resolveLmstudioProviderHeaders(params: {
@@ -131,7 +139,7 @@ export async function resolveLmstudioProviderHeaders(params: {
   }
 
   if (!params.config) {
-    return sanitizeStringHeaders(headerInputs);
+    return sanitizeLmstudioStringHeaders(headerInputs);
   }
 
   const pathPrefix = params.path ?? "models.providers.lmstudio.headers";
@@ -205,6 +213,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
     configuredApiKeyPromise ??= resolveLmstudioConfiguredApiKey({
       config,
       env: params.env,
+      allowUnresolved: hasAuthorizationHeader,
     });
     return await configuredApiKeyPromise;
   };
@@ -221,7 +230,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
       [
         "LM Studio API key is required.",
         `Set models.providers.lmstudio.apiKey (for example "${envMarker}")`,
-        'or run "openclaw models auth lmstudio".',
+        `or run "${formatCliCommand("openclaw models auth login --provider lmstudio")}".`,
       ].join(" "),
     );
   };
@@ -243,7 +252,11 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   if (shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(resolved.source, hasAuthorizationHeader)) {
     return await resolveConfiguredApiKeyOrThrow();
   }
-  if (isNonSecretApiKeyMarker(resolvedApiKey) && resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER) {
+  if (
+    isNonSecretApiKeyMarker(resolvedApiKey) &&
+    resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER &&
+    resolvedApiKey !== LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
+  ) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   return resolvedApiKey;

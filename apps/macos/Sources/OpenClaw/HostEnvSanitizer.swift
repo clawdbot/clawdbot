@@ -6,7 +6,7 @@ struct HostEnvOverrideDiagnostics: Equatable {
 }
 
 enum HostEnvSanitizer {
-    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mjs.
+    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mts.
     /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
     private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes
@@ -24,6 +24,22 @@ enum HostEnvSanitizer {
         "NO_COLOR",
         "FORCE_COLOR",
     ]
+    private static let gitAllowProtocolKey = "GIT_ALLOW_PROTOCOL"
+    private static let gitProtocolFromUserKey = "GIT_PROTOCOL_FROM_USER"
+    private static let gitProtocolFromUserDisabledValue = "0"
+    private static let cargoTargetExecutableOverridePattern =
+        #"^CARGO_TARGET_[A-Z0-9_]+_(LINKER|RUNNER)$"#
+    private static let gitDefaultAlwaysAllowedProtocols: Set<String> = [
+        "git",
+        "http",
+        "https",
+        "ssh",
+    ]
+
+    private static func isNoPagerOverride(_ key: String, _ value: String) -> Bool {
+        (key.uppercased() == "GIT_PAGER" || key.uppercased() == "PAGER") &&
+            (value.isEmpty || value == "cat")
+    }
 
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
@@ -37,6 +53,12 @@ enum HostEnvSanitizer {
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
         if self.blockedOverrideKeys.contains(upperKey) { return true }
+        if upperKey.range(
+            of: self.cargoTargetExecutableOverridePattern,
+            options: .regularExpression) != nil
+        {
+            return true
+        }
         return self.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
@@ -46,7 +68,9 @@ enum HostEnvSanitizer {
         for (rawKey, value) in overrides {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
-            if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
+            if self.isNoPagerOverride(key, value) {
+                filtered[key] = ""
+            } else if self.shellWrapperAllowedOverrideKeys.contains(key.uppercased()) {
                 filtered[key] = value
             }
         }
@@ -82,6 +106,25 @@ enum HostEnvSanitizer {
         Array(Set(values)).sorted()
     }
 
+    private static func isPermissiveGitProtocolFromUserValue(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "true" || normalized == "yes" || normalized == "on" {
+            return true
+        }
+        let isInteger = normalized.range(of: #"^[+-]?[0-9]+$"#, options: .regularExpression) != nil
+        let isZero = normalized.range(of: #"^[+-]?0+$"#, options: .regularExpression) != nil
+        return isInteger && !isZero
+    }
+
+    private static func sanitizeInheritedGitAllowProtocolValue(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty { return "" }
+        let safeProtocols = normalized
+            .split(separator: ":", omittingEmptySubsequences: false)
+            .filter { self.gitDefaultAlwaysAllowedProtocols.contains(String($0)) }
+        return safeProtocols.joined(separator: ":")
+    }
+
     static func inspectOverrides(
         overrides: [String: String]?,
         blockPathOverrides: Bool = true) -> HostEnvOverrideDiagnostics
@@ -92,7 +135,7 @@ enum HostEnvSanitizer {
 
         var blocked: [String] = []
         var invalid: [String] = []
-        for (rawKey, _) in overrides {
+        for (rawKey, value) in overrides {
             let candidate = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let normalized = self.normalizeOverrideKey(rawKey) else {
                 invalid.append(candidate.isEmpty ? rawKey : candidate)
@@ -103,6 +146,7 @@ enum HostEnvSanitizer {
                 blocked.append(upper)
                 continue
             }
+            if self.isNoPagerOverride(normalized, value) { continue }
             if self.isBlockedOverride(upper) || self.isBlocked(upper) {
                 blocked.append(upper)
                 continue
@@ -120,6 +164,22 @@ enum HostEnvSanitizer {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
+            // Preserve inherited Git allowlists without widening malformed or unsafe entries by
+            // deletion. Protocols outside Git's safe default set are removed instead.
+            if upper == self.gitAllowProtocolKey {
+                merged[key] = self.sanitizeInheritedGitAllowProtocolValue(value)
+                continue
+            }
+            // Preserve non-permissive Git boolean values. Permissive values must become explicit
+            // `0` because Git's unset default still permits protocols with policy `user`.
+            if upper == self.gitProtocolFromUserKey {
+                if !self.isPermissiveGitProtocolFromUserValue(value) {
+                    merged[key] = value
+                } else {
+                    merged[key] = self.gitProtocolFromUserDisabledValue
+                }
+                continue
+            }
             if self.isBlockedInherited(upper) { continue }
             merged[key] = value
         }
@@ -135,6 +195,12 @@ enum HostEnvSanitizer {
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
             if upper == "PATH" { continue }
+            // Never pass an executable cat through generic PAGER consumers or PATH lookup.
+            // Exact cat/empty requests become empty; whitespace and commands stay blocked.
+            if self.isNoPagerOverride(key, value) {
+                merged[key] = ""
+                continue
+            }
             if self.isBlockedOverride(upper) { continue }
             if self.isBlocked(upper) { continue }
             merged[key] = value

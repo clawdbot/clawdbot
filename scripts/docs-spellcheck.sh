@@ -17,7 +17,7 @@ args=(
   scripts/codespell-dictionary.txt
   -I
   scripts/codespell-ignore.txt
-  "${write_flag[@]}"
+  ${write_flag[@]+"${write_flag[@]}"}
 )
 
 if command -v codespell >/dev/null 2>&1; then

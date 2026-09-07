@@ -1,25 +1,25 @@
-export type AnnounceIdFromChildRunParams = {
+/**
+ * Stable announce identifiers for child-run completion messages.
+ * Versioned keys let future formats coexist with persisted v1 delivery records.
+ */
+type AnnounceIdFromChildRunParams = {
   childSessionKey: string;
   childRunId: string;
 };
 
+const ANNOUNCE_IDEMPOTENCY_KEY_PREFIX = "announce:";
+
+/** Build the persisted announce id for a child session/run pair. */
 export function buildAnnounceIdFromChildRun(params: AnnounceIdFromChildRunParams): string {
   return `v1:${params.childSessionKey}:${params.childRunId}`;
 }
 
+/** Build the idempotency key used by announce delivery storage. */
 export function buildAnnounceIdempotencyKey(announceId: string): string {
-  return `announce:${announceId}`;
+  return `${ANNOUNCE_IDEMPOTENCY_KEY_PREFIX}${announceId}`;
 }
 
-export function resolveQueueAnnounceId(params: {
-  announceId?: string;
-  sessionKey: string;
-  enqueuedAt: number;
-}): string {
-  const announceId = params.announceId?.trim();
-  if (announceId) {
-    return announceId;
-  }
-  // Backward-compatible fallback for queue items that predate announceId.
-  return `legacy:${params.sessionKey}:${params.enqueuedAt}`;
+/** True when a gateway run id belongs to an announce delivery turn. */
+export function isAnnounceRunId(runId: string | null | undefined): boolean {
+  return typeof runId === "string" && runId.startsWith(ANNOUNCE_IDEMPOTENCY_KEY_PREFIX);
 }

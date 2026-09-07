@@ -1,0 +1,44 @@
+name: openclaw-codeql-plugin-sdk-reply-runtime-critical-quality
+
+disable-default-queries: true
+
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  - include:
+      problem.severity:
+        - error
+  - exclude:
+      tags:
+        - security
+
+paths:
+  - src/plugin-sdk/inbound-envelope.ts
+  - src/plugin-sdk/inbound-reply-dispatch.ts
+  - src/plugin-sdk/reply-*.ts
+  - src/plugin-sdk/channel-reply-*.ts
+  - src/plugin-sdk/delivery-queue-runtime.ts
+  - src/plugin-sdk/outbound-runtime.ts
+  - src/plugin-sdk/outbound-send-deps.ts
+  - src/plugin-sdk/model-session-runtime.ts
+  - src/plugin-sdk/session-*.ts
+  - src/plugin-sdk/thread-bindings-runtime.ts
+  - src/plugin-sdk/thread-bindings-session-runtime.ts
+  - src/plugin-sdk/conversation-binding-runtime.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

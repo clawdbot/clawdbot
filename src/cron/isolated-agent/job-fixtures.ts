@@ -1,5 +1,7 @@
+/** Shared loose cron fixtures for isolated-agent tests. */
 type LooseRecord = Record<string, unknown>;
 
+/** Builds a loose cron job fixture for isolated-agent unit tests. */
 export function makeIsolatedAgentJobFixture(overrides?: LooseRecord) {
   return {
     id: "test-job",
@@ -12,6 +14,8 @@ export function makeIsolatedAgentJobFixture(overrides?: LooseRecord) {
 }
 
 export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
+  // Keep the fixture deliberately loose so tests can pass partial CronJob shapes
+  // without repeating unrelated scheduler defaults.
   const jobOverrides =
     overrides && "job" in overrides ? (overrides.job as LooseRecord | undefined) : undefined;
   return {

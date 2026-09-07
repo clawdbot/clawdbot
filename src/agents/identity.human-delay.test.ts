@@ -1,3 +1,4 @@
+// Covers human-delay identity config inheritance.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHumanDelayConfig } from "./identity.js";
@@ -9,6 +10,8 @@ describe("resolveHumanDelayConfig", () => {
   });
 
   it("merges defaults with per-agent overrides", () => {
+    // Partial agent overrides should preserve unspecified timing bounds from
+    // defaults while replacing the fields the agent owns.
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {

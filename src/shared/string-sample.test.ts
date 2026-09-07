@@ -1,3 +1,4 @@
+// String sample tests cover compact string sampling and truncation behavior.
 import { describe, expect, it } from "vitest";
 import { summarizeStringEntries } from "./string-sample.js";
 
@@ -39,6 +40,15 @@ describe("summarizeStringEntries", () => {
     expect(
       summarizeStringEntries({
         entries: ["a", "b", "c", "d", "e", "f", "g"],
+      }),
+    ).toBe("a, b, c, d, e, f (+1)");
+  });
+
+  it("uses the default limit for non-finite limits", () => {
+    expect(
+      summarizeStringEntries({
+        entries: ["a", "b", "c", "d", "e", "f", "g"],
+        limit: Number.NaN,
       }),
     ).toBe("a, b, c, d, e, f (+1)");
   });

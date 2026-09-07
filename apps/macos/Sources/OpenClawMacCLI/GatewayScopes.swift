@@ -3,5 +3,6 @@ let defaultOperatorConnectScopes: [String] = [
     "operator.read",
     "operator.write",
     "operator.approvals",
+    "operator.questions",
     "operator.pairing",
 ]

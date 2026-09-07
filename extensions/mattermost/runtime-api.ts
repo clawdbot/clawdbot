@@ -16,12 +16,13 @@ export type {
 } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+export type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-contracts";
 export {
   DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
@@ -31,40 +32,34 @@ export {
   isTrustedProxyAddress,
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 export {
-  buildModelsProviderData,
   listSkillCommandsForAgents,
   resolveControlCommandGate,
   resolveStoredModelOverride,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
+export { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
-  isDangerousNameMatchingEnabled,
-  loadSessionStore,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveStorePath,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+export { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 export { formatInboundFromLabel } from "openclaw/plugin-sdk/channel-inbound";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  DM_GROUP_ACCESS_REASON,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/channel-policy";
-export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
+export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+// Legacy map-helper exports stay for older plugin consumers. New message-turn
+// code should use createChannelHistoryWindow.
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
@@ -81,9 +76,7 @@ export {
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/setup";
-export {
-  getAgentScopedMediaLocalRoots,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 export { setMattermostRuntime } from "./src/runtime.js";

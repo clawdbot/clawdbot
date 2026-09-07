@@ -1,27 +1,40 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+// Msteams plugin module implements send behavior.
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPart,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
 import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  uploadAndShareOneDrive,
+  requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
+import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
+import {
+  deleteMSTeamsActivityWithReference,
+  sendMSTeamsActivityWithReference,
+  updateMSTeamsActivityWithReference,
+} from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
-export type SendMSTeamsMessageParams = {
+type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -32,13 +45,15 @@ export type SendMSTeamsMessageParams = {
   mediaUrl?: string;
   /** Optional filename override for uploaded media/files */
   filename?: string;
+  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
-export type SendMSTeamsMessageResult = {
+type SendMSTeamsMessageResult = {
   messageId: string;
   conversationId: string;
+  receipt: MessageReceipt;
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
   pendingUploadId?: string;
 };
@@ -48,11 +63,85 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
 
 /**
  * MSTeams-specific media size limit (100MB).
- * Higher than the default because OneDrive upload handles large files well.
+ * Higher than the default to support Teams file-consent and SharePoint uploads.
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
-export type SendMSTeamsPollParams = {
+function createMSTeamsSendError(errorPrefix: string, error: unknown): Error {
+  const classification = classifyMSTeamsSendError(error);
+  const hint = formatMSTeamsSendErrorHint(classification);
+  const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+  return new Error(
+    `${errorPrefix} failed${status}: ${formatUnknownError(error)}${hint ? ` (${hint})` : ""}`,
+    { cause: error },
+  );
+}
+
+function createMSTeamsSendReceipt(params: {
+  conversationId: string;
+  platformMessageIds: readonly string[];
+  kind: MessageReceiptPartKind;
+  kinds?: readonly MessageReceiptPartKind[];
+}) {
+  const receipt = createMessageReceiptFromOutboundResults({
+    kind: params.kind,
+    results: params.platformMessageIds.map((messageId) => ({
+      channel: "msteams",
+      messageId,
+      conversationId: params.conversationId,
+    })),
+  });
+  if (!params.kinds) {
+    return receipt;
+  }
+  const kinds = params.kinds;
+  return {
+    ...receipt,
+    parts: receipt.parts.map((part, index) => {
+      const nextPart: MessageReceiptPart = {
+        platformMessageId: part.platformMessageId,
+        kind: kinds[index] ?? params.kind,
+        index: part.index,
+      };
+      if (part.threadId) {
+        nextPart.threadId = part.threadId;
+      }
+      if (part.replyToId) {
+        nextPart.replyToId = part.replyToId;
+      }
+      if (part.raw) {
+        nextPart.raw = part.raw;
+      }
+      return nextPart;
+    }),
+  };
+}
+
+function createMSTeamsSendResult(params: {
+  conversationId: string;
+  messageId: string;
+  platformMessageIds?: readonly string[];
+  kind: MessageReceiptPartKind;
+  pendingUploadId?: string;
+}): SendMSTeamsMessageResult {
+  const platformMessageIds = (
+    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
+  )
+    .map((messageId) => messageId.trim())
+    .filter((messageId) => messageId && messageId !== "unknown");
+  return {
+    messageId: params.messageId,
+    conversationId: params.conversationId,
+    receipt: createMSTeamsSendReceipt({
+      conversationId: params.conversationId,
+      platformMessageIds,
+      kind: params.kind,
+    }),
+    ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
+  };
+}
+
+type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -65,13 +154,13 @@ export type SendMSTeamsPollParams = {
   maxSelections?: number;
 };
 
-export type SendMSTeamsPollResult = {
+type SendMSTeamsPollResult = {
   pollId: string;
   messageId: string;
   conversationId: string;
 };
 
-export type SendMSTeamsCardParams = {
+type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -80,7 +169,7 @@ export type SendMSTeamsCardParams = {
   card: Record<string, unknown>;
 };
 
-export type SendMSTeamsCardResult = {
+type SendMSTeamsCardResult = {
   messageId: string;
   conversationId: string;
 };
@@ -94,28 +183,19 @@ export type SendMSTeamsCardResult = {
  *
  * File handling by conversation type:
  * - Personal (1:1) chats: small images (<4MB) use base64, large files and non-images use FileConsentCard
- * - Group chats / channels: files are uploaded to OneDrive and shared via link
+ * - Group chats / channels: files require configured SharePoint storage
  */
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaAccess, mediaLocalRoots, mediaReadFile } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
   });
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
-  const {
-    adapter,
-    appId,
-    conversationId,
-    ref,
-    log,
-    conversationType,
-    tokenProvider,
-    sharePointSiteId,
-  } = ctx;
+  const { conversationId, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   log.debug?.("sending proactive message", {
     conversationId,
@@ -129,6 +209,7 @@ export async function sendMessageMSTeams(
     const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
       maxBytes: mediaMaxBytes,
+      mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
     });
@@ -168,9 +249,7 @@ export async function sendMessageMSTeams(
       log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
       const messageId = await sendProactiveActivity({
-        adapter,
-        appId,
-        ref,
+        ctx,
         activity,
         errorPrefix: "msteams consent card send",
       });
@@ -183,11 +262,12 @@ export async function sendMessageMSTeams(
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 
-      return {
+      return createMSTeamsSendResult({
         messageId,
         conversationId,
+        kind: "card",
         pendingUploadId: uploadId,
-      };
+      });
     }
 
     // Personal chat with small image: use base64 (only works for images)
@@ -200,120 +280,70 @@ export async function sendMessageMSTeams(
     }
 
     if (isImage && !sharePointSiteId) {
-      // Group chat/channel without SharePoint: send image inline (avoids OneDrive failures)
+      // Group chat/channel images can be sent inline without SharePoint storage.
       const base64 = media.buffer.toString("base64");
       const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
       return sendTextWithMedia(ctx, messageText, finalMediaUrl);
     }
 
-    // Group chat or channel: upload to SharePoint (if siteId configured) or OneDrive
+    // Group chat or channel: upload to configured SharePoint storage.
     try {
-      if (sharePointSiteId) {
-        // Use SharePoint upload + Graph API for native file card
-        log.debug?.("uploading to SharePoint for native file card", {
-          fileName,
-          conversationType,
-          siteId: sharePointSiteId,
-        });
-
-        const uploaded = await uploadAndShareSharePoint({
-          buffer: media.buffer,
-          filename: fileName,
-          contentType: media.contentType,
-          tokenProvider,
-          siteId: sharePointSiteId,
-          // Use the Graph-native chat ID (19:xxx format) — the Bot Framework conversationId
-          // for personal DMs uses a different format that Graph API rejects.
-          chatId: ctx.graphChatId ?? conversationId,
-          usePerUserSharing: conversationType === "groupChat",
-        });
-
-        log.debug?.("SharePoint upload complete", {
-          itemId: uploaded.itemId,
-          shareUrl: uploaded.shareUrl,
-        });
-
-        // Get driveItem properties needed for native file card
-        const driveItem = await getDriveItemProperties({
-          siteId: sharePointSiteId,
-          itemId: uploaded.itemId,
-          tokenProvider,
-        });
-
-        log.debug?.("driveItem properties retrieved", {
-          eTag: driveItem.eTag,
-          webDavUrl: driveItem.webDavUrl,
-        });
-
-        // Build native Teams file card attachment and send via Bot Framework
-        const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
-        const activity = {
-          type: "message",
-          text: messageText || undefined,
-          attachments: [fileCardAttachment],
-        };
-        const messageId = await sendProactiveActivityRaw({
-          adapter,
-          appId,
-          ref,
-          activity,
-        });
-
-        log.info("sent native file card", {
-          conversationId,
-          messageId,
-          fileName: driveItem.name,
-        });
-
-        return { messageId, conversationId };
-      }
-
-      // Fallback: no SharePoint site configured, use OneDrive with markdown link
-      log.debug?.("uploading to OneDrive (no SharePoint site configured)", {
+      const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+      log.debug?.("uploading to SharePoint for native file card", {
         fileName,
         conversationType,
+        siteId,
       });
 
-      const uploaded = await uploadAndShareOneDrive({
+      const uploaded = await uploadAndShareSharePoint({
         buffer: media.buffer,
         filename: fileName,
         contentType: media.contentType,
         tokenProvider,
+        siteId,
+        chatId: conversationId,
+        usePerUserSharing: conversationType === "groupChat",
       });
 
-      log.debug?.("OneDrive upload complete", {
+      log.debug?.("SharePoint upload complete", {
         itemId: uploaded.itemId,
         shareUrl: uploaded.shareUrl,
       });
 
-      // Send message with file link (Bot Framework doesn't support "reference" attachment type for sending)
-      const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
+      const driveItem = await getDriveItemProperties({
+        siteId,
+        itemId: uploaded.itemId,
+        tokenProvider,
+      });
+
+      log.debug?.("driveItem properties retrieved", {
+        eTag: driveItem.eTag,
+        webDavUrl: driveItem.webDavUrl,
+      });
+
+      const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
       const activity = {
-        type: "message",
-        text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
+        ...buildMSTeamsMessageActivity(messageText || undefined),
+        attachments: [fileCardAttachment],
       };
       const messageId = await sendProactiveActivityRaw({
-        adapter,
-        appId,
-        ref,
+        ctx,
         activity,
       });
 
-      log.info("sent message with OneDrive file link", {
+      log.info("sent native file card", {
         conversationId,
         messageId,
-        shareUrl: uploaded.shareUrl,
+        fileName: driveItem.name,
       });
 
-      return { messageId, conversationId };
+      return createMSTeamsSendResult({
+        messageId,
+        conversationId,
+        kind: "media",
+      });
     } catch (err) {
-      const classification = classifyMSTeamsSendError(err);
-      const hint = formatMSTeamsSendErrorHint(classification);
-      const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-      throw new Error(
-        `msteams file send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-        { cause: err },
-      );
+      throw createMSTeamsSendError("msteams file send", err);
     }
   }
 
@@ -330,7 +360,7 @@ async function sendTextWithMedia(
   mediaUrl: string | undefined,
 ): Promise<SendMSTeamsMessageResult> {
   const {
-    adapter,
+    app,
     appId,
     conversationId,
     ref,
@@ -338,16 +368,19 @@ async function sendTextWithMedia(
     tokenProvider,
     sharePointSiteId,
     mediaMaxBytes,
+    replyStyle,
   } = ctx;
+  const messages =
+    text && mediaUrl ? [{ text }, { mediaUrl }] : [{ text: text || undefined, mediaUrl }];
 
-  let messageIds: string[];
+  let platformMessageIds: string[];
   try {
-    messageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
-      adapter,
+    platformMessageIds = await sendMSTeamsMessages({
+      replyStyle,
+      app,
       appId,
       conversationRef: ref,
-      messages: [{ text: text || undefined, mediaUrl }],
+      messages,
       retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
@@ -355,30 +388,29 @@ async function sendTextWithMedia(
       tokenProvider,
       sharePointSiteId,
       mediaMaxBytes,
+      serviceUrlBoundary: ctx.sdkCloudOptions,
     });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams send", err);
   }
 
-  const messageId = messageIds[0] ?? "unknown";
+  const messageId = platformMessageIds[0] ?? "unknown";
   log.info("sent proactive message", { conversationId, messageId });
 
   return {
     messageId,
     conversationId,
+    receipt: createMSTeamsSendReceipt({
+      conversationId,
+      platformMessageIds,
+      kind: mediaUrl ? "media" : "text",
+      ...(text && mediaUrl ? { kinds: ["text", "media"] } : {}),
+    }),
   };
 }
 
 type ProactiveActivityParams = {
-  adapter: MSTeamsProactiveContext["adapter"];
-  appId: string;
-  ref: MSTeamsProactiveContext["ref"];
+  ctx: MSTeamsProactiveContext;
   activity: Record<string, unknown>;
   errorPrefix: string;
 };
@@ -386,47 +418,26 @@ type ProactiveActivityParams = {
 type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
 
 async function sendProactiveActivityRaw({
-  adapter,
-  appId,
-  ref,
+  ctx,
   activity,
 }: ProactiveActivityRawParams): Promise<string> {
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-    const response = await ctx.sendActivity(activity);
-    messageId = extractMessageId(response) ?? "unknown";
+  const baseRef = buildConversationReference(ctx.ref);
+  const response = await sendMSTeamsActivityWithReference(ctx.app, baseRef, activity, {
+    ...(ctx.threadActivityId ? { threadActivityId: ctx.threadActivityId } : {}),
+    serviceUrlBoundary: ctx.sdkCloudOptions,
   });
-  return messageId;
+  return extractMessageId(response) ?? "unknown";
 }
 
 async function sendProactiveActivity({
-  adapter,
-  appId,
-  ref,
+  ctx,
   activity,
   errorPrefix,
 }: ProactiveActivityParams): Promise<string> {
   try {
-    return await sendProactiveActivityRaw({
-      adapter,
-      appId,
-      ref,
-      activity,
-    });
+    return await sendProactiveActivityRaw({ ctx, activity });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `${errorPrefix} failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError(errorPrefix, err);
   }
 }
 
@@ -437,10 +448,11 @@ export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
   const { cfg, to, question, options, maxSelections } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const ctx = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
+  const { conversationId, log } = ctx;
 
   const pollCard = buildMSTeamsPollCard({
     question,
@@ -466,9 +478,7 @@ export async function sendPollMSTeams(
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
   const messageId = await sendProactiveActivity({
-    adapter,
-    appId,
-    ref,
+    ctx,
     activity,
     errorPrefix: "msteams poll send",
   });
@@ -489,10 +499,11 @@ export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
   const { cfg, to, card } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const ctx = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
+  const { conversationId, log } = ctx;
 
   log.debug?.("sending adaptive card", {
     conversationId,
@@ -512,9 +523,7 @@ export async function sendAdaptiveCardMSTeams(
 
   // Send card via proactive conversation
   const messageId = await sendProactiveActivity({
-    adapter,
-    appId,
-    ref,
+    ctx,
     activity,
     errorPrefix: "msteams card send",
   });
@@ -527,70 +536,78 @@ export async function sendAdaptiveCardMSTeams(
   };
 }
 
-export type EditMSTeamsMessageParams = {
+type MSTeamsMessageMutationParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID */
   to: string;
-  /** Activity ID of the message to edit */
-  activityId: string;
-  /** New message text */
-  text: string;
-};
-
-export type EditMSTeamsMessageResult = {
-  conversationId: string;
-};
-
-export type DeleteMSTeamsMessageParams = {
-  /** Full config (for credentials) */
-  cfg: OpenClawConfig;
-  /** Conversation ID or user ID */
-  to: string;
-  /** Activity ID of the message to delete */
+  /** Activity ID of the message to edit or delete */
   activityId: string;
 };
 
-export type DeleteMSTeamsMessageResult = {
+type MSTeamsMessageMutationResult = {
   conversationId: string;
 };
 
 /**
  * Edit (update) a previously sent message in a Teams conversation.
  *
- * Uses the Bot Framework `continueConversation` → `updateActivity` flow
- * for proactive edits outside of the original turn context.
+ * Uses the Bot Framework REST API for proactive edits outside of the
+ * original turn context.
  */
 export async function editMessageMSTeams(
-  params: EditMSTeamsMessageParams,
-): Promise<EditMSTeamsMessageResult> {
-  const { cfg, to, activityId, text } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  params: MSTeamsMessageMutationParams & { text: string },
+): Promise<MSTeamsMessageMutationResult> {
+  return updateMSTeamsMessageActivity({
+    ...params,
+    activity: {
+      ...buildMSTeamsMessageActivity(
+        formatMSTeamsMarkdown(
+          params.text,
+          resolveMarkdownTableMode({ cfg: params.cfg, channel: "msteams" }),
+        ),
+      ),
+      id: params.activityId,
+    },
+  });
+}
+
+export async function editAdaptiveCardMSTeams(
+  params: MSTeamsMessageMutationParams & { card: Record<string, unknown> },
+): Promise<MSTeamsMessageMutationResult> {
+  return updateMSTeamsMessageActivity({
+    ...params,
+    activity: {
+      type: "message",
+      id: params.activityId,
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: params.card,
+        },
+      ],
+    },
+  });
+}
+
+async function updateMSTeamsMessageActivity(
+  params: MSTeamsMessageMutationParams & { activity: Record<string, unknown> },
+): Promise<MSTeamsMessageMutationResult> {
+  const { cfg, to, activityId, activity } = params;
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
-  log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
-
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = { ...baseRef, activityId: undefined };
+  log.debug?.("editing proactive message", { conversationId, activityId });
 
   try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      await ctx.updateActivity({
-        type: "message",
-        id: activityId,
-        text,
-      });
+    const baseRef = buildConversationReference(ref);
+    await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, {
+      serviceUrlBoundary: sdkCloudOptions,
     });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams edit failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams edit", err);
   }
 
   log.info("edited proactive message", { conversationId, activityId });
@@ -601,57 +618,30 @@ export async function editMessageMSTeams(
 /**
  * Delete a previously sent message in a Teams conversation.
  *
- * Uses the Bot Framework `continueConversation` → `deleteActivity` flow
- * for proactive deletes outside of the original turn context.
+ * Uses the Bot Framework REST API for proactive deletes outside of the
+ * original turn context.
  */
 export async function deleteMessageMSTeams(
-  params: DeleteMSTeamsMessageParams,
-): Promise<DeleteMSTeamsMessageResult> {
+  params: MSTeamsMessageMutationParams,
+): Promise<MSTeamsMessageMutationResult> {
   const { cfg, to, activityId } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
   log.debug?.("deleting proactive message", { conversationId, activityId });
 
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = { ...baseRef, activityId: undefined };
-
   try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      await ctx.deleteActivity(activityId);
+    const baseRef = buildConversationReference(ref);
+    await deleteMSTeamsActivityWithReference(app, baseRef, activityId, {
+      serviceUrlBoundary: sdkCloudOptions,
     });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams delete failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams delete", err);
   }
 
   log.info("deleted proactive message", { conversationId, activityId });
 
   return { conversationId };
-}
-
-/**
- * List all known conversation references (for debugging/CLI).
- */
-export async function listMSTeamsConversations(): Promise<
-  Array<{
-    conversationId: string;
-    userName?: string;
-    conversationType?: string;
-  }>
-> {
-  const store = createMSTeamsConversationStoreFs();
-  const all = await store.list();
-  return all.map(({ conversationId, reference }) => ({
-    conversationId,
-    userName: reference.user?.name,
-    conversationType: reference.conversation?.conversationType,
-  }));
 }

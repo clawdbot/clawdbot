@@ -1,5 +1,11 @@
 {
   "id": "device-pair",
+  "doctorContract": {
+    "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
+  },
+  "activation": {
+    "onStartup": true
+  },
   "enabledByDefault": true,
   "name": "Device Pairing",
   "description": "Generate setup codes and approve device pairing requests.",

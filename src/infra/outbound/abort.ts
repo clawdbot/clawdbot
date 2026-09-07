@@ -1,6 +1,4 @@
-/**
- * Utility for checking AbortSignal state and throwing a standard AbortError.
- */
+import { createAbortError } from "../abort-signal.js";
 
 /**
  * Throws an AbortError if the given signal has been aborted.
@@ -8,8 +6,6 @@
  */
 export function throwIfAborted(abortSignal?: AbortSignal): void {
   if (abortSignal?.aborted) {
-    const err = new Error("Operation aborted");
-    err.name = "AbortError";
-    throw err;
+    throw createAbortError("Operation aborted");
   }
 }

@@ -1,18 +1,12 @@
-import { isRecord } from "./comment-shared.js";
+// Feishu plugin module implements card interaction behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 
-export type FeishuCardInteractionKind = "button" | "quick" | "meta";
-export type FeishuCardInteractionReason =
-  | "malformed"
-  | "stale"
-  | "wrong_user"
-  | "wrong_conversation";
+type FeishuCardInteractionKind = "button" | "quick" | "meta";
+type FeishuCardInteractionReason = "malformed" | "stale" | "wrong_user" | "wrong_conversation";
 
-export type FeishuCardInteractionMetadata = Record<
-  string,
-  string | number | boolean | null | undefined
->;
+type FeishuCardInteractionMetadata = Record<string, string | number | boolean | null | undefined>;
 
 export type FeishuCardInteractionEnvelope = {
   oc: typeof FEISHU_CARD_INTERACTION_VERSION;
@@ -29,7 +23,7 @@ export type FeishuCardInteractionEnvelope = {
   };
 };
 
-export type FeishuCardActionEventLike = {
+type FeishuCardActionEventLike = {
   operator: {
     open_id?: string;
   };
@@ -41,7 +35,7 @@ export type FeishuCardActionEventLike = {
   };
 };
 
-export type DecodedFeishuCardAction =
+type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;

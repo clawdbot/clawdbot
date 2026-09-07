@@ -1,17 +1,10 @@
-function toMessageSidPart(value?: string | number | null): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(Math.trunc(value));
-  }
-  return "";
-}
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function parseZalouserMessageSidFull(
+// Zalouser plugin module implements message sid behavior.
+function parseZalouserMessageSidFull(
   value?: string | number | null,
 ): { msgId: string; cliMsgId: string } | null {
-  const raw = toMessageSidPart(value);
+  const raw = normalizeOptionalStringifiedId(value) ?? "";
   if (!raw) {
     return null;
   }
@@ -27,8 +20,8 @@ export function resolveZalouserReactionMessageIds(params: {
   cliMsgId?: string;
   currentMessageId?: string | number;
 }): { msgId: string; cliMsgId: string } | null {
-  const explicitMessageId = toMessageSidPart(params.messageId);
-  const explicitCliMsgId = toMessageSidPart(params.cliMsgId);
+  const explicitMessageId = normalizeOptionalStringifiedId(params.messageId) ?? "";
+  const explicitCliMsgId = normalizeOptionalStringifiedId(params.cliMsgId) ?? "";
   if (explicitMessageId && explicitCliMsgId) {
     return { msgId: explicitMessageId, cliMsgId: explicitCliMsgId };
   }
@@ -38,7 +31,7 @@ export function resolveZalouserReactionMessageIds(params: {
     return parsedFromCurrent;
   }
 
-  const currentRaw = toMessageSidPart(params.currentMessageId);
+  const currentRaw = normalizeOptionalStringifiedId(params.currentMessageId) ?? "";
   if (!currentRaw) {
     return null;
   }
@@ -55,8 +48,8 @@ export function formatZalouserMessageSidFull(params: {
   msgId?: string | null;
   cliMsgId?: string | null;
 }): string | undefined {
-  const msgId = toMessageSidPart(params.msgId);
-  const cliMsgId = toMessageSidPart(params.cliMsgId);
+  const msgId = normalizeOptionalStringifiedId(params.msgId) ?? "";
+  const cliMsgId = normalizeOptionalStringifiedId(params.cliMsgId) ?? "";
   if (!msgId && !cliMsgId) {
     return undefined;
   }
@@ -71,10 +64,10 @@ export function resolveZalouserMessageSid(params: {
   cliMsgId?: string | null;
   fallback?: string | null;
 }): string | undefined {
-  const msgId = toMessageSidPart(params.msgId);
-  const cliMsgId = toMessageSidPart(params.cliMsgId);
+  const msgId = normalizeOptionalStringifiedId(params.msgId) ?? "";
+  const cliMsgId = normalizeOptionalStringifiedId(params.cliMsgId) ?? "";
   if (msgId || cliMsgId) {
     return msgId || cliMsgId;
   }
-  return toMessageSidPart(params.fallback) || undefined;
+  return normalizeOptionalStringifiedId(params.fallback);
 }

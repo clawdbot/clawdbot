@@ -1,0 +1,274 @@
+title: Compaction retry after mutating tool
+
+scenario:
+  id: compaction-retry-mutating-tool
+  surface: runtime
+  runtimePairLane: core
+  coverage:
+    primary:
+      - session-memory.compaction
+      - session-memory.compaction-retry-policy
+      - session-memory.pruning
+  objective: Verify OpenClaw persists one overflow compaction, prunes bulky historical turns, retries from durable context, and performs the requested mutation exactly once.
+  successCriteria:
+    - One coded over-threshold provider overflow produces one persisted OpenClaw overflow compaction and one compacted retry retaining durable current context.
+    - OpenClaw performs exactly one successful write, then one terminal continuation after zero-or-more causally linked waits, and returns the exact file content and final marker.
+    - OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix ending at block 15 while pruning marker block 10.
+    - OpenClaw records one overflow-retry checkpoint whose branch preserves the independent pre-compaction assistant marker.
+    - The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.
+  docsRefs:
+    - docs/help/testing.md
+  codeRefs:
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
+    - src/gateway/session-compaction-checkpoints.ts
+  execution:
+    kind: flow
+    summary: Force one OpenClaw context overflow, verify persisted pruning evidence, and prove exactly-once mutation after compaction.
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      outputFile: compaction-retry-summary.txt
+      promptSnippet: Compaction retry mutating tool check
+      durableMarker: QA-COMPACTION-DURABLE-MARKER
+      bulkyMarker: QA-COMPACTION-BULKY-HISTORICAL-MARKER
+      checkpointMarker: QA-COMPACTION-PRECOMPACTION-ASSISTANT-MARKER
+      overflowThresholdBytes: 262144
+      expectedFileContent: "Replay safety: unsafe after write.\n"
+      finalMarker: "Protocol note: replay unsafe after write."
+      prompt: |-
+        Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER.
+
+        Create `compaction-retry-summary.txt` in the workspace containing exactly:
+        Replay safety: unsafe after write.
+
+        Then reply with exactly: Protocol note: replay unsafe after write.
+
+flow:
+  steps:
+    - name: compacts bulky history and mutates exactly once after overflow
+      actions:
+        - if:
+            expr: "env.runtimeId === 'codex'"
+            then:
+              - call: qaImport
+                args:
+                  - ./errors.js
+                saveAs: qaErrors
+              - throw:
+                  expr: "new qaErrors.QaSuiteScenarioSkipError('known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.')"
+        - assert:
+            expr: "env.runtimeId === 'openclaw' && env.providerMode === 'mock-openai' && Boolean(env.mock)"
+            message: compaction overflow injection requires the mock-openai OpenClaw runtime
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: sessionId
+          value:
+            expr: "`qa-compaction-retry-${randomUUID()}`"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:compaction-retry:${randomUUID().slice(0, 8)}`"
+        - set: now
+          value:
+            expr: "Date.now()"
+        - call: seedQaSessionTranscript
+          args:
+            - ref: env
+            - sessionId:
+                ref: sessionId
+              sessionKey:
+                ref: sessionKey
+              updatedAt:
+                ref: now
+              label: QA compaction retry historical transcript
+              # Exceed the mock provider byte limit without triggering proactive compaction.
+              # Keep each tail large enough that recent-history retention still prunes block 10.
+              messages:
+                expr: "[...Array.from({ length: 32 }, (_, index) => [{ role: 'user', text: `historical user block ${String(index).padStart(2, '0')} ${'u'.repeat(128)}`, timestamp: now - (70000 - index * 2000) }, { role: 'assistant', text: `historical assistant block ${String(index).padStart(2, '0')} ${'a'.repeat(128)}`, timestamp: now - (69000 - index * 2000) }]).flat(), ...Array.from({ length: 16 }, (_, index) => ({ role: 'user', text: `${index === 10 ? config.bulkyMarker + ' ' : ''}post-marker historical user block ${String(index).padStart(2, '0')} ${Array.from({ length: 1280 }, (_, tokenIndex) => `tail_${String(index).padStart(2, '0')}_${String(tokenIndex).padStart(4, '0')}`).join(' ')}`, timestamp: now - (6000 - index * 300) })), { role: 'assistant', text: config.checkpointMarker, timestamp: now - 1000 }]"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                ref: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - set: scenarioRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+        - set: requestEvidence
+          value:
+            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null, bytes: request.rawByteLength, inputChars: String(request.allInputText ?? '').length, tailBlocks: [...new Set(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0')).filter((id) => String(request.allInputText ?? '').includes(`post-marker historical user block ${id}`)))].sort().slice(0, 16), prompt: String(request.allInputText ?? '').includes(config.promptSnippet), durable: String(request.allInputText ?? '').includes(config.durableMarker), bulky: String(request.allInputText ?? '').includes(config.bulkyMarker), qualityRetry: String(request.allInputText ?? '').includes('Previous summary failed quality checks'), tool: request.plannedToolName ?? null, resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null, callId: request.plannedToolCallId ?? null, itemId: request.plannedToolItemId ?? null, transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0 ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId ?? null }))"
+        - set: overflowRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.requestKind === 'agent-initial' && request.outcome === 'error' && request.errorCode === 'context_length_exceeded' && String(request.allInputText ?? '').includes(sessionId) && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
+        - assert:
+            expr: "overflowRequests.length === 1"
+            message:
+              expr: "`expected one scenario-owned coded overflow: ${JSON.stringify(requestEvidence)}`"
+        - set: overflowRequest
+          value:
+            expr: "overflowRequests[0]"
+        - set: writeRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.cursor > overflowRequest.cursor && request.plannedToolName === 'write' && String(request.allInputText ?? '').includes(sessionId) && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
+        - assert:
+            expr: "writeRequests.length === 1"
+            message:
+              expr: "`expected one later scenario-owned write retry: ${JSON.stringify(requestEvidence)}`"
+        - set: writeRequest
+          value:
+            expr: "writeRequests[0]"
+        - assert:
+            expr: "writeRequest.requestKind === 'agent-initial' && writeRequest.outcome === 'success' && !writeRequest.toolOutput && writeRequest.plannedToolArgs?.path === config.outputFile && writeRequest.plannedToolArgs?.content === config.expectedFileContent && (writeRequest.plannedWireToolName === undefined || writeRequest.plannedWireToolName === 'exec') && typeof writeRequest.plannedToolCallId === 'string' && writeRequest.plannedToolCallId.length > 0"
+            message:
+              expr: "`logical write did not have the expected successful direct-or-Code-Mode wire shape: ${JSON.stringify(requestEvidence.find((request) => request.cursor === writeRequest.cursor))}`"
+        - set: writeWireToolName
+          value:
+            expr: "writeRequest.plannedWireToolName ?? writeRequest.plannedToolName"
+        - set: writeTranscriptToolCallId
+          value:
+            expr: "typeof writeRequest.plannedToolItemId === 'string' && writeRequest.plannedToolItemId.length > 0 ? `${writeRequest.plannedToolCallId}|${writeRequest.plannedToolItemId}` : writeRequest.plannedToolCallId"
+        - set: overflowEvidence
+          value:
+            expr: "requestEvidence.find((request) => request.cursor === overflowRequest.cursor)"
+        - set: writeEvidence
+          value:
+            expr: "requestEvidence.find((request) => request.cursor === writeRequest.cursor)"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: successfulWriteTranscriptEvents
+          value:
+            expr: "(transcript.successfulToolCallEvents ?? []).filter((event) => event.toolCallId === writeTranscriptToolCallId && event.name === writeWireToolName)"
+        - assert:
+            expr: "successfulWriteTranscriptEvents.length === 1"
+            message:
+              expr: "`expected one authenticated successful transcript event for the logical write's wire call: ${JSON.stringify({ write: writeEvidence, wireTool: writeWireToolName, callId: writeRequest.plannedToolCallId, itemId: writeRequest.plannedToolItemId, transcriptId: writeTranscriptToolCallId, events: transcript.successfulToolCallEvents ?? [] })}`"
+        - assert:
+            expr: "transcript.successfulToolCallCounts[writeWireToolName] === 1"
+            message:
+              expr: "`expected exactly one successful resolved wire call, got ${JSON.stringify({ wireTool: writeWireToolName, counts: transcript.successfulToolCallCounts })}`"
+        - assert:
+            expr: "overflowRequest.rawByteLength > config.overflowThresholdBytes"
+            message:
+              expr: "`original request did not exceed the overflow threshold: ${JSON.stringify(overflowEvidence)}`"
+        - assert:
+            expr: "String(writeRequest.allInputText ?? '').includes(config.durableMarker)"
+            message:
+              expr: "`compacted retry did not retain durable current context: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
+        - set: postWriteContinuations
+          value:
+            expr: "scenarioRequests.filter((request) => request.requestKind === 'tool-continuation' && request.cursor > writeRequest.cursor && String(request.allInputText ?? '').includes(sessionId)).toSorted((left, right) => left.cursor - right.cursor)"
+        - set: continuationChain
+          value:
+            expr: "(() => { const requests = []; const waits = []; const followedCallIds = new Set(); let currentCallId = writeRequest.plannedToolCallId; let previousCursor = writeRequest.cursor; let terminal; let valid = typeof currentCallId === 'string' && currentCallId.length > 0; while (valid) { if (followedCallIds.has(currentCallId)) { valid = false; break; } followedCallIds.add(currentCallId); const matches = postWriteContinuations.filter((request) => request.cursor > previousCursor && request.toolOutputCallId === currentCallId); if (matches.length !== 1) { valid = false; break; } const request = matches[0]; requests.push(request); previousCursor = request.cursor; if (request.plannedToolName === 'wait') { if (typeof request.plannedToolCallId !== 'string' || request.plannedToolCallId.length === 0) { valid = false; break; } waits.push(request); currentCallId = request.plannedToolCallId; continue; } if (request.plannedToolName === undefined) { terminal = request; break; } valid = false; } return { valid, requests, waits, terminal }; })()"
+        - assert:
+            expr: "continuationChain.valid === true && continuationChain.requests.length === postWriteContinuations.length && continuationChain.requests.every((request, index) => request === postWriteContinuations[index]) && continuationChain.requests.length === continuationChain.waits.length + 1 && continuationChain.requests.every((request) => request.outcome === 'success' && request.toolOutputStructuredError !== true)"
+            message:
+              expr: "`expected one exhaustive successful causal continuation chain after the logical write: ${JSON.stringify(postWriteContinuations)}`"
+        - set: terminalContinuations
+          value:
+            expr: "continuationChain.requests.filter((request) => request.plannedToolName === undefined)"
+        - assert:
+            expr: "terminalContinuations.length === 1 && terminalContinuations[0] === continuationChain.terminal && String(terminalContinuations[0].toolOutput ?? '').trim().length > 0 && terminalContinuations[0].toolOutputStructuredError !== true"
+            message:
+              expr: "`expected exactly one non-error terminal continuation after zero-or-more linked waits: ${JSON.stringify(postWriteContinuations)}`"
+        - assert:
+            expr: "continuationChain.waits.every((request) => request.plannedToolName === 'wait' && typeof request.plannedToolCallId === 'string' && request.plannedToolCallId.length > 0) && new Set([writeRequest.plannedToolCallId, ...continuationChain.waits.map((request) => request.plannedToolCallId)]).size === continuationChain.waits.length + 1"
+            message:
+              expr: "`linked wait calls did not preserve distinct causal call ids: ${JSON.stringify(postWriteContinuations)}`"
+        - assert:
+            expr: "continuationChain.waits.length === 0 || (continuationChain.waits.every((request) => typeof request.plannedToolArgs?.cell_id === 'string' && request.plannedToolArgs.cell_id.length > 0) && new Set(continuationChain.waits.map((request) => request.plannedToolArgs.cell_id)).size === 1)"
+            message:
+              expr: "`linked waits did not preserve one nonempty Code Mode cell id: ${JSON.stringify(postWriteContinuations)}`"
+        - assert:
+            expr: "writeWireToolName !== 'exec' || (terminalContinuations[0].providerVariant === 'openai' ? String(terminalContinuations[0].toolOutput ?? '').startsWith('Script completed\\n') : terminalContinuations[0].providerVariant === 'anthropic' ? (() => { try { const parsed = JSON.parse(String(terminalContinuations[0].toolOutput ?? '')); return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.status === 'completed'; } catch { return false; } })() : false)"
+            message:
+              expr: "`Code Mode terminal continuation did not report successful completion: ${JSON.stringify(terminalContinuations[0])}`"
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.finalMarker)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "outbound.text === config.finalMarker"
+            message:
+              expr: "`unexpected final compaction reply: ${JSON.stringify(outbound.text)}`"
+        - call: fs.readFile
+          saveAs: writtenSummary
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.outputFile)"
+            - utf8
+        - assert:
+            expr: "writtenSummary === config.expectedFileContent"
+            message:
+              expr: "`unexpected compaction retry file content: ${JSON.stringify(writtenSummary)}; requests=${JSON.stringify(requestEvidence)}`"
+        - assert:
+            expr: "String(overflowRequest.allInputText ?? '').includes(config.bulkyMarker) && !String(writeRequest.allInputText ?? '').includes(config.bulkyMarker)"
+            message:
+              expr: "`OpenClaw retry did not prune marker block 10: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
+        - assert:
+            expr: "JSON.stringify(overflowEvidence.tailBlocks) === JSON.stringify(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0'))) && writeEvidence.tailBlocks.length > 0 && !writeEvidence.tailBlocks.includes('10') && JSON.stringify(writeEvidence.tailBlocks) === JSON.stringify(Array.from({ length: writeEvidence.tailBlocks.length }, (_, index) => String(16 - writeEvidence.tailBlocks.length + index).padStart(2, '0')))"
+            message:
+              expr: "`OpenClaw tail retention did not keep a contiguous suffix ending at block 15 while pruning block 10: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
+        - assert:
+            expr: "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength"
+            message:
+              expr: "`OpenClaw retry was not compacted below the overflow threshold: original=${String(overflowRequest.rawByteLength)} retry=${String(writeRequest.rawByteLength)}`"
+        - set: compactionSummaryRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.requestKind === 'compaction-summary')"
+        - assert:
+            expr: "compactionSummaryRequests.some((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor) && compactionSummaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)"
+            message:
+              expr: "`expected at least one causal summary between overflow and retry with all OpenClaw compaction summaries healthy: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
+        - assert:
+            expr: "compactionSummaryRequests.every((request) => !String(request.allInputText ?? '').includes('Previous summary failed quality checks'))"
+            message:
+              expr: "`compaction summary unexpectedly required quality-feedback regeneration: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
+        - call: readRawQaSessionStore
+          saveAs: store
+          args:
+            - ref: env
+        - set: sessionEntry
+          value:
+            expr: "store[sessionKey]"
+        - assert:
+            expr: "Number.isInteger(sessionEntry?.compactionCount) && sessionEntry.compactionCount >= 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
+            message:
+              expr: "`OpenClaw token snapshot did not retain a positive compaction count with fresh token data: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
+        - set: checkpointPage
+          value:
+            expr: "await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })"
+        - set: overflowCheckpoints
+          value:
+            expr: "(checkpointPage.checkpoints ?? []).filter((checkpoint) => checkpoint.reason === 'overflow-retry')"
+        - assert:
+            expr: "overflowCheckpoints.length === 1 && Number.isFinite(overflowCheckpoints[0].tokensBefore) && Number.isFinite(overflowCheckpoints[0].tokensAfter) && overflowCheckpoints[0].tokensBefore > overflowCheckpoints[0].tokensAfter && overflowCheckpoints[0].tokensAfter >= 0"
+            message:
+              expr: "`invalid overflow checkpoint evidence: ${JSON.stringify(overflowCheckpoints.map((checkpoint) => ({ checkpointId: checkpoint.checkpointId, reason: checkpoint.reason, tokensBefore: checkpoint.tokensBefore, tokensAfter: checkpoint.tokensAfter })))}`"
+        - set: branchResult
+          value:
+            expr: "await env.gateway.call('sessions.compaction.branch', { key: sessionKey, checkpointId: overflowCheckpoints[0].checkpointId }, { timeoutMs: 30000 })"
+        - call: readSessionTranscriptSummary
+          saveAs: branchSummary
+          args:
+            - ref: env
+            - expr: "branchResult.key"
+        - assert:
+            expr: "branchSummary.finalText === config.checkpointMarker"
+            message:
+              expr: "`checkpoint branch did not preserve pre-compaction assistant marker: ${JSON.stringify({ key: branchResult.key, finalText: branchSummary.finalText })}`"
+      detailsExpr: "`${outbound.text}\\nOpenClaw originalBytes=${String(overflowRequest.rawByteLength)} retryBytes=${String(writeRequest.rawByteLength)} logicalWrites=${String(writeRequests.length)} wireTool=${String(writeWireToolName)} callId=${String(writeRequest.plannedToolCallId)} itemId=${String(writeRequest.plannedToolItemId)} transcriptId=${String(writeTranscriptToolCallId)} wireSuccesses=${String(transcript.successfulToolCallCounts[writeWireToolName] ?? 0)} compactions=${String(sessionEntry.compactionCount)} checkpoints=${String(overflowCheckpoints.length)}`"

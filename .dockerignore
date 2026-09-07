@@ -8,6 +8,14 @@
 
 .bun-cache
 .bun
+.artifacts
+**/.artifacts
+.local
+**/.local
+.pi
+**/.pi
+__openclaw_vitest__
+**/__openclaw_vitest__
 .tmp
 **/.tmp
 .DS_Store
@@ -38,6 +46,9 @@ docs/.generated
 *.log
 tmp
 **/tmp
+dist-runtime
+**/dist-runtime
+openclaw-path-alias-*
 
 # build artifacts
 dist
@@ -48,11 +59,6 @@ apps/ios/build
 
 # large app trees not needed for CLI build
 apps/
-assets/
-Peekaboo/
-Swabble/
-Core/
-Users/
 vendor/
 
 # Needed for building the Canvas A2UI bundle during Docker image builds.

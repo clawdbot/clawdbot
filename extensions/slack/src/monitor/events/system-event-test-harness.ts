@@ -1,15 +1,22 @@
+// Slack plugin module implements system event test harness behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
+  context?: AllMiddlewareArgs["context"];
+  client?: AllMiddlewareArgs["client"];
 }) => Promise<void>;
 
 export type SlackSystemEventTestOverrides = {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  channelType?: "im" | "channel";
+  channelType?: "im" | "channel" | "group" | "mpim";
   channelUsers?: string[];
+  reactionMode?: "off" | "own" | "all" | "allowlist";
+  reactionAllowlist?: Array<string | number>;
+  userNames?: Record<string, string>;
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
@@ -23,6 +30,10 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   const ctx = {
     app,
     runtime: { error: () => {} },
+    botUserId: "U_BOT",
+    botId: "B_BOT",
+    teamId: "T_TEST",
+    installationIdentity: { kind: "workspace", teamId: "T_TEST" },
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
@@ -37,14 +48,23 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     groupPolicy: "open",
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: false,
+    reactionMode: overrides?.reactionMode ?? "all",
+    reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
+    rememberSlackChannelType: () => {},
+    recallSlackChannelType: () => undefined,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
     }),
-    resolveUserName: async () => ({ name: "alice" }),
-    resolveSlackSystemEventSessionKey: () => "agent:main:main",
+    resolveUserName: async (userId: string) => ({
+      name: overrides?.userNames?.[userId] ?? "alice",
+    }),
+    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
+    getSlackAssistantThreadContext: () => undefined,
+    isSlackManagedViewThread: async () => false,
+    isSlackAgentView: async () => true,
   } as unknown as SlackMonitorContext;
 
   return {

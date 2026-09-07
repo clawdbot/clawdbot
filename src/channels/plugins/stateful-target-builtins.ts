@@ -1,41 +1,26 @@
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+/**
+ * Built-in stateful binding target registration.
+ *
+ * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
+ */
+import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
-type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
-
-let builtinsRegisteredPromise: Promise<void> | null = null;
-let acpDriverModulePromise: Promise<AcpStatefulTargetDriverModule> | undefined;
-
-function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverModule> {
-  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js");
-  return acpDriverModulePromise;
-}
+const loadAcpStatefulTargetDriverModule = createLazyRuntimeModule(
+  () => import("./acp-stateful-target-driver.js"),
+);
 
 export function isStatefulTargetBuiltinDriverId(id: string): boolean {
   return id.trim() === "acp";
 }
 
 export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
-  if (builtinsRegisteredPromise) {
-    await builtinsRegisteredPromise;
-    return;
-  }
-  builtinsRegisteredPromise = (async () => {
+  try {
     const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
     registerStatefulBindingTargetDriver(acpStatefulBindingTargetDriver);
-  })();
-  try {
-    await builtinsRegisteredPromise;
   } catch (error) {
-    builtinsRegisteredPromise = null;
+    // A rejected lazy import is cached; clear it so a later setup or binding attempt can retry.
+    loadAcpStatefulTargetDriverModule.clear();
     throw error;
   }
-}
-
-export async function resetStatefulTargetBuiltinsForTesting(): Promise<void> {
-  builtinsRegisteredPromise = null;
-  const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
-  unregisterStatefulBindingTargetDriver(acpStatefulBindingTargetDriver.id);
 }

@@ -1,10 +1,11 @@
+// Xai tests cover tool auth shared plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
-  resolveFallbackXaiApiKey,
-  resolveXaiToolApiKey,
+  resolveXaiToolApiKeyWithAuth,
 } from "./tool-auth-shared.js";
 
 describe("xai tool auth helpers", () => {
@@ -12,9 +13,9 @@ describe("xai tool auth helpers", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prefers plugin web search keys over legacy grok keys", () => {
+  it("uses plugin web search keys", () => {
     expect(
-      resolveFallbackXaiApiKey({
+      resolveFallbackXaiAuth({
         plugins: {
           entries: {
             xai: {
@@ -26,17 +27,11 @@ describe("xai tool auth helpers", () => {
             },
           },
         },
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
       }),
-    ).toBe("plugin-key");
+    ).toEqual({
+      apiKey: "plugin-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+    });
   });
 
   it("returns source metadata and managed markers for fallback auth", () => {
@@ -58,30 +53,13 @@ describe("xai tool auth helpers", () => {
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
     });
-
-    expect(
-      resolveFallbackXaiAuth({
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      apiKey: "legacy-key",
-      source: "tools.web.search.grok.apiKey",
-    });
   });
 
-  it("falls back to runtime, then source config, then env for tool auth", () => {
+  it("falls back to runtime, then source config, then env for tool auth", async () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         runtimeConfig: {
           plugins: {
             entries: {
@@ -109,10 +87,10 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBe("runtime-key");
+    ).resolves.toBe("runtime-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           plugins: {
             entries: {
@@ -127,9 +105,9 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBe("source-key");
+    ).resolves.toBe("source-key");
 
-    expect(resolveXaiToolApiKey({})).toBe("env-key");
+    await expect(resolveXaiToolApiKeyWithAuth({})).resolves.toBe("env-key");
   });
 
   it("honors explicit disabled flags before auth fallback", () => {
@@ -138,11 +116,22 @@ describe("xai tool auth helpers", () => {
     expect(isXaiToolEnabled({ enabled: true })).toBe(true);
   });
 
-  it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
+  it("uses xAI auth profiles when tool config and env are absent", async () => {
+    const auth = {
+      hasAuthForProvider: (providerId: string) => providerId === "xai",
+      resolveApiKeyForProvider: async (providerId: string) =>
+        providerId === "xai" ? "profile-key" : undefined, // pragma: allowlist secret
+    };
+
+    expect(isXaiToolEnabled({ auth })).toBe(true);
+    await expect(resolveXaiToolApiKeyWithAuth({ auth })).resolves.toBe("profile-key");
+  });
+
+  it("does not use env fallback when a non-env SecretRef is configured but unavailable", async () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           plugins: {
             entries: {
@@ -161,14 +150,89 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
   });
 
-  it("resolves env SecretRefs from source config when runtime snapshot is unavailable", () => {
+  it.each(
+    [undefined, "   "].flatMap((envValue) =>
+      [
+        undefined,
+        { source: "env" as const },
+        { source: "file" as const, path: "/unused" },
+        { source: "exec" as const, command: "/unused" },
+        { source: "store" as const },
+      ].map((declaration) => ({
+        envValue,
+        declaration,
+        source: declaration?.source ?? "undeclared",
+      })),
+    ),
+  )(
+    "does not borrow profile auth for a missing configured env ref ($source, $envValue)",
+    async ({ envValue, declaration }) => {
+      vi.stubEnv("XAI_API_KEY", envValue);
+      const auth = {
+        hasAuthForProvider: vi.fn(() => true),
+        resolveApiKeyForProvider: vi.fn(async () => "profile-key"),
+      };
+      const sourceConfig: OpenClawConfig = {
+        secrets: {
+          defaults: { env: "selected" },
+          providers: declaration ? { selected: declaration } : undefined,
+        },
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "selected", id: "XAI_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
+      await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
+      expect(auth.hasAuthForProvider).not.toHaveBeenCalled();
+      expect(auth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not bypass blocked explicit tool config with auth profiles", async () => {
+    const auth = {
+      hasAuthForProvider: (providerId: string) => providerId === "xai",
+      resolveApiKeyForProvider: async () => "profile-key", // pragma: allowlist secret
+    };
+
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "file",
+                  provider: "vault",
+                  id: "/xai/tool-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
+    await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
+  });
+
+  it("resolves env SecretRefs from source config when runtime snapshot is unavailable", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           plugins: {
             entries: {
@@ -187,14 +251,14 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBe("xai-secretref-key");
+    ).resolves.toBe("xai-secretref-key");
   });
 
-  it("does not read arbitrary env SecretRef ids for xAI tool auth", () => {
+  it("does not read arbitrary env SecretRef ids for xAI tool auth", async () => {
     vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           plugins: {
             entries: {
@@ -213,14 +277,14 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
   });
 
-  it("does not resolve env SecretRefs when provider allowlist excludes XAI_API_KEY", () => {
+  it("does not resolve env SecretRefs when provider allowlist excludes XAI_API_KEY", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           secrets: {
             providers: {
@@ -247,14 +311,14 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
   });
 
-  it("does not resolve env SecretRefs when provider source is not env", () => {
+  it("does not resolve env SecretRefs when provider source is not env", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
 
-    expect(
-      resolveXaiToolApiKey({
+    await expect(
+      resolveXaiToolApiKeyWithAuth({
         sourceConfig: {
           secrets: {
             providers: {
@@ -281,6 +345,6 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
   });
 });

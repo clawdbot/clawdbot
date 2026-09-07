@@ -1,11 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Telegram tests cover shared plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
+import { telegramConfigAdapter } from "./config-adapter.js";
 import { createTelegramPluginBase } from "./shared.js";
 
 const telegramPluginBase = createTelegramPluginBase({
   setupWizard: {} as never,
-  setup: {} as never,
+  setupContract: {} as never,
 });
 
 function createCfg(): OpenClawConfig {
@@ -28,6 +30,46 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
 }
 
 describe("createTelegramPluginBase config duplicate token guard", () => {
+  it.each(["buildModelsMenuChannelData", "buildModelsProviderChannelData"] as const)(
+    "%s renders providers and preserves the empty fallback",
+    (hook) => {
+      const render = telegramPluginBase.commands?.[hook];
+      const channelData = render?.({
+        providers: [
+          { id: "anthropic", count: 2 },
+          { id: "openai", count: 3 },
+        ],
+      });
+
+      expect(channelData).toEqual({
+        telegram: {
+          buttons: [
+            [
+              { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
+              { text: "openai (3)", callback_data: "mdl_list_openai_1" },
+            ],
+          ],
+        },
+      });
+      expect(render?.({ providers: [] })).toBeNull();
+    },
+  );
+
+  it("wires the guided add-provider adapter into the production plugin", () => {
+    const channelData = telegramPluginBase.commands?.buildModelsAddProviderChannelData?.({
+      providers: [{ id: "ollama" }, { id: "lmstudio" }],
+    });
+
+    expect(channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "ollama", callback_data: "tgcmd:/models add ollama" }],
+          [{ text: "lmstudio", callback_data: "tgcmd:/models add lmstudio" }],
+        ],
+      },
+    });
+  });
+
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
     const alertsAccount = resolveAccount(cfg, "alerts");
@@ -130,5 +172,38 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     const account = resolveAccount(cfg, "default");
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+    expect(telegramPluginBase.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    });
+  });
+
+  it("keeps read-only accessors from resolving bot token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          telegram_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-telegram-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "telegram_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(telegramConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(telegramConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
   });
 });

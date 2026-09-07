@@ -1,13 +1,19 @@
+// Matrix plugin module implements room behavior.
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomId } from "../send.js";
 import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
 import { EventType, type MatrixActionClientOpts } from "./types.js";
 
 export async function getMatrixMemberInfo(
   userId: string,
-  opts: MatrixActionClientOpts & { roomId?: string } = {},
+  opts: MatrixActionClientOpts & { roomId: string },
 ) {
   return await withResolvedActionClient(opts, async (client) => {
-    const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
+    const roomId = await resolveMatrixRoomId(client, opts.roomId);
+    const members = await client.getJoinedRoomMembers(roomId);
+    if (!members.includes(userId)) {
+      throw new Error(`User ${userId} is not a member of room ${roomId}`);
+    }
     const profile = await client.getUserProfile(userId);
     // Membership and power levels are not included in profile calls; fetch state separately if needed.
     return {
@@ -19,7 +25,7 @@ export async function getMatrixMemberInfo(
       membership: null, // Would need separate room state query
       powerLevel: null, // Would need separate power levels state query
       displayName: profile?.displayname ?? null,
-      roomId: roomId ?? null,
+      roomId,
     };
   });
 }
@@ -29,6 +35,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;
+    let altAliases: string[] = [];
     let memberCount: number | null = null;
 
     try {
@@ -48,6 +55,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
     try {
       const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
       canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
+      altAliases = filterStringEntries(aliasState?.alt_aliases);
     } catch {
       // ignore
     }
@@ -64,7 +72,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       name,
       topic,
       canonicalAlias,
-      altAliases: [], // Would need separate query
+      altAliases,
       memberCount,
     };
   });

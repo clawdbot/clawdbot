@@ -1,10 +1,11 @@
+// Memory Core plugin module implements tools.citations behavior.
 import {
   parseAgentSessionKey,
   type MemoryCitationsMode,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
@@ -23,7 +24,7 @@ export function decorateCitations(
   }
   return results.map((entry) => {
     const citation = formatCitation(entry);
-    const snippet = `${entry.snippet.trim()}\n\nSource: ${citation}`;
+    const snippet = `${entry.snippet.trimEnd()}\n\nSource: ${citation}`;
     return { ...entry, citation, snippet };
   });
 }
@@ -34,32 +35,6 @@ function formatCitation(entry: MemorySearchResult): string {
       ? `#L${entry.startLine}`
       : `#L${entry.startLine}-L${entry.endLine}`;
   return `${entry.path}${lineRange}`;
-}
-
-export function clampResultsByInjectedChars(
-  results: MemorySearchResult[],
-  budget?: number,
-): MemorySearchResult[] {
-  if (!budget || budget <= 0) {
-    return results;
-  }
-  let remaining = budget;
-  const clamped: MemorySearchResult[] = [];
-  for (const entry of results) {
-    if (remaining <= 0) {
-      break;
-    }
-    const snippet = entry.snippet ?? "";
-    if (snippet.length <= remaining) {
-      clamped.push(entry);
-      remaining -= snippet.length;
-    } else {
-      const trimmed = snippet.slice(0, Math.max(0, remaining));
-      clamped.push({ ...entry, snippet: trimmed });
-      break;
-    }
-  }
-  return clamped;
 }
 
 export function shouldIncludeCitations(params: {

@@ -1,0 +1,3 @@
+package_name(ENV["GOOGLE_PLAY_PACKAGE_NAME"] || "ai.openclaw.app")
+
+json_key_file(ENV["GOOGLE_PLAY_JSON_KEY"]) if ENV["GOOGLE_PLAY_JSON_KEY"]

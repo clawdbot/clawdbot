@@ -1,5 +1,7 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Normalizes HTTP path values used by plugin manifests and routes.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Normalizes plugin HTTP paths to leading-slash form with optional fallback. */
 export function normalizePluginHttpPath(
   path?: string | null,
   fallback?: string | null,

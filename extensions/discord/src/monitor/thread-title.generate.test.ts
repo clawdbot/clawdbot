@@ -1,196 +1,117 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
+// Discord tests cover thread title.generate plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
-const completeWithPreparedSimpleCompletionModelMock =
-  vi.fn<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>();
-const prepareSimpleCompletionModelForAgentMock =
-  vi.fn<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>();
-const extractAssistantTextMock = vi.fn<typeof agentRuntimeModule.extractAssistantText>();
+const generateConversationLabelMock = vi.hoisted(() => vi.fn());
 
+vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>()),
+  generateConversationLabel: generateConversationLabelMock,
+}));
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
 
 beforeAll(async () => {
   ({ generateThreadTitle } = await import("./thread-title.js"));
 });
 
 beforeEach(() => {
-  vi.restoreAllMocks();
-  completeWithPreparedSimpleCompletionModelMock.mockReset();
-  prepareSimpleCompletionModelForAgentMock.mockReset();
-  extractAssistantTextMock.mockReset();
-
-  prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
-    selection: {
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/openclaw-agent",
-    },
-    model: {
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-    },
-    auth: {
-      apiKey: "sk-test",
-      source: "env:TEST_API_KEY",
-      mode: "api-key",
-    },
-  } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
-  completeWithPreparedSimpleCompletionModelMock.mockResolvedValue(
-    {} as Awaited<ReturnType<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>>,
-  );
-  extractAssistantTextMock.mockReturnValue("Generated title");
-  vi.spyOn(agentRuntimeModule, "prepareSimpleCompletionModelForAgent").mockImplementation(
-    (...args) => prepareSimpleCompletionModelForAgentMock(...args),
-  );
-  vi.spyOn(agentRuntimeModule, "completeWithPreparedSimpleCompletionModel").mockImplementation(
-    (...args) => completeWithPreparedSimpleCompletionModelMock(...args),
-  );
-  vi.spyOn(agentRuntimeModule, "extractAssistantText").mockImplementation((...args) =>
-    extractAssistantTextMock(...args),
-  );
+  generateConversationLabelMock.mockReset();
+  generateConversationLabelMock.mockResolvedValue("Generated title");
 });
 
 describe("generateThreadTitle", () => {
-  it("calls shared one-shot model prep with aws-sdk allowance", async () => {
-    prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
-      selection: {
-        provider: "openrouter",
-        modelId: "anthropic/claude-sonnet-4-5",
-        profileId: "work",
-        agentDir: "/tmp/openclaw-agent",
-      },
-      model: {
-        provider: "openrouter",
-        id: "anthropic/claude-sonnet-4-5",
-      },
-      auth: {
-        apiKey: "sk-openrouter",
-        source: "profile:work",
-        mode: "api-key",
-      },
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "openrouter/anthropic/claude-sonnet-4-5@work",
-        },
-      },
-    } as OpenClawConfig;
-
-    await generateThreadTitle({
-      cfg,
-      agentId: "main",
-      messageText: "Need a generated title.",
-    });
-
-    expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
+  it.each([
+    [' "Weekly Release Summary"\nExtra text', "Weekly Release Summary"],
+    ["```markdown\nWeekly Release Summary\n```", "Weekly Release Summary"],
+    ["**Scaling ArcherScore Development Roadmap**", "Scaling ArcherScore Development Roadmap"],
+    ['"__Weekly Release Summary__"', "Weekly Release Summary"],
+    ["*Plan* for *project*", "*Plan* for *project*"],
+    ["***Release plan***", "Release plan"],
+  ])("normalizes generated title %j", async (generated, expected) => {
+    generateConversationLabelMock.mockResolvedValueOnce(generated);
+    await expect(
+      generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Need a generated title.",
+      }),
+    ).resolves.toBe(expected);
   });
 
-  it("passes model override refs into shared model prep", async () => {
-    const cfg = {} as OpenClawConfig;
+  it("routes through the shared isolated label generator", async () => {
     await generateThreadTitle({
-      cfg,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       modelRef: "openai/gpt-4.1-mini@local",
-      messageText: "Need a generated title.",
-    });
-
-    expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      modelRef: "openai/gpt-4.1-mini@local",
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-  });
-
-  it("returns null when shared model prep cannot resolve selection", async () => {
-    prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
-      error: "No model configured for agent main.",
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
-
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      messageText: "Need a thread title.",
-    });
-
-    expect(result).toBeNull();
-    expect(completeWithPreparedSimpleCompletionModelMock).not.toHaveBeenCalled();
-  });
-
-  it("returns null when shared completion prep fails", async () => {
-    prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
-      error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
-      selection: {
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        agentDir: "/tmp/openclaw-agent",
-      },
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
-
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      messageText: "Need a thread title.",
-    });
-
-    expect(result).toBeNull();
-    expect(completeWithPreparedSimpleCompletionModelMock).not.toHaveBeenCalled();
-  });
-
-  it("builds contextual prompt and forwards completion options", async () => {
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
       messageText: "Summarize deployment blockers and owner follow-ups.",
       channelName: "release-status",
       channelDescription: "Deploy updates and incident notes",
     });
 
-    expect(result).toBe("Generated title");
-    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context).toEqual(
-      expect.objectContaining({
-        systemPrompt:
-          "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
-        messages: [
-          expect.objectContaining({
-            role: "user",
-            content: expect.stringContaining("Channel: release-status"),
-          }),
-        ],
-      }),
-    );
-    expect(
-      completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context?.messages?.[0]
-        ?.content,
-    ).toContain("Channel description: Deploy updates and incident notes");
-    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
-      expect.objectContaining({
-        maxTokens: 512,
-      }),
-    );
-    expect(
-      completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options,
-    ).not.toHaveProperty("temperature");
+    expect(generateConversationLabelMock).toHaveBeenCalledWith({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      agentId: "main",
+      userMessage:
+        "Channel: release-status\n\nChannel description: Deploy updates and incident notes\n\nMessage:\nSummarize deployment blockers and owner follow-ups.",
+      prompt:
+        "Generate a concise Discord thread title (3-6 words) in sentence case: capitalize only the first word and words that are always capitalized. Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
+      modelRef: "openai/gpt-4.1-mini@local",
+      timeoutMs: 60_000,
+      maxLength: 600,
+    });
   });
 
-  it("returns null when completion throws", async () => {
-    completeWithPreparedSimpleCompletionModelMock.mockRejectedValueOnce(
-      new Error("network timeout"),
-    );
-
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+  it("keeps truncated prompt fields on UTF-16 boundaries", async () => {
+    await generateThreadTitle({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
-      messageText: "Generate title.",
+      messageText: `${"m".repeat(599)}😀tail`,
+      channelName: `${"n".repeat(119)}😀tail`,
+      channelDescription: `${"d".repeat(319)}😀tail`,
     });
 
-    expect(result).toBeNull();
+    const content = generateConversationLabelMock.mock.calls[0]?.[0]?.userMessage ?? "";
+    expect(hasLoneSurrogate(content)).toBe(false);
+    expect(content).toContain(`${"m".repeat(599)}...`);
+    expect(content).toContain(`${"n".repeat(119)}...`);
+    expect(content).toContain(`${"d".repeat(319)}...`);
+  });
+
+  it("returns null for empty input, empty output, or generation failure", async () => {
+    await expect(
+      generateThreadTitle({ cfg: EMPTY_DISCORD_TEST_CONFIG, agentId: "main", messageText: " " }),
+    ).resolves.toBeNull();
+    generateConversationLabelMock.mockResolvedValueOnce(null);
+    await expect(
+      generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Generate title.",
+      }),
+    ).resolves.toBeNull();
+    generateConversationLabelMock.mockRejectedValueOnce(new Error("network timeout"));
+    await expect(
+      generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Generate title.",
+      }),
+    ).resolves.toBeNull();
   });
 });

@@ -1,15 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-} from "./subagents-utils.js";
+// Tests subagent utility helpers for label, routing, and transcript handling.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
+import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
+import { resolveSubagentEntryForToken } from "./commands-subagents/shared.js";
+import { resolveSubagentLabel } from "./subagents-utils.js";
 
 const NOW_MS = 1_700_000_000_000;
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeRun(overrides: RunOverrides): SubagentRunRecord {
   const id = overrides.runId ?? "run-default";
+  const { startedAt, endedAt, outcome, execution, ...recordOverrides } = overrides;
   return {
     runId: id,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${id}`,
@@ -18,29 +25,43 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     task: overrides.task ?? "default task",
     cleanup: overrides.cleanup ?? "keep",
     createdAt: overrides.createdAt ?? NOW_MS - 2_000,
-    ...overrides,
+    ...recordOverrides,
+    execution:
+      execution ??
+      (endedAt === undefined
+        ? { status: "running", startedAt }
+        : { status: "terminal", startedAt, endedAt, outcome }),
   };
 }
 
-function resolveTarget(runs: SubagentRunRecord[], token: string | undefined) {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: 30,
-    label: (entry) => resolveSubagentLabel(entry),
-    errors: {
-      missingTarget: "missing",
-      invalidIndex: (value) => `invalid:${value}`,
-      unknownSession: (value) => `unknown-session:${value}`,
-      ambiguousLabel: (value) => `ambiguous-label:${value}`,
-      ambiguousLabelPrefix: (value) => `ambiguous-prefix:${value}`,
-      ambiguousRunIdPrefix: (value) => `ambiguous-run:${value}`,
-      unknownTarget: (value) => `unknown:${value}`,
-    },
-  });
+function resolveTarget(
+  runs: SubagentRunRecord[],
+  token: string | undefined,
+): {
+  entry?: SubagentRunRecord;
+  error?: string;
+} {
+  const result = resolveSubagentEntryForToken(runs, token);
+  return "entry" in result ? result : { error: result.reply.reply?.text };
+}
+
+function expectResolvedRunId(
+  runs: SubagentRunRecord[],
+  token: string | undefined,
+  expectedRunId: string,
+): void {
+  const resolved = resolveTarget(runs, token);
+  if (!resolved.entry) {
+    throw new Error(`Expected ${String(token)} to resolve, got ${resolved.error ?? "no target"}`);
+  }
+  expect(resolved.entry.runId).toBe(expectedRunId);
 }
 
 describe("subagents utils", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -65,12 +86,10 @@ describe("subagents utils", () => {
       makeRun({ runId: "old", createdAt: NOW_MS - 2_000 }),
       makeRun({ runId: "new", createdAt: NOW_MS - 500 }),
     ];
-    const resolved = resolveTarget(runs, " last ");
-    expect(resolved.entry?.runId).toBe("new");
+    expectResolvedRunId(runs, " last ", "new");
   });
 
   it("resolves numeric index from running then recent finished order", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
     const runs = [
       makeRun({
         runId: "running",
@@ -91,16 +110,16 @@ describe("subagents utils", () => {
       }),
     ];
 
-    expect(resolveTarget(runs, "1").entry?.runId).toBe("running");
-    expect(resolveTarget(runs, "2").entry?.runId).toBe("recent-finished");
-    expect(resolveTarget(runs, "3").error).toBe("invalid:3");
+    expectResolvedRunId(runs, "1", "running");
+    expectResolvedRunId(runs, "2", "recent-finished");
+    expect(resolveTarget(runs, "3").error).toBe("⚠️ Invalid subagent index: 3");
   });
 
   it("resolves session key target and unknown session errors", () => {
     const run = makeRun({ runId: "abc123", childSessionKey: "agent:beta:subagent:xyz" });
-    expect(resolveTarget([run], "agent:beta:subagent:xyz").entry?.runId).toBe("abc123");
+    expectResolvedRunId([run], "agent:beta:subagent:xyz", "abc123");
     expect(resolveTarget([run], "agent:beta:subagent:missing").error).toBe(
-      "unknown-session:agent:beta:subagent:missing",
+      "⚠️ Unknown subagent session: agent:beta:subagent:missing",
     );
   });
 
@@ -111,15 +130,15 @@ describe("subagents utils", () => {
       makeRun({ runId: "run-beta-1", label: "Beta Worker" }),
     ];
 
-    expect(resolveTarget(runs, "beta worker").entry?.runId).toBe("run-beta-1");
-    expect(resolveTarget(runs, "beta").entry?.runId).toBe("run-beta-1");
-    expect(resolveTarget(runs, "run-beta").entry?.runId).toBe("run-beta-1");
+    expectResolvedRunId(runs, "beta worker", "run-beta-1");
+    expectResolvedRunId(runs, "beta", "run-beta-1");
+    expectResolvedRunId(runs, "run-beta", "run-beta-1");
 
-    expect(resolveTarget(runs, "alpha core").entry?.runId).toBe("run-alpha-1");
-    expect(resolveTarget(runs, "alpha").error).toBe("ambiguous-prefix:alpha");
-    expect(resolveTarget(runs, "run-alpha").error).toBe("ambiguous-run:run-alpha");
-    expect(resolveTarget(runs, "missing").error).toBe("unknown:missing");
-    expect(resolveTarget(runs, undefined).error).toBe("missing");
+    expectResolvedRunId(runs, "alpha core", "run-alpha-1");
+    expect(resolveTarget(runs, "alpha").error).toBe("⚠️ Ambiguous subagent label prefix: alpha");
+    expect(resolveTarget(runs, "run-alpha").error).toBe("⚠️ Ambiguous run id prefix: run-alpha");
+    expect(resolveTarget(runs, "missing").error).toBe("⚠️ Unknown subagent id: missing");
+    expect(resolveTarget(runs, undefined).error).toBe("⚠️ Missing subagent id.");
   });
 
   it("returns ambiguous exact label error before prefix/run id matching", () => {
@@ -127,7 +146,49 @@ describe("subagents utils", () => {
       makeRun({ runId: "run-a", label: "dup" }),
       makeRun({ runId: "run-b", label: "dup" }),
     ];
-    expect(resolveTarget(runs, "dup").error).toBe("ambiguous-label:dup");
+    expect(resolveTarget(runs, "dup").error).toBe("⚠️ Ambiguous subagent label: dup");
+  });
+
+  it("resolves stable taskName aliases before labels and run ids", () => {
+    const runs = [
+      makeRun({ runId: "run-review-1", label: "Review", taskName: "code_review" }),
+      makeRun({ runId: "run-review-2", label: "Review copy", taskName: "copy_review" }),
+    ];
+
+    expectResolvedRunId(runs, "code_review", "run-review-1");
+    expectResolvedRunId(runs, "copy_", "run-review-2");
+  });
+
+  it("preserves exact label targets before taskName prefix aliases", () => {
+    const runs = [
+      makeRun({ runId: "run-review-label", label: "review" }),
+      makeRun({ runId: "run-review-docs", label: "docs", taskName: "review_docs" }),
+    ];
+
+    expectResolvedRunId(runs, "review", "run-review-label");
+    expectResolvedRunId(runs, "review_", "run-review-docs");
+  });
+
+  it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
+    const runs = [
+      makeRun({
+        runId: "run-old-review",
+        childSessionKey: "agent:main:subagent:old-review",
+        label: "Old review",
+        taskName: "review_subagents",
+        createdAt: NOW_MS - 2 * 60 * 60 * 1_000,
+        endedAt: NOW_MS - 90 * 60 * 1_000,
+      }),
+      makeRun({
+        runId: "run-current-review",
+        childSessionKey: "agent:main:subagent:current-review",
+        label: "Current review",
+        taskName: "review_subagents",
+        createdAt: NOW_MS - 1_000,
+      }),
+    ];
+
+    expectResolvedRunId(runs, "review_subagents", "run-current-review");
   });
 
   it("prefers the current live row when stale and current runs share a label on one child session", () => {
@@ -149,6 +210,6 @@ describe("subagents utils", () => {
       }),
     ];
 
-    expect(resolveTarget(runs, "same worker").entry?.runId).toBe("run-new");
+    expectResolvedRunId(runs, "same worker", "run-new");
   });
 });

@@ -1,6 +1,7 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+// Discord tests cover provider.allowlist plugin behavior.
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../../test/helpers/plugins/runtime-env.js";
 import * as resolveChannelsModule from "../resolve-channels.js";
 import * as resolveUsersModule from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -28,8 +29,25 @@ describe("resolveDiscordAllowlistConfig", () => {
     );
   });
 
+  it("applies numeric guild and channel policy without directory resolution", async () => {
+    const guildEntries = {
+      "111": { users: ["333"], channels: { "222": { allow: true } } },
+      "444": { users: ["555"] },
+    };
+    const result = await resolveDiscordAllowlistConfig({
+      token: "synthetic-token",
+      guildEntries,
+      allowFrom: [],
+      discordConfig: {},
+      fetcher: vi.fn(),
+      runtime: createNonExitingRuntimeEnv(),
+    });
+    expect(result.guildEntries).toEqual(guildEntries);
+    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).not.toHaveBeenCalled();
+  });
+
   it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
     const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: ["Alice", "111", "*"],
@@ -45,6 +63,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
     });
 
     expect(result.allowFrom).toEqual(["111", "*"]);
@@ -63,7 +82,7 @@ describe("resolveDiscordAllowlistConfig", () => {
         channelName: "missing-room",
       },
     ]);
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
 
     await resolveDiscordAllowlistConfig({
       token: "token",
@@ -77,6 +96,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
     });
 
     const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
@@ -85,27 +105,12 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).toContain(
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
-    expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
+    expect(logs).toContain("discord users resolved: 387→Peter");
+    expect(logs).not.toContain("(id:387)");
   });
 
   it("groups resolved discord channel aliases under one target line", async () => {
     vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
-      {
-        input: "1456350064065904867/1464953333713473657",
-        resolved: true,
-        guildId: "1456350064065904867",
-        guildName: "Friends of the Crustacean 🦞🤝",
-        channelId: "1464953333713473657",
-        channelName: "dev",
-      },
-      {
-        input: "1456350064065904867/1456744319972282449",
-        resolved: true,
-        guildId: "1456350064065904867",
-        guildName: "Friends of the Crustacean 🦞🤝",
-        channelId: "1456744319972282449",
-        channelName: "maintainers",
-      },
       {
         input: "friends-of-the-crustacean/1464953333713473657",
         resolved: true,
@@ -116,9 +121,9 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
     ]);
 
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
 
-    await resolveDiscordAllowlistConfig({
+    const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: [],
       guildEntries: {
@@ -136,6 +141,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
       runtime,
+      discordConfig: {} as DiscordAccountConfig,
     });
 
     const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
@@ -143,8 +149,73 @@ describe("resolveDiscordAllowlistConfig", () => {
       .join("\n");
     expect(logs.match(/1456350064065904867\/1464953333713473657/g)?.length).toBe(1);
     expect(logs).toContain("aliases:friends-of-the-crustacean/1464953333713473657");
-    expect(logs).toContain(
-      "1456350064065904867/1456744319972282449 (guild:Friends of the Crustacean 🦞🤝; channel:maintainers)",
-    );
+    expect(result.guildEntries?.["1456350064065904867"]?.channels).toEqual({
+      "1464953333713473657": {},
+      "1456744319972282449": {},
+    });
+  });
+
+  it("keeps user allowlist names unresolved unless name matching is enabled", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: ["Alice", "111", "*"],
+      guildEntries: {
+        "*": {
+          users: ["Bob", "999"],
+          channels: {
+            "*": {
+              users: ["Carol", "888"],
+            },
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+      discordConfig: {} as DiscordAccountConfig,
+    });
+
+    expect(result.allowFrom).toEqual(["Alice", "111", "*"]);
+    expect(result.guildEntries?.["*"]?.users).toEqual(["Bob", "999"]);
+    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["Carol", "888"]);
+    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
+  });
+
+  it("still resolves guild and channel ids when name matching is disabled", async () => {
+    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
+      {
+        input: "ops/general",
+        resolved: true,
+        guildId: "145",
+        guildName: "Ops",
+        channelId: "246",
+        channelName: "general",
+      },
+    ]);
+    const runtime = createNonExitingRuntimeEnv();
+
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: ["Alice"],
+      guildEntries: {
+        ops: {
+          users: ["Bob"],
+          channels: {
+            general: {
+              users: ["Carol"],
+            },
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+      discordConfig: {} as DiscordAccountConfig,
+    });
+
+    expect(result.allowFrom).toEqual(["Alice"]);
+    expect(result.guildEntries?.["145"]?.channels?.["246"]?.users).toEqual(["Carol"]);
+    expect(result.guildEntries?.ops?.users).toEqual(["Bob"]);
+    expect(resolveChannelsModule.resolveDiscordChannelAllowlist).toHaveBeenCalledTimes(1);
+    expect(resolveUsersModule.resolveDiscordUserAllowlist).not.toHaveBeenCalled();
   });
 });

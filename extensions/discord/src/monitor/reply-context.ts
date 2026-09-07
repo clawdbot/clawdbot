@@ -1,8 +1,10 @@
-import type { Guild, Message, User } from "@buape/carbon";
+// Discord plugin module implements reply context behavior.
+import type { Guild, Message, User } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-export type DiscordReplyContext = {
+type DiscordReplyContext = {
   id: string;
   channelId: string;
   sender: string;
@@ -10,7 +12,7 @@ export type DiscordReplyContext = {
   senderName?: string;
   senderTag?: string;
   memberRoleIds?: string[];
-  body: string;
+  body?: string;
   timestamp?: number;
 };
 
@@ -25,7 +27,10 @@ export function resolveReplyContext(
   const referencedText = resolveDiscordMessageText(referenced, {
     includeForwarded: true,
   });
-  if (!referencedText) {
+  const hasVisibleMedia =
+    referenced.attachments.length > 0 ||
+    (!referencedText && resolveDiscordMessageStickers(referenced).length > 0);
+  if (!referencedText && !hasVisibleMedia) {
     return null;
   }
   const sender = resolveDiscordSenderIdentity({
@@ -43,7 +48,7 @@ export function resolveReplyContext(
       const roles = (referenced as { member?: { roles?: string[] } }).member?.roles;
       return Array.isArray(roles) ? roles.map((roleId) => roleId) : undefined;
     })(),
-    body: referencedText,
+    ...(referencedText ? { body: referencedText } : {}),
     timestamp: resolveTimestampMs(referenced.timestamp),
   };
 }

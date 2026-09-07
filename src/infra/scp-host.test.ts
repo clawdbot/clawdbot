@@ -1,3 +1,4 @@
+// Covers SCP remote host and path normalization.
 import { describe, expect, it } from "vitest";
 import {
   isSafeScpRemoteHost,

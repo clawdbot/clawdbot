@@ -1,7 +1,8 @@
+// Checks web-search credential presence from config and plugin metadata.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -10,27 +11,24 @@ function hasConfiguredCredentialValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean {
-  if (!isRecord(searchConfig)) {
+  const record = asOptionalObjectRecord(searchConfig);
+  if (!record) {
     return false;
   }
-  return Object.entries(searchConfig).some(
+  return Object.entries(record).some(
     ([key, value]) => key !== "enabled" && hasConfiguredCredentialValue(value),
   );
 }
 
 function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean {
-  const entries = isRecord(config.plugins?.entries) ? config.plugins.entries : undefined;
+  const entries = asOptionalObjectRecord(config.plugins?.entries);
   if (!entries) {
     return false;
   }
   return Object.values(entries).some((entry) => {
-    const pluginConfig = isRecord(entry) ? entry.config : undefined;
-    return isRecord(pluginConfig) && hasConfiguredSearchCredentialCandidate(pluginConfig.webSearch);
+    const pluginConfig = asOptionalObjectRecord(entry)?.config;
+    return hasConfiguredSearchCredentialCandidate(asOptionalObjectRecord(pluginConfig)?.webSearch);
   });
 }
 
@@ -43,7 +41,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   if (!env) {
     return false;
   }
-  return loadPluginManifestRegistry({
+  return loadManifestMetadataSnapshot({
     config: params.config,
     env,
   }).plugins.some((plugin) => {
@@ -53,13 +51,8 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
       return false;
     }
-    const providerAuthEnvVars = plugin.providerAuthEnvVars;
-    if (!providerAuthEnvVars) {
-      return false;
-    }
-    return Object.values(providerAuthEnvVars)
-      .flat()
-      .some((envVar) => hasConfiguredCredentialValue(env[envVar]));
+    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
+    return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
   });
 }
 
@@ -68,34 +61,17 @@ export function hasConfiguredWebSearchCredential(params: {
   env?: NodeJS.ProcessEnv;
   searchConfig?: Record<string, unknown>;
   origin?: PluginManifestRecord["origin"];
-  bundledAllowlistCompat?: boolean;
 }): boolean {
   const searchConfig =
     params.searchConfig ??
     (params.config.tools?.web?.search as Record<string, unknown> | undefined);
-  if (
-    !hasConfiguredSearchCredentialCandidate(searchConfig) &&
-    !hasConfiguredPluginWebSearchCandidate(params.config) &&
-    !hasManifestWebSearchEnvCredentialCandidate({
+  return (
+    hasConfiguredSearchCredentialCandidate(searchConfig) ||
+    hasConfiguredPluginWebSearchCandidate(params.config) ||
+    hasManifestWebSearchEnvCredentialCandidate({
       config: params.config,
       env: params.env,
       origin: params.origin,
     })
-  ) {
-    return false;
-  }
-  return resolvePluginWebSearchProviders({
-    config: params.config,
-    env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat ?? false,
-    origin: params.origin,
-  }).some((provider) => {
-    const configuredCredential =
-      provider.getConfiguredCredentialValue?.(params.config) ??
-      provider.getCredentialValue(searchConfig);
-    if (hasConfiguredCredentialValue(configuredCredential)) {
-      return true;
-    }
-    return provider.envVars.some((envVar) => hasConfiguredCredentialValue(params.env?.[envVar]));
-  });
+  );
 }

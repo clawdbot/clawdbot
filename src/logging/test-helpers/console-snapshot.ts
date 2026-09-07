@@ -1,3 +1,4 @@
+/** Snapshot of global console methods that tests can restore after capture patches. */
 export type ConsoleSnapshot = {
   log: typeof console.log;
   info: typeof console.info;
@@ -7,6 +8,7 @@ export type ConsoleSnapshot = {
   trace: typeof console.trace;
 };
 
+/** Captures current global console methods. */
 export function captureConsoleSnapshot(): ConsoleSnapshot {
   return {
     log: console.log,
@@ -18,6 +20,7 @@ export function captureConsoleSnapshot(): ConsoleSnapshot {
   };
 }
 
+/** Restores global console methods from a prior snapshot. */
 export function restoreConsoleSnapshot(snapshot: ConsoleSnapshot): void {
   console.log = snapshot.log;
   console.info = snapshot.info;

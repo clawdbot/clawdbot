@@ -1,14 +1,14 @@
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+/**
+ * Legacy config migration for Amazon Bedrock discovery settings. It moves
+ * old `models.bedrockDiscovery` config into plugin-local config shape.
+ */
+import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type JsonRecord = Record<string, unknown>;
 
 const LEGACY_PATH = "models.bedrockDiscovery";
 const TARGET_PATH = "plugins.entries.amazon-bedrock.config.discovery";
-const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
-function isBlockedObjectKey(key: string): boolean {
-  return BLOCKED_OBJECT_KEYS.has(key);
-}
 
 function getRecord(value: unknown): JsonRecord | null {
   return isRecord(value) ? value : null;
@@ -22,22 +22,6 @@ function ensureRecord(root: JsonRecord, key: string): JsonRecord {
   const next: JsonRecord = {};
   root[key] = next;
   return next;
-}
-
-function mergeMissing(target: JsonRecord, source: JsonRecord): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined || isBlockedObjectKey(key)) {
-      continue;
-    }
-    const existing = target[key];
-    if (existing === undefined) {
-      target[key] = value;
-      continue;
-    }
-    if (isRecord(existing) && isRecord(value)) {
-      mergeMissing(existing, value);
-    }
-  }
 }
 
 function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
@@ -59,6 +43,7 @@ function pruneEmptyModelsRoot(root: JsonRecord): void {
   }
 }
 
+/** Migrate legacy Bedrock discovery config into `plugins.entries.amazon-bedrock.config`. */
 export function migrateAmazonBedrockLegacyConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };

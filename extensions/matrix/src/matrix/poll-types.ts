@@ -7,18 +7,22 @@
  * - m.poll.end - Closes a poll
  */
 
+import {
+  M_POLL_KIND_DISCLOSED,
+  type PollKind as MatrixPollKind,
+} from "matrix-js-sdk/lib/@types/polls.js";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
-export const M_POLL_RESPONSE = "m.poll.response" as const;
-export const M_POLL_END = "m.poll.end" as const;
+const M_POLL_RESPONSE = "m.poll.response" as const;
+const M_POLL_END = "m.poll.end" as const;
 
-export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
-export const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
+const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
-export const POLL_EVENT_TYPES = [
+const POLL_EVENT_TYPES = [
   M_POLL_START,
   M_POLL_RESPONSE,
   M_POLL_END,
@@ -27,36 +31,32 @@ export const POLL_EVENT_TYPES = [
   ORG_POLL_END,
 ];
 
-export const POLL_START_TYPES = [M_POLL_START, ORG_POLL_START];
-export const POLL_RESPONSE_TYPES = [M_POLL_RESPONSE, ORG_POLL_RESPONSE];
-export const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
+const POLL_START_TYPES = [M_POLL_START, ORG_POLL_START];
+const POLL_RESPONSE_TYPES = [M_POLL_RESPONSE, ORG_POLL_RESPONSE];
+const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
 
-export type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
+type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
 
-export type TextContent = {
+type TextContent = {
   "m.text"?: string;
   "org.matrix.msc1767.text"?: string;
   body?: string;
 };
 
-export type PollAnswer = {
+type PollAnswer = {
   id: string;
 } & TextContent;
 
-export type PollParsedAnswer = {
+type PollParsedAnswer = {
   id: string;
   text: string;
 };
 
-export type PollStartSubtype = {
+type PollStartSubtype = {
   question: TextContent;
-  kind?: PollKind;
+  kind?: MatrixPollKind;
   max_selections?: number;
   answers: PollAnswer[];
-};
-
-export type LegacyPollStartContent = {
-  "m.poll"?: PollStartSubtype;
 };
 
 export type PollStartContent = {
@@ -67,7 +67,7 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-export type PollSummary = {
+type PollSummary = {
   eventId: string;
   roomId: string;
   sender: string;
@@ -78,7 +78,7 @@ export type PollSummary = {
   maxSelections: number;
 };
 
-export type PollResultsSummary = PollSummary & {
+type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -88,18 +88,18 @@ export type PollResultsSummary = PollSummary & {
   closed: boolean;
 };
 
-export type ParsedPollStart = {
+type ParsedPollStart = {
   question: string;
   answers: PollParsedAnswer[];
   kind: PollKind;
   maxSelections: number;
 };
 
-export type PollResponseSubtype = {
+type PollResponseSubtype = {
   answers: string[];
 };
 
-export type PollResponseContent = {
+type PollResponseContent = {
   [M_POLL_RESPONSE]?: PollResponseSubtype;
   [ORG_POLL_RESPONSE]?: PollResponseSubtype;
   "m.relates_to": {
@@ -112,11 +112,11 @@ export function isPollStartType(eventType: string): boolean {
   return (POLL_START_TYPES as readonly string[]).includes(eventType);
 }
 
-export function isPollResponseType(eventType: string): boolean {
+function isPollResponseType(eventType: string): boolean {
   return (POLL_RESPONSE_TYPES as readonly string[]).includes(eventType);
 }
 
-export function isPollEndType(eventType: string): boolean {
+function isPollEndType(eventType: string): boolean {
   return (POLL_END_TYPES as readonly string[]).includes(eventType);
 }
 
@@ -124,11 +124,12 @@ export function isPollEventType(eventType: string): boolean {
   return (POLL_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
-export function getTextContent(text?: TextContent): string {
-  if (!text) {
+function getTextContent(text?: unknown): string {
+  if (!isRecord(text)) {
     return "";
   }
-  return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
+  const value = text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body;
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
@@ -140,15 +141,18 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
     return null;
   }
 
-  const question = getTextContent(poll.question).trim();
+  const question = getTextContent(poll.question);
   if (!question) {
     return null;
   }
 
-  const answers = poll.answers
+  // Sender-controlled event content can violate declared Matrix types; discard
+  // malformed answers here so context building never drops the whole message.
+  const rawAnswers: unknown = poll.answers;
+  const answers = (Array.isArray(rawAnswers) ? rawAnswers : [])
     .map((answer) => ({
-      id: answer.id,
-      text: getTextContent(answer).trim(),
+      id: isRecord(answer) && typeof answer.id === "string" ? answer.id : "",
+      text: getTextContent(answer),
     }))
     .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
@@ -164,7 +168,9 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   return {
     question,
     answers,
-    kind: poll.kind ?? "m.poll.disclosed",
+    kind: M_POLL_KIND_DISCLOSED.matches(poll.kind ?? "m.poll.disclosed")
+      ? "m.poll.disclosed"
+      : "m.poll.undisclosed",
     maxSelections: Math.min(Math.max(maxSelections, 1), answers.length),
   };
 }
@@ -209,7 +215,7 @@ export function resolvePollReferenceEventId(content: unknown): string | null {
   return eventId.length > 0 ? eventId : null;
 }
 
-export function parsePollResponseAnswerIds(content: unknown): string[] | null {
+function parsePollResponseAnswerIds(content: unknown): string[] | null {
   if (!content || typeof content !== "object") {
     return null;
   }

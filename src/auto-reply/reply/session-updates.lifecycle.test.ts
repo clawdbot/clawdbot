@@ -1,110 +1,265 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { HookRunner } from "../../plugins/hooks.js";
+import { describe, expect, it } from "vitest";
+import {
+  applySessionEntryLifecycleMutation,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { incrementCompactionCount } from "./session-updates.js";
+import { persistSessionUsageUpdate } from "./session-usage.js";
 
-const hookRunnerMocks = vi.hoisted(() => ({
-  hasHooks: vi.fn<HookRunner["hasHooks"]>(),
-  runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
-  runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
-}));
+type AccountingParams = Parameters<typeof incrementCompactionCount>[0];
 
-let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
-const tempDirs: string[] = [];
-
-async function createFixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-"));
-  tempDirs.push(root);
-  const storePath = path.join(root, "sessions.json");
-  const sessionKey = "agent:main:telegram:direct:compaction";
-  const transcriptPath = path.join(root, "s1.jsonl");
-  await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
-  const entry = {
-    sessionId: "s1",
-    sessionFile: transcriptPath,
-    updatedAt: Date.now(),
-    compactionCount: 0,
-  } as SessionEntry;
-  const sessionStore: Record<string, SessionEntry> = {
-    [sessionKey]: entry,
-  };
-  await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-  return { storePath, sessionKey, sessionStore, entry, transcriptPath };
+async function withAccountingFixture(
+  body: (fixture: {
+    params: AccountingParams;
+    entry: InternalSessionEntry;
+    cached: () => InternalSessionEntry | undefined;
+    read: () => InternalSessionEntry | undefined;
+    replace: (patch: Partial<InternalSessionEntry>) => Promise<unknown>;
+    remove: () => Promise<unknown>;
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState(
+    { label: "compaction-accounting", scenario: "minimal" },
+    async (state) => {
+      const scope = {
+        agentId: "main",
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        sessionKey: "agent:main:compaction-accounting",
+      };
+      const entry: InternalSessionEntry = {
+        sessionId: randomUUID(),
+        lifecycleRevision: randomUUID(),
+        updatedAt: 1,
+        compactionCount: 0,
+      };
+      await replaceSessionEntry(scope, entry);
+      const sessionStore = { [scope.sessionKey]: entry };
+      await body({
+        params: { ...scope, sessionEntry: entry, sessionStore, expectedSession: entry },
+        entry,
+        cached: () => sessionStore[scope.sessionKey],
+        read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
+        replace: (patch) => replaceSessionEntry(scope, { ...entry, ...patch }),
+        remove: () =>
+          applySessionEntryLifecycleMutation({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            removals: [{ sessionKey: scope.sessionKey }],
+            skipMaintenance: true,
+          }),
+      });
+    },
+  );
 }
 
-describe("session-updates lifecycle hooks", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../plugins/hook-runner-global.js", () => ({
-      getGlobalHookRunner: () =>
-        ({
-          hasHooks: hookRunnerMocks.hasHooks,
-          runSessionEnd: hookRunnerMocks.runSessionEnd,
-          runSessionStart: hookRunnerMocks.runSessionStart,
-        }) as unknown as HookRunner,
-    }));
-    hookRunnerMocks.hasHooks.mockReset();
-    hookRunnerMocks.runSessionEnd.mockReset();
-    hookRunnerMocks.runSessionStart.mockReset();
-    hookRunnerMocks.hasHooks.mockImplementation(
-      (hookName) => hookName === "session_end" || hookName === "session_start",
-    );
-    hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
-    hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
-    ({ incrementCompactionCount } = await import("./session-updates.js"));
+describe("completed compaction accounting", () => {
+  it.each([80, undefined])(
+    "invalidates prior run accounting with tokensAfter=%s",
+    async (tokensAfter) => {
+      await withAccountingFixture(async (fixture) => {
+        await fixture.replace({
+          inputTokens: 18_420,
+          outputTokens: 840,
+          cacheRead: 76_500,
+          cacheWrite: 300,
+          estimatedCostUsd: 0.023,
+          totalTokens: 95_760,
+          totalTokensFresh: true,
+        });
+        expect(await incrementCompactionCount({ ...fixture.params, tokensAfter })).toBe(1);
+        for (const row of [fixture.read(), fixture.cached()]) {
+          expect(row?.inputTokens).toBeUndefined();
+          expect(row?.outputTokens).toBeUndefined();
+          expect(row?.cacheRead).toBeUndefined();
+          expect(row?.cacheWrite).toBeUndefined();
+          expect(row?.estimatedCostUsd).toBeUndefined();
+        }
+        expect(fixture.read()?.totalTokens).toBe(tokensAfter ?? 95_760);
+        expect(fixture.read()?.totalTokensFresh).toBe(tokensAfter !== undefined);
+      });
+    },
+  );
+  it.each([true, false])(
+    "increments the authoritative count with caller cache=%s",
+    async (withCache) => {
+      await withAccountingFixture(async (fixture) => {
+        await fixture.replace({ compactionCount: 7 });
+
+        const count = await incrementCompactionCount({
+          ...fixture.params,
+          sessionEntry: withCache ? fixture.params.sessionEntry : undefined,
+          sessionStore: withCache ? fixture.params.sessionStore : undefined,
+          tokensAfter: 123,
+        });
+
+        expect(count).toBe(8);
+        expect(fixture.read()).toMatchObject({
+          sessionId: fixture.entry.sessionId,
+          compactionCount: 8,
+          totalTokens: 123,
+        });
+        expect(fixture.cached()?.compactionCount).toBe(withCache ? 8 : 0);
+      });
+    },
+  );
+
+  it.each([120, 40, 0, undefined])(
+    "persists the latest private context snapshot (%s)",
+    async (currentContextTokens) => {
+      await withAccountingFixture(async (fixture) => {
+        await fixture.replace({ totalTokens: 999, totalTokensFresh: true });
+
+        expect(
+          await incrementCompactionCount({ ...fixture.params, tokensAfter: currentContextTokens }),
+        ).toBe(1);
+
+        expect(fixture.read()).toMatchObject({
+          compactionCount: 1,
+          totalTokens: currentContextTokens ?? 999,
+          totalTokensFresh: currentContextTokens !== undefined,
+        });
+      });
+    },
+  );
+
+  it("records and clears byte-compaction progress with authoritative accounting", async () => {
+    await withAccountingFixture(async (fixture) => {
+      const latch = {
+        activeBytes: 60_000,
+        sessionId: fixture.entry.sessionId,
+        maxBytes: 50_000,
+      };
+
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          transcriptByteCompactionLatch: latch,
+        }),
+      ).toBe(1);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
+    });
   });
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+  it("does not overwrite a newer writer's count or token snapshot", async () => {
+    await withAccountingFixture(async (fixture) => {
+      await fixture.replace({
+        activeWriterRunId: "new-writer",
+        compactionCount: 7,
+        totalTokens: 666,
+        totalTokensFresh: true,
+      });
+      const before = fixture.read();
+
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
+          tokensAfter: 123,
+        }),
+      ).toBeUndefined();
+
+      expect(fixture.read()).toEqual(before);
+    });
   });
 
-  it("emits compaction lifecycle hooks when newSessionId replaces the session", async () => {
-    const { storePath, sessionKey, sessionStore, entry, transcriptPath } = await createFixture();
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+  it("does not recreate a deleted row from a cached compaction result", async () => {
+    await withAccountingFixture(async (fixture) => {
+      await fixture.remove();
 
-    await incrementCompactionCount({
-      cfg,
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      newSessionId: "s2",
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          expectedSession: undefined,
+        }),
+      ).toBeUndefined();
+      expect(fixture.read()).toBeUndefined();
     });
+  });
 
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  it("preserves terminal owner authorization through run accounting", async () => {
+    await withAccountingFixture(async (fixture) => {
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          tokensAfter: 123,
+          authorize: () => false,
+        }),
+      ).toBeUndefined();
+      expect(fixture.read()?.compactionCount).toBe(0);
+    });
+  });
 
-    const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+  it.each(["writer", "authority"] as const)(
+    "does not write old compaction usage after terminal %s changes",
+    async (change) => {
+      await withAccountingFixture(async (fixture) => {
+        await fixture.replace({
+          activeWriterRunId: change === "writer" ? "new-writer" : "old-writer",
+          totalTokens: 666,
+          totalTokensFresh: true,
+        });
+        const before = fixture.read();
 
-    expect(endEvent).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      reason: "compaction",
-      transcriptArchived: false,
+        await persistSessionUsageUpdate({
+          agentId: fixture.params.agentId,
+          storePath: fixture.params.storePath,
+          sessionKey: fixture.params.sessionKey,
+          cfg: {},
+          expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
+          currentContextSnapshot: { tokens: 123 },
+          authorize: () => change !== "authority",
+        });
+
+        expect(fixture.read()).toEqual(before);
+      });
+    },
+  );
+
+  it.each([
+    { name: "session", patch: { sessionId: "replacement-session" } },
+    { name: "lifecycle", patch: { lifecycleRevision: "replacement-revision" } },
+  ])("does not account compaction against a replaced $name", async ({ patch }) => {
+    await withAccountingFixture(async (fixture) => {
+      await fixture.replace(patch);
+      const before = fixture.read();
+
+      expect(
+        await incrementCompactionCount({ ...fixture.params, tokensAfter: 123 }),
+      ).toBeUndefined();
+
+      expect(fixture.cached()).toBe(fixture.entry);
+      expect(fixture.read()).toEqual(before);
     });
-    expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
-    expect(endContext).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      agentId: "main",
-    });
-    expect(endEvent?.nextSessionId).toBe(startEvent?.sessionId);
-    expect(startEvent).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      resumedFrom: "s1",
-    });
-    expect(startContext).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      agentId: "main",
+  });
+
+  it("does not commit accounting when authority closes after the queued updater", async () => {
+    await withAccountingFixture(async (fixture) => {
+      let authorized = true;
+
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          tokensAfter: 123,
+          authorize: () => {
+            queueMicrotask(() => {
+              authorized = false;
+            });
+            return authorized;
+          },
+        }),
+      ).toBeUndefined();
+
+      expect(fixture.cached()).toBe(fixture.entry);
+      expect(fixture.read()?.compactionCount).toBe(0);
+      expect(fixture.read()?.totalTokens).toBeUndefined();
     });
   });
 });

@@ -1,3 +1,4 @@
+// Zalo tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { zaloApprovalAuth } from "./approval-auth.js";
 

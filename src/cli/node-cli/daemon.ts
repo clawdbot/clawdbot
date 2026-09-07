@@ -1,8 +1,10 @@
-import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
+// Node-host daemon lifecycle commands for install, status, start, stop, and restart.
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
-  DEFAULT_NODE_DAEMON_RUNTIME,
-  isNodeDaemonRuntime,
-} from "../../commands/node-daemon-runtime.js";
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  isGatewayDaemonRuntime,
+} from "../../commands/daemon-runtime.js";
+import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -14,10 +16,14 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+  resolveSystemdUserServiceAccount,
+} from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -29,19 +35,23 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daem
 import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
+  resolveDaemonInstallBlockMessage,
   formatRuntimeStatus,
-  parsePort,
+  projectDaemonServiceForJson,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  shareInstalledApps?: boolean;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -57,7 +67,7 @@ type NodeDaemonStatusOptions = {
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw node install"),
+    installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
     systemdServiceName: resolveNodeSystemdServiceName(),
@@ -73,47 +83,89 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   });
 }
 
-function resolveNodeDefaults(
-  opts: NodeDaemonInstallOptions,
-  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
-) {
-  const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null };
+/**
+ * Warns (does NOT auto-enable) when systemd user lingering is disabled.
+ * The installed user-level node service stops when the last SSH session ends
+ * unless `loginctl enable-linger <user>` has been run. Read-only: this never
+ * changes host state, matching the operator-consent policy used elsewhere.
+ */
+async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
   }
-  const port = portOverride ?? config?.gateway?.port ?? 18789;
-  return { host, port };
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return;
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
+  if (!status || status.linger === "yes") {
+    return;
+  }
+  warn(
+    `Systemd lingering is disabled for ${status.user}. The node service will stop when you log out. Run: sudo loginctl enable-linger ${status.user}`,
+  );
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
-  if (failIfNixDaemonInstallMode(fail)) {
+  const installBlock = resolveDaemonInstallBlockMessage("node");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
-    fail("Invalid port");
+  let gatewayOptions;
+  try {
+    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
+    fail(
+      opts.port !== undefined
+        ? formatInvalidPortOption("--port")
+        : formatInvalidConfigPort("node.gateway.port"),
+    );
+    return;
+  }
+  if (opts.tls === false && opts.tlsFingerprint !== undefined) {
+    fail("--no-tls cannot be combined with --tls-fingerprint");
+    return;
+  }
+  if (cloudflareAccess && tls !== true) {
+    fail("Cloudflare Access credentials require --tls for the node Gateway connection");
     return;
   }
 
-  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
-  if (!isNodeDaemonRuntime(runtimeRaw)) {
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  if (!isGatewayDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
+    await warnIfSystemdUserLingerDisabled(warn);
     emit({
       ok: true,
       result: "already-installed",
@@ -128,18 +180,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const tlsFingerprint =
-    normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
-      tls,
-      tlsFingerprint: tlsFingerprint || undefined,
+      contextPath,
+      tls: Boolean(tls),
+      tlsFingerprint,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      installedAppsSharing: opts.shareInstalledApps,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {
@@ -160,11 +211,21 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       await service.install({
         env: process.env,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
         description,
       });
+    },
+    // Run the linger diagnostic only on the verified-success path: placing it
+    // in `install` (before service-load verification) would let a linger
+    // warning accompany a failed install or verification, misdirecting the
+    // operator (see #107033 review). The already-installed short-circuit
+    // above warns separately.
+    onVerified: async () => {
+      await warnIfSystemdUserLingerDisabled(warn);
     },
   });
 }
@@ -208,12 +269,24 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
+    if (json) {
+      throw new Error(message, { cause: error });
+    }
+    defaultRuntime.error(message);
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {
@@ -225,7 +298,9 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.writeJson(payload);
+    defaultRuntime.writeJson({
+      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
+    });
     return;
   }
 
@@ -271,7 +346,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -279,7 +354,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

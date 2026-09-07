@@ -1,8 +1,16 @@
+// Thread binding API tests cover channel plugin thread binding contracts and helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock: vi.fn(
+    ({
+      artifactCandidates,
+      dirName,
+    }: {
+      artifactCandidates: readonly string[];
+      dirName: string;
+    }) => {
+      const artifactBasename = artifactCandidates[0];
       if (dirName === "matrix" && artifactBasename === "thread-binding-api.js") {
         return {
           defaultTopLevelPlacement: "child",
@@ -23,41 +31,38 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
       if (dirName === "broken" && artifactBasename === "thread-binding-api.js") {
         throw new Error("broken thread binding artifact");
       }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-      );
+      return null;
     },
   ),
 }));
 
 vi.mock("../../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync:
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
 }));
 
 import {
-  __testing,
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./thread-binding-api.js";
 
 describe("bundled channel thread binding fast path", () => {
   beforeEach(() => {
-    __testing.clearThreadBindingApiCache();
-    loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
   });
 
   it("loads default placement from the narrow thread binding artifact", () => {
-    expect(resolveBundledChannelThreadBindingDefaultPlacement("matrix")).toBe("child");
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(resolveBundledChannelThreadBindingDefaultPlacement(" matrix ")).toBe("child");
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
       dirName: "matrix",
-      artifactBasename: "thread-binding-api.js",
+      artifactCandidates: ["thread-binding-api.js"],
     });
   });
 
   it("loads inbound conversation resolution from the narrow artifact", () => {
     expect(
       resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "matrix",
+        channelId: " matrix ",
         to: "room:!room:example",
         threadId: "$thread",
         isGroup: true,
@@ -69,10 +74,12 @@ describe("bundled channel thread binding fast path", () => {
   });
 
   it("treats missing artifacts as absent hints", () => {
-    expect(resolveBundledChannelThreadBindingDefaultPlacement("discord")).toBeUndefined();
+    // "absent" is a synthetic channel; real bundled artifacts are covered by
+    // the thread-binding artifact parity contract test.
+    expect(resolveBundledChannelThreadBindingDefaultPlacement("absent")).toBeUndefined();
     expect(
       resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "discord",
+        channelId: "absent",
         to: "channel:general",
         isGroup: true,
       }),

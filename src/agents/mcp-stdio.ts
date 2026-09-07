@@ -1,6 +1,14 @@
-import { isMcpConfigRecord, toMcpStringArray, toMcpStringRecord } from "./mcp-config-shared.js";
+/**
+ * Stdio MCP launch config normalization.
+ * Accepts OpenClaw and upstream MCP config field names, keeping only
+ * command/args/env/cwd needed to spawn a stdio server.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { redactSensitiveArgv } from "../config/redact-argv.js";
+import { toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
-type StdioMcpServerLaunchConfig = {
+/** Normalized stdio MCP server launch config. */
+export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];
   env?: Record<string, string>;
@@ -11,8 +19,12 @@ type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
-export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerLaunchResult {
-  if (!isMcpConfigRecord(raw)) {
+/** Resolve raw MCP server config into a stdio launch config. */
+export function resolveStdioMcpServerLaunchConfig(
+  raw: unknown,
+  options?: { onDroppedEnv?: (key: string, value: unknown) => void },
+): StdioMcpServerLaunchResult {
+  if (!isRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
   }
   if (typeof raw.command !== "string" || raw.command.trim().length === 0) {
@@ -35,17 +47,16 @@ export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerL
     config: {
       command: raw.command,
       args: toMcpStringArray(raw.args),
-      env: toMcpStringRecord(raw.env),
+      env: toMcpEnvRecord(raw.env, { onDroppedEntry: options?.onDroppedEnv }),
       cwd,
     },
   };
 }
 
+/** Describe a stdio MCP launch config for diagnostics. */
 export function describeStdioMcpServerLaunchConfig(config: StdioMcpServerLaunchConfig): string {
-  const args =
-    Array.isArray(config.args) && config.args.length > 0 ? ` ${config.args.join(" ")}` : "";
+  const redactedArgs = Array.isArray(config.args) ? redactSensitiveArgv(config.args) : [];
+  const args = redactedArgs.length > 0 ? ` ${redactedArgs.join(" ")}` : "";
   const cwd = config.cwd ? ` (cwd=${config.cwd})` : "";
   return `${config.command}${args}${cwd}`;
 }
-
-export type { StdioMcpServerLaunchConfig, StdioMcpServerLaunchResult };

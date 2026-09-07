@@ -1,12 +1,27 @@
+// Zalouser tests cover monitor.account scope plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
-import { __testing } from "./monitor.js";
-import "./zalo-js.test-mocks.js";
-import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
+import {
+  createRawZalouserMessageFromNormalized,
+  waitForZalouserIngressVerdict,
+  withZalouserIngressTestQueue,
+} from "./ingress.test-support.js";
+import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+
+type ZaloJsModule = typeof import("./zalo-js.js");
+type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
+
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
@@ -28,7 +43,12 @@ describe("zalouser monitor pairing account scoping", () => {
         return scopedAccountId === "beta" ? [] : ["attacker"];
       },
     );
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIRME88", created: true }));
+    const upsertPairingRequest = vi.fn(
+      async (_params: { channel: string; id: string; accountId?: string }) => ({
+        code: "PAIRME88",
+        created: true,
+      }),
+    );
 
     setZalouserRuntime({
       logging: {
@@ -82,26 +102,94 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    await __testing.processMessage({
-      message,
-      account,
-      config,
-      runtime: createZalouserRuntimeEnv(),
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      let resolveListener: ((params: ListenerParams) => void) | undefined;
+      const listenerReady = new Promise<ListenerParams>((resolve) => {
+        resolveListener = resolve;
+      });
+      startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+        resolveListener?.(listenerParams);
+        return { stop: vi.fn() };
+      });
+      const run = monitorZalouserProvider({
+        account,
+        config,
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        ingressQueue,
+      });
+      try {
+        const listenerParams = await listenerReady;
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await waitForZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
+      } finally {
+        abortController.abort();
+        await run;
+      }
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalouser",
-        accountId: "beta",
-      }),
+    expect(readAllowFromStore).toHaveBeenCalledOnce();
+    const allowStoreParams = requireRecord(
+      readAllowFromStore.mock.calls[0]?.[0],
+      "allow store params",
     );
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalouser",
-        id: "attacker",
-        accountId: "beta",
-      }),
+    expect(allowStoreParams.channel).toBe("zalouser");
+    expect(allowStoreParams.accountId).toBe("beta");
+
+    expect(upsertPairingRequest).toHaveBeenCalledOnce();
+    const pairingRequest = requireRecord(
+      upsertPairingRequest.mock.calls[0]?.[0],
+      "pairing request params",
     );
+    expect(pairingRequest.channel).toBe("zalouser");
+    expect(pairingRequest.id).toBe("attacker");
+    expect(pairingRequest.accountId).toBe("beta");
     expect(sendMessageZalouserMock).toHaveBeenCalled();
+  });
+});
+
+describe("zalouser monitor lifecycle", () => {
+  it("publishes ready after the listener starts", async () => {
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime);
+    startZaloListenerMock.mockResolvedValueOnce({ stop: vi.fn() });
+    const statusSink = vi.fn();
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      const run = monitorZalouserProvider({
+        account: {
+          accountId: "default",
+          enabled: true,
+          profile: "default",
+          authenticated: true,
+          config: {},
+        },
+        config: {},
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        statusSink,
+        ingressQueue,
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(statusSink).toHaveBeenCalledWith({
+            running: true,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        });
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
   });
 });

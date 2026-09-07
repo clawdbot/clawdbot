@@ -1,4 +1,5 @@
 import AVFoundation
+import OpenClawKit
 import OSLog
 import SwiftUI
 
@@ -8,12 +9,18 @@ actor MicLevelMonitor {
     private var update: (@Sendable (Double) -> Void)?
     private var running = false
     private var smoothedLevel: Double = 0
+    private var lastUpdate = ContinuousClock.now
+    private var lastPublishedLevel: Double = 0
+    private let minimumUpdateInterval: Duration = .milliseconds(125)
+    private let minimumLevelDelta = 0.02
 
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
         self.update = onLevel
         if self.running { return }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
+        self.lastUpdate = .now
+        self.lastPublishedLevel = self.smoothedLevel
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.engine = nil
             throw NSError(
@@ -35,7 +42,7 @@ actor MicLevelMonitor {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            let level = Self.normalizedLevel(from: buffer)
+            let level = TalkAudioLevel.normalized(rms: TalkAudioLevel.rms(buffer: buffer))
             Task { await self.push(level: level) }
         }
         engine.prepare()
@@ -56,22 +63,14 @@ actor MicLevelMonitor {
     private func push(level: Double) {
         self.smoothedLevel = (self.smoothedLevel * 0.45) + (level * 0.55)
         guard let update else { return }
+        let now = ContinuousClock.now
+        guard now - self.lastUpdate >= self.minimumUpdateInterval ||
+            abs(self.smoothedLevel - self.lastPublishedLevel) >= self.minimumLevelDelta
+        else { return }
+        self.lastUpdate = now
         let value = self.smoothedLevel
+        self.lastPublishedLevel = value
         Task { @MainActor in update(value) }
-    }
-
-    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Double {
-        guard let channel = buffer.floatChannelData?[0] else { return 0 }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return 0 }
-        var sum: Float = 0
-        for i in 0..<frameCount {
-            let s = channel[i]
-            sum += s * s
-        }
-        let rms = sqrt(sum / Float(frameCount) + 1e-12)
-        let db = 20 * log10(Double(rms))
-        return max(0, min(1, (db + 50) / 50))
     }
 }
 

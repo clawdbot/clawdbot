@@ -4,14 +4,12 @@ struct SelectionStateIndicator: View {
     let selected: Bool
 
     var body: some View {
-        Group {
-            if self.selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.accentColor)
-            } else {
-                Image(systemName: "arrow.right.circle")
-                    .foregroundStyle(.secondary)
-            }
+        if self.selected {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.accentColor)
+        } else {
+            Image(systemName: "arrow.right.circle")
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -25,6 +23,7 @@ extension View {
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(self.openClawRowBackground(selected: selected, hovered: hovered)))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(

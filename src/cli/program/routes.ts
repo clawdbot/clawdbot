@@ -1,11 +1,16 @@
-import { routedCommands, type RouteSpec } from "./route-specs.js";
+import { cliCommandCatalog } from "../command-catalog.js";
+import { matchesCommandPath } from "../command-path-matches.js";
+import { routedCommandDefinitions } from "./routed-command-definitions.js";
 
-export type { RouteSpec } from "./route-specs.js";
-
-export function findRoutedCommand(path: string[]): RouteSpec | null {
-  for (const route of routedCommands) {
-    if (route.match(path)) {
-      return route;
+/** Bind validated arguments before startup; defer command imports and execution until afterward. */
+export function findRoutedCommand(path: string[], argv: string[]): (() => Promise<void>) | null {
+  for (const entry of cliCommandCatalog) {
+    if (!entry.route || !matchesCommandPath(path, entry.commandPath, { exact: entry.exact })) {
+      continue;
+    }
+    const run = routedCommandDefinitions[entry.route.id](argv);
+    if (run) {
+      return run;
     }
   }
   return null;

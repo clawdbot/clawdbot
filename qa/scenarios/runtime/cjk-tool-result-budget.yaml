@@ -1,0 +1,101 @@
+title: CJK-aware tool-result budget
+
+scenario:
+  id: cjk-tool-result-budget
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.compaction
+  objective: Verify a dense CJK tool result is truncated by token-budget weight before the real Gateway agent loop sends it back to the model.
+  successCriteria:
+    - Scenario is mock-openai only so the provider-bound request is deterministic and inspectable.
+    - The model requests a normal read of a 16000-character CJK workspace file.
+    - The provider-bound tool output contains the standard truncation notice and is below 9000 raw characters for the 128K mock model context.
+    - The agent receives that bounded result and returns the exact final marker.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/reference/session-management-compaction.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/tool-result-text-budget.ts
+    - src/agents/embedded-agent-runner/tool-result-truncation.ts
+    - src/agents/embedded-agent-runner/run/attempt-prompt-build.ts
+  execution:
+    kind: flow
+    summary: Read dense CJK through the real agent loop and inspect the provider-bound truncated tool result.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: CJK tool progress QA check
+      fixtureFile: CJK_TOOL_RESULT.txt
+      fixtureChars: 16000
+      maxProviderOutputChars: 9000
+      expectedReply: CJK-TOOL-RESULT-OK
+      prompt: "CJK tool progress QA check: read `CJK_TOOL_RESULT.txt`, then reply exactly `CJK-TOOL-RESULT-OK`."
+
+flow:
+  steps:
+    - name: bounds dense CJK before the next model request
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+            - expr: "'你'.repeat(config.fixtureChars)"
+            - utf8
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:cjk-tool-result:${randomUUID().slice(0, 8)}`"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.trim() === config.expectedReply"
+            - expr: liveTurnTimeoutMs(env, 30000)
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: readRequest
+          value:
+            expr: "scenarioRequests.find((request) => request.plannedToolName === 'read')"
+        - set: resultRequest
+          value:
+            expr: "scenarioRequests.find((request) => String(request.toolOutput ?? '').includes('truncated'))"
+        - set: providerToolOutput
+          value:
+            expr: "String(resultRequest?.toolOutput ?? '')"
+        - assert:
+            expr: "readRequest?.plannedToolArgs?.path === config.fixtureFile"
+            message:
+              expr: "`expected read(${config.fixtureFile}), saw ${JSON.stringify(readRequest?.plannedToolArgs ?? null)}`"
+        - assert:
+            expr: "providerToolOutput.includes('truncated')"
+            message: provider-bound CJK tool result was not truncated
+        - assert:
+            expr: "providerToolOutput.length > 0 && providerToolOutput.length < config.maxProviderOutputChars"
+            message:
+              expr: "`expected provider-bound CJK output below ${config.maxProviderOutputChars} raw chars, saw ${providerToolOutput.length}`"
+        - assert:
+            expr: "outbound.text.trim() === config.expectedReply"
+            message:
+              expr: "`agent did not finish after bounded CJK result: ${outbound.text}`"
+      detailsExpr: "`status=pass sourceChars=${config.fixtureChars} providerChars=${providerToolOutput.length} truncated=${providerToolOutput.includes('truncated')} final=${outbound.text.trim()}`"

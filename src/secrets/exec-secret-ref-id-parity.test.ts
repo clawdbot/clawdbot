@@ -1,10 +1,13 @@
-import AjvPkg from "ajv";
+/** Tests exec SecretRef id validation parity with provider contract helpers. */
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
+import { SecretRefSchema as GatewaySecretRefSchema } from "../../packages/gateway-protocol/src/schema.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
-import { SecretRefSchema as GatewaySecretRefSchema } from "../gateway/protocol/schema/primitives.js";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import {
+  INVALID_FILE_SECRET_REF_IDS,
   INVALID_EXEC_SECRET_REF_IDS,
+  VALID_FILE_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
 import {
@@ -13,16 +16,16 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan } from "./plan.js";
-import { isValidExecSecretRefId } from "./ref-contract.js";
-import { materializePathTokens, parsePathPattern } from "./target-registry-pattern.js";
-import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
+import { isValidExecSecretRefId, isValidFileSecretRefId } from "./ref-contract.js";
+import { compileTargetRegistryEntry, materializePathTokens } from "./target-registry-pattern.js";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  const validateGatewaySecretRef = ajv.compile(GatewaySecretRefSchema);
+  const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
+  const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
+  const invalidEnvSecretRefIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
 
   function configAcceptsExecRef(id: string): boolean {
     const result = validateConfigObjectRaw({
@@ -31,6 +34,36 @@ describe("exec SecretRef id parity", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "exec", provider: "vault", id },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    return result.ok;
+  }
+
+  function configAcceptsFileRef(id: string): boolean {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "file", provider: "default", id },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    return result.ok;
+  }
+
+  function configAcceptsRef(ref: unknown): boolean {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: ref,
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -57,12 +90,80 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+  function planAcceptsRef(ref: unknown) {
+    return isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-03-10T00:00:00.000Z",
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
+          ref,
+        },
+      ],
+    });
+  }
+
+  for (const id of [...validEnvSecretRefIds, ...invalidEnvSecretRefIds]) {
+    it(`keeps plan/gateway/plugin parity for env id "${id}"`, () => {
+      const expected = validEnvSecretRefIds.includes(id);
+      expect(planAcceptsRef({ source: "env", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "env", provider: "default", id })).toBe(
+        expected,
+      );
+      expect(
+        pluginSdkSecretInput.safeParse({ source: "env", provider: "default", id }).success,
+      ).toBe(expected);
+    });
+  }
+
+  for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
+    it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
+      const expected = isValidFileSecretRefId(id);
+      expect(configAcceptsFileRef(id)).toBe(expected);
+      expect(planAcceptsRef({ source: "file", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "file", provider: "default", id })).toBe(
+        expected,
+      );
+      expect(
+        pluginSdkSecretInput.safeParse({ source: "file", provider: "default", id }).success,
+      ).toBe(expected);
+    });
+  }
+
+  it("rejects invalid provider aliases across plan/gateway/plugin refs", () => {
+    const ref = { source: "env" as const, provider: "Default", id: "OPENAI_API_KEY" };
+
+    expect(planAcceptsRef(ref)).toBe(false);
+    expect(validateGatewaySecretRef.Check(ref)).toBe(false);
+    expect(pluginSdkSecretInput.safeParse(ref).success).toBe(false);
+  });
+
+  for (const ref of [
+    { source: "env", provider: "default", id: "OPENAI_API_KEY", extra: "x" },
+    { source: "file", provider: "default", id: "value", extra: "x" },
+    { source: "exec", provider: "vault", id: "vault/openai/api-key", extra: "x" },
+  ]) {
+    it(`rejects non-canonical ${ref.source} refs with extra properties across config/plan/gateway/plugin`, () => {
+      expect(configAcceptsRef(ref)).toBe(false);
+      expect(planAcceptsRef(ref)).toBe(false);
+      expect(validateGatewaySecretRef.Check(ref)).toBe(false);
+      expect(pluginSdkSecretInput.safeParse(ref).success).toBe(false);
+    });
+  }
+
   for (const id of [...VALID_EXEC_SECRET_REF_IDS, ...INVALID_EXEC_SECRET_REF_IDS]) {
     it(`keeps config/plan/gateway/plugin parity for exec id "${id}"`, () => {
       const expected = isValidExecSecretRefId(id);
       expect(configAcceptsExecRef(id)).toBe(expected);
       expect(planAcceptsExecRef(id)).toBe(expected);
-      expect(validateGatewaySecretRef({ source: "exec", provider: "vault", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "exec", provider: "vault", id })).toBe(
+        expected,
+      );
       expect(
         pluginSdkSecretInput.safeParse({ source: "exec", provider: "vault", id }).success,
       ).toBe(expected);
@@ -70,77 +171,79 @@ describe("exec SecretRef id parity", () => {
   }
 
   function classifyTargetClass(id: string): string {
-    const canonicalId = canonicalizeSecretTargetCoverageId(id);
-    if (canonicalId.startsWith("auth-profiles.")) {
+    if (id.startsWith("auth-profiles.")) {
       return "auth-profiles";
     }
-    if (canonicalId.startsWith("agents.")) {
+    if (id.startsWith("agents.")) {
       return "agents";
     }
-    if (canonicalId.startsWith("channels.")) {
+    if (id.startsWith("channels.")) {
       return "channels";
     }
-    if (canonicalId.startsWith("cron.")) {
+    if (id.startsWith("cron.")) {
       return "cron";
     }
-    if (canonicalId.startsWith("gateway.auth.")) {
+    if (id.startsWith("gateway.auth.")) {
       return "gateway.auth";
     }
-    if (canonicalId.startsWith("gateway.remote.")) {
+    if (id.startsWith("gateway.remote.")) {
       return "gateway.remote";
     }
-    if (canonicalId.startsWith("messages.")) {
+    if (id.startsWith("messages.")) {
       return "messages";
     }
-    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".headers.")) {
+    if (id.startsWith("memory.search.")) {
+      return "memory";
+    }
+    if (id.startsWith("models.providers.") && id.includes(".headers.")) {
       return "models.headers";
     }
-    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".request.")) {
+    if (id.startsWith("models.providers.") && id.includes(".request.")) {
       return "models.request";
     }
-    if (canonicalId.startsWith("models.providers.")) {
+    if (id.startsWith("models.providers.")) {
       return "models.apiKey";
     }
-    if (canonicalId.startsWith("skills.entries.")) {
+    if (id.startsWith("skills.entries.")) {
       return "skills";
     }
-    if (canonicalId.startsWith("talk.")) {
+    if (id.startsWith("talk.")) {
       return "talk";
     }
-    if (canonicalId.startsWith("tools.web.fetch.")) {
+    if (id.startsWith("tts.")) {
+      return "tts";
+    }
+    if (id.startsWith("tools.web.fetch.")) {
       return "tools.web.fetch";
     }
-    if (
-      canonicalId.startsWith("plugins.entries.") &&
-      canonicalId.includes(".config.webFetch.apiKey")
-    ) {
+    if (id.startsWith("plugins.entries.") && id.includes(".config.webFetch.apiKey")) {
       return "tools.web.fetch";
     }
-    if (
-      canonicalId.startsWith("plugins.entries.") &&
-      canonicalId.includes(".config.webSearch.apiKey")
-    ) {
+    if (id.startsWith("plugins.entries.") && id.includes(".config.webSearch.apiKey")) {
       return "tools.web.search";
     }
-    if (canonicalId.startsWith("tools.web.search.")) {
+    if (id.startsWith("tools.web.search.")) {
       return "tools.web.search";
+    }
+    if (id.startsWith("plugins.entries.")) {
+      return "plugins.config";
     }
     return "unclassified";
   }
 
-  function samplePathSegments(pathPattern: string): string[] {
-    const tokens = parsePathPattern(pathPattern);
+  function samplePathSegments(entry: SecretTargetRegistryEntry): string[] {
+    const tokens = compileTargetRegistryEntry(entry).pathTokens;
     const captures = tokens.flatMap((token) => {
       if (token.kind === "literal") {
         return [];
       }
-      return [token.kind === "array" ? "0" : "sample"];
+      return [token.kind === "array" ? 0 : "sample"];
     });
     const segments = materializePathTokens(tokens, captures);
     if (!segments) {
-      throw new Error(`failed to sample path segments for pattern "${pathPattern}"`);
+      throw new Error(`failed to sample path segments for pattern "${entry.pathPattern}"`);
     }
-    return segments;
+    return segments.map(String);
   }
 
   const registryPlanTargets = listSecretTargetRegistryEntries().filter(
@@ -161,7 +264,7 @@ describe("exec SecretRef id parity", () => {
       if (!selected) {
         throw new Error(`missing sampled target for class "${className}"`);
       }
-      const pathSegments = samplePathSegments(selected.pathPattern);
+      const pathSegments = samplePathSegments(selected);
       return {
         className,
         id: selected.id,
@@ -173,7 +276,7 @@ describe("exec SecretRef id parity", () => {
 
   function planAcceptsExecRefForSample(params: {
     type: string;
-    configFile: "openclaw.json" | "auth-profiles.json";
+    configFile: "openclaw.json" | "auth-profile-store";
     pathSegments: string[];
     id: string;
   }): boolean {
@@ -188,14 +291,14 @@ describe("exec SecretRef id parity", () => {
           path: params.pathSegments.join("."),
           pathSegments: params.pathSegments,
           ref: { source: "exec", provider: "vault", id: params.id },
-          ...(params.configFile === "auth-profiles.json" ? { agentId: "main" } : {}),
+          ...(params.configFile === "auth-profile-store" ? { agentId: "main" } : {}),
         },
       ],
     });
   }
 
   it("derives sampled class coverage from target registry metadata", () => {
-    expect(unclassifiedTargetIds).toEqual([]);
+    expect(unclassifiedTargetIds).toStrictEqual([]);
     expect(sampledTargetsByClass.length).toBeGreaterThan(0);
   });
 

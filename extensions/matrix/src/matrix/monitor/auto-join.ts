@@ -1,4 +1,5 @@
-import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+// Matrix plugin module implements auto join behavior.
+import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
@@ -8,7 +9,8 @@ export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
   accountConfig: Pick<MatrixConfig, "autoJoin" | "autoJoinAllowlist">;
   runtime: RuntimeEnv;
-}) {
+  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
+}): () => void {
   const { client, accountConfig, runtime } = params;
   const core = getMatrixRuntime();
   const logVerbose = (message: string) => {
@@ -18,16 +20,14 @@ export function registerMatrixAutoJoin(params: {
     runtime.log?.(message);
   };
   const autoJoin = accountConfig.autoJoin ?? "off";
-  const rawAllowlist = (accountConfig.autoJoinAllowlist ?? [])
-    .map((entry) => normalizeStringifiedOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  const rawAllowlist = normalizeStringifiedEntries(accountConfig.autoJoinAllowlist ?? []);
   const autoJoinAllowlist = new Set(rawAllowlist);
   const allowedRoomIds = new Set(rawAllowlist.filter((entry) => entry.startsWith("!")));
   const allowedAliases = rawAllowlist.filter((entry) => entry.startsWith("#"));
   const resolvedAliasRoomIds = new Map<string, string>();
 
   if (autoJoin === "off") {
-    return;
+    return () => {};
   }
 
   if (autoJoin === "always") {
@@ -60,27 +60,32 @@ export function registerMatrixAutoJoin(params: {
     );
     return resolved.filter((roomId): roomId is string => Boolean(roomId));
   };
-
   // Handle invites directly so both "always" and "allowlist" modes share the same path.
-  client.on("room.invite", async (roomId: string, _inviteEvent: unknown) => {
-    if (autoJoin === "allowlist") {
-      const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
-      const allowed =
-        autoJoinAllowlist.has("*") ||
-        allowedRoomIds.has(roomId) ||
-        allowedAliasRoomIds.some((resolvedRoomId) => resolvedRoomId === roomId);
+  const onInvite = (roomId: string, _inviteEvent: unknown) => {
+    void params.runDetachedTask(`auto-join invite handler room=${roomId}`, async () => {
+      if (autoJoin === "allowlist") {
+        const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
+        const allowed =
+          autoJoinAllowlist.has("*") ||
+          allowedRoomIds.has(roomId) ||
+          allowedAliasRoomIds.some((resolvedRoomId) => resolvedRoomId === roomId);
 
-      if (!allowed) {
-        logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
-        return;
+        if (!allowed) {
+          logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
+          return;
+        }
       }
-    }
 
-    try {
-      await client.joinRoom(roomId);
-      logVerbose(`matrix: joined room ${roomId}`);
-    } catch (err) {
-      runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
-    }
-  });
+      try {
+        await client.joinRoom(roomId);
+        logVerbose(`matrix: joined room ${roomId}`);
+      } catch (err) {
+        runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
+      }
+    });
+  };
+  client.on("room.invite", onInvite);
+  return () => {
+    client.off("room.invite", onInvite);
+  };
 }

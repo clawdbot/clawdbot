@@ -1,1 +1,6 @@
-export { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
+// Memory Core plugin module implements manager runtime behavior.
+export {
+  closeAllMemoryIndexManagers,
+  closeMemoryIndexManagersForAgent,
+  MemoryIndexManager,
+} from "./manager.js";

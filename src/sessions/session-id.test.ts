@@ -1,3 +1,4 @@
+// Session id tests cover session id parsing and generation helpers.
 import { describe, expect, it } from "vitest";
 import { SESSION_ID_RE, looksLikeSessionId } from "./session-id.js";
 

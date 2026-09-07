@@ -1,11 +1,11 @@
 package ai.openclaw.app
 
-import java.time.LocalDateTime
-import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 class NotificationForwardingPolicyTest {
   @Test
@@ -75,6 +75,64 @@ class NotificationForwardingPolicyTest {
 
     assertTrue(policy.allowsPackage("com.allowed.app"))
     assertFalse(policy.allowsPackage("com.other.app"))
+  }
+
+  @Test
+  fun allowsPackage_neverForwardsSelfPackageEvenInAllowlist() {
+    val policy =
+      NotificationForwardingPolicy(
+        enabled = true,
+        mode = NotificationPackageFilterMode.Allowlist,
+        packages = setOf("ai.openclaw.app", "com.other.app"),
+        quietHoursEnabled = false,
+        quietStart = "22:00",
+        quietEnd = "07:00",
+        maxEventsPerMinute = 20,
+        sessionKey = null,
+        selfPackageName = "ai.openclaw.app",
+      )
+
+    assertFalse(policy.allowsPackage("ai.openclaw.app"))
+    assertTrue(policy.allowsPackage("com.other.app"))
+  }
+
+  @Test
+  fun allowsPackage_neverForwardsNativeChannelPackages() {
+    val nativeChannelPackages =
+      setOf(
+        "com.discord",
+        "com.whatsapp",
+        "com.whatsapp.w4b",
+        "org.telegram.messenger",
+        "org.telegram.messenger.web",
+        "org.thunderdog.challegram",
+        "org.thoughtcrime.securesms",
+      )
+    val policies =
+      NotificationPackageFilterMode.entries.map { mode ->
+        NotificationForwardingPolicy(
+          enabled = true,
+          mode = mode,
+          packages =
+            if (mode == NotificationPackageFilterMode.Allowlist) {
+              nativeChannelPackages + "com.other.app"
+            } else {
+              nativeChannelPackages
+            },
+          quietHoursEnabled = false,
+          quietStart = "22:00",
+          quietEnd = "07:00",
+          maxEventsPerMinute = 20,
+          sessionKey = null,
+        )
+      }
+
+    policies.forEach { policy ->
+      nativeChannelPackages.forEach { packageName ->
+        assertFalse("$packageName must be owned by its native channel", policy.allowsPackage(packageName))
+      }
+      assertTrue(policy.allowsPackage("com.other.app"))
+    }
   }
 
   @Test

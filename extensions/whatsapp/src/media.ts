@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements media behavior.
 export {
   getDefaultLocalRoots,
   LocalMediaAccessError,

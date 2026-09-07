@@ -1,6 +1,10 @@
+// Covers channel approval handler bootstrap lifecycle.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
+import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
+import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
   createChannelApprovalHandlerFromCapability: vi.fn(),
@@ -33,21 +37,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       id: "slack",
       meta: { label: "Slack" },
       approvalCapability: {
-        nativeRuntime: {
-          availability: {
-            isConfigured: vi.fn().mockReturnValue(true),
-            shouldHandle: vi.fn().mockReturnValue(true),
-          },
-          presentation: {
-            buildPendingPayload: vi.fn(),
-            buildResolvedResult: vi.fn(),
-            buildExpiredResult: vi.fn(),
-          },
-          transport: {
-            prepareTarget: vi.fn(),
-            deliverPending: vi.fn(),
-          },
-        },
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
       },
     }) as never;
 
@@ -111,6 +101,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const lease = registerApprovalContext(channelRuntime);
 
     const cleanup = await startTestBootstrap({ channelRuntime });
+    await flushTransitions();
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
@@ -118,6 +109,20 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
     expect(stop).toHaveBeenCalledTimes(1);
     lease.dispose();
+  });
+
+  it("does not block bootstrap return on an existing runtime context", async () => {
+    const channelRuntime = createRuntimeChannel();
+    createChannelApprovalHandlerFromCapability.mockReturnValue(new Promise(() => {}));
+    registerApprovalContext(channelRuntime);
+
+    const result = await withTestTimeout(
+      startTestBootstrap({ channelRuntime }).then((cleanup) => ({ cleanup })),
+      50,
+      "timed out waiting for approval bootstrap",
+    );
+
+    await result.cleanup();
   });
 
   it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
@@ -222,6 +227,87 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(stop).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(
       "failed to start native approval handler: Error: boom",
+    );
+
+    await cleanup();
+  });
+
+  it("defers retryable gateway readiness startup failures without terminal error logs", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const readinessError = new Error("gateway event loop readiness timeout");
+    const start = vi.fn().mockRejectedValueOnce(readinessError).mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    };
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    await flushTransitions();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "native approval handler deferred until gateway readiness recovers: gateway readiness unavailable before approval handler start",
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(2);
+
+    await cleanup();
+  });
+
+  it("does not retry terminal native approval startup failures", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const terminalError = new ExecApprovalChannelRuntimeTerminalStartError({
+      code: 1008,
+      reason: "pairing required",
+      detailCode: "PAIRING_REQUIRED",
+    });
+    const start = vi.fn().mockRejectedValue(terminalError);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    };
+    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      `native approval handler disabled: ${String(terminalError)}`,
     );
 
     await cleanup();

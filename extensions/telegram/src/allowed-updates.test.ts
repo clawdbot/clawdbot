@@ -1,26 +1,16 @@
-import { beforeAll, describe, expect, it } from "vitest";
-let API_CONSTANTS: typeof import("grammy").API_CONSTANTS;
-let DEFAULT_TELEGRAM_UPDATE_TYPES: typeof import("./allowed-updates.js").DEFAULT_TELEGRAM_UPDATE_TYPES;
-let resolveTelegramAllowedUpdates: typeof import("./allowed-updates.js").resolveTelegramAllowedUpdates;
-
-beforeAll(async () => {
-  ({ API_CONSTANTS } = await import("grammy"));
-  ({ DEFAULT_TELEGRAM_UPDATE_TYPES, resolveTelegramAllowedUpdates } =
-    await import("./allowed-updates.js"));
-});
+// Telegram tests cover allowed updates plugin behavior.
+import { API_CONSTANTS } from "grammy";
+import { describe, expect, it } from "vitest";
+import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 
 describe("resolveTelegramAllowedUpdates", () => {
-  it("includes the default update types plus reaction and channel post support", () => {
+  it("keeps default updates and reactions without subscribing to unsupported draft stops", () => {
     const updates = resolveTelegramAllowedUpdates();
-
-    expect(updates).toEqual(
-      expect.arrayContaining([
-        ...DEFAULT_TELEGRAM_UPDATE_TYPES,
-        ...(API_CONSTANTS?.DEFAULT_UPDATE_TYPES ?? []),
-      ]),
+    const defaults = API_CONSTANTS.DEFAULT_UPDATE_TYPES.filter(
+      (type) => type !== "stopped_message_generation",
     );
-    expect(updates).toContain("message_reaction");
-    expect(updates).toContain("channel_post");
-    expect(new Set(updates).size).toBe(updates.length);
+
+    expect(new Set(updates)).toEqual(new Set([...defaults, "message_reaction", "channel_post"]));
+    expect(updates).toHaveLength(new Set(updates).size);
   });
 });

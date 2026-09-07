@@ -1,6 +1,9 @@
+// Provides live-test helpers for media-generation provider checks.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
+// Helpers shared by live media-generation tests. They keep provider/model/env
+// parsing deterministic without exposing raw API keys in test output.
 type LiveProviderModelConfig =
   | string
   | {
@@ -9,17 +12,16 @@ type LiveProviderModelConfig =
     }
   | undefined;
 
+/** Redacts live API keys without retaining credential-derived text in test output. */
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "none";
   }
-  if (trimmed.length <= 12) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
+  return "<redacted>";
 }
 
+/** Parses comma-separated live-test filters; null means "all". */
 export function parseLiveCsvFilter(
   raw?: string,
   options: { lowercase?: boolean } = {},
@@ -37,6 +39,7 @@ export function parseLiveCsvFilter(
   return values.length > 0 ? new Set(values) : null;
 }
 
+/** Parses provider/model refs keyed by normalized provider id. */
 export function parseProviderModelMap(raw?: string): Map<string, string> {
   const entries = new Map<string, string>();
   for (const token of raw?.split(",") ?? []) {
@@ -57,6 +60,7 @@ export function parseProviderModelMap(raw?: string): Map<string, string> {
   return entries;
 }
 
+/** Collects primary/fallback provider model refs from live-test config. */
 export function resolveConfiguredLiveProviderModels(
   configured: LiveProviderModelConfig,
 ): Map<string, string> {
@@ -87,6 +91,7 @@ export function resolveConfiguredLiveProviderModels(
   return resolved;
 }
 
+/** Returns an empty auth store only when live env keys may be used directly. */
 export function resolveLiveAuthStore(params: {
   requireProfileKeys: boolean;
   hasLiveKeys: boolean;

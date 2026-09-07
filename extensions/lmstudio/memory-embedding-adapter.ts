@@ -1,7 +1,6 @@
-import {
-  sanitizeEmbeddingCacheHeaders,
-  type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+// Lmstudio plugin module implements memory embedding adapter behavior.
+import { sanitizeEmbeddingCacheHeaders } from "openclaw/plugin-sdk/embedding-provider-adapter";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createLmstudioEmbeddingProvider,
   DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
@@ -14,20 +13,22 @@ export const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdap
   authProviderId: "lmstudio",
   allowExplicitWhenConfiguredAuto: true,
   create: async (options) => {
+    const providerId = options.provider?.trim() || "lmstudio";
     const { provider, client } = await createLmstudioEmbeddingProvider({
       ...options,
-      provider: "lmstudio",
+      provider: providerId,
       fallback: "none",
     });
     return {
       provider,
       runtime: {
         id: "lmstudio",
+        inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
-          provider: "lmstudio",
+          provider: providerId,
           baseUrl: client.baseUrl,
           model: client.model,
-          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
+          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization", "x-api-key"]),
         },
       },
     };

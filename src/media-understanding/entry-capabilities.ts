@@ -1,5 +1,7 @@
+// Entry capability helpers validate explicit media capability tags and infer
+// shared provider entries from registry metadata.
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   MediaUnderstandingCapability,
   MediaUnderstandingCapabilityRegistry,
@@ -15,6 +17,7 @@ function resolveEntryType(entry: MediaUnderstandingModelConfig): "provider" | "c
   return entry.type ?? (entry.command ? "cli" : "provider");
 }
 
+/** Returns valid explicit capability tags from a media model entry. */
 export function resolveConfiguredMediaEntryCapabilities(
   entry: MediaUnderstandingModelConfig,
 ): MediaUnderstandingCapability[] | undefined {
@@ -25,17 +28,14 @@ export function resolveConfiguredMediaEntryCapabilities(
   return capabilities.length > 0 ? capabilities : undefined;
 }
 
+/** Resolves the capability set for an entry, inferring shared provider entries from metadata. */
 export function resolveEffectiveMediaEntryCapabilities(params: {
   entry: MediaUnderstandingModelConfig;
-  source: "shared" | "capability";
   providerRegistry: MediaUnderstandingCapabilityRegistry;
 }): MediaUnderstandingCapability[] | undefined {
   const configured = resolveConfiguredMediaEntryCapabilities(params.entry);
   if (configured) {
     return configured;
-  }
-  if (params.source !== "shared") {
-    return undefined;
   }
   if (resolveEntryType(params.entry) === "cli") {
     return undefined;
@@ -47,15 +47,12 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   return params.providerRegistry.get(providerId)?.capabilities;
 }
 
+/** Tests whether an entry should be considered for a requested media capability. */
 export function matchesMediaEntryCapability(params: {
   entry: MediaUnderstandingModelConfig;
-  source: "shared" | "capability";
   capability: MediaUnderstandingCapability;
   providerRegistry: MediaUnderstandingCapabilityRegistry;
 }): boolean {
   const capabilities = resolveEffectiveMediaEntryCapabilities(params);
-  if (!capabilities || capabilities.length === 0) {
-    return params.source === "capability";
-  }
-  return capabilities.includes(params.capability);
+  return capabilities?.includes(params.capability) ?? false;
 }

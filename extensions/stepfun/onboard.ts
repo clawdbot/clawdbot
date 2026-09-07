@@ -1,3 +1,4 @@
+// Stepfun setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type ModelProviderConfig,
@@ -17,15 +18,6 @@ import {
   STEPFUN_STANDARD_INTL_BASE_URL,
 } from "./provider-catalog.js";
 
-export {
-  STEPFUN_DEFAULT_MODEL_REF,
-  STEPFUN_PLAN_CN_BASE_URL,
-  STEPFUN_PLAN_DEFAULT_MODEL_REF,
-  STEPFUN_PLAN_INTL_BASE_URL,
-  STEPFUN_STANDARD_CN_BASE_URL,
-  STEPFUN_STANDARD_INTL_BASE_URL,
-};
-
 function createStepFunPresetAppliers(params: {
   providerId: string;
   primaryModelRef: string;
@@ -34,14 +26,14 @@ function createStepFunPresetAppliers(params: {
 }): ProviderOnboardPresetAppliers<[string]> {
   return createModelCatalogPresetAppliers<[string]>({
     primaryModelRef: params.primaryModelRef,
-    resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+    resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
       const provider = params.buildProvider(baseUrl);
       const models = provider.models ?? [];
       return {
         providerId: params.providerId,
         api: provider.api ?? "openai-completions",
         baseUrl,
-        catalogModels: models,
+        catalogModels: cfg.models?.mode === "replace" ? models : [],
         aliases: [
           ...models.map((model) => `${params.providerId}/${model.id}`),
           { modelRef: params.primaryModelRef, alias: params.alias },

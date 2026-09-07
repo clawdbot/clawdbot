@@ -1,3 +1,4 @@
+// Approval tests cover channel plugin approval request formatting and dispatch.
 import { describe, expect, it, vi } from "vitest";
 import { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";
 
@@ -55,11 +56,13 @@ describe("resolveChannelApprovalAdapter", () => {
     const delivery = { hasConfiguredDmRoute: vi.fn() };
     const nativeRuntime = createNativeRuntimeStub();
     const describeExecApprovalSetup = vi.fn();
+    const describePluginApprovalSetup = vi.fn();
 
     expect(
       resolveChannelApprovalAdapter({
         approvalCapability: {
           describeExecApprovalSetup,
+          describePluginApprovalSetup,
           delivery,
           nativeRuntime,
           authorizeActorAction: vi.fn(),
@@ -67,6 +70,7 @@ describe("resolveChannelApprovalAdapter", () => {
       }),
     ).toEqual({
       describeExecApprovalSetup,
+      describePluginApprovalSetup,
       delivery,
       nativeRuntime,
       render: undefined,

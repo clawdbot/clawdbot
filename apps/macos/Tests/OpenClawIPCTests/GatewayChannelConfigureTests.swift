@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import Testing
@@ -17,11 +18,19 @@ struct GatewayConnectionTests {
         return (conn, cfg)
     }
 
-    private func makeSession(helloDelayMs: Int = 0) -> GatewayTestWebSocketSession {
+    private func makeSession(
+        helloDelayMs: Int = 0,
+        serverCapabilities: [String] = [],
+        connectIncludesDeviceHandler: @escaping @Sendable (Bool) -> Void = { _ in })
+        -> GatewayTestWebSocketSession
+    {
         GatewayTestWebSocketSession(
             taskFactory: {
                 GatewayTestWebSocketTask(
                     sendHook: { task, message, sendIndex in
+                        if let params = GatewayWebSocketTestSupport.connectRequestParams(from: message) {
+                            connectIncludesDeviceHandler(params["device"] != nil)
+                        }
                         guard sendIndex > 0 else { return }
                         guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                         let response = GatewayWebSocketTestSupport.okResponseData(id: id)
@@ -35,7 +44,9 @@ struct GatewayConnectionTests {
                             try await Task.sleep(nanoseconds: UInt64(helloDelayMs) * 1_000_000)
                         }
                         let id = task.snapshotConnectRequestID() ?? "connect"
-                        return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: id,
+                            capabilities: serverCapabilities))
                     })
             })
     }
@@ -58,7 +69,7 @@ struct GatewayConnectionTests {
 
     @Test func `request reuses single web socket for same config`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -68,9 +79,199 @@ struct GatewayConnectionTests {
         #expect(session.snapshotCancelCount() == 0)
     }
 
+    @Test func `mock connection omits device identity`() async throws {
+        let connectIncludesDevice = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+        let session = self.makeSession(connectIncludesDeviceHandler: { includesDevice in
+            connectIncludesDevice.withLock { $0 = includesDevice }
+        })
+        let (conn, _) = try self.makeConnection(session: session)
+
+        _ = try await conn.request(method: "status", params: nil)
+
+        #expect(connectIncludesDevice.withLock { $0 } == false)
+        await conn.shutdown()
+    }
+
+    @Test func `first connection admits hello capabilities before lease readiness`() async throws {
+        let session = self.makeSession(serverCapabilities: ["openclaw-setup-model-ref"])
+        let (conn, _) = try makeConnection(session: session)
+
+        let lease = try await conn.acquireServerLease()
+
+        #expect(await conn.supportsServerCapability(
+            .systemAgentSetupModelRef,
+            ifCurrentServerLease: lease) == true)
+        #expect(await conn.cachedGatewayVersion() == "test")
+        #expect(session.snapshotMakeCount() == 1)
+        // Connect handshake plus the recovery-aware health preflight.
+        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        await conn.shutdown()
+    }
+
+    @Test(arguments: ["disconnected", "endpoint-before", "endpoint-after", "send-cancelled", "success"])
+    func `server lease preserves dispatch certainty`(outcome: String) async throws {
+        let cfg = ConfigSource(token: "initial-test-token")
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                // Connect and health precede the bound request under test.
+                if sendIndex == 2 {
+                    if outcome == "send-cancelled" {
+                        throw CancellationError()
+                    }
+                    if outcome == "endpoint-after" {
+                        cfg.setToken("replacement-test-token")
+                    }
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let conn = GatewayConnection(
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let lease = try await conn.acquireServerLease()
+
+        if outcome == "disconnected" {
+            await conn._test_handleDisconnect(socketGeneration: lease.socketGeneration)
+        } else if outcome == "endpoint-before" {
+            cfg.setToken("replacement-test-token")
+        }
+        let refusedBeforeDispatch = outcome == "disconnected" || outcome == "endpoint-before"
+        do {
+            let data = try await conn.request(
+                method: "openclaw.setup.activate",
+                params: [:],
+                ifCurrentServerLease: lease)
+            #expect(outcome == "success")
+            #expect(!data.isEmpty)
+        } catch OpenClawChatTransportSendError.notDispatched {
+            #expect(refusedBeforeDispatch)
+        } catch is CancellationError {
+            #expect(outcome == "endpoint-after" || outcome == "send-cancelled")
+        } catch {
+            Issue.record("unexpected server lease error: \(error)")
+        }
+
+        #expect(!Task.isCancelled)
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == (refusedBeforeDispatch ? 2 : 3))
+        await conn.shutdown()
+    }
+
+    @Test(arguments: [false, true], ["current", "endpoint", "socket"])
+    func `bound request denials retain their captured authority`(
+        serverBound: Bool,
+        replacement: String) async throws
+    {
+        let gate = GatewayConnectionSuspensionGate()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if sendIndex == 2 {
+                    await gate.suspend()
+                    let response = """
+                    {"type":"res","id":"\(id)","ok":false,"error":{"code":"INVALID_REQUEST",
+                    "message":"Session access denied","details":{"code":"SESSION_PARTICIPATION_REQUIRED"}}}
+                    """
+                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                } else {
+                    socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
+            })
+        })
+        let (conn, cfg) = try self.makeConnection(session: session, token: "initial-test-token")
+        let lease = try await conn.acquireServerLease()
+        let params = ["sessionKey": AnyCodable("agent:main:main")]
+        let request = Task {
+            if serverBound {
+                try await conn.request(method: "progressCard.get", params: params, ifCurrentServerLease: lease)
+            } else {
+                try await conn.request(method: "progressCard.get", params: params, ifCurrentRoute: lease.route)
+            }
+        }
+        await gate.waitUntilStarted()
+        if replacement == "endpoint" {
+            cfg.setToken("replacement-test-token")
+        } else if replacement == "socket" {
+            await conn._test_handleDisconnect(socketGeneration: lease.socketGeneration)
+        }
+        await gate.open()
+        // Logical route requests deliberately survive same-route socket retirement;
+        // server leases additionally require the exact connected physical socket.
+        let stale = replacement == "endpoint" || (serverBound && replacement == "socket")
+        do {
+            _ = try await request.value
+            Issue.record("expected the bound request to fail")
+        } catch is CancellationError {
+            #expect(stale)
+        } catch let error as GatewayResponseError {
+            #expect(!stale)
+            #expect(error.method == "progressCard.get")
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED")
+        } catch {
+            await conn.shutdown()
+            throw error
+        }
+        #expect(!Task.isCancelled)
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 3)
+        await conn.shutdown()
+    }
+
+    @Test func `server lease preserves caller cancellation after dispatch`() async throws {
+        let requestSent = AsyncStream<Void>.makeStream()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        if sendIndex == 2 {
+                            requestSent.continuation.yield()
+                            return
+                        }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: id,
+                            capabilities: ["openclaw-setup-model-ref"]))
+                    })
+            })
+        let (conn, _) = try makeConnection(session: session)
+        let lease = try await conn.acquireServerLease()
+        let request = Task {
+            try await conn.request(
+                method: "openclaw.setup.activate",
+                params: [:],
+                timeoutMs: 5000,
+                ifCurrentServerLease: lease)
+        }
+        var sentIterator = requestSent.stream.makeAsyncIterator()
+        _ = await sentIterator.next()
+
+        request.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await request.value
+        }
+        requestSent.continuation.finish()
+        await conn.shutdown()
+    }
+
     @Test func `request reconfigures and cancels on token change`() async throws {
         let session = self.makeSession()
-        let (conn, cfg) = try self.makeConnection(session: session, token: "a")
+        let (conn, cfg) = try makeConnection(session: session, token: "a")
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -81,9 +282,38 @@ struct GatewayConnectionTests {
         #expect(session.snapshotCancelCount() == 1)
     }
 
+    @Test func `captured route cancels instead of reconfiguring on token change`() async throws {
+        let session = self.makeSession()
+        let (conn, cfg) = try makeConnection(session: session, token: "a")
+
+        _ = try await conn.request(method: "status", params: nil)
+        let route = try #require(await conn.captureRoute())
+        cfg.setToken("b")
+
+        do {
+            _ = try await conn.request(
+                method: "status",
+                params: nil,
+                ifCurrentRoute: route)
+            Issue.record("expected stale route cancellation")
+        } catch is CancellationError {}
+
+        do {
+            _ = try await conn.request(
+                method: "status",
+                params: nil,
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            Issue.record("expected typed stale route rejection")
+        } catch is OpenClawChatTransportSendError {}
+
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.snapshotCancelCount() == 0)
+    }
+
     @Test func `concurrent requests still use single web socket`() async throws {
         let session = self.makeSession(helloDelayMs: 150)
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         async let r1: Data = conn.request(method: "status", params: nil)
         async let r2: Data = conn.request(method: "status", params: nil)
@@ -92,9 +322,33 @@ struct GatewayConnectionTests {
         #expect(session.snapshotMakeCount() == 1)
     }
 
+    @Test func `request can disable retries for non idempotent mutations`() async throws {
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, _, sendIndex in
+                    if sendIndex > 0 {
+                        throw URLError(.timedOut)
+                    }
+                })
+            })
+        let (conn, _) = try makeConnection(session: session)
+
+        do {
+            _ = try await conn.request(
+                method: "sessions.compact",
+                params: nil,
+                timeoutMs: 10,
+                retryTransportFailures: false)
+            Issue.record("expected sessions.compact transport failure")
+        } catch {}
+
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 2)
+    }
+
     @Test func `subscribe replays latest snapshot`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
 
@@ -102,7 +356,7 @@ struct GatewayConnectionTests {
         var iterator = stream.makeAsyncIterator()
         let first = await iterator.next()
 
-        guard case let .snapshot(snap) = first else {
+        guard first?.isCurrent == true, case let .snapshot(snap) = first?.push else {
             Issue.record("expected snapshot, got \(String(describing: first))")
             return
         }
@@ -111,7 +365,7 @@ struct GatewayConnectionTests {
 
     @Test func `subscribe emits seq gap before event`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         let stream = await conn.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()
@@ -126,7 +380,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt1))
 
         let firstEvent = await iterator.next()
-        guard case let .event(firstFrame) = firstEvent else {
+        guard firstEvent?.isCurrent == true, case let .event(firstFrame) = firstEvent?.push else {
             Issue.record("expected event, got \(String(describing: firstEvent))")
             return
         }
@@ -139,7 +393,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt3))
 
         let gap = await iterator.next()
-        guard case let .seqGap(expected, received) = gap else {
+        guard gap?.isCurrent == true, case let .seqGap(expected, received) = gap?.push else {
             Issue.record("expected seqGap, got \(String(describing: gap))")
             return
         }
@@ -147,7 +401,7 @@ struct GatewayConnectionTests {
         #expect(received == 3)
 
         let secondEvent = await iterator.next()
-        guard case let .event(secondFrame) = secondEvent else {
+        guard secondEvent?.isCurrent == true, case let .event(secondFrame) = secondEvent?.push else {
             Issue.record("expected event, got \(String(describing: secondEvent))")
             return
         }

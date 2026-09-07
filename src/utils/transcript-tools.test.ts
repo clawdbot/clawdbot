@@ -1,5 +1,6 @@
+// Transcript tool tests cover transcript utility parsing and formatting.
 import { describe, expect, it } from "vitest";
-import { countToolResults, extractToolCallNames, hasToolCall } from "./transcript-tools.js";
+import { countToolResults, extractToolCallNames } from "./transcript-tools.js";
 
 describe("transcript-tools", () => {
   describe("extractToolCallNames", () => {
@@ -30,18 +31,6 @@ describe("transcript-tools", () => {
         toolName: "read",
       });
       expect(names).toEqual(["read"]);
-    });
-  });
-
-  describe("hasToolCall", () => {
-    it("returns true when tool call names exist", () => {
-      expect(hasToolCall({ toolName: "weather" })).toBe(true);
-      expect(hasToolCall({ content: [{ type: "tool_use", name: "read" }] })).toBe(true);
-    });
-
-    it("returns false when no tool calls exist", () => {
-      expect(hasToolCall({})).toBe(false);
-      expect(hasToolCall({ content: [{ type: "text", text: "hi" }] })).toBe(false);
     });
   });
 

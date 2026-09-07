@@ -1,169 +1,30 @@
+/** Interactive stdio ACP client used to connect a terminal session to an OpenClaw ACP server. */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
   type RequestPermissionRequest,
-  type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
-import {
-  listKnownProviderAuthEnvVarNames,
-  omitEnvKeysCaseInsensitive,
-} from "../secrets/provider-env-vars.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
+  buildAcpClientStripKeys,
+  resolveAcpClientSpawnEnv,
+  resolveAcpClientSpawnInvocation,
+  resolvePermissionRequest,
+  shouldStripProviderAuthEnvVarsForAcpServer,
+} from "./client-helpers.js";
 
-type PermissionOption = RequestPermissionRequest["options"][number];
-
-type PermissionResolverDeps = {
-  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
-  log?: (line: string) => void;
-  cwd?: string;
-};
-
-function resolveToolKindForPermission(
-  toolName: string | undefined,
-  approvalClass: AcpApprovalClass,
-): string | undefined {
-  if (!toolName && approvalClass === "unknown") {
-    return undefined;
-  }
-  if (approvalClass === "readonly_scoped") {
-    return "readonly_scoped";
-  }
-  if (approvalClass === "readonly_search") {
-    return "readonly_search";
-  }
-  return approvalClass;
-}
-
-function pickOption(
-  options: PermissionOption[],
-  kinds: PermissionOption["kind"][],
-): PermissionOption | undefined {
-  for (const kind of kinds) {
-    const match = options.find((option) => option.kind === kind);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
-}
-
-function selectedPermission(optionId: string): RequestPermissionResponse {
-  return { outcome: { outcome: "selected", optionId } };
-}
-
-function cancelledPermission(): RequestPermissionResponse {
-  return { outcome: { outcome: "cancelled" } };
-}
-
-function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
-    return Promise.resolve(false);
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stderr,
-    });
-
-    const finish = (approved: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      rl.close();
-      resolve(approved);
-    };
-
-    const timeout = setTimeout(() => {
-      console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
-      finish(false);
-    }, 30_000);
-
-    const label = toolTitle
-      ? toolName
-        ? `${toolTitle} (${toolName})`
-        : toolTitle
-      : (toolName ?? "unknown tool");
-    rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
-      const approved = normalizeLowercaseStringOrEmpty(answer) === "y";
-      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
-      finish(approved);
-    });
-  });
-}
-
-export async function resolvePermissionRequest(
-  params: RequestPermissionRequest,
-  deps: PermissionResolverDeps = {},
-): Promise<RequestPermissionResponse> {
-  const log = deps.log ?? ((line: string) => console.error(line));
-  const prompt = deps.prompt ?? promptUserPermission;
-  const cwd = deps.cwd ?? process.cwd();
-  const options = params.options ?? [];
-  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
-  const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
-  const toolName = classification.toolName;
-  const toolKind = resolveToolKindForPermission(toolName, classification.approvalClass);
-
-  if (options.length === 0) {
-    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
-    return cancelledPermission();
-  }
-
-  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
-  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const promptRequired = !classification.autoApprove;
-
-  if (!promptRequired) {
-    const option = allowOption ?? options[0];
-    if (!option) {
-      log(`[permission cancelled] ${toolName}: no selectable options`);
-      return cancelledPermission();
-    }
-    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
-    return selectedPermission(option.optionId);
-  }
-
-  log(
-    `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
-  );
-  const approved = await prompt(toolName, toolTitle);
-
-  if (approved && allowOption) {
-    return selectedPermission(allowOption.optionId);
-  }
-  if (!approved && rejectOption) {
-    return selectedPermission(rejectOption.optionId);
-  }
-
-  log(
-    `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
-  );
-  return cancelledPermission();
-}
-
-export type AcpClientOptions = {
+type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;
   serverArgs?: string[];
@@ -171,11 +32,55 @@ export type AcpClientOptions = {
   verbose?: boolean;
 };
 
-export type AcpClientHandle = {
+type AcpClientHandle = {
   client: ClientSideConnection;
   agent: ChildProcess;
   sessionId: string;
 };
+
+const ACP_SERVER_KILL_GRACE_MS = 1000;
+const ACP_SERVER_FORCE_KILL_TIMEOUT_MS = 1000;
+const ACP_SERVER_EXIT_POLL_MS = 25;
+
+function hasChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!hasChildExited(child) && Date.now() < deadline) {
+    await delay(ACP_SERVER_EXIT_POLL_MS);
+  }
+  return hasChildExited(child);
+}
+
+async function terminateAcpServer(child: ChildProcess): Promise<void> {
+  if (hasChildExited(child)) {
+    return;
+  }
+
+  if (child.pid) {
+    // This child is not detached, so Unix cleanup must stay on its direct PID.
+    // Windows still reaps descendants; both paths escalate if SIGTERM is ignored.
+    killProcessTree(child.pid, {
+      detached: false,
+      graceMs: ACP_SERVER_KILL_GRACE_MS,
+    });
+  } else {
+    child.kill("SIGTERM");
+  }
+
+  if (await waitForChildExit(child, ACP_SERVER_KILL_GRACE_MS + ACP_SERVER_FORCE_KILL_TIMEOUT_MS)) {
+    return;
+  }
+
+  if (child.pid) {
+    signalProcessTree(child.pid, "SIGKILL", { detached: false });
+  } else {
+    child.kill("SIGKILL");
+  }
+  await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
+}
 
 function toArgs(value: string[] | string | undefined): string[] {
   if (!value) {
@@ -190,88 +95,6 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
     args.push("--verbose");
   }
   return args;
-}
-
-type AcpClientSpawnEnvOptions = {
-  stripKeys?: Iterable<string>;
-};
-
-export function resolveAcpClientSpawnEnv(
-  baseEnv: NodeJS.ProcessEnv = process.env,
-  options: AcpClientSpawnEnvOptions = {},
-): NodeJS.ProcessEnv {
-  const env = omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []);
-  env.OPENCLAW_SHELL = "acp-client";
-  return env;
-}
-
-export function shouldStripProviderAuthEnvVarsForAcpServer(
-  params: {
-    serverCommand?: string;
-    serverArgs?: string[];
-    defaultServerCommand?: string;
-    defaultServerArgs?: string[];
-  } = {},
-): boolean {
-  const serverCommand = normalizeOptionalString(params.serverCommand);
-  if (!serverCommand) {
-    return true;
-  }
-  const defaultServerCommand = normalizeOptionalString(params.defaultServerCommand);
-  if (!defaultServerCommand || serverCommand !== defaultServerCommand) {
-    return false;
-  }
-  const serverArgs = params.serverArgs ?? [];
-  const defaultServerArgs = params.defaultServerArgs ?? [];
-  return (
-    serverArgs.length === defaultServerArgs.length &&
-    serverArgs.every((arg, index) => arg === defaultServerArgs[index])
-  );
-}
-
-export function buildAcpClientStripKeys(params: {
-  stripProviderAuthEnvVars?: boolean;
-  activeSkillEnvKeys?: Iterable<string>;
-}): Set<string> {
-  const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
-  if (params.stripProviderAuthEnvVars) {
-    for (const key of listKnownProviderAuthEnvVarNames()) {
-      stripKeys.add(key);
-    }
-  }
-  return stripKeys;
-}
-
-type AcpSpawnRuntime = {
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  execPath: string;
-};
-
-const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
-  platform: process.platform,
-  env: process.env,
-  execPath: process.execPath,
-};
-
-export function resolveAcpClientSpawnInvocation(
-  params: { serverCommand: string; serverArgs: string[] },
-  runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
-  const program = resolveWindowsSpawnProgram({
-    command: params.serverCommand,
-    platform: runtime.platform,
-    env: runtime.env,
-    execPath: runtime.execPath,
-    packageName: "openclaw",
-  });
-  const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
 }
 
 function resolveSelfEntryPath(): string | null {
@@ -295,10 +118,6 @@ function resolveSelfEntryPath(): string | null {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) {
-    return;
-  }
-
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       if (update.content?.type === "text") {
@@ -321,14 +140,12 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 
-export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
@@ -341,7 +158,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -372,49 +189,59 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     windowsHide: spawnInvocation.windowsHide,
   });
 
-  if (!agent.stdin || !agent.stdout) {
-    throw new Error("Failed to create ACP stdio pipes");
+  agent.on("error", (err) => {
+    log(`agent error: ${String(err)}`);
+  });
+
+  try {
+    if (!agent.stdin || !agent.stdout) {
+      throw new Error("Failed to create ACP stdio pipes");
+    }
+
+    const input = Writable.toWeb(agent.stdin);
+    const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
+    const stream = ndJsonStream(input, output);
+
+    const client = new ClientSideConnection(
+      () => ({
+        sessionUpdate: async (params: SessionNotification) => {
+          printSessionUpdate(params);
+        },
+        requestPermission: async (params: RequestPermissionRequest) => {
+          return resolvePermissionRequest(params, { cwd });
+        },
+      }),
+      stream,
+    );
+
+    log("initializing");
+    await client.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+      clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    });
+
+    log("creating session");
+    const session = await client.newSession({
+      cwd,
+      mcpServers: [],
+    });
+
+    return {
+      client,
+      agent,
+      sessionId: session.sessionId,
+    };
+  } catch (error) {
+    await terminateAcpServer(agent);
+    throw error;
   }
-
-  const input = Writable.toWeb(agent.stdin);
-  const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
-
-  const client = new ClientSideConnection(
-    () => ({
-      sessionUpdate: async (params: SessionNotification) => {
-        printSessionUpdate(params);
-      },
-      requestPermission: async (params: RequestPermissionRequest) => {
-        return resolvePermissionRequest(params, { cwd });
-      },
-    }),
-    stream,
-  );
-
-  log("initializing");
-  await client.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: true,
-    },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
-  });
-
-  log("creating session");
-  const session = await client.newSession({
-    cwd,
-    mcpServers: [],
-  });
-
-  return {
-    client,
-    agent,
-    sessionId: session.sessionId,
-  };
 }
 
+/** Starts the terminal prompt loop for a local ACP client session. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
   const { client, agent, sessionId } = await createAcpClient(opts);
 
@@ -428,29 +255,31 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log('Type a prompt, or "exit" to quit.\n');
 
   const prompt = () => {
-    rl.question("> ", async (input) => {
-      const text = input.trim();
-      if (!text) {
+    rl.question("> ", (input) => {
+      void (async () => {
+        const text = input.trim();
+        if (!text) {
+          prompt();
+          return;
+        }
+        if (text === "exit" || text === "quit") {
+          await terminateAcpServer(agent);
+          rl.close();
+          process.exit(0);
+        }
+
+        try {
+          const response = await client.prompt({
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
+          console.log(`\n[${response.stopReason}]\n`);
+        } catch (err) {
+          console.error(`\n[error] ${String(err)}\n`);
+        }
+
         prompt();
-        return;
-      }
-      if (text === "exit" || text === "quit") {
-        agent.kill();
-        rl.close();
-        process.exit(0);
-      }
-
-      try {
-        const response = await client.prompt({
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        console.log(`\n[${response.stopReason}]\n`);
-      } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
-      }
-
-      prompt();
+      })();
     });
   };
 

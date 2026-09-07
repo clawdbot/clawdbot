@@ -4,7 +4,6 @@ import SwiftUI
 
 enum DebugActions {
     private static let verboseDefaultsKey = "openclaw.debug.verboseMain"
-    private static let sessionMenuLimit = 12
     private static let onboardingSeenKey = "openclaw.onboardingSeen"
 
     @MainActor
@@ -16,6 +15,7 @@ enum DebugActions {
             defer: false)
         window.title = "Agent Events"
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.contentView = NSHostingView(rootView: AgentEventsWindow())
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -60,8 +60,8 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+    static func sendTestNotification() async -> TestNotificationOutcome {
+        await TestNotificationAction.send()
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -108,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }
@@ -159,12 +158,12 @@ enum DebugActions {
     }
 
     static var verboseLoggingEnabledMain: Bool {
-        UserDefaults.standard.bool(forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.bool(forKey: self.verboseDefaultsKey)
     }
 
     static func toggleVerboseLoggingMain() async -> Bool {
         let newValue = !self.verboseLoggingEnabledMain
-        UserDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
         _ = try? await ControlChannel.shared.request(
             method: "system-event",
             params: ["text": AnyHashable("verbose-main:\(newValue ? "on" : "off")")])
@@ -175,17 +174,22 @@ enum DebugActions {
     static func restartApp() {
         let url = Bundle.main.bundleURL
         let task = Process()
-        // Relaunch shortly after this instance exits so we get a true restart even in debug.
-        task.launchPath = "/bin/sh"
-        task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
+        // The replacement must wait until cleanup releases this profile's instance lock.
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; shift; exec /usr/bin/open -n \"$@\"",
+            "openclaw-restart",
+            String(ProcessInfo.processInfo.processIdentifier),
+        ] + (AppProfile.current.name.map { ["--env", "OPENCLAW_PROFILE=\($0)"] } ?? []) + [url.path]
         try? task.run()
-        NSApp.terminate(nil)
+        AppDelegate.requestTermination()
     }
 
     @MainActor
     static func restartOnboarding() {
-        UserDefaults.standard.set(false, forKey: self.onboardingSeenKey)
-        UserDefaults.standard.set(0, forKey: onboardingVersionKey)
+        AppDefaults.standard.set(false, forKey: self.onboardingSeenKey)
+        AppDefaults.standard.set(0, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = false
         OnboardingController.shared.restart()
     }
@@ -204,24 +208,6 @@ enum DebugActions {
             return defaultPath
         }
         return path
-    }
-
-    // MARK: - Sessions (thinking / verbose)
-
-    static func recentSessions(limit: Int = sessionMenuLimit) async -> [SessionRow] {
-        guard let snapshot = try? await SessionLoader.loadSnapshot(limit: limit) else { return [] }
-        return Array(snapshot.rows.prefix(limit))
-    }
-
-    static func updateSession(
-        key: String,
-        thinking: String?,
-        verbose: String?) async throws
-    {
-        var params: [String: AnyHashable] = ["key": AnyHashable(key)]
-        params["thinkingLevel"] = thinking.map(AnyHashable.init) ?? AnyHashable(NSNull())
-        params["verboseLevel"] = verbose.map(AnyHashable.init) ?? AnyHashable(NSNull())
-        _ = try await ControlChannel.shared.request(method: "sessions.patch", params: params)
     }
 
     // MARK: - Port diagnostics
@@ -243,14 +229,84 @@ enum DebugActions {
         return .failure(.message(detail))
     }
 
+    #if DEBUG
     @MainActor
-    static func openSessionStoreInCode() {
-        let path = SessionLoader.defaultStorePath
-        let proc = Process()
-        proc.launchPath = "/usr/bin/env"
-        proc.arguments = ["code", path]
-        try? proc.run()
+    static func showPairingPanelDemo() {
+        let now = Date()
+        PairingApprovalCenter.shared.injectDemoCards([
+            PairingApprovalCenter.Card(
+                kind: .node,
+                requestId: "demo-node-1",
+                subjectId: "19cec1c3301a7469d4fd71f5f81339508390dadda91b34aee15faf2849dccdc7",
+                displayName: "Demo Mac",
+                platform: "macos 26.5",
+                deviceFamily: "Mac",
+                modelIdentifier: "MacBookPro18,3",
+                version: "2026.6.11",
+                coreVersion: "2026.6.10",
+                remoteIp: "192.0.2.42",
+                role: nil,
+                scopes: [],
+                caps: [
+                    "canvas",
+                    "screen",
+                    "computer",
+                    "codex-app-server-threads",
+                    "claude-sessions",
+                    "browser",
+                    "codex-cli-sessions",
+                    "file",
+                    "local-inference",
+                    "mcp",
+                    "opencode-sessions",
+                    "pi-sessions",
+                    "system",
+                ],
+                commands: ["system.run", "system.notify"],
+                isRepair: false,
+                previouslyPaired: false,
+                requestedAt: now.addingTimeInterval(-45),
+                requiredApproveScopes: ["operator.pairing", "operator.admin"]),
+            PairingApprovalCenter.Card(
+                kind: .node,
+                requestId: "demo-admin-node",
+                subjectId: "demo-admin-node",
+                displayName: "Browser node",
+                platform: "linux",
+                deviceFamily: nil,
+                modelIdentifier: nil,
+                version: nil,
+                coreVersion: nil,
+                remoteIp: "192.0.2.43",
+                role: nil,
+                scopes: [],
+                caps: ["browser", "file"],
+                commands: ["browser.proxy", "fs.listDir", "terminal.upload", "system.execApprovals.get"],
+                isRepair: false,
+                previouslyPaired: false,
+                requestedAt: now,
+                requiredApproveScopes: ["operator.pairing", "operator.admin"]),
+            PairingApprovalCenter.Card(
+                kind: .device,
+                requestId: "demo-device-1",
+                subjectId: "4a865684dbfa7b7937bd333813476ca88b672c2d02ad08fc52b80d88af4e82bd",
+                displayName: "OpenClaw iPhone",
+                platform: "ios 26.4",
+                deviceFamily: nil,
+                modelIdentifier: nil,
+                version: nil,
+                coreVersion: nil,
+                remoteIp: "192.168.1.87",
+                role: "operator",
+                scopes: ["operator.read", "operator.write", "operator.approvals"],
+                caps: [],
+                commands: [],
+                isRepair: true,
+                previouslyPaired: true,
+                requestedAt: now.addingTimeInterval(-190)),
+        ])
     }
+    #endif
 }
 
 enum DebugActionError: LocalizedError {

@@ -1,3 +1,5 @@
+<!-- Agent tool test performance notes for avoiding heavyweight plugin/channel runtime loads. -->
+
 # Agent Tools Performance
 
 Tool tests should not load full channel or plugin runtimes for static tool

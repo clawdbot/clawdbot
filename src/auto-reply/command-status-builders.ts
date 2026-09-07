@@ -1,13 +1,14 @@
-import type { SkillCommandSpec } from "../agents/skills.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import { isCommandFlagEnabled } from "../config/commands.flags.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listPluginCommands } from "../plugins/commands.js";
+/** Formats /help and /commands output for text and native command-list surfaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { isCommandFlagEnabled } from "../config/commands.flags.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listPluginCommands } from "../plugins/commands.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import {
   listChatCommands,
   listChatCommandsForConfig,
@@ -15,35 +16,35 @@ import {
 } from "./commands-registry.js";
 import type { CommandCategory } from "./commands-registry.types.js";
 
-const CATEGORY_LABELS: Record<CommandCategory, string> = {
+type DisplayCategory = Exclude<CommandCategory, "docks">;
+
+const CATEGORY_LABELS: Record<DisplayCategory, string> = {
   session: "Session",
   options: "Options",
   status: "Status",
   management: "Management",
   media: "Media",
   tools: "Tools",
-  docks: "Docks",
 };
 
-const CATEGORY_ORDER: CommandCategory[] = [
+const CATEGORY_ORDER: DisplayCategory[] = [
   "session",
   "options",
   "status",
   "management",
   "media",
   "tools",
-  "docks",
 ];
 
 function groupCommandsByCategory(
   commands: ChatCommandDefinition[],
-): Map<CommandCategory, ChatCommandDefinition[]> {
-  const grouped = new Map<CommandCategory, ChatCommandDefinition[]>();
+): Map<DisplayCategory, ChatCommandDefinition[]> {
+  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
   for (const category of CATEGORY_ORDER) {
     grouped.set(category, []);
   }
   for (const command of commands) {
-    const category = command.category ?? "tools";
+    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
     const list = grouped.get(category) ?? [];
     list.push(command);
     grouped.set(category, list);
@@ -51,6 +52,7 @@ function groupCommandsByCategory(
   return grouped;
 }
 
+/** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const lines = ["ℹ️ Help", ""];
 
@@ -59,10 +61,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   const optionParts = [
-    "/think <level>",
+    "/think <level|default>",
     "/model <id>",
-    "/fast status|on|off",
-    "/verbose on|off",
+    "/fast status|auto|on|off|default",
+    "/verbose on|off|full",
     "/trace on|off|raw",
   ];
   if (isCommandFlagEnabled(cfg, "config")) {
@@ -90,12 +92,14 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
 
 const COMMANDS_PER_PAGE = 8;
 
+/** Options for rendering `/commands` output for a specific channel surface. */
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
   forcePaginatedList?: boolean;
 };
 
+/** Rendered `/commands` text plus pagination metadata for channel-native lists. */
 export type CommandsMessageResult = {
   text: string;
   totalPages: number;
@@ -181,6 +185,7 @@ function formatCommandList(items: CommandsListItem[]): string {
   return lines.join("\n");
 }
 
+/** Builds `/commands` text, returning only the rendered message body. */
 export function buildCommandsMessage(
   cfg?: OpenClawConfig,
   skillCommands?: SkillCommandSpec[],
@@ -190,6 +195,7 @@ export function buildCommandsMessage(
   return result.text;
 }
 
+/** Builds `/commands` text and pagination metadata for surfaces with native list controls. */
 export function buildCommandsMessagePaginated(
   cfg?: OpenClawConfig,
   skillCommands?: SkillCommandSpec[],
@@ -197,6 +203,7 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = normalizeOptionalLowercaseString(options?.surface);
+  // Surfaces with native command-list UI need page metadata; plain text surfaces get one full list.
   const prefersPaginatedList =
     options?.forcePaginatedList === true ||
     Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);

@@ -1,3 +1,7 @@
+/**
+ * Browser config API barrel. It re-exports default profile, upload, auth, and
+ * CDP config helpers for setup/runtime consumers.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
@@ -10,6 +14,7 @@ export {
   resolveProfile,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
+  type ResolvedBrowserTabCleanupConfig,
 } from "./browser-profiles.js";
 export { resolveBrowserControlAuth, type BrowserControlAuth } from "./browser-control-auth.js";
 export { parseBrowserHttpUrl, redactCdpUrl } from "./src/browser/config.js";

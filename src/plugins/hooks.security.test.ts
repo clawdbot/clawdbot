@@ -1,13 +1,15 @@
+// Verifies plugin hook security constraints and rejections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-helpers.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { addStaticTestHooks } from "./hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
-const messageCtx = { channelId: "telegram" };
+const messageCtx = { channelId: "forum" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
@@ -60,6 +62,18 @@ function expectTerminalHookState<
   if ("content" in expected) {
     expect(result?.content).toBe(expected.content);
   }
+}
+
+function requireLoggerErrorMessage(logger: { error: { mock: { calls: unknown[][] } } }): string {
+  const call = logger.error.mock.calls[0];
+  if (!call) {
+    throw new Error("expected logger error call");
+  }
+  expect(typeof call[0]).toBe("string");
+  if (typeof call[0] !== "string") {
+    throw new Error("expected logger error message to be a string");
+  }
+  return call[0];
 }
 
 describe("before_tool_call terminal block semantics", () => {
@@ -147,7 +161,7 @@ describe("before_tool_call terminal block semantics", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority before-tool-call hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });
@@ -186,8 +200,37 @@ describe("before_tool_call terminal block semantics", () => {
     });
 
     await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
-      "before_tool_call handler from failing failed: Error: boom",
+      "before_tool_call handler from failing failed: boom",
     );
+  });
+
+  it("sanitizes caught hook error logs", async () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    addStaticTestHooks(registry, {
+      hookName: "message_received",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: undefined,
+          handler: () => {
+            throw new Error("boom\nforged\tsecret sk-test1234567890");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, { catchErrors: true, logger });
+
+    await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
+
+    const message = requireLoggerErrorMessage(logger);
+    expect(message).toMatch(
+      /^\[hooks\] message_received handler from failing failed: boom forged secret/,
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("sk-test1234567890");
   });
 });
 
@@ -266,7 +309,7 @@ describe("message_sending terminal cancel semantics", () => {
     expect(result?.content).toBe("second");
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority message-sending hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });

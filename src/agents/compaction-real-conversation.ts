@@ -1,8 +1,12 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+/**
+ * Classifies transcript messages that contain real user-visible conversation
+ * for compaction and history pruning.
+ */
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
+import type { AgentMessage } from "./runtime/index.js";
 
-export const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
+const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
 const NON_CONVERSATION_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -13,21 +17,44 @@ const NON_CONVERSATION_BLOCK_TYPES = new Set([
 
 function hasMeaningfulText(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (isSilentReplyText(trimmed)) {
+  if (!trimmed || isSilentReplyText(trimmed)) {
     return false;
   }
   const heartbeat = stripHeartbeatToken(trimmed, { mode: "message" });
-  if (heartbeat.didStrip) {
-    return heartbeat.text.trim().length > 0;
-  }
-  return true;
+  return !heartbeat.didStrip || heartbeat.text.trim().length > 0;
 }
 
-export function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+function isSummaryRole(role: unknown): boolean {
+  return role === "branchSummary" || role === "compactionSummary";
+}
+
+/** Returns whether a message has content worth preserving as conversation. */
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return false;
+  }
+  if ((message as { role?: unknown }).role === "custom") {
+    const custom = message as { content?: unknown; display?: unknown };
+    return custom.display !== false && hasMeaningfulMessageContent(custom.content);
+  }
+  if ((message as { role?: unknown }).role === "bashExecution") {
+    const bash = message as {
+      command?: unknown;
+      output?: unknown;
+    };
+    const command = typeof bash.command === "string" ? bash.command : "";
+    const output = typeof bash.output === "string" ? bash.output : "";
+    return hasMeaningfulText(`${command}\n${output}`);
+  }
+  if (isSummaryRole((message as { role?: unknown }).role)) {
+    const summary = (message as { summary?: unknown }).summary;
+    return typeof summary === "string" && hasMeaningfulText(summary);
+  }
   const content = (message as { content?: unknown }).content;
+  return hasMeaningfulMessageContent(content);
+}
+
+function hasMeaningfulMessageContent(content: unknown): boolean {
   if (typeof content === "string") {
     return hasMeaningfulText(content);
   }
@@ -39,33 +66,41 @@ export function hasMeaningfulConversationContent(message: AgentMessage): boolean
     if (!block || typeof block !== "object") {
       continue;
     }
-    const type = (block as { type?: unknown }).type;
-    if (type !== "text") {
+    const { type, text } = block as { type?: unknown; text?: unknown };
+    if (type === "text") {
+      if (typeof text === "string" && hasMeaningfulText(text)) {
+        return true;
+      }
+    } else if (typeof type !== "string" || !NON_CONVERSATION_BLOCK_TYPES.has(type)) {
       // Tool-call metadata and internal reasoning blocks do not make a
       // heartbeat-only transcript count as real conversation.
-      if (typeof type === "string" && NON_CONVERSATION_BLOCK_TYPES.has(type)) {
-        continue;
-      }
       sawMeaningfulNonTextBlock = true;
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") {
-      continue;
-    }
-    if (hasMeaningfulText(text)) {
-      return true;
     }
   }
   return sawMeaningfulNonTextBlock;
 }
 
+function isToolResultConversationAnchor(message: AgentMessage): boolean {
+  const role = (message as { role?: unknown }).role;
+  return (
+    (role === "user" || role === "custom" || role === "bashExecution" || isSummaryRole(role)) &&
+    hasMeaningfulConversationContent(message)
+  );
+}
+
+/** Returns whether a transcript message should count as real conversation. */
 export function isRealConversationMessage(
   message: AgentMessage,
   messages: AgentMessage[],
   index: number,
 ): boolean {
-  if (message.role === "user" || message.role === "assistant") {
+  if (
+    message.role === "user" ||
+    message.role === "assistant" ||
+    message.role === "custom" ||
+    message.role === "bashExecution" ||
+    isSummaryRole(message.role)
+  ) {
     return hasMeaningfulConversationContent(message);
   }
   if (message.role !== "toolResult") {
@@ -74,10 +109,7 @@ export function isRealConversationMessage(
   const start = Math.max(0, index - TOOL_RESULT_REAL_CONVERSATION_LOOKBACK);
   for (let i = index - 1; i >= start; i -= 1) {
     const candidate = messages[i];
-    if (!candidate || candidate.role !== "user") {
-      continue;
-    }
-    if (hasMeaningfulConversationContent(candidate)) {
+    if (candidate && isToolResultConversationAnchor(candidate)) {
       return true;
     }
   }

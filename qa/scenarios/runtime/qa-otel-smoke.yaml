@@ -1,0 +1,36 @@
+title: QA OTEL smoke evidence
+
+scenario:
+  id: qa-otel-smoke
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.otlp-http-traces-otel
+    secondary:
+      - observability.plugin-sdk-diagnostic-runtime-exports
+  objective: Execute the bounded local OTLP runtime producer directly and publish its OpenTelemetry assertions through the shared QA script evidence writer.
+  successCriteria:
+    - QA Lab launches the runtime producer directly with a bounded local collector configuration.
+    - The producer emits shared script evidence plus its OTEL assertion summary.
+    - The producer captures release-critical traces, metrics, and correlated logs from the diagnostics runtime.
+    - Smoke assertions reject failed OTLP requests, missing required signals, and configured leak needles.
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/script-evidence.ts
+    - test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+    - extensions/diagnostics-otel/runtime-api.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --output-dir
+      - ${outputDir}
+      - --logs-exporter
+      - both
+    timeoutMs: 120000
+    summary: Direct QA OTEL runtime producer coverage with shared script evidence.

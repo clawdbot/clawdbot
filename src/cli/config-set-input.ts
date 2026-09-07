@@ -1,15 +1,22 @@
+// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
-import JSON5 from "json5";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errors.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
+  /** @deprecated Use strictJson. */
   json?: boolean;
   dryRun?: boolean;
   allowExec?: boolean;
+  merge?: boolean;
+  replace?: boolean;
   refProvider?: string;
   refSource?: string;
   refId?: string;
@@ -27,10 +34,10 @@ export type ConfigSetOptions = {
   providerEnv?: string[];
   providerPassEnv?: string[];
   providerTrustedDir?: string[];
-  providerAllowInsecurePath?: boolean;
-  providerAllowSymlinkCommand?: boolean;
   batchJson?: string;
   batchFile?: string;
+  expectCurrentAbsent?: boolean;
+  expectCurrentJson?: string;
 };
 
 export type ConfigSetBatchEntry = {
@@ -39,6 +46,49 @@ export type ConfigSetBatchEntry = {
   ref?: unknown;
   provider?: unknown;
 };
+
+export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; value: unknown };
+
+const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
+
+export function readConfigMutationFileSync(
+  filePath: string,
+  sourceLabel: "--batch-file" | "--file",
+): string {
+  // These explicit CLI file flags have historically followed user-provided
+  // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, "r");
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new Error(`${sourceLabel} not found: ${filePath}. Check the path and try again.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) {
+      throw new Error(
+        `${sourceLabel} must be a regular file: ${filePath}. Choose a JSON5 input file and try again.`,
+      );
+    }
+    try {
+      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new RangeError(
+          `${sourceLabel} exceeds the 8 MiB supported maximum (${CONFIG_MUTATION_FILE_MAX_BYTES} bytes): ${filePath}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
@@ -65,24 +115,28 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||
-    opts.providerTrustedDir?.length ||
-    opts.providerAllowInsecurePath ||
-    opts.providerAllowSymlinkCommand,
+    opts.providerTrustedDir?.length,
   );
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
+  let parsed: unknown;
   try {
-    return JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
   } catch (err) {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {
   const parsed = parseJson5Raw(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
+  }
+  if (parsed.length === 0) {
+    throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
   const out: ConfigSetBatchEntry[] = [];
   for (const [index, entry] of parsed.entries()) {
@@ -94,9 +148,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.prototype.hasOwnProperty.call(typed, "value");
-    const hasRef = Object.prototype.hasOwnProperty.call(typed, "ref");
-    const hasProvider = Object.prototype.hasOwnProperty.call(typed, "provider");
+    const hasValue = Object.hasOwn(typed, "value");
+    const hasRef = Object.hasOwn(typed, "ref");
+    const hasProvider = Object.hasOwn(typed, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
@@ -113,7 +167,50 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   return out;
 }
 
+export function parseConfigSetCurrentExpectation(
+  opts: ConfigSetOptions,
+): ConfigSetCurrentExpectation | undefined {
+  const expectAbsent = opts.expectCurrentAbsent === true;
+  const hasExpectedJson = opts.expectCurrentJson !== undefined;
+  if (!expectAbsent && !hasExpectedJson) {
+    return undefined;
+  }
+  if (expectAbsent && hasExpectedJson) {
+    throw new Error(
+      "config set mode error: choose either --expect-current-absent or --expect-current-json, not both.",
+    );
+  }
+  if (opts.dryRun) {
+    throw new Error(
+      "config set mode error: conditional expectations cannot be combined with --dry-run.",
+    );
+  }
+  if (opts.batchJson !== undefined || opts.batchFile !== undefined) {
+    throw new Error(
+      "config set mode error: conditional expectations require one path operation and cannot be combined with batch mode.",
+    );
+  }
+  if (expectAbsent) {
+    return { kind: "absent" };
+  }
+  const expectedJson = opts.expectCurrentJson;
+  if (expectedJson === undefined) {
+    throw new Error("config set mode error: missing conditional expectation.");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(expectedJson) as unknown;
+    rejectConfigNonFiniteNumbers(value);
+  } catch (error) {
+    throw new Error("config set mode error: --expect-current-json must be valid JSON.", {
+      cause: error,
+    });
+  }
+  return { kind: "json", value };
+}
+
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
+  // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = normalizeOptionalString(opts.batchJson);
   const batchFile = normalizeOptionalString(opts.batchFile);
   const hasInline = Boolean(batchJson);
@@ -131,6 +228,6 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const raw = fs.readFileSync(pathname, "utf8");
+  const raw = readConfigMutationFileSync(pathname, "--batch-file");
   return parseBatchEntries(raw, "--batch-file");
 }

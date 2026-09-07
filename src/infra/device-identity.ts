@@ -1,188 +1,203 @@
+// Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  PRIMARY_DEVICE_IDENTITY_KEY,
+  readStoredDeviceIdentity,
+  readStoredDeviceIdentityReadOnly,
+  resolveDeviceIdentityStore,
+  type DeviceIdentity,
+  type DeviceIdentityStoreOptions,
+  type StoredDeviceIdentity,
+} from "./device-identity-store.js";
+import {
+  normalizeEd25519PublicKeyBase64Url,
+  publicKeyRawBase64UrlFromEd25519Pem,
+  signEd25519Payload,
+  verifyEd25519Signature,
+} from "./ed25519-signature.js";
+import { pruneMapToMaxSize } from "./map-size.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 
-export type DeviceIdentity = {
-  deviceId: string;
-  publicKeyPem: string;
-  privateKeyPem: string;
-};
+export type { DeviceIdentity } from "./device-identity-store.js";
 
-type StoredIdentity = {
-  version: 1;
-  deviceId: string;
-  publicKeyPem: string;
-  privateKeyPem: string;
-  createdAtMs: number;
-};
+const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
+const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+const NATIVE_CLAIM_SUFFIX = ".native-importing";
 
-function resolveDefaultIdentityPath(): string {
-  return path.join(resolveStateDir(), "identity", "device.json");
-}
-
-function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
-}
-
-function base64UrlDecode(input: string): Buffer {
-  const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
-  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-  return Buffer.from(padded, "base64");
-}
-
-function derivePublicKeyRaw(publicKeyPem: string): Buffer {
-  const key = crypto.createPublicKey(publicKeyPem);
-  const spki = key.export({ type: "spki", format: "der" }) as Buffer;
-  if (
-    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
-    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
-  ) {
-    return spki.subarray(ED25519_SPKI_PREFIX.length);
-  }
-  return spki;
-}
-
-function fingerprintPublicKey(publicKeyPem: string): string {
-  const raw = derivePublicKeyRaw(publicKeyPem);
-  return crypto.createHash("sha256").update(raw).digest("hex");
-}
-
-function generateIdentity(): DeviceIdentity {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const deviceId = fingerprintPublicKey(publicKeyPem);
-  return { deviceId, publicKeyPem, privateKeyPem };
-}
-
-export function loadOrCreateDeviceIdentity(
-  filePath: string = resolveDefaultIdentityPath(),
-): DeviceIdentity {
-  try {
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw) as StoredIdentity;
-      if (
-        parsed?.version === 1 &&
-        typeof parsed.deviceId === "string" &&
-        typeof parsed.publicKeyPem === "string" &&
-        typeof parsed.privateKeyPem === "string"
-      ) {
-        const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-        if (derivedId && derivedId !== parsed.deviceId) {
-          const updated: StoredIdentity = {
-            ...parsed,
-            deviceId: derivedId,
-          };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
-          return {
-            deviceId: derivedId,
-            publicKeyPem: parsed.publicKeyPem,
-            privateKeyPem: parsed.privateKeyPem,
-          };
-        }
-        return {
-          deviceId: parsed.deviceId,
-          publicKeyPem: parsed.publicKeyPem,
-          privateKeyPem: parsed.privateKeyPem,
-        };
-      }
-    }
-  } catch {
-    // fall through to regenerate
-  }
-
-  const identity = generateIdentity();
-  ensureDir(filePath);
-  const stored: StoredIdentity = {
-    version: 1,
-    deviceId: identity.deviceId,
-    publicKeyPem: identity.publicKeyPem,
-    privateKeyPem: identity.privateKeyPem,
-    createdAtMs: Date.now(),
+function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
+  return {
+    deviceId: stored.deviceId,
+    publicKeyPem: stored.publicKeyPem,
+    privateKeyPem: stored.privateKeyPem,
   };
-  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
-  return identity;
 }
 
+/** Exact retired file owned by Doctor migration code. */
+function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  return path.join(
+    resolveOpenClawStateDirForDatabasePath(databasePath),
+    LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
+  );
+}
+
+function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
+  const { identityKey } = resolveDeviceIdentityStore(options);
+  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
+    return;
+  }
+  const legacyPath = resolveLegacyDeviceIdentityPath(options);
+  if (
+    // Claims first, source last: both migration owners restore claim -> source atomically.
+    pathMayExistSync(`${legacyPath}${DOCTOR_CLAIM_SUFFIX}`) ||
+    pathMayExistSync(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
+    pathMayExistSync(legacyPath)
+  ) {
+    throw new Error(
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+  }
+}
+
+function withDeviceIdentityCoordinator<T>(
+  options: DeviceIdentityStoreOptions,
+  operation: (
+    resolved: ReturnType<typeof resolveDeviceIdentityStore>,
+    resolvedOptions: DeviceIdentityStoreOptions,
+  ) => T,
+): T {
+  const resolved = resolveDeviceIdentityStore(options);
+  const resolvedOptions: DeviceIdentityStoreOptions = {
+    ...options,
+    path: resolved.databasePath,
+    identityKey: resolved.identityKey,
+  };
+  const coordinator = acquireDeviceIdentityCoordinator({
+    databasePath: resolved.databasePath,
+    stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
+  });
+  let result: T;
+  try {
+    result = operation(resolved, resolvedOptions);
+  } catch (operationError) {
+    let releaseFailed = false;
+    let releaseError: unknown;
+    try {
+      coordinator.release();
+    } catch (error) {
+      releaseFailed = true;
+      releaseError = error;
+    }
+    if (releaseFailed) {
+      throw createSqliteLifecycleAggregateError(
+        [operationError, releaseError],
+        "device identity operation and coordinator release both failed",
+        operationError,
+      );
+    }
+    throw operationError;
+  }
+  coordinator.release();
+  return result;
+}
+
+function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  // A downgrade can recreate retired JSON after SQLite migration. Once this profile has
+  // a canonical row, keep it authoritative and leave the retired source for Doctor.
+  const existing = pathMayExistSync(databasePath) ? readStoredDeviceIdentity(options) : null;
+  if (existing) {
+    return toDeviceIdentity(existing);
+  }
+  assertNoPendingLegacyIdentity(options);
+
+  // Generate outside the write transaction. The transaction rereads the row
+  // before inserting so concurrent runtimes converge on one authoritative key.
+  const candidate = generateStoredDeviceIdentity();
+  return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
+}
+
+/** Load a valid canonical identity or atomically create its SQLite row. */
+export function loadOrCreateDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
+  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) =>
+    loadOrCreateDeviceIdentityOwned(resolvedOptions),
+  );
+}
+
+const processDeviceIdentities = new Map<string, DeviceIdentity>();
+const MAX_PROCESS_DEVICE_IDENTITIES = 32;
+
+/** Keep one authoritative identity stable for the lifetime of a state-dir process. */
+export function loadOrCreateProcessDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
+  return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
+    const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
+    const cached = processDeviceIdentities.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
+    pruneMapToMaxSize(processDeviceIdentities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
+    processDeviceIdentities.set(cacheKey, identity);
+    return identity;
+  });
+}
+
+/** Load a valid persisted identity without creating or mutating SQLite state. */
+export function loadDeviceIdentityIfPresent(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity | null {
+  const stored = readStoredDeviceIdentityReadOnly(options);
+  if (stored) {
+    return toDeviceIdentity(stored);
+  }
+  assertNoPendingLegacyIdentity(options);
+  return null;
+}
+
+/** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
-  const key = crypto.createPrivateKey(privateKeyPem);
-  const sig = crypto.sign(null, Buffer.from(payload, "utf8"), key);
-  return base64UrlEncode(sig);
+  return signEd25519Payload(privateKeyPem, payload);
 }
 
+/** Normalize PEM or raw base64/base64url public keys to canonical raw base64url bytes. */
 export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
-  try {
-    if (publicKey.includes("BEGIN")) {
-      return base64UrlEncode(derivePublicKeyRaw(publicKey));
-    }
-    const raw = base64UrlDecode(publicKey);
-    if (raw.length === 0) {
-      return null;
-    }
-    return base64UrlEncode(raw);
-  } catch {
-    return null;
-  }
+  return normalizeEd25519PublicKeyBase64Url(publicKey);
 }
 
+/** Derive the stable device id from PEM or raw base64/base64url public key material. */
 export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
   try {
-    const raw = publicKey.includes("BEGIN")
-      ? derivePublicKeyRaw(publicKey)
-      : base64UrlDecode(publicKey);
-    if (raw.length === 0) {
+    const normalized = normalizeEd25519PublicKeyBase64Url(publicKey);
+    if (!normalized) {
       return null;
     }
+    const raw = Buffer.from(normalized, "base64url");
     return crypto.createHash("sha256").update(raw).digest("hex");
   } catch {
     return null;
   }
 }
 
+/** Export a PEM Ed25519 public key as canonical raw base64url bytes. */
 export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
+  return publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem);
 }
 
+/** Verify a UTF-8 payload signature against PEM or raw base64/base64url public key material. */
 export function verifyDeviceSignature(
   publicKey: string,
   payload: string,
   signatureBase64Url: string,
 ): boolean {
-  try {
-    const key = publicKey.includes("BEGIN")
-      ? crypto.createPublicKey(publicKey)
-      : crypto.createPublicKey({
-          key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(publicKey)]),
-          type: "spki",
-          format: "der",
-        });
-    const sig = (() => {
-      try {
-        return base64UrlDecode(signatureBase64Url);
-      } catch {
-        return Buffer.from(signatureBase64Url, "base64");
-      }
-    })();
-    return crypto.verify(null, Buffer.from(payload, "utf8"), key, sig);
-  } catch {
-    return false;
-  }
+  return verifyEd25519Signature({ publicKey, payload, signatureBase64Url });
 }

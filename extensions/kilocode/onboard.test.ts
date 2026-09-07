@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Kilocode tests cover onboard plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -10,15 +10,19 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
 } from "./api.js";
-import {
-  applyKilocodeProviderConfig,
-  applyKilocodeConfig,
-  KILOCODE_BASE_URL,
-  KILOCODE_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { KILOCODE_BASE_URL } from "./provider-models.js";
 
 const emptyCfg: OpenClawConfig = {};
-const KILOCODE_MODEL_IDS = ["kilo/auto"];
+const KILOCODE_MODEL_IDS = ["kilo-auto/balanced"];
+
+function requireKilocodeProvider(cfg: OpenClawConfig) {
+  const provider = cfg.models?.providers?.kilocode;
+  if (!provider) {
+    throw new Error("expected Kilocode provider config");
+  }
+  return provider;
+}
 
 describe("Kilo Gateway provider config", () => {
   describe("constants", () => {
@@ -27,11 +31,11 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo/auto");
+      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo-auto/balanced");
     });
 
-    it("KILOCODE_DEFAULT_MODEL_ID is kilo/auto", () => {
-      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo/auto");
+    it("KILOCODE_DEFAULT_MODEL_ID is kilo-auto/balanced", () => {
+      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo-auto/balanced");
     });
   });
 
@@ -39,7 +43,7 @@ describe("Kilo Gateway provider config", () => {
     it("returns correct model shape", () => {
       const model = buildKilocodeModelDefinition();
       expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
-      expect(model.name).toBe("Kilo Auto");
+      expect(model.name).toBe("Auto Balanced");
       expect(model.reasoning).toBe(true);
       expect(model.input).toEqual(["text", "image"]);
       expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);
@@ -48,17 +52,16 @@ describe("Kilo Gateway provider config", () => {
     });
   });
 
-  describe("applyKilocodeProviderConfig", () => {
+  describe("applyKilocodeConfig", () => {
     it("registers kilocode provider with correct baseUrl and api", () => {
-      const result = applyKilocodeProviderConfig(emptyCfg);
-      const provider = result.models?.providers?.kilocode;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);
-      expect(provider?.api).toBe("openai-completions");
+      const result = applyKilocodeConfig(emptyCfg);
+      const provider = requireKilocodeProvider(result);
+      expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
+      expect(provider.api).toBe("openai-completions");
     });
 
     it("includes the default model in the provider model list", () => {
-      const result = applyKilocodeProviderConfig(emptyCfg);
+      const result = applyKilocodeConfig({ models: { mode: "replace" } });
       const provider = result.models?.providers?.kilocode;
       const models = provider?.models;
       expect(Array.isArray(models)).toBe(true);
@@ -67,7 +70,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("surfaces the full Kilo model catalog", () => {
-      const result = applyKilocodeProviderConfig(emptyCfg);
+      const result = applyKilocodeConfig({ models: { mode: "replace" } });
       const provider = result.models?.providers?.kilocode;
       const modelIds = provider?.models?.map((m) => m.id) ?? [];
       for (const modelId of KILOCODE_MODEL_IDS) {
@@ -76,7 +79,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("appends missing catalog models to existing Kilo provider config", () => {
-      const result = applyKilocodeProviderConfig({
+      const result = applyKilocodeConfig({
         models: {
           providers: {
             kilocode: {
@@ -94,11 +97,31 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("sets Kilo Gateway alias in agent default models", () => {
-      const result = applyKilocodeProviderConfig(emptyCfg);
+      const result = applyKilocodeConfig(emptyCfg);
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel).toBeDefined();
-      expect(agentModel?.alias).toBe("Kilo Gateway");
+      expect(agentModel).toEqual({ alias: "Kilo Gateway" });
     });
+
+    it.each([undefined, "merge"] as const)(
+      "preserves authored rows without seeding %s config",
+      (mode) => {
+        expect(
+          applyKilocodeConfig({ models: { mode } }).models?.providers?.kilocode?.models,
+        ).toEqual([]);
+        const authored = {
+          ...buildKilocodeModelDefinition(),
+          id: "operator-model",
+          name: "My model",
+        };
+        const result = applyKilocodeConfig({
+          models: {
+            mode,
+            providers: { kilocode: { baseUrl: KILOCODE_BASE_URL, models: [authored] } },
+          },
+        });
+        expect(result.models?.providers?.kilocode?.models).toEqual([authored]);
+      },
+    );
 
     it("preserves existing alias if already set", () => {
       const cfg: OpenClawConfig = {
@@ -110,7 +133,7 @@ describe("Kilo Gateway provider config", () => {
           },
         },
       };
-      const result = applyKilocodeProviderConfig(cfg);
+      const result = applyKilocodeConfig(cfg);
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
       expect(agentModel?.alias).toBe("My Custom Alias");
     });
@@ -123,47 +146,43 @@ describe("Kilo Gateway provider config", () => {
           },
         },
       };
-      const result = applyKilocodeProviderConfig(cfg);
+      const result = applyKilocodeConfig(cfg);
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5");
     });
   });
 
-  describe("applyKilocodeConfig", () => {
-    it("sets kilocode as the default model", () => {
-      const result = applyKilocodeConfig(emptyCfg);
-      expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
-        KILOCODE_DEFAULT_MODEL_REF,
-      );
-      const provider = result.models?.providers?.kilocode;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);
-    });
+  it("sets kilocode as the default model", () => {
+    const result = applyKilocodeConfig(emptyCfg);
+    expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
+      KILOCODE_DEFAULT_MODEL_REF,
+    );
+    const provider = requireKilocodeProvider(result);
+    expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
   });
 
   describe("env var resolution", () => {
     it("resolves KILOCODE_API_KEY from env", () => {
-      const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "test-kilo-key";
+      vi.stubEnv("KILOCODE_API_KEY", "test-kilo-key");
 
       try {
         const result = resolveEnvApiKey("kilocode");
-        expect(result).not.toBeNull();
-        expect(result?.apiKey).toBe("test-kilo-key");
-        expect(result?.source).toContain("KILOCODE_API_KEY");
+        expect(result).toEqual({
+          apiKey: "test-kilo-key",
+          source: "env: KILOCODE_API_KEY",
+        });
       } finally {
-        envSnapshot.restore();
+        vi.unstubAllEnvs();
       }
     });
 
     it("returns null when KILOCODE_API_KEY is not set", () => {
-      const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      delete process.env.KILOCODE_API_KEY;
+      vi.stubEnv("KILOCODE_API_KEY", "");
 
       try {
         const result = resolveEnvApiKey("kilocode");
         expect(result).toBeNull();
       } finally {
-        envSnapshot.restore();
+        vi.unstubAllEnvs();
       }
     });
   });

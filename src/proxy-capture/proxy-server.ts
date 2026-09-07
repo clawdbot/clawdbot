@@ -1,19 +1,80 @@
+// Proxy capture server records proxied HTTP traffic for deterministic test fixtures.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { request as httpRequest } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+  request as httpRequest,
+} from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
+import { redactedCaptureHeaders } from "./header-redaction.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
+import type { CaptureEventRecord } from "./types.js";
+
+const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
+  "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
+const CAPTURE_BODY_PREVIEW_BYTES = 8192;
+const BAD_GATEWAY_BODY = "Bad Gateway\n";
+const DEBUG_PROXY_CONNECT_TIMEOUT_MS = 30_000;
+const GATEWAY_TIMEOUT_BODY = "Gateway Timeout\n";
+
+type BodyPreviewCapture = {
+  chunks: Buffer[];
+  previewBytes: number;
+  totalBytes: number;
+  truncated: boolean;
+};
+
+function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
+}
+
+function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
+}
+
+function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+    return;
+  }
+  throw new Error(
+    "Debug proxy direct upstream forwarding is disabled while managed proxy mode is active. " +
+      `Set ${DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE}=1 only for approved local diagnostics.`,
+  );
+}
 
 type DebugProxyServerHandle = {
   proxyUrl: string;
   stop: () => Promise<void>;
 };
 
-export function parseConnectTarget(rawTarget: string | undefined): {
+type ProxyCaptureEventInput = Omit<
+  CaptureEventRecord,
+  "sessionId" | "ts" | "sourceScope" | "sourceProcess"
+>;
+
+function createProxyCaptureRecorder(params: {
+  store: ReturnType<typeof getDebugProxyCaptureStore>;
+  settings: DebugProxySettings;
+}) {
+  return (event: ProxyCaptureEventInput): void => {
+    params.store.recordEvent({
+      sessionId: params.settings.sessionId,
+      ts: Date.now(),
+      sourceScope: "openclaw",
+      sourceProcess: params.settings.sourceProcess,
+      ...event,
+    });
+  };
+}
+
+function parseConnectTarget(rawTarget: string | undefined): {
   hostname: string;
   port: number;
 } {
@@ -38,6 +99,9 @@ export function parseConnectTarget(rawTarget: string | undefined): {
   }
   const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
   const portText = trimmed.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portText)) {
+    throw new Error("Invalid CONNECT target port");
+  }
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid CONNECT target port");
@@ -53,12 +117,60 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
   return new URL(`http://${host}${req.url ?? "/"}`);
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function createBodyPreviewCapture(): BodyPreviewCapture {
+  return { chunks: [], previewBytes: 0, totalBytes: 0, truncated: false };
+}
+
+function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | string): void {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  capture.totalBytes += buffer.byteLength;
+  const remaining = CAPTURE_BODY_PREVIEW_BYTES - capture.previewBytes;
+  if (remaining <= 0) {
+    capture.truncated = capture.truncated || buffer.byteLength > 0;
+    return;
   }
-  return Buffer.concat(chunks);
+  const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+  capture.chunks.push(slice);
+  capture.previewBytes += slice.byteLength;
+  if (slice.byteLength < buffer.byteLength) {
+    capture.truncated = true;
+  }
+}
+
+function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
+  dataText: string;
+  metaJson?: string;
+} {
+  return {
+    // write(), unlike end(), omits an incomplete trailing code point introduced
+    // by the byte cap instead of injecting a replacement character into the preview.
+    dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
+    metaJson: capture.truncated
+      ? JSON.stringify({
+          bodyBytes: capture.totalBytes,
+          capturePreviewBytes: CAPTURE_BODY_PREVIEW_BYTES,
+          captureTruncated: true,
+        })
+      : undefined,
+  };
+}
+
+function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  // HTTP status cannot be replaced after forwarding upstream headers. Closing
+  // the downstream prevents a partial 2xx body from looking complete.
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(502, {
+    Connection: "close",
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": Buffer.byteLength(BAD_GATEWAY_BODY),
+  });
+  res.end(BAD_GATEWAY_BODY);
 }
 
 export async function startDebugProxyServer(params: {
@@ -67,102 +179,201 @@ export async function startDebugProxyServer(params: {
   settings: DebugProxySettings;
 }): Promise<DebugProxyServerHandle> {
   await ensureDebugProxyCa(params.settings.certDir);
-  const store = getDebugProxyCaptureStore(params.settings.dbPath, params.settings.blobDir);
+  const store = getDebugProxyCaptureStore();
+  const recordProxyEvent = createProxyCaptureRecorder({ store, settings: params.settings });
   const host = params.host?.trim() || "127.0.0.1";
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const flowId = randomUUID();
-    const target = normalizeTargetUrl(req);
-    const body = await readBody(req);
-    store.recordEvent({
-      sessionId: params.settings.sessionId,
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: params.settings.sourceProcess,
-      protocol: target.protocol === "https:" ? "https" : "http",
-      direction: "outbound",
-      kind: "request",
-      flowId,
-      method: req.method,
-      host: target.host,
-      path: `${target.pathname}${target.search}`,
-      headersJson: JSON.stringify(req.headers),
-      dataText: body.subarray(0, 8192).toString("utf8"),
-    });
-    const upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(
-      target,
-      {
-        method: req.method,
-        headers: req.headers,
-      },
-      (upstreamRes) => {
-        const chunks: Buffer[] = [];
-        upstreamRes.on("data", (chunk) => {
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          chunks.push(buffer);
-          res.write(buffer);
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      const flowId = randomUUID();
+      let target: URL;
+      try {
+        target = normalizeTargetUrl(req);
+      } catch (error) {
+        const message = "Invalid proxy target URL";
+        recordProxyEvent({
+          protocol: "http",
+          direction: "local",
+          kind: "error",
+          flowId,
+          method: req.method,
+          host: req.headers.host,
+          path: req.url ?? "",
+          errorText: error instanceof Error ? error.message : String(error),
         });
-        upstreamRes.on("end", () => {
-          const responseBody = Buffer.concat(chunks);
-          store.recordEvent({
-            sessionId: params.settings.sessionId,
-            ts: Date.now(),
-            sourceScope: "openclaw",
-            sourceProcess: params.settings.sourceProcess,
-            protocol: target.protocol === "https:" ? "https" : "http",
-            direction: "inbound",
-            kind: "response",
-            flowId,
-            method: req.method,
-            host: target.host,
-            path: `${target.pathname}${target.search}`,
-            status: upstreamRes.statusCode ?? undefined,
-            headersJson: JSON.stringify(upstreamRes.headers),
-            dataText: responseBody.subarray(0, 8192).toString("utf8"),
+        const responseBody = `${message}\n`;
+        res.writeHead(400, {
+          Connection: "close",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Length": Buffer.byteLength(responseBody),
+        });
+        res.end(responseBody);
+        return;
+      }
+      const targetProtocol = target.protocol === "https:" ? "https" : "http";
+      const targetPath = `${target.pathname}${target.search}`;
+      const recordTargetEvent = (
+        event: Omit<ProxyCaptureEventInput, "protocol" | "flowId" | "method" | "host" | "path">,
+      ) =>
+        recordProxyEvent({
+          protocol: targetProtocol,
+          flowId,
+          method: req.method,
+          host: target.host,
+          path: targetPath,
+          ...event,
+        });
+      try {
+        assertDebugProxyDirectUpstreamAllowed();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: message,
+        });
+        const responseBody = `${message}\n`;
+        res.writeHead(403, {
+          Connection: "close",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Length": Buffer.byteLength(responseBody),
+        });
+        res.end(responseBody);
+        return;
+      }
+      const requestCapture = createBodyPreviewCapture();
+      const upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(
+        target,
+        {
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          const responseCapture = createBodyPreviewCapture();
+          let upstreamFinished = false;
+          let upstreamFailed = false;
+          let responseFinished = false;
+          let downstreamFailed = false;
+          let pausedForDownstream = false;
+          const resumeUpstreamResponse = () => {
+            pausedForDownstream = false;
+            if (!res.destroyed && !res.writableEnded && !upstreamRes.destroyed) {
+              upstreamRes.resume();
+            }
+          };
+          const handleDownstreamFailure = (error?: Error) => {
+            if (downstreamFailed || responseFinished || upstreamFailed) {
+              return;
+            }
+            downstreamFailed = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "local",
+              kind: "error",
+              errorText: error?.message ?? "Downstream response closed before completion",
+            });
+            upstream.destroy();
+            upstreamRes.destroy();
+          };
+          res.on("finish", () => {
+            if (!upstreamFinished || downstreamFailed || upstreamFailed) {
+              return;
+            }
+            responseFinished = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "response",
+              status: upstreamRes.statusCode ?? undefined,
+              headersJson: JSON.stringify(redactedCaptureHeaders(upstreamRes.headers)),
+              ...finishBodyPreviewCapture(responseCapture),
+            });
           });
-          res.end();
-        });
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-      },
-    );
-    upstream.on("error", (error) => {
-      store.recordEvent({
-        sessionId: params.settings.sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: params.settings.sourceProcess,
-        protocol: target.protocol === "https:" ? "https" : "http",
-        direction: "local",
-        kind: "error",
-        flowId,
-        method: req.method,
-        host: target.host,
-        path: `${target.pathname}${target.search}`,
-        errorText: error.message,
+          res.on("error", handleDownstreamFailure);
+          res.on("close", () => handleDownstreamFailure());
+          upstreamRes.on("data", (chunk) => {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            appendBodyPreviewCapture(responseCapture, buffer);
+            if (res.destroyed || res.writableEnded) {
+              handleDownstreamFailure();
+              return;
+            }
+            try {
+              if (!res.write(buffer) && !pausedForDownstream) {
+                pausedForDownstream = true;
+                upstreamRes.pause();
+                res.once("drain", resumeUpstreamResponse);
+              }
+            } catch (error) {
+              handleDownstreamFailure(error instanceof Error ? error : new Error(String(error)));
+            }
+          });
+          upstreamRes.on("end", () => {
+            upstreamFinished = true;
+            res.off("drain", resumeUpstreamResponse);
+            if (!res.destroyed && !res.writableEnded) {
+              res.end();
+            } else if (!res.writableFinished) {
+              handleDownstreamFailure();
+            }
+          });
+          upstreamRes.on("error", (error) => {
+            if (downstreamFailed || responseFinished || upstreamFailed) {
+              return;
+            }
+            upstreamFailed = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "error",
+              errorText: error.message,
+            });
+            finishProxyResponseAfterUpstreamError(res);
+          });
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+        },
+      );
+      req.on("data", (chunk) => {
+        appendBodyPreviewCapture(requestCapture, chunk);
       });
-      res.statusCode = 502;
-      res.end(error.message);
-    });
-    if (body.byteLength > 0) {
-      upstream.write(body);
-    }
-    upstream.end();
+      req.on("end", () => {
+        recordTargetEvent({
+          direction: "outbound",
+          kind: "request",
+          headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
+          ...finishBodyPreviewCapture(requestCapture),
+        });
+      });
+      req.on("error", (error) => {
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
+        });
+        upstream.destroy(error);
+      });
+      upstream.on("error", (error) => {
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
+        });
+        finishProxyResponseAfterUpstreamError(res);
+      });
+      req.pipe(upstream);
+    })();
   });
 
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
     let hostname = "127.0.0.1";
-    let port = 443;
+    let port;
     try {
       const parsed = parseConnectTarget(req.url);
       hostname = parsed.hostname;
       port = parsed.port;
     } catch (error) {
-      store.recordEvent({
-        sessionId: params.settings.sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: params.settings.sourceProcess,
+      recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -174,20 +385,39 @@ export async function startDebugProxyServer(params: {
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
-    store.recordEvent({
-      sessionId: params.settings.sessionId,
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: params.settings.sourceProcess,
+    recordProxyEvent({
       protocol: "connect",
       direction: "local",
       kind: "connect",
       flowId,
       host: hostname,
       path: req.url ?? "",
-      headersJson: JSON.stringify(req.headers),
+      headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
     });
+    try {
+      assertDebugProxyDirectUpstreamAllowed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      const responseBody = `${message}\n`;
+      clientSocket.end(
+        `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(responseBody)}\r\n\r\n${responseBody}`,
+      );
+      return;
+    }
     const upstreamSocket = net.connect(port, hostname, () => {
+      // This inactivity timeout only protects opening the upstream socket. CONNECT
+      // tunnels are intentionally long-lived and must not inherit it.
+      upstreamSocket.setTimeout(0);
+      upstreamSocket.off("timeout", onUpstreamConnectTimeout);
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {
         upstreamSocket.write(head);
@@ -195,12 +425,26 @@ export async function startDebugProxyServer(params: {
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
     });
-    upstreamSocket.on("error", (error) => {
-      store.recordEvent({
-        sessionId: params.settings.sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: params.settings.sourceProcess,
+    function onUpstreamConnectTimeout() {
+      const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
+      recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      upstreamSocket.destroy();
+      clientSocket.end(
+        `HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(GATEWAY_TIMEOUT_BODY)}\r\n\r\n${GATEWAY_TIMEOUT_BODY}`,
+        () => clientSocket.destroy(),
+      );
+    }
+    upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
+    clientSocket.on("error", (error) => {
+      recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -209,7 +453,19 @@ export async function startDebugProxyServer(params: {
         path: req.url ?? "",
         errorText: error.message,
       });
-      clientSocket.end();
+      upstreamSocket.destroy();
+    });
+    upstreamSocket.on("error", (error) => {
+      recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error.message,
+      });
+      clientSocket.destroy();
     });
   });
 

@@ -1,291 +1,705 @@
+// Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
-import { getShellConfig } from "../../agents/shell-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
-import { createRunRegistry } from "./registry.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
+  ProcessScopeCleanupPolicy,
   RunExit,
-  RunRecord,
   SpawnInput,
+  SpawnProcessAdapter,
   TerminationReason,
 } from "./types.js";
 
-type SupervisorLogRuntime = typeof import("./supervisor-log.runtime.js");
-
-type ActiveRun = {
-  run: ManagedRun;
+type OwnedRun = {
+  runId: string;
   scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel?: (reason: TerminationReason) => void;
+  pending?: Promise<ManagedRun>;
+  waitForExtinction?: () => Promise<void>;
+  cleanupOwners: ScopeCleanupOwner[];
 };
 
-let supervisorLogRuntimePromise: Promise<SupervisorLogRuntime> | undefined;
+type ScopeCleanupOwner = { processTree: ProcessScopeCleanupPolicy; failure?: { error: unknown } };
 
-function loadSupervisorLogRuntime(): Promise<SupervisorLogRuntime> {
-  supervisorLogRuntimePromise ??= import("./supervisor-log.runtime.js");
-  return supervisorLogRuntimePromise;
+function requiresProcessTree(scope: ScopeCleanupOwner, external: boolean): boolean {
+  return scope.processTree === "required-all" || (scope.processTree === "owned-only" && !external);
 }
 
-function clampTimeout(value?: number): number | undefined {
+function recordScopeCleanupFailure(owner: OwnedRun, error: unknown): void {
+  for (const cleanupOwner of owner.cleanupOwners) {
+    cleanupOwner.failure ??= { error };
+  }
+}
+
+type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};
+
+const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
+
+const loadSupervisorLogRuntime = createLazyRuntimeModule(
+  () => import("./supervisor-log.runtime.js"),
+);
+
+function normalizeTimeoutDuration(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.max(1, Math.floor(value));
 }
 
+function clampCapturedOutputChars(value?: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_MAX_CAPTURED_OUTPUT_CHARS;
+  }
+  return Math.max(256, Math.floor(value));
+}
+
+function appendCapturedOutput(
+  current: string,
+  chunk: string,
+  stream: "stdout" | "stderr",
+  maxChars: number,
+) {
+  const next = current + chunk;
+  if (next.length <= maxChars) {
+    return next;
+  }
+  const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
+  const tailChars = Math.max(0, maxChars - marker.length);
+  return `${marker}${sliceUtf16Safe(next, -tailChars)}`;
+}
+
 function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
-export function createProcessSupervisor(): ProcessSupervisor {
-  const registry = createRunRegistry();
-  const active = new Map<string, ActiveRun>();
+function resolveElapsedTimeoutReason(params: {
+  nowMs: number;
+  overallTimeoutDeadlineMs: number | null;
+  noOutputTimeoutDeadlineMs: number | null;
+}): TerminationReason | null {
+  if (
+    params.overallTimeoutDeadlineMs !== null &&
+    params.nowMs >= params.overallTimeoutDeadlineMs &&
+    (params.noOutputTimeoutDeadlineMs === null ||
+      params.nowMs < params.noOutputTimeoutDeadlineMs ||
+      params.overallTimeoutDeadlineMs <= params.noOutputTimeoutDeadlineMs)
+  ) {
+    return "overall-timeout";
+  }
+  return params.noOutputTimeoutDeadlineMs !== null &&
+    params.nowMs >= params.noOutputTimeoutDeadlineMs
+    ? "no-output-timeout"
+    : null;
+}
 
-  const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
-    const current = active.get(runId);
-    if (!current) {
+export function createProcessSupervisor(): ProcessSupervisor & {
+  shutdown: () => Promise<void>;
+} {
+  // Retries share a run ID while an older command can still own descendants.
+  // Keep each admission until its own cleanup completes.
+  const ownedRuns = new Set<OwnedRun>();
+  const scopeCleanupOwners = new Map<string, Set<ScopeCleanupOwner>>();
+  const startingScopes = new Map<string, StartingScope>();
+  let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
+  let cleanupFailure: { error: unknown } | undefined;
+
+  const cancelOwner = (current: OwnedRun, reason: TerminationReason) => {
+    if (current.cancel) {
+      current.cancel(reason);
       return;
     }
-    registry.updateState(runId, "exiting", {
-      terminationReason: reason,
-    });
-    current.run.cancel(reason);
+    current.terminationReason ??= reason;
+  };
+
+  const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
+    for (const current of ownedRuns) {
+      if (current.runId === runId) {
+        cancelOwner(current, reason);
+      }
+    }
+  };
+
+  const cancelActiveScope = (scopeKey: string, reason: TerminationReason) => {
+    for (const current of ownedRuns) {
+      if (current.waitForExtinction && current.scopeKey === scopeKey) {
+        cancelOwner(current, reason);
+      }
+    }
   };
 
   const cancelScope = (scopeKey: string, reason: TerminationReason = "manual-cancel") => {
     if (!scopeKey.trim()) {
       return;
     }
-    for (const [runId, run] of active.entries()) {
-      if (run.scopeKey !== scopeKey) {
-        continue;
+    for (const current of ownedRuns) {
+      if (current.scopeKey === scopeKey) {
+        cancelOwner(current, reason);
       }
-      cancel(runId, reason);
     }
   };
 
-  const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
-    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
-    const scopeKey = normalizeOptionalString(input.scopeKey);
-    if (input.replaceExistingScope && scopeKey) {
-      cancelScope(scopeKey, "manual-cancel");
+  const waitForRuns = async (
+    scopeKey: string | null,
+    ignoreStartupFailures = false,
+  ): Promise<void> => {
+    let firstFailure: PromiseRejectedResult | undefined;
+    const observed = new Set<OwnedRun>();
+    while (true) {
+      const selected = Array.from(ownedRuns).filter(
+        (current) => !observed.has(current) && (scopeKey === null || current.scopeKey === scopeKey),
+      );
+      const starts = selected.flatMap((current) => (current.pending ? [current.pending] : []));
+      const owned = selected.flatMap((current) => {
+        if (!current.waitForExtinction) {
+          return [];
+        }
+        observed.add(current);
+        return [current.waitForExtinction()];
+      });
+      if (starts.length === 0 && owned.length === 0) {
+        if (firstFailure) {
+          throw firstFailure.reason;
+        }
+        return;
+      }
+      // Startup can become active while the snapshot settles; recheck admissions
+      // so shutdown cannot outrun an admitted command or retained descendants.
+      const results = await Promise.allSettled([...owned, ...starts]);
+      firstFailure ??= results
+        .slice(0, ignoreStartupFailures ? owned.length : undefined)
+        .find((result): result is PromiseRejectedResult => result.status === "rejected");
     }
+  };
+  const acquireScopeCleanup = (
+    scopeKey: string,
+    options: { processTree: ProcessScopeCleanupPolicy },
+  ): (() => Promise<void>) => {
+    const cleanupOwner: ScopeCleanupOwner = { processTree: options.processTree };
+    const owners = scopeCleanupOwners.get(scopeKey) ?? new Set<ScopeCleanupOwner>();
+    owners.add(cleanupOwner);
+    scopeCleanupOwners.set(scopeKey, owners);
+    let closing: Promise<void> | undefined;
+    return () =>
+      (closing ??= (async () => {
+        try {
+          cancelScope(scopeKey);
+          await waitForRuns(scopeKey);
+        } catch (error) {
+          cleanupOwner.failure ??= { error };
+        } finally {
+          owners.delete(cleanupOwner);
+          if (owners.size === 0) {
+            scopeCleanupOwners.delete(scopeKey);
+          }
+        }
+        if (cleanupOwner.failure) {
+          throw cleanupOwner.failure.error;
+        }
+      })());
+  };
+
+  const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
+    const external = input.cleanupOwnership === "external";
+    const requireProcessTree = owner.cleanupOwners.some((scope) =>
+      requiresProcessTree(scope, external),
+    );
+    // A queued replacement must still own authority before stopping the surviving run.
+    if (!owner.terminationReason) {
+      input.assertCurrent?.();
+      // Native PTY has no tree-extinction owner. Reject before spawning so exec's
+      // existing PTY-unavailable fallback can run once under the child anchor.
+      if (input.mode === "pty" && requireProcessTree) {
+        throw new Error("PTY is unavailable when execution requires process-tree cleanup");
+      }
+    }
+    const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
-    const record: RunRecord = {
-      runId,
-      sessionId: input.sessionId,
-      backendId: input.backendId,
-      scopeKey,
-      state: "starting",
-      startedAtMs,
-      lastOutputAtMs: startedAtMs,
-      createdAtMs: startedAtMs,
-      updatedAtMs: startedAtMs,
+    const startingTerminationReason = owner.terminationReason;
+
+    const settleConstructionResult = (
+      reason: TerminationReason,
+      cleanup?: Promise<void>,
+    ): ManagedRun => {
+      const exit: RunExit = {
+        reason,
+        exitCode: null,
+        exitSignal: null,
+        durationMs: Date.now() - startedAtMs,
+        stdout: "",
+        stderr: "",
+        timedOut: isTimeoutReason(reason),
+        noOutputTimedOut: reason === "no-output-timeout",
+      };
+      return {
+        runId,
+        startedAtMs,
+        activity: Object.freeze({ resultSettled: true, lastOutputAtMs: startedAtMs }),
+        wait: async () => exit,
+        ...(cleanup && { waitForExtinction: () => cleanup }),
+        cancel: () => undefined,
+      };
     };
-    registry.add(record);
+    if (startingTerminationReason) {
+      // A replacement can be cancelled behind its scope fence. Never launch
+      // its command or terminate the surviving scope after that cancellation.
+      return settleConstructionResult(startingTerminationReason);
+    }
 
-    let forcedReason: TerminationReason | null = null;
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    let noOutputTimer: NodeJS.Timeout | null = null;
+    if (input.replaceExistingScope && scopeKey) {
+      // Scope admission already waited for predecessor startups. Do not
+      // cancel this replacement or later runs reserved behind its fence.
+      cancelActiveScope(scopeKey, "manual-cancel");
+    }
+
+    let forcedReason: TerminationReason | null = owner.terminationReason ?? null;
+    let resultSettled = false;
+    let lastOutputAtMs = startedAtMs;
+    let cleanupSettled = false;
+    const captured = { stdout: "", stderr: "" };
+    // Forced settlement (kill-wait fallback, Windows forced close) resolves the
+    // result while inherited pipes stay open, and callers finalize their own
+    // output state from that terminal result. One fence closes every output path
+    // together: a late chunk reaches no listener, capture buffer, or output clock.
+    let outputDetached = false;
+    const detachOutput = () => {
+      outputDetached = true;
+    };
+    let forceKillTimer: NodeJS.Timeout | null = null;
+    let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
-
-    const overallTimeoutMs = clampTimeout(input.timeoutMs);
-    const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
+    const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
     const setForcedReason = (reason: TerminationReason) => {
-      if (forcedReason) {
+      if (forcedReason || resultSettled) {
         return;
       }
       forcedReason = reason;
-      registry.updateState(runId, "exiting", { terminationReason: reason });
     };
 
     let cancelAdapter: ((reason: TerminationReason) => void) | null = null;
+    const constructionAbort = new AbortController();
+    const constructionAbortError = new Error("adapter construction aborted");
+    const constructionAbortPromise = new Promise<never>((_, reject) => {
+      const rejectConstruction = () => reject(constructionAbortError);
+      if (constructionAbort.signal.aborted) {
+        rejectConstruction();
+      } else {
+        constructionAbort.signal.addEventListener("abort", rejectConstruction, { once: true });
+      }
+    });
 
     const requestCancel = (reason: TerminationReason) => {
       setForcedReason(reason);
       cancelAdapter?.(reason);
+      // Any cancel must abort construction: the relay may already be spawned
+      // and waiting for ready, and a later deadline must not replace this reason.
+      if (!cancelAdapter) {
+        constructionAbort.abort();
+      }
     };
+    owner.cancel = requestCancel;
 
+    const createDeadline = (reason: "overall-timeout" | "no-output-timeout", value?: number) => {
+      const durationMs = normalizeTimeoutDuration(value);
+      let deadlineMs: number | null = null;
+      let timer: NodeJS.Timeout | undefined;
+      // Re-arm bounded intervals: a long deadline must not overflow Node's timer cap.
+      const schedule = (remainingMs: number, deadline: number) => {
+        const intervalMs = resolveTimerTimeoutMs(remainingMs, 1);
+        timer = setTimeout(() => {
+          if (resultSettled) {
+            return;
+          }
+          const remaining = Math.min(remainingMs - intervalMs, deadline - performance.now());
+          if (remaining <= 0) {
+            requestCancel(reason);
+          } else {
+            schedule(remaining, deadline);
+          }
+        }, intervalMs);
+      };
+      return {
+        get deadlineMs() {
+          return deadlineMs;
+        },
+        reset: () => {
+          if (!durationMs || resultSettled) {
+            return;
+          }
+          clearTimeout(timer);
+          deadlineMs = performance.now() + durationMs;
+          schedule(durationMs, deadlineMs);
+        },
+        clear: () => clearTimeout(timer),
+      };
+    };
+    const overallDeadline = createDeadline("overall-timeout", input.timeoutMs);
+    const outputDeadline = createDeadline("no-output-timeout", input.noOutputTimeoutMs);
     const touchOutput = () => {
-      registry.touchOutput(runId);
-      if (!noOutputTimeoutMs || settled) {
-        return;
-      }
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-      }
-      noOutputTimer = setTimeout(() => {
-        requestCancel("no-output-timeout");
-      }, noOutputTimeoutMs);
+      lastOutputAtMs = Date.now();
+      outputDeadline.reset();
     };
 
     try {
-      if (input.mode === "child" && input.argv.length === 0) {
+      if (input.mode !== "anchored-shell" && input.argv.length === 0) {
         throw new Error("spawn argv cannot be empty");
       }
-      const adapter =
+      // Reserve the join before construction: a timeout result does not release
+      // resources acquired later, or hide cleanup when readiness rejects after spawn.
+      const cleanup = createDeferredCore();
+      owner.waitForExtinction = () => cleanup.promise;
+      void cleanup.promise.catch(() => undefined);
+      let constructionCleanup: Promise<void> | undefined;
+      let ownedAdapter: SpawnProcessAdapter | undefined;
+      const onSpawnCleanup = (promise: Promise<void>) => {
+        constructionCleanup = promise;
+        void promise.catch(() => undefined);
+      };
+      overallDeadline.reset();
+      outputDeadline.reset();
+      const adapterPromise =
         input.mode === "pty"
-          ? await (async () => {
-              const { shell, args: shellArgs } = getShellConfig();
-              const ptyCommand = input.ptyCommand.trim();
-              if (!ptyCommand) {
-                throw new Error("PTY command cannot be empty");
-              }
-              return await createPtyAdapter({
-                shell,
-                args: [...shellArgs, ptyCommand],
-                cwd: input.cwd,
-                env: input.env,
-              });
-            })()
-          : await createChildAdapter({
-              argv: input.argv,
+          ? createPtyAdapter({
+              assertCurrent: input.assertCurrent,
+              shell: expectDefined(input.argv[0], "spawn executable"),
+              args: input.argv.slice(1),
               cwd: input.cwd,
               env: input.env,
-              windowsVerbatimArguments: input.windowsVerbatimArguments,
-              input: input.input,
-              stdinMode: input.stdinMode,
-            });
-
-      registry.updateState(runId, "running", { pid: adapter.pid });
-
-      const clearTimers = () => {
-        if (timeoutTimer) {
-          clearTimeout(timeoutTimer);
-          timeoutTimer = null;
+              abortSignal: constructionAbort.signal,
+              onSpawnCleanup,
+            })
+          : input.mode === "anchored-shell"
+            ? createChildAdapter({
+                assertCurrent: input.assertCurrent,
+                anchoredShellCommand: input.command,
+                cwd: input.cwd,
+                env: input.env,
+                abortSignal: constructionAbort.signal,
+                onSpawnCleanup,
+              })
+            : createChildAdapter({
+                assertCurrent: input.assertCurrent,
+                ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
+                argv: input.argv,
+                argv0: input.argv0,
+                cwd: input.cwd,
+                env: input.env,
+                exactEnv: input.exactEnv,
+                windowsVerbatimArguments: input.windowsVerbatimArguments,
+                input: input.input,
+                stdinMode: input.stdinMode,
+                secretInput: input.secretInput,
+                abortSignal: constructionAbort.signal,
+                onSpawnCleanup,
+              });
+      const extinctionPromise = adapterPromise
+        .then(
+          async (started) => {
+            ownedAdapter = started;
+            if (external || !started.waitForExtinction) {
+              for (const scope of owner.cleanupOwners) {
+                if (requiresProcessTree(scope, external)) {
+                  scope.failure ??= {
+                    error: new Error(
+                      "process cleanup cannot confirm owned execution-tree settlement",
+                    ),
+                  };
+                }
+              }
+            }
+            if (constructionAbort.signal.aborted) {
+              started.kill("SIGKILL");
+              // Drain a late adapter's output without reopening the terminal result.
+              void started.wait().catch(() => undefined);
+            }
+            await (constructionCleanup ?? started.waitForExtinction?.() ?? started.wait());
+          },
+          async () => {
+            await constructionCleanup;
+          },
+        )
+        .finally(() => {
+          cleanupSettled = true;
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+            forceKillTimer = null;
+          }
+          if (resultSettled) {
+            ownedAdapter?.dispose();
+          }
+        });
+      void extinctionPromise.then(
+        () => {
+          ownedRuns.delete(owner);
+          cleanup.resolve();
+        },
+        (error: unknown) => {
+          recordScopeCleanupFailure(owner, error);
+          cleanupFailure ??= { error };
+          ownedRuns.delete(owner);
+          cleanup.reject(error);
+        },
+      );
+      let adapter: Awaited<typeof adapterPromise>;
+      try {
+        adapter = await Promise.race([adapterPromise, constructionAbortPromise]);
+      } catch (err) {
+        if (err !== constructionAbortError || !forcedReason) {
+          throw err;
         }
-        if (noOutputTimer) {
-          clearTimeout(noOutputTimer);
-          noOutputTimer = null;
+        resultSettled = true;
+        overallDeadline.clear();
+        outputDeadline.clear();
+        detachOutput();
+        if (cleanupSettled) {
+          ownedAdapter?.dispose();
+        }
+        return settleConstructionResult(forcedReason, cleanup.promise);
+      }
+
+      const settleResult = () => {
+        resultSettled = true;
+        overallDeadline.clear();
+        outputDeadline.clear();
+        detachOutput();
+        if (cleanupSettled) {
+          adapter.dispose();
         }
       };
 
-      cancelAdapter = (_reason: TerminationReason) => {
-        if (settled) {
+      cancelAdapter = (reason: TerminationReason) => {
+        if (
+          cleanupSettled ||
+          (cancelRequested && (requireProcessTree || !(resultSettled && forceKillTimer)))
+        ) {
           return;
         }
-        adapter.kill("SIGKILL");
+        cancelRequested = true;
+        if (resultSettled && !requireProcessTree) {
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+            forceKillTimer = null;
+          }
+          // Root completion closes its terminal record, not ownership of
+          // descendants still retained by the authoritative group or Job.
+          adapter.kill("SIGKILL");
+          return;
+        }
+        // Windows has no catchable SIGTERM equivalent: the adapter implements it
+        // with asynchronous taskkill, so waiting the cleanup grace only delays an
+        // already-expired deadline before the same forced tree termination.
+        if (
+          process.platform === "win32" &&
+          (reason === "overall-timeout" || reason === "no-output-timeout")
+        ) {
+          adapter.kill("SIGKILL");
+          return;
+        }
+        adapter.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          if (!cleanupSettled) {
+            adapter.kill("SIGKILL");
+          }
+        }, GRACEFUL_CANCEL_TIMEOUT_MS);
+        forceKillTimer.unref?.();
       };
 
-      if (overallTimeoutMs) {
-        timeoutTimer = setTimeout(() => {
-          requestCancel("overall-timeout");
-        }, overallTimeoutMs);
+      const withOutputFence =
+        <Chunk>(deliver?: (chunk: Chunk) => void, recordsOutput = true) =>
+        (chunk: Chunk) => {
+          if (outputDetached) {
+            return;
+          }
+          if (recordsOutput) {
+            touchOutput();
+          }
+          deliver?.(chunk);
+        };
+      const rawInput = input.mode === "child" ? input : undefined;
+      // Byte transports can flush decoded text at EOF without fresh activity.
+      // PTYs and Windows Job transports report only text.
+      for (const [stream, subscribe, onText, onRaw] of [
+        ["stdout", adapter.onStdout, input.onStdout, rawInput?.onStdoutRaw],
+        ["stderr", adapter.onStderr, input.onStderr, rawInput?.onStderrRaw],
+      ] as const) {
+        subscribe(
+          withOutputFence((chunk: string) => {
+            if (captureOutput) {
+              captured[stream] = appendCapturedOutput(
+                captured[stream],
+                chunk,
+                stream,
+                maxCapturedOutputChars,
+              );
+            }
+            onText?.(chunk);
+          }, !adapter.supportsRawOutput),
+          withOutputFence(onRaw),
+        );
       }
-      if (noOutputTimeoutMs) {
-        noOutputTimer = setTimeout(() => {
-          requestCancel("no-output-timeout");
-        }, noOutputTimeoutMs);
-      }
-
-      adapter.onStdout((chunk) => {
-        if (captureOutput) {
-          stdout += chunk;
-        }
-        input.onStdout?.(chunk);
-        touchOutput();
-      });
-      adapter.onStderr((chunk) => {
-        if (captureOutput) {
-          stderr += chunk;
-        }
-        input.onStderr?.(chunk);
-        touchOutput();
-      });
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
-        if (settled) {
-          return {
-            reason: forcedReason ?? "exit",
-            exitCode: result.code,
-            exitSignal: result.signal,
-            durationMs: Date.now() - startedAtMs,
-            stdout,
-            stderr,
-            timedOut: isTimeoutReason(forcedReason ?? "exit"),
-            noOutputTimedOut: forcedReason === "no-output-timeout",
-          };
-        }
-        settled = true;
-        clearTimers();
-        adapter.dispose();
-        active.delete(runId);
+        const deadlineReason = resolveElapsedTimeoutReason({
+          nowMs: performance.now(),
+          overallTimeoutDeadlineMs: overallDeadline.deadlineMs,
+          noOutputTimeoutDeadlineMs: outputDeadline.deadlineMs,
+        });
+        const terminalReason = forcedReason ?? deadlineReason;
+        settleResult();
 
         const reason: TerminationReason =
-          forcedReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+          terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
         const exit: RunExit = {
           reason,
           exitCode: result.code,
           exitSignal: result.signal,
+          oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
           durationMs: Date.now() - startedAtMs,
-          stdout,
-          stderr,
-          timedOut: isTimeoutReason(forcedReason ?? reason),
-          noOutputTimedOut: forcedReason === "no-output-timeout",
+          ...captured,
+          timedOut: isTimeoutReason(reason),
+          noOutputTimedOut: terminalReason === "no-output-timeout",
         };
-        registry.finalize(runId, {
-          reason: exit.reason,
-          exitCode: exit.exitCode,
-          exitSignal: exit.exitSignal,
-        });
         return exit;
-      })().catch((err) => {
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          active.delete(runId);
-          adapter.dispose();
-          registry.finalize(runId, {
-            reason: "spawn-error",
-            exitCode: null,
-            exitSignal: null,
-          });
+      })().catch((err: unknown) => {
+        if (!resultSettled) {
+          settleResult();
         }
         throw err;
       });
 
       const managedRun: ManagedRun = {
+        activity: Object.freeze({
+          get resultSettled() {
+            return resultSettled;
+          },
+          get lastOutputAtMs() {
+            return lastOutputAtMs;
+          },
+        }),
         runId,
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
         wait: async () => await waitPromise,
+        ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
+        detachOutput,
       };
 
-      active.set(runId, {
-        run: managedRun,
-        scopeKey,
-      });
+      if (forcedReason) {
+        managedRun.cancel(forcedReason);
+      }
       return managedRun;
     } catch (err) {
-      registry.finalize(runId, {
-        reason: "spawn-error",
-        exitCode: null,
-        exitSignal: null,
-      });
+      resultSettled = true;
+      overallDeadline.clear();
+      outputDeadline.clear();
+      detachOutput();
       const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
     }
   };
 
+  const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    if (shuttingDown) {
+      return Promise.reject(new Error("process supervisor is shut down"));
+    }
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
+    const owner: OwnedRun = {
+      runId,
+      scopeKey,
+      cleanupOwners: scopeKey ? [...(scopeCleanupOwners.get(scopeKey) ?? [])] : [],
+    };
+    // Reserve cancellation before either adapter startup or a replacement
+    // fence, so stopping a run cannot silently leave a late child alive.
+    ownedRuns.add(owner);
+
+    const starting = scopeKey
+      ? (startingScopes.get(scopeKey) ?? { runs: new Set<Promise<ManagedRun>>() })
+      : undefined;
+    if (scopeKey && starting) {
+      startingScopes.set(scopeKey, starting);
+    }
+
+    // Ordinary runs start together, but replacements fence later arrivals so
+    // delayed cancellation cannot accidentally terminate a newer scoped run.
+    const previous = starting
+      ? input.replaceExistingScope
+        ? Array.from(starting.runs)
+        : starting.replacement
+          ? [starting.replacement]
+          : []
+      : [];
+    const pending =
+      previous.length > 0
+        ? Promise.allSettled(previous).then(() => startRun(input, owner))
+        : startRun(input, owner);
+    owner.pending = pending;
+    starting?.runs.add(pending);
+    if (starting && input.replaceExistingScope) {
+      starting.replacement = pending;
+    }
+
+    const clearPendingStart = () => {
+      delete owner.pending;
+      if (!owner.waitForExtinction) {
+        ownedRuns.delete(owner);
+      }
+      starting?.runs.delete(pending);
+      if (starting?.replacement === pending) {
+        delete starting.replacement;
+      }
+      if (scopeKey && starting?.runs.size === 0 && startingScopes.get(scopeKey) === starting) {
+        startingScopes.delete(scopeKey);
+      }
+    };
+    void pending.then(clearPendingStart, clearPendingStart);
+    return pending;
+  };
+
+  const shutdown = (): Promise<void> => {
+    // Publish the admission fence before cancellation can invoke owner callbacks.
+    shuttingDown = true;
+    return (shutdownPromise ??= Promise.resolve().then(async () => {
+      while (ownedRuns.size) {
+        for (const owner of ownedRuns) {
+          cancelOwner(owner, "manual-cancel");
+        }
+        // A failed startup owns no live process; only failed owner extinction
+        // must keep the process-wide supervisor fenced for operator recovery.
+        await waitForRuns(null, true);
+      }
+      if (cleanupFailure) {
+        throw cleanupFailure.error;
+      }
+    }));
+  };
+
   return {
+    acquireScopeCleanup,
     spawn,
     cancel,
     cancelScope,
-    reconcileOrphans: async () => {
-      // Deliberate no-op: this supervisor uses in-memory ownership only.
-      // Active runs are not recovered after process restart in the current model.
-    },
-    getRecord: (runId: string) => registry.get(runId),
+    shutdown,
   };
 }

@@ -1,3 +1,4 @@
+// ClawHub plugin docs tests validate plugin documentation examples.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,7 +6,6 @@ import { validateExternalCodePluginPackageJson } from "../../packages/plugin-pac
 
 const DOCS_ROOT = path.join(process.cwd(), "docs");
 const pluginDocs = [
-  path.join(DOCS_ROOT, "tools", "clawhub.md"),
   path.join(DOCS_ROOT, "plugins", "building-plugins.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-setup.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins.md"),
@@ -40,9 +40,14 @@ describe("ClawHub plugin docs", () => {
       ),
     ) as { id?: unknown; configSchema?: unknown };
 
-    expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
+    expect(validateExternalCodePluginPackageJson(packageJson).issues).toStrictEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(pluginManifest.configSchema).toBeTruthy();
+    const { configSchema } = pluginManifest;
+    if (configSchema === null) {
+      throw new Error("expected minimal plugin config schema");
+    }
+    expect(typeof configSchema).toBe("object");
+    expect(Array.isArray(configSchema)).toBe(false);
   });
 
   it("does not tell plugin authors to use bare clawhub publish", async () => {

@@ -1,3 +1,4 @@
+// Channel MCP shutdown tests cover unhandled rejection behavior during shutdown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const transportState = vi.hoisted(() => ({
@@ -43,10 +44,11 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "test",
 }));
 
@@ -79,6 +81,18 @@ vi.mock("./channel-tools.js", () => ({
   registerChannelMcpTools: vi.fn(),
 }));
 
+async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
+  await vi.waitFor(() => {
+    if (transportState.lastTransport === null) {
+      throw new Error("MCP stdio transport was not created");
+    }
+  });
+  if (!transportState.lastTransport) {
+    throw new Error("MCP stdio transport was not created");
+  }
+  return transportState.lastTransport;
+}
+
 describe("serveOpenClawChannelMcp shutdown", () => {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
@@ -97,18 +111,39 @@ describe("serveOpenClawChannelMcp shutdown", () => {
     bridgeState.handleClaudePermissionRequest.mockClear();
   });
 
-  it("does not leak unhandled rejections when shutdown close fails", async () => {
+  it("rejects without leaking unhandled rejections and attempts every cleanup owner", async () => {
     process.on("unhandledRejection", onUnhandledRejection);
     const { serveOpenClawChannelMcp } = await import("./channel-server.js");
 
     const servePromise = serveOpenClawChannelMcp({ verbose: false });
-    await Promise.resolve();
+    const transport = await waitForTransport();
 
-    transportState.lastTransport?.onclose?.();
-    await servePromise;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    transport.onclose?.();
+    await expect(servePromise).rejects.toThrow("close boom");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
-    expect(unhandledRejections).toEqual([]);
+    expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);
+    expect(serverState.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("aggregates bridge and MCP server close failures", async () => {
+    serverState.close.mockRejectedValueOnce(new Error("server close boom"));
+    const { serveOpenClawChannelMcp } = await import("./channel-server.js");
+
+    const servePromise = serveOpenClawChannelMcp({ verbose: false });
+    const transport = await waitForTransport();
+    transport.onclose?.();
+
+    const error = await servePromise.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "close boom" }),
+      expect.objectContaining({ message: "server close boom" }),
+    ]);
+    expect(bridgeState.close).toHaveBeenCalledTimes(1);
+    expect(serverState.close).toHaveBeenCalledTimes(1);
   });
 });

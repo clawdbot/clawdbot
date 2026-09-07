@@ -1,3 +1,4 @@
+// Pairing adapter tests cover channel plugin device/account pairing adapter behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createLoggedPairingApprovalNotifier,

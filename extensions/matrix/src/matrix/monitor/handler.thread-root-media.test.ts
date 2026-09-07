@@ -1,3 +1,5 @@
+// Matrix tests cover handler.thread root media plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
@@ -5,6 +7,12 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
+
+const requireRecord = createRequireRecord("object", "expected-label");
+
+function readFirstMockArg(fn: unknown): unknown {
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];
+}
 
 describe("createMatrixRoomMessageHandler thread root media", () => {
   it("keeps image-only thread roots visible via attachment markers", async () => {
@@ -47,7 +55,6 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       getMemberDisplayName: async () => "Gum",
       startupMs: Date.now() - 120_000,
       startupGraceMs: 60_000,
-      textLimit: 4000,
       mediaMaxBytes: 5 * 1024 * 1024,
       replyToMode: "first",
     });
@@ -66,17 +73,16 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       }),
     );
 
-    expect(formatAgentEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.stringContaining("replying"),
-      }),
+    expect(formatAgentEnvelope).toHaveBeenCalledTimes(1);
+    const envelope = requireRecord(
+      formatAgentEnvelope.mock.calls.at(0)?.[0],
+      "format agent envelope params",
     );
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          ThreadStarterBody: expect.stringContaining("[matrix image attachment]"),
-        }),
-      }),
-    );
+    expect(String(envelope.body)).toContain("replying");
+
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    const inbound = requireRecord(readFirstMockArg(recordInboundSession), "record inbound session");
+    const ctx = requireRecord(inbound.ctx, "inbound context");
+    expect(String(ctx.ThreadStarterBody)).toContain("[matrix image attachment]");
   });
 });

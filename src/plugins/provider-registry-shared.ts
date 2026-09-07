@@ -1,35 +1,51 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Shares provider registry normalization helpers across plugin paths.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
+/** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(providerId);
+  const normalized = normalizeOptionalLowercaseString(providerId);
+  return normalized && !isBlockedObjectKey(normalized) ? normalized : undefined;
 }
 
-export function buildCapabilityProviderMaps<T extends { id: string; aliases?: readonly string[] }>(
+export function matchesProviderPluginRef(
+  provider: { id: string; aliases?: readonly string[]; hookAliases?: readonly string[] },
+  providerId: string,
+): boolean {
+  const normalized = normalizeProviderId(providerId);
+  return Boolean(
+    normalized &&
+    (normalizeProviderId(provider.id) === normalized ||
+      [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+        (alias) => normalizeProviderId(alias) === normalized,
+      )),
+  );
+}
+
+/** Preserves ordered alias overrides, including aliases of replaced canonical entries. */
+export function buildCapabilityProviderIndex<T extends { id: string; aliases?: readonly string[] }>(
   providers: readonly T[],
-  normalizeId: (
-    providerId: string | undefined,
-  ) => string | undefined = normalizeCapabilityProviderId,
-): {
-  canonical: Map<string, T>;
-  aliases: Map<string, T>;
-} {
-  const canonical = new Map<string, T>();
-  const aliases = new Map<string, T>();
+  mode: "canonical" | "aliases",
+): Map<string, T> {
+  const index = new Map<string, T>();
 
   for (const provider of providers) {
-    const id = normalizeId(provider.id);
+    const id = normalizeCapabilityProviderId(provider.id);
     if (!id) {
       continue;
     }
-    canonical.set(id, provider);
-    aliases.set(id, provider);
+    index.set(id, provider);
+    if (mode === "canonical") {
+      continue;
+    }
     for (const alias of provider.aliases ?? []) {
-      const normalizedAlias = normalizeId(alias);
+      const normalizedAlias = normalizeCapabilityProviderId(alias);
       if (normalizedAlias) {
-        aliases.set(normalizedAlias, provider);
+        index.set(normalizedAlias, provider);
       }
     }
   }
 
-  return { canonical, aliases };
+  return index;
 }

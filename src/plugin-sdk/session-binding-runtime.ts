@@ -1,8 +1,10 @@
 // Narrow session-binding runtime surface for channels that only need current
 // conversation binding state, not configured binding routing or pairing stores.
 export {
-  __testing,
+  testing as __testing,
+  testing,
   getSessionBindingService,
+  inspectSessionBindingByConversation,
   registerSessionBindingAdapter,
   type SessionBindingRecord,
   type SessionBindingService,

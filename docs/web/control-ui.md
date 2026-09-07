@@ -1,27 +1,39 @@
 ---
-summary: "Browser-based control UI for the Gateway (chat, nodes, config)"
+summary: "Browser-based control UI for the Gateway (chat, activity, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
   - You want Tailnet access without SSH tunnels
 title: "Control UI"
+sidebarTitle: "Control UI"
 ---
-
-# Control UI (browser)
 
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
+`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
+pages and assets while bots and existing Gateway connections keep running.
+Re-enable it to resume serving; missing assets are prepared in the background.
+Changing the serving base path or asset root still requires a Gateway restart.
+
+For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
+
 It speaks **directly to the Gateway WebSocket** on the same port.
+
+While the initial connection or a route loads, shimmer placeholders reserve the chat layout. They respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+
+Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
 
 ## Quick open (local)
 
-If the Gateway is running on the same computer, open:
-
-- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
+If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
 
 If the page fails to load, start the Gateway first: `openclaw gateway`.
+
+<Note>
+On native Windows LAN binds, Windows Firewall or organization-managed Group Policy can still block the advertised LAN URL even when `127.0.0.1` works on the Gateway host. Run `openclaw gateway status --deep` on the Windows host; it reports likely-blocked ports, profile mismatches, and local firewall rules that policy may ignore.
+</Note>
 
 Auth is supplied during the WebSocket handshake via:
 
@@ -30,324 +42,112 @@ Auth is supplied during the WebSocket handshake via:
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
 
-The dashboard settings panel keeps a token for the current browser tab session
-and selected gateway URL; passwords are not persisted. Onboarding usually
-generates a gateway token for shared-secret auth on first connect, but password
-auth works too when `gateway.auth.mode` is `"password"`.
-
-## Device pairing (first connection)
-
-When you connect to the Control UI from a new browser or device, the Gateway
-requires a **one-time pairing approval** — even if you're on the same Tailnet
-with `gateway.auth.allowTailscale: true`. This is a security measure to prevent
-unauthorized access.
-
-**What you'll see:** "disconnected (1008): pairing required"
-
-**To approve the device:**
-
-```bash
-# List pending requests
-openclaw devices list
-
-# Approve by request ID
-openclaw devices approve <requestId>
-```
-
-If the browser retries pairing with changed auth details (role/scopes/public
-key), the previous pending request is superseded and a new `requestId` is
-created. Re-run `openclaw devices list` before approval.
-
-Once approved, the device is remembered and won't require re-approval unless
-you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
-[Devices CLI](/cli/devices) for token rotation and revocation.
-
-**Notes:**
-
-- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
-  auto-approved.
-- Tailnet and LAN browser connects still require explicit approval, even when
-  they originate from the same machine.
-- Each browser profile generates a unique device ID, so switching browsers or
-  clearing browser data will require re-pairing.
-
-## Language support
-
-The Control UI can localize itself on first load based on your browser locale.
-To override it later, open **Overview -> Gateway Access -> Language**. The
-locale picker lives in the Gateway Access card, not under Appearance.
-
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
-- Non-English translations are lazy-loaded in the browser.
-- The selected locale is saved in browser storage and reused on future visits.
-- Missing translation keys fall back to English.
-
-## What it can do (today)
-
-- Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
-- Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
-- Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`)
-- Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
-- Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
-- Skills: status, enable/disable, install, API key updates (`skills.*`)
-- Nodes: list + caps (`node.list`)
-- Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
-- Config: view/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`)
-- Config: apply + restart with validation (`config.apply`) and wake the last active session
-- Config writes include a base-hash guard to prevent clobbering concurrent edits
-- Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
-- Config schema + form rendering (`config.schema` / `config.schema.lookup`,
-  including field `title` / `description`, matched UI hints, immediate child
-  summaries, docs metadata on nested object/wildcard/array/composition nodes,
-  plus plugin + channel schemas when available); Raw JSON editor is
-  available only when the snapshot has a safe raw round-trip
-- If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
-- Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
-- Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
-- Logs: live tail of gateway file logs with filter/export (`logs.tail`)
-- Update: run a package/git update + restart (`update.run`) with a restart report
-
-Cron jobs panel notes:
-
-- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
-- Channel/target fields appear when announce is selected.
-- Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
-- For main-session jobs, webhook and none delivery modes are available.
-- Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options,
-  agent model/thinking overrides, and best-effort delivery toggles.
-- Form validation is inline with field-level errors; invalid values disable the save button until fixed.
-- Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
-- Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
-
-## Chat behavior
-
-- `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
-- Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
-- `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
-- `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
-- `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-- The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
-- Stop:
-  - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
-  - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
-- Abort partial retention:
-  - When a run is aborted, partial assistant text can still be shown in the UI
-  - Gateway persists aborted partial assistant text into transcript history when buffered output exists
-  - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
-
-## Hosted embeds
-
-Assistant messages can render hosted web content inline with the `[embed ...]`
-shortcode. The iframe sandbox policy is controlled by
-`gateway.controlUi.embedSandbox`:
-
-- `strict`: disables script execution inside hosted embeds
-- `scripts`: allows interactive embeds while keeping origin isolation; this is
-  the default and is usually enough for self-contained browser games/widgets
-- `trusted`: adds `allow-same-origin` on top of `allow-scripts` for same-site
-  documents that intentionally need stronger privileges
-
-Example:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      embedSandbox: "scripts",
-    },
-  },
-}
-```
-
-Use `trusted` only when the embedded document genuinely needs same-origin
-behavior. For most agent-generated games and interactive canvases, `scripts` is
-the safer choice.
-
-Absolute external `http(s)` embed URLs stay blocked by default. If you
-intentionally want `[embed url="https://..."]` to load third-party pages, set
-`gateway.controlUi.allowExternalEmbedUrls: true`.
-
-## Tailnet access (recommended)
-
-### Integrated Tailscale Serve (preferred)
-
-Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
-
-```bash
-openclaw gateway --tailscale serve
-```
-
-Open:
-
-- `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
-
-By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers
-(`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw
-verifies the identity by resolving the `x-forwarded-for` address with
-`tailscale whois` and matching it to the header, and only accepts these when the
-request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
-`gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
-credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
-`"password"`.
-For that async Serve identity path, failed auth attempts for the same client IP
-and auth scope are serialized before rate-limit writes. Concurrent bad retries
-from the same browser can therefore show `retry later` on the second request
-instead of two plain mismatches racing in parallel.
-Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
-code may run on that host, require token/password auth.
-
-### Bind to tailnet + token
-
-```bash
-openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
-```
-
-Then open:
-
-- `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
-
-Paste the matching shared secret into the UI settings (sent as
-`connect.params.auth.token` or `connect.params.auth.password`).
-
-## Insecure HTTP
-
-If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
-the browser runs in a **non-secure context** and blocks WebCrypto. By default,
-OpenClaw **blocks** Control UI connections without device identity.
-
-Documented exceptions:
-
-- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
-- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
-- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
-
-**Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
-
-- `https://<magicdns>/` (Serve)
-- `http://127.0.0.1:18789/` (on the gateway host)
-
-**Insecure-auth toggle behavior:**
-
-```json5
-{
-  gateway: {
-    controlUi: { allowInsecureAuth: true },
-    bind: "tailnet",
-    auth: { mode: "token", token: "replace-me" },
-  },
-}
-```
-
-`allowInsecureAuth` is a local compatibility toggle only:
-
-- It allows localhost Control UI sessions to proceed without device identity in
-  non-secure HTTP contexts.
-- It does not bypass pairing checks.
-- It does not relax remote (non-localhost) device identity requirements.
-
-**Break-glass only:**
-
-```json5
-{
-  gateway: {
-    controlUi: { dangerouslyDisableDeviceAuth: true },
-    bind: "tailnet",
-    auth: { mode: "token", token: "replace-me" },
-  },
-}
-```
-
-`dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a
-severe security downgrade. Revert quickly after emergency use.
-
-Trusted-proxy note:
-
-- successful trusted-proxy auth can admit **operator** Control UI sessions without
-  device identity
-- this does **not** extend to node-role Control UI sessions
-- same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
-  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
-
-See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
-
-## Building the UI
-
-The Gateway serves static files from `dist/control-ui`. Build them with:
-
-```bash
-pnpm ui:build
-```
-
-Optional absolute base (when you want fixed asset URLs):
-
-```bash
-OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
-```
-
-For local development (separate dev server):
-
-```bash
-pnpm ui:dev
-```
-
-Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
-
-## Debugging/testing: dev server + remote Gateway
-
-The Control UI is static files; the WebSocket target is configurable and can be
-different from the HTTP origin. This is handy when you want the Vite dev server
-locally but the Gateway runs elsewhere.
-
-1. Start the UI dev server: `pnpm ui:dev`
-2. Open a URL like:
-
-```text
-http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
-```
-
-Optional one-time auth (if needed):
-
-```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-token>
-```
-
-Notes:
-
-- `gatewayUrl` is stored in localStorage after load and removed from the URL.
-- `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
-- `password` is kept in memory only.
-- When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
-  Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
-- Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
-- `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-- Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
-  explicitly (full origins). This includes remote dev setups.
-- Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
-  local testing. It means allow any browser origin, not “match whatever host I am
-  using.”
-- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
-  Host-header origin fallback mode, but it is a dangerous security mode.
-
-Example:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      allowedOrigins: ["http://localhost:5173"],
-    },
-  },
-}
-```
-
-Remote access setup details: [Remote access](/gateway/remote).
+Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted. After pairing, the browser can use its stored per-device token on later connections.
+
+Onboarding usually configures a gateway token for shared-secret auth. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings. Password auth works instead when `gateway.auth.mode` is `"password"`.
+
+## What each page covers
+
+- [Connect and pair](/web/control-ui/connect-and-pair) — pair a browser or phone, reach the UI over Tailscale, and fix a blank page.
+- [Sessions and sidebar](/web/control-ui/sessions-and-sidebar) — sidebar zones, session menus, and the New session page.
+- [Chat](/web/control-ui/chat) — composer controls, the session rail, transcript rendering, and hosted embeds.
+- [Panels and docks](/web/control-ui/panels) — Ask OpenClaw, the Home dock, the operator terminal, and the browser panel.
+- [Settings](/web/control-ui/settings) — identity, appearance, plugins, updates, MCP, activity, and meetings.
+- [Feature and RPC reference](/web/control-ui/feature-reference) — every capability with the Gateway RPC behind it.
+- [Offline and reconnect](/web/control-ui/offline-and-reconnect) — what survives a dropped connection.
+- [Security model](/web/control-ui/security-model) — content security policy, media route auth, and approval links.
+- [Build and develop](/web/control-ui/development) — build the UI and run the dev server against a Gateway.
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/web/control-ui#chat-behavior` still resolves. Each entry points at the page that now holds the content.
+
+- <a id="session-rail-and-side-chat" />[Session rail and side chat](/web/control-ui/chat#session-rail-and-side-chat)
+- <a id="session-links-in-messages" />[Session links in messages](/web/control-ui/chat#session-links-in-messages)
+- <a id="composer-capability-menu" />[Composer capability menu](/web/control-ui/chat#composer-capability-menu)
+- <a id="chat-behavior" />[Chat behavior](/web/control-ui/chat#chat-behavior)
+- <a id="source-previews-and-copying-code" />[Source previews and copying code](/web/control-ui/chat#source-previews-and-copying-code)
+- <a id="markdown-tables" />[Markdown tables](/web/control-ui/chat#markdown-tables)
+- <a id="mermaid-diagrams" />[Mermaid diagrams](/web/control-ui/chat#mermaid-diagrams)
+- <a id="hosted-embeds" />[Hosted embeds](/web/control-ui/chat#hosted-embeds)
+- <a id="chat-transcript-layout" />[Chat transcript layout](/web/control-ui/chat#chat-transcript-layout)
+- <a id="chat-message-width" />[Chat message width](/web/control-ui/chat#chat-message-width)
+- <a id="send-and-history-semantics" />[send and history semantics](/web/control-ui/chat#send-and-history-semantics)
+- <a id="talk-mode-browser-realtime" />[talk mode browser realtime](/web/control-ui/chat#talk-mode-browser-realtime)
+- <a id="stop-and-abort" />[stop and abort](/web/control-ui/chat#stop-and-abort)
+- <a id="abort-partial-retention" />[abort partial retention](/web/control-ui/chat#abort-partial-retention)
+- <a id="strict" />[strict](/web/control-ui/chat#strict)
+- <a id="scripts-default" />[scripts default](/web/control-ui/chat#scripts-default)
+- <a id="trusted" />[trusted](/web/control-ui/chat#trusted)
+- <a id="device-pairing-(first-connection)" />[device pairing (first connection)](</web/control-ui/connect-and-pair#device-pairing-(first-connection)>)
+- <a id="pair-a-mobile-device" />[Pair a mobile device](/web/control-ui/connect-and-pair#pair-a-mobile-device)
+- <a id="runtime-config-endpoint" />[Runtime config endpoint](/web/control-ui/connect-and-pair#runtime-config-endpoint)
+- <a id="pwa-install-and-web-push" />[PWA install and web push](/web/control-ui/connect-and-pair#pwa-install-and-web-push)
+- <a id="tailnet-access-(recommended)" />[tailnet access (recommended)](</web/control-ui/connect-and-pair#tailnet-access-(recommended)>)
+- <a id="insecure-http" />[Insecure HTTP](/web/control-ui/connect-and-pair#insecure-http)
+- <a id="blank-control-ui-page" />[Blank Control UI page](/web/control-ui/connect-and-pair#blank-control-ui-page)
+- <a id="device-pairing-first-connection" />[Device pairing (first connection)](/web/control-ui/connect-and-pair#device-pairing-first-connection)
+- <a id="tailnet-access-recommended" />[Tailnet access (recommended)](/web/control-ui/connect-and-pair#tailnet-access-recommended)
+- <a id="list-pending-requests" />[list pending requests](/web/control-ui/connect-and-pair#list-pending-requests)
+- <a id="approve-by-request-id" />[approve by request id](/web/control-ui/connect-and-pair#approve-by-request-id)
+- <a id="open-mobile-pairing" />[open mobile pairing](/web/control-ui/connect-and-pair#open-mobile-pairing)
+- <a id="connect-the-phone" />[connect the phone](/web/control-ui/connect-and-pair#connect-the-phone)
+- <a id="confirm-the-connection" />[confirm the connection](/web/control-ui/connect-and-pair#confirm-the-connection)
+- <a id="trusted-proxy-note" />[trusted proxy note](/web/control-ui/connect-and-pair#trusted-proxy-note)
+- <a id="build-and-develop-the-ui" />[Build and develop the UI](/web/control-ui/development#build-and-develop-the-ui)
+- <a id="debugging%2Ftesting%3A-dev-server-%2B-remote-gateway" />[debugging%2Ftesting%3A dev server %2B remote gateway](/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway)
+- <a id="debugging/testing-dev-server-+-remote-gateway" />[debugging/testing dev server + remote gateway](/web/control-ui/development#debugging/testing-dev-server-+-remote-gateway)
+- <a id="start-the-ui-dev-server" />[start the ui dev server](/web/control-ui/development#start-the-ui-dev-server)
+- <a id="connect-the-remote-gateway" />[connect the remote gateway](/web/control-ui/development#connect-the-remote-gateway)
+- <a id="origin-security-notes" />[origin security notes](/web/control-ui/development#origin-security-notes)
+- <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
+- <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
+- <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron tasks plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="config" />[config](/web/control-ui/feature-reference#config)
+- <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
+- <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)
+- <a id="automations-panel-notes" />[automations panel notes](/web/control-ui/feature-reference#automations-panel-notes)
+- <a id="connection-loss-and-reconnect" />[Connection loss and reconnect](/web/control-ui/offline-and-reconnect#connection-loss-and-reconnect)
+- <a id="openclaw-system-care" />[OpenClaw system care](/web/control-ui/panels#openclaw-system-care)
+- <a id="home-dock" />[Home dock](/web/control-ui/panels#home-dock)
+- <a id="operator-terminal" />[Operator terminal](/web/control-ui/panels#operator-terminal)
+- <a id="browser-panel" />[Browser panel](/web/control-ui/panels#browser-panel)
+- <a id="content-security-policy" />[Content security policy](/web/control-ui/security-model#content-security-policy)
+- <a id="avatar-route-auth" />[Avatar route auth](/web/control-ui/security-model#avatar-route-auth)
+- <a id="assistant-media-route-auth" />[Assistant media route auth](/web/control-ui/security-model#assistant-media-route-auth)
+- <a id="approval-links" />[Approval links](/web/control-ui/security-model#approval-links)
+- <a id="new-session-names" />[New session names](/web/control-ui/sessions-and-sidebar#new-session-names)
+- <a id="new-session-preferences-and-recents" />[New-session preferences and recents](/web/control-ui/sessions-and-sidebar#new-session-preferences-and-recents)
+- <a id="sidebar-navigation" />[Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+- <a id="session-menu" />[Session menu](/web/control-ui/sessions-and-sidebar#session-menu)
+- <a id="session-placement" />[Session placement](/web/control-ui/sessions-and-sidebar#session-placement)
+- <a id="session-icons" />[Session icons](/web/control-ui/sessions-and-sidebar#session-icons)
+- <a id="session-colors" />[Session colors](/web/control-ui/sessions-and-sidebar#session-colors)
+- <a id="new-session-page" />[New session page](/web/control-ui/sessions-and-sidebar#new-session-page)
+- <a id="start-a-native-coding-cli" />[Start a native coding CLI](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli)
+- <a id="openclaw-chat-workspace-startup" />[OpenClaw Chat workspace startup](/web/control-ui/sessions-and-sidebar#openclaw-chat-workspace-startup)
+- <a id="environment-identity" />[Environment identity](/web/control-ui/settings#environment-identity)
+- <a id="community-invitation" />[Community invitation](/web/control-ui/settings#community-invitation)
+- <a id="personal-identity" />[Personal identity](/web/control-ui/settings#personal-identity)
+- <a id="gateway-host-status" />[Gateway host status](/web/control-ui/settings#gateway-host-status)
+- <a id="language-support" />[Language support](/web/control-ui/settings#language-support)
+- <a id="appearance-themes" />[Appearance themes](/web/control-ui/settings#appearance-themes)
+- <a id="manage-plugins" />[Manage plugins](/web/control-ui/settings#manage-plugins)
+- <a id="updates" />[Updates](/web/control-ui/settings#updates)
+- <a id="apps-and-extensions" />[Apps and extensions](/web/control-ui/settings#apps-and-extensions)
+- <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
+- <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
+- <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
+- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
+- <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
+- <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)
+- <a id="this-mac-macos-app" />[This Mac (macOS app)](/web/control-ui/settings#this-mac-macos-app)
 
 ## Related
 
 - [Dashboard](/web/dashboard) — gateway dashboard
-- [WebChat](/web/webchat) — browser-based chat interface
-- [TUI](/web/tui) — terminal user interface
 - [Health Checks](/gateway/health) — gateway health monitoring
+- [TUI](/web/tui) — terminal user interface
+- [WebChat](/web/webchat) — browser-based chat interface

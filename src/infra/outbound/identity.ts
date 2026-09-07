@@ -1,11 +1,14 @@
+// Outbound identity helpers project configured agent identity/avatar metadata
+// into channel-safe send payload fields.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OutboundIdentity } from "./identity-types.js";
 
 export type { OutboundIdentity } from "./identity-types.js";
 
+/** Trims outbound identity fields and drops empty identity payloads. */
 export function normalizeOutboundIdentity(
   identity?: OutboundIdentity | null,
 ): OutboundIdentity | undefined {
@@ -22,6 +25,7 @@ export function normalizeOutboundIdentity(
   return { name, avatarUrl, emoji, theme };
 }
 
+/** Resolves an agent's configured identity into channel-safe outbound metadata. */
 export function resolveAgentOutboundIdentity(
   cfg: OpenClawConfig,
   agentId: string,

@@ -1,8 +1,15 @@
+/**
+ * Sandbox configuration resolver.
+ *
+ * Merges global and agent settings into normalized Docker, SSH, browser, prune, scope, and tool-policy config.
+ */
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveSandboxDockerEnv, resolveSandboxScope } from "./config-contract.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
@@ -40,6 +47,10 @@ const DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
 type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
 type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
 
+function resolveSandboxBrowserAutoStartTimeoutMs(value: number | undefined): number {
+  return resolveTimerTimeoutMs(value, DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS);
+}
+
 function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
   globalDocker?: Partial<SandboxDockerConfig>,
@@ -67,18 +78,7 @@ export function resolveSandboxBrowserDockerCreateConfig(params: {
   return params.browser.binds !== undefined ? { ...base, binds: params.browser.binds } : base;
 }
 
-export function resolveSandboxScope(params: {
-  scope?: SandboxScope;
-  perSession?: boolean;
-}): SandboxScope {
-  if (params.scope) {
-    return params.scope;
-  }
-  if (typeof params.perSession === "boolean") {
-    return params.perSession ? "session" : "shared";
-  }
-  return "agent";
-}
+export { resolveSandboxScope } from "./config-contract.js";
 
 export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
@@ -88,9 +88,11 @@ export function resolveSandboxDockerConfig(params: {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const env = resolveSandboxDockerEnv({
+    scope: params.scope,
+    globalEnv: globalDocker?.env,
+    agentEnv: agentDocker?.env,
+  });
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
@@ -116,6 +118,7 @@ export function resolveSandboxDockerConfig(params: {
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
     cpus: agentDocker?.cpus ?? globalDocker?.cpus,
+    gpus: normalizeOptionalString(agentDocker?.gpus ?? globalDocker?.gpus),
     ulimits,
     seccompProfile: agentDocker?.seccompProfile ?? globalDocker?.seccompProfile,
     apparmorProfile: agentDocker?.apparmorProfile ?? globalDocker?.apparmorProfile,
@@ -150,13 +153,12 @@ export function resolveSandboxBrowserConfig(params: {
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
     headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
-    enableNoVnc: agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+    noVncEnabled: agentBrowser?.noVncEnabled ?? globalBrowser?.noVncEnabled ?? true,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
-    autoStartTimeoutMs:
-      agentBrowser?.autoStartTimeoutMs ??
-      globalBrowser?.autoStartTimeoutMs ??
-      DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
+    autoStartTimeoutMs: resolveSandboxBrowserAutoStartTimeoutMs(
+      agentBrowser?.autoStartTimeoutMs ?? globalBrowser?.autoStartTimeoutMs,
+    ),
     binds: bindsConfigured ? binds : undefined,
   };
 }
@@ -240,6 +242,7 @@ export function resolveSandboxConfigForAgent(
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
+  const scopedAgentDocker = scope === "shared" ? undefined : agentSandbox?.docker;
 
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
@@ -248,10 +251,14 @@ export function resolveSandboxConfigForAgent(
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    dockerTmpfsSource:
+      scopedAgentDocker?.tmpfs === undefined && agent?.docker?.tmpfs === undefined
+        ? "default"
+        : "configured",
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,
-      agentDocker: agentSandbox?.docker,
+      agentDocker: scopedAgentDocker,
     }),
     ssh: resolveSandboxSshConfig({
       scope,

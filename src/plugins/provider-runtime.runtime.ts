@@ -1,64 +1,43 @@
-type ProviderRuntimeModule = typeof import("./provider-runtime.js");
+/** Runtime-side provider discovery and provider registration resolution helpers. */
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 
-type AugmentModelCatalogWithProviderPlugins =
-  ProviderRuntimeModule["augmentModelCatalogWithProviderPlugins"];
-type BuildProviderAuthDoctorHintWithPlugin =
-  ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
-type BuildProviderMissingAuthMessageWithPlugin =
-  ProviderRuntimeModule["buildProviderMissingAuthMessageWithPlugin"];
-type FormatProviderAuthProfileApiKeyWithPlugin =
-  ProviderRuntimeModule["formatProviderAuthProfileApiKeyWithPlugin"];
-type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
-type RefreshProviderOAuthCredentialWithPlugin =
-  ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
+const providerRuntimeLoader = createLazyImportLoader(() => import("./provider-runtime.js"));
+// Keep the heavy provider runtime behind an actual async boundary so callers
+// can import this wrapper eagerly without collapsing the lazy chunk.
+const bindProviderRuntime = createLazyRuntimeMethodBinder(providerRuntimeLoader.load);
 
-let providerRuntimePromise: Promise<ProviderRuntimeModule> | undefined;
+/** Lazily augments the model catalog with provider plugin metadata. */
+export const augmentModelCatalogWithProviderPlugins = bindProviderRuntime(
+  (runtime) => runtime.augmentModelCatalogWithProviderPlugins,
+);
 
-async function loadProviderRuntime(): Promise<ProviderRuntimeModule> {
-  // Keep the heavy provider runtime behind an actual async boundary so callers
-  // can import this wrapper eagerly without collapsing the lazy chunk.
-  providerRuntimePromise ??= import("./provider-runtime.js");
-  return providerRuntimePromise;
-}
+/** Lazily builds doctor hint text for provider auth problems. */
+export const buildProviderAuthDoctorHintWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.buildProviderAuthDoctorHintWithPlugin,
+);
 
-export async function augmentModelCatalogWithProviderPlugins(
-  ...args: Parameters<AugmentModelCatalogWithProviderPlugins>
-): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPlugins>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.augmentModelCatalogWithProviderPlugins(...args);
-}
+/** Lazily formats API-key auth profile display text with provider plugin rules. */
+export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.formatProviderAuthProfileApiKeyWithPlugin,
+);
 
-export async function buildProviderAuthDoctorHintWithPlugin(
-  ...args: Parameters<BuildProviderAuthDoctorHintWithPlugin>
-): Promise<Awaited<ReturnType<BuildProviderAuthDoctorHintWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.buildProviderAuthDoctorHintWithPlugin(...args);
-}
+/** Lazily runs the callback-based OAuth login owned by a provider plugin. */
+export const loginProviderOAuthWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.loginProviderOAuthWithPlugin,
+);
 
-export async function buildProviderMissingAuthMessageWithPlugin(
-  ...args: Parameters<BuildProviderMissingAuthMessageWithPlugin>
-): Promise<Awaited<ReturnType<BuildProviderMissingAuthMessageWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.buildProviderMissingAuthMessageWithPlugin(...args);
-}
+/** Lazily resolves or refreshes a session OAuth credential through its provider plugin. */
+export const resolveProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.resolveProviderOAuthCredentialWithPlugin,
+);
 
-export async function formatProviderAuthProfileApiKeyWithPlugin(
-  ...args: Parameters<FormatProviderAuthProfileApiKeyWithPlugin>
-): Promise<Awaited<ReturnType<FormatProviderAuthProfileApiKeyWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.formatProviderAuthProfileApiKeyWithPlugin(...args);
-}
+/** Lazily prepares provider runtime auth for model execution. */
+export const prepareProviderRuntimeAuth = bindProviderRuntime(
+  (runtime) => runtime.prepareProviderRuntimeAuth,
+);
 
-export async function prepareProviderRuntimeAuth(
-  ...args: Parameters<PrepareProviderRuntimeAuth>
-): Promise<Awaited<ReturnType<PrepareProviderRuntimeAuth>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.prepareProviderRuntimeAuth(...args);
-}
-
-export async function refreshProviderOAuthCredentialWithPlugin(
-  ...args: Parameters<RefreshProviderOAuthCredentialWithPlugin>
-): Promise<Awaited<ReturnType<RefreshProviderOAuthCredentialWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.refreshProviderOAuthCredentialWithPlugin(...args);
-}
+/** Lazily refreshes OAuth credentials through provider plugin runtime hooks. */
+export const refreshProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.refreshProviderOAuthCredentialWithPlugin,
+);

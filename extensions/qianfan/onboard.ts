@@ -1,3 +1,4 @@
+// Qianfan setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   type ModelApi,
@@ -16,7 +17,6 @@ function resolveQianfanPreset(cfg: OpenClawConfig): {
   baseUrl: string;
   defaultModels: NonNullable<ReturnType<typeof buildQianfanProvider>["models"]>;
 } {
-  const defaultProvider = buildQianfanProvider();
   const existingProvider = cfg.models?.providers?.qianfan as
     | {
         baseUrl?: unknown;
@@ -33,11 +33,11 @@ function resolveQianfanPreset(cfg: OpenClawConfig): {
   return {
     api,
     baseUrl: existingBaseUrl || QIANFAN_BASE_URL,
-    defaultModels: defaultProvider.models ?? [],
+    defaultModels: cfg.models?.mode === "replace" ? (buildQianfanProvider().models ?? []) : [],
   };
 }
 
-const qianfanPresetAppliers = createDefaultModelsPresetAppliers({
+export const { applyConfig: applyQianfanConfig } = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: QIANFAN_DEFAULT_MODEL_REF,
   resolveParams: (cfg: OpenClawConfig) => {
     const preset = resolveQianfanPreset(cfg);
@@ -51,11 +51,3 @@ const qianfanPresetAppliers = createDefaultModelsPresetAppliers({
     };
   },
 });
-
-export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return qianfanPresetAppliers.applyProviderConfig(cfg);
-}
-
-export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return qianfanPresetAppliers.applyConfig(cfg);
-}

@@ -1,8 +1,149 @@
-import { describe, expect, it } from "vitest";
-import { capturePluginRegistration } from "./captured-registration.js";
-import type { AnyAgentTool } from "./types.js";
+// Covers captured plugin registration behavior in test registries.
+import { describe, expect, it, vi } from "vitest";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import {
+  capturePluginRegistration,
+  createCapturedPluginRegistration,
+} from "./captured-registration.js";
+import { createPluginRecord } from "./loader-records.js";
+import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
+import { createPluginRegistry } from "./registry.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
+  it.each(["captured", "registry"] as const)(
+    "materializes native capability factories without losing descriptor identity (%s)",
+    (mode) => {
+      const captured = mode === "captured" ? createCapturedPluginRegistration() : undefined;
+      const registry = createPluginRegistry({
+        logger: { info() {}, warn() {}, error() {} },
+        runtime: {} as PluginRuntime,
+        resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({
+        id: "factory-owner",
+        source: "/fixture/index.js",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = captured?.api ?? registry.createApi(record, { config: {} });
+      const marker = Symbol("provider-owned");
+      const unused = () => {
+        throw new Error("not provider execution");
+      };
+      const factory = vi.fn((context: PluginCapabilityCatalogContext) => {
+        expect(context).toBe(resolvePluginCapabilityCatalogContext());
+        const provider = {
+          id: "factory-provider",
+          label: "Factory provider",
+          isConfigured: () => context.formatErrorMessage(new Error("ready")) === "ready",
+          synthesize: unused,
+          createSession: unused,
+          createBridge: unused,
+        };
+        Object.defineProperty(provider, marker, { value: "retained" });
+        return provider;
+      });
+      api.registerSpeechProvider(factory);
+      api.registerRealtimeTranscriptionProvider(factory);
+      api.registerRealtimeVoiceProvider(factory);
+      for (const [index, family] of (
+        ["speechProviders", "realtimeTranscriptionProviders", "realtimeVoiceProviders"] as const
+      ).entries()) {
+        const providers = captured
+          ? captured[family]
+          : registry.registry[family].map((entry) => entry.provider);
+        expect(providers).toHaveLength(1);
+        expect(providers[0]).toBe(factory.mock.results[index]?.value);
+        expect(Object.getOwnPropertyDescriptor(providers[0], marker)).toMatchObject({
+          value: "retained",
+          enumerable: false,
+        });
+      }
+      expect(factory).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("rejects a direct registry factory without a host context instead of passing undefined", () => {
+    const registry = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {} },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "factory-owner",
+      source: "/fixture/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const factory = vi.fn(() => {
+      throw new Error("factory must not run");
+    });
+    const api = registry.createApi(record, { config: {} });
+    expect(() => api.registerSpeechProvider(factory)).toThrow(
+      "supply resolveCapabilityCatalogContext",
+    );
+    expect(factory).not.toHaveBeenCalled();
+    expect(registry.registry.speechProviders).toEqual([]);
+  });
+
+  it("rejects asynchronous captured factories without capturing promises", async () => {
+    const captured = createCapturedPluginRegistration();
+    const invalid = (() => Promise.reject(new Error("factory rejected"))) as unknown as Parameters<
+      OpenClawPluginApi["registerSpeechProvider"]
+    >[0];
+    expect(() => captured.api.registerSpeechProvider(invalid)).toThrow("must be synchronous");
+    expect(captured.speechProviders).toEqual([]);
+    await Promise.resolve();
+  });
+
+  it("rejects runtime access while capturing CLI metadata without activating the real runtime", () => {
+    expect(() =>
+      capturePluginRegistration({
+        id: "captured-cli-plugin",
+        registrationMode: "cli-metadata",
+        register(api) {
+          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+        },
+      }),
+    ).toThrow(
+      'Plugin "captured-cli-plugin" runtime is intentionally unavailable during "cli-metadata" registration.',
+    );
+  });
+
+  it("preserves root machine-output metadata", () => {
+    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerCli(() => {}, {
+          commands: [" captured-machine ", "captured-machine", "captured-extra"],
+          descriptors: [
+            {
+              name: "captured-machine",
+              description: "Captured machine output",
+              hasSubcommands: true,
+              machineOutput,
+            },
+          ],
+        });
+      },
+    });
+
+    expect(captured.cliRegistrars[0]?.commands).toEqual(["captured-machine", "captured-extra"]);
+    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
+    expect(descriptor?.machineOutput).toBe(machineOutput);
+    expect(
+      descriptor?.machineOutput?.({
+        argv: ["node", "openclaw", "captured-machine"],
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a complete plugin API surface available while capturing supported capabilities", () => {
     const capturedTool = {
       name: "captured-tool",
@@ -17,6 +158,64 @@ describe("captured plugin registration", () => {
           id: "captured-provider",
           label: "Captured Provider",
           auth: [],
+        });
+        api.registerWorkerProvider({
+          id: "captured-worker",
+          resolveAllocation: async () => ({ leaseId: "captured-lease", sharedHost: false }),
+          provision: async () => ({
+            leaseId: "captured-lease",
+            ssh: {
+              host: "worker.example",
+              port: 22,
+              user: "worker",
+              hostKey: ["ssh-ed25519", "AAAA"].join(" "),
+              keyRef: { source: "env", provider: "default", id: "WORKER_SSH_KEY" },
+            },
+          }),
+          inspect: async () => ({ status: "active" }),
+          destroy: async () => {},
+        });
+        api.registerModelCatalogProvider({
+          provider: "captured-provider",
+          kinds: ["text"],
+          staticCatalog: () => [
+            {
+              kind: "text",
+              provider: "captured-provider",
+              model: "captured-model",
+              source: "static",
+            },
+          ],
+        });
+        api.registerSessionCatalog({
+          id: "captured-catalog",
+          label: "Captured Catalog",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+        });
+        api.registerVideoGenerationProvider({
+          id: "captured-video",
+          label: "Captured Video",
+          defaultModel: "captured-video-model",
+          capabilities: {
+            generate: { maxVideos: 1 },
+          },
+          generateVideo: async () => ({
+            provider: "captured-video",
+            model: "captured-video-model",
+            videos: [],
+          }),
+        });
+        api.registerMusicGenerationProvider({
+          id: "captured-music",
+          label: "Captured Music",
+          defaultModel: "captured-music-model",
+          capabilities: {
+            generate: { maxTracks: 1 },
+          },
+          generateMusic: async () => ({
+            tracks: [],
+          }),
         });
         api.registerTextTransforms({
           input: [{ from: /red basket/g, to: "blue basket" }],
@@ -46,13 +245,103 @@ describe("captured plugin registration", () => {
           description: "Captured command",
           handler: async () => ({ text: "ok" }),
         });
+        api.registerAgentToolResultMiddleware(() => undefined, {
+          runtimes: ["codex"],
+        });
       },
     });
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
+    expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
+      "captured-provider",
+    ]);
+    expect(captured.sessionCatalogs.map((provider) => provider.id)).toEqual(["captured-catalog"]);
+    expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
+      "captured-video",
+    ]);
+    expect(captured.musicGenerationProviders.map((provider) => provider.id)).toEqual([
+      "captured-music",
+    ]);
     expect(captured.textTransforms).toHaveLength(1);
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
-    expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+    expect(captured.agentToolResultMiddlewares).toHaveLength(1);
+    expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
+    expect(captured.api.runtime.version).toEqual(expect.any(String));
+  });
+
+  it("enforces captured middleware runtime and tool scopes", async () => {
+    const handler = vi.fn(() => undefined);
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerAgentToolResultMiddleware(handler, {
+          runtimes: ["codex"],
+          matcher: ["exec"],
+        });
+      },
+    });
+    const registration = captured.agentToolResultMiddlewares[0];
+    expect(registration).toBeDefined();
+    if (!registration) {
+      return;
+    }
+    const event = {
+      toolCallId: "call-1",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
+    };
+
+    await registration.handler({ ...event, toolName: "web_search" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
+    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
+    const captured = capturePluginRegistration({
+      id: "captured-custom-plugin",
+      name: "Captured Custom Plugin",
+      register(api) {
+        registerSessionSchedulerJob = api.session.workflow.registerSessionSchedulerJob;
+        scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
+      },
+    });
+
+    expect(
+      registerSessionSchedulerJob?.({
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      }),
+    ).toEqual({
+      id: "captured-job",
+      pluginId: "captured-custom-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    await expect(
+      scheduleSessionTurn?.({
+        sessionKey: "agent:main:main",
+        message: "wake",
+        delayMs: 1_000,
+        name: "human-readable-name",
+      }),
+    ).resolves.toEqual({
+      id: "captured-session-turn-1",
+      pluginId: "captured-custom-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    expect(captured.sessionSchedulerJobs).toEqual([
+      {
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
   });
 });

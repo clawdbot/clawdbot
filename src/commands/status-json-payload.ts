@@ -1,11 +1,14 @@
+// Builds the stable JSON payload for `openclaw status --json`.
+// Optional deep fields are included only when their upstream probes actually ran.
+
+import type { BestEffortConfigSnapshot } from "../config/io.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
   buildStatusGatewayJsonPayloadFromSurface,
   type StatusOverviewSurface,
 } from "./status-overview-surface.ts";
 
-export { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
-
+/** Combines scan summary, overview surface, services, agents, diagnostics, and optional deep probes. */
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
   surface: StatusOverviewSurface;
@@ -13,6 +16,7 @@ export function buildStatusJsonPayload(params: {
   memory: unknown;
   memoryPlugin: unknown;
   agents: unknown;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   secretDiagnostics: string[];
   securityAudit?: unknown;
   health?: unknown;
@@ -36,10 +40,12 @@ export function buildStatusJsonPayload(params: {
     gatewayService: params.surface.gatewayService,
     nodeService: params.surface.nodeService,
     agents: params.agents,
+    ...(params.configDiagnostics ? { configDiagnostics: params.configDiagnostics } : {}),
     secretDiagnostics: params.secretDiagnostics,
     ...(params.securityAudit ? { securityAudit: params.securityAudit } : {}),
     ...(params.pluginCompatibility
       ? {
+          // Keep warnings grouped with a count so consumers can test compatibility status cheaply.
           pluginCompatibility: {
             count: params.pluginCompatibility.length,
             warnings: params.pluginCompatibility,
@@ -48,6 +54,7 @@ export function buildStatusJsonPayload(params: {
       : {}),
     ...(params.health || params.usage || params.lastHeartbeat
       ? {
+          // Deep/usage fields stay absent in fast mode instead of appearing as null placeholders.
           health: params.health,
           usage: params.usage,
           lastHeartbeat: params.lastHeartbeat,

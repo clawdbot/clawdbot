@@ -1,6 +1,8 @@
+// Status scan result tests cover cold-start summaries and gateway probe snapshot aggregation.
 import { describe, expect, it } from "vitest";
 import { buildStatusScanResult } from "./status.scan-result.ts";
 import { buildColdStartStatusSummary } from "./status.scan.bootstrap-shared.ts";
+import type { GatewayProbeSnapshot } from "./status.scan.shared.ts";
 
 describe("buildStatusScanResult", () => {
   it("builds the full shared scan result shape", () => {
@@ -15,7 +17,17 @@ describe("buildStatusScanResult", () => {
       installKind: "package" as const,
       packageManager: "npm" as const,
     };
-    const gatewaySnapshot = {
+    const gatewaySnapshot: Pick<
+      GatewayProbeSnapshot,
+      | "gatewayConnection"
+      | "remoteUrlMissing"
+      | "gatewayMode"
+      | "gatewayProbeAuth"
+      | "gatewayProbeAuthWarning"
+      | "gatewayProbe"
+      | "gatewayReachable"
+      | "gatewaySelf"
+    > = {
       gatewayConnection: {
         url: "ws://127.0.0.1:18789",
         urlSource: "config" as const,
@@ -31,6 +43,11 @@ describe("buildStatusScanResult", () => {
         connectLatencyMs: 42,
         error: null,
         close: null,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          capability: "read_only",
+        },
         health: null,
         status: null,
         presence: null,
@@ -41,7 +58,7 @@ describe("buildStatusScanResult", () => {
     };
     const channelIssues = [
       {
-        channel: "discord",
+        channel: "quietchat",
         accountId: "default",
         kind: "runtime" as const,
         message: "warn",
@@ -49,6 +66,8 @@ describe("buildStatusScanResult", () => {
     ];
     const agentStatus = {
       defaultId: "main",
+      ownership: "sole" as const,
+      selectionRequired: false,
       totalSessions: 0,
       bootstrapPendingCount: 0,
       agents: [
@@ -70,8 +89,9 @@ describe("buildStatusScanResult", () => {
     const pluginCompatibility = [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start" as const,
-        severity: "warn" as const,
+        code: "hook-only" as const,
+        compatCode: "hook-only-plugin-shape" as const,
+        severity: "info" as const,
         message: "warn",
       },
     ];
@@ -80,6 +100,7 @@ describe("buildStatusScanResult", () => {
       buildStatusScanResult({
         cfg: { gateway: {} },
         sourceConfig: { gateway: {} },
+        configDiagnostics: null,
         secretDiagnostics: ["diag"],
         osSummary,
         tailscaleMode: "serve",
@@ -98,6 +119,7 @@ describe("buildStatusScanResult", () => {
     ).toEqual({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
+      configDiagnostics: null,
       secretDiagnostics: ["diag"],
       osSummary,
       tailscaleMode: "serve",

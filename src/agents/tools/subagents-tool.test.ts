@@ -1,0 +1,449 @@
+// Subagents tool tests cover requester-scoped task listing and cancellation.
+import { describe, expect, it, vi } from "vitest";
+import type { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
+import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
+import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../subagents/registry/subagent-lifecycle-events.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { createSubagentsTool } from "./subagents-tool.js";
+
+function task(params: {
+  taskId: string;
+  runtime: TaskRuntime;
+  status?: TaskStatus;
+  ownerKey?: string;
+  requesterSessionKey?: string;
+  childSessionKey?: string;
+  label?: string;
+  progressSummary?: string;
+  terminalSummary?: string;
+  terminalOutcome?: TaskRecord["terminalOutcome"];
+  error?: string;
+}): TaskRecord {
+  return {
+    taskId: params.taskId,
+    runtime: params.runtime,
+    ownerKey: params.ownerKey ?? "agent:main:main",
+    requesterSessionKey: params.requesterSessionKey ?? "agent:main:main",
+    scopeKind: "session",
+    task: params.taskId,
+    status: params.status ?? "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "done_only",
+    createdAt: Date.now(),
+    lastEventAt: Date.now(),
+    ...(params.childSessionKey ? { childSessionKey: params.childSessionKey } : {}),
+    ...(params.label ? { label: params.label } : {}),
+    ...(params.progressSummary ? { progressSummary: params.progressSummary } : {}),
+    ...(params.terminalSummary ? { terminalSummary: params.terminalSummary } : {}),
+    ...(params.terminalOutcome ? { terminalOutcome: params.terminalOutcome } : {}),
+    ...(params.error ? { error: params.error } : {}),
+  };
+}
+
+describe("subagents tool", () => {
+  it("advertises the unified task ledger", () => {
+    const tool = createSubagentsTool();
+
+    expect(tool.description).toBe(
+      "Background work: subagents, media gen, automation runs. list/cancel.",
+    );
+  });
+
+  it("reports a killed subagent truthfully through the actual list tool", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const run = {
+      runId: "run-tool-killed",
+      childSessionKey: "agent:main:subagent:tool-killed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "report the killed child",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      execution: {
+        status: "terminal",
+        startedAt: now - 2_000,
+        endedAt: now - 1_000,
+        outcome: { status: "error", error: "agent run aborted" },
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+
+    try {
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:main:main",
+        config: {},
+        listTasks: () => [],
+      });
+
+      const result = await tool.execute("list-killed", { action: "list" });
+
+      expect(result.details).toMatchObject({
+        status: "ok",
+        recent: [expect.objectContaining({ runId: run.runId, status: "killed" })],
+      });
+      expect((result.details as { text: string }).text).toContain(" killed");
+    } finally {
+      resetSubagentRegistryForTests();
+    }
+  });
+
+  it("lists cross-runtime tasks in the caller session tree", async () => {
+    const tasks = [
+      task({
+        taskId: "subagent-task",
+        runtime: "subagent",
+        childSessionKey: "agent:main:dashboard:child",
+        label: "Research",
+        progressSummary: "Reading",
+      }),
+      task({ taskId: "acp-task", runtime: "acp", status: "succeeded", terminalSummary: "Done" }),
+      task({ taskId: "cli-task", runtime: "cli" }),
+      task({ taskId: "cron-task", runtime: "cron" }),
+      task({
+        taskId: "outside-owner",
+        runtime: "cli",
+        ownerKey: "agent:other:main",
+        requesterSessionKey: "agent:main:main",
+      }),
+      task({
+        taskId: "child-task",
+        runtime: "cli",
+        ownerKey: "agent:main:dashboard:child",
+        requesterSessionKey: "agent:main:dashboard:child",
+      }),
+      task({
+        taskId: "outside",
+        runtime: "cron",
+        ownerKey: "agent:other:main",
+        requesterSessionKey: "agent:other:main",
+      }),
+    ];
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => tasks,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+
+    expect(result.details).toMatchObject({ status: "ok", taskTotal: 5 });
+    const rows = (result.details as { tasks: Array<Record<string, unknown>> }).tasks;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: "subagent-task",
+          runtime: "subagent",
+          status: "running",
+          label: "Research",
+          progressSummary: "Reading",
+        }),
+        expect.objectContaining({
+          taskId: "acp-task",
+          runtime: "acp",
+          status: "completed",
+          terminalSummary: "Done",
+        }),
+        expect.objectContaining({ taskId: "cli-task", runtime: "cli" }),
+        expect.objectContaining({ taskId: "cron-task", runtime: "cron" }),
+        expect.objectContaining({ taskId: "child-task", runtime: "cli" }),
+      ]),
+    );
+    expect(rows).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "outside" }),
+        expect.objectContaining({ taskId: "outside-owner" }),
+      ]),
+    );
+  });
+
+  it("cancels only tasks in the caller session tree", async () => {
+    const tasks = [
+      task({ taskId: "inside", runtime: "cli" }),
+      task({
+        taskId: "outside",
+        runtime: "cron",
+        ownerKey: "agent:other:main",
+        requesterSessionKey: "agent:other:main",
+      }),
+      task({
+        taskId: "outside-owner",
+        runtime: "cli",
+        ownerKey: "agent:other:main",
+        requesterSessionKey: "agent:main:main",
+      }),
+    ];
+    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => tasks,
+      cancelTask: cancelTask as never,
+    });
+
+    await expect(tool.execute("cancel", { action: "cancel", taskId: "inside" })).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "inside" });
+
+    await expect(
+      tool.execute("cancel-outside", { action: "cancel", taskId: "outside" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "forbidden" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledTimes(1);
+
+    await expect(
+      tool.execute("cancel-outside-owner", { action: "cancel", taskId: "outside-owner" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "forbidden" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["list", "cancel"] as const)(
+    "keeps %s available when an unrelated retained task has ambiguous ownership",
+    async (action) => {
+      const config = { agents: { entries: { alpha: {}, beta: {} } } };
+      const cancelTask = vi.fn<typeof cancelDetachedTaskRunById>().mockResolvedValue({
+        found: true,
+        cancelled: true,
+      });
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:alpha:main",
+        config,
+        listTasks: () => [
+          task({
+            taskId: "legacy-orphan",
+            runtime: "cli",
+            ownerKey: "global",
+            requesterSessionKey: "global",
+          }),
+          task({
+            taskId: "owned-task",
+            runtime: "cli",
+            ownerKey: "agent:alpha:main",
+            requesterSessionKey: "agent:alpha:main",
+          }),
+        ],
+        cancelTask,
+      });
+
+      const result = await tool.execute(action, { action, taskId: "owned-task" });
+
+      if (action === "list") {
+        expect(result.details).toMatchObject({
+          status: "ok",
+          taskTotal: 1,
+          tasks: [expect.objectContaining({ taskId: "owned-task" })],
+        });
+        expect(cancelTask).not.toHaveBeenCalled();
+      } else {
+        expect(result.details).toMatchObject({ status: "cancelled", taskId: "owned-task" });
+        expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ cfg: config, taskId: "owned-task" });
+      }
+    },
+  );
+
+  it("preserves blocked terminal outcomes and actionable terminal failure reasons", async () => {
+    const tasks = [
+      task({
+        taskId: "blocked",
+        runtime: "acp",
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session authorization required.",
+      }),
+      task({
+        taskId: "failed",
+        runtime: "subagent",
+        status: "failed",
+        error: "Provider rejected the tool call.",
+      }),
+      task({
+        taskId: "timed-out",
+        runtime: "cli",
+        status: "timed_out",
+        error: "Provider timed out before producing output.",
+      }),
+    ];
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => tasks,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      taskTotal: 3,
+      tasks: expect.arrayContaining([
+        expect.objectContaining({
+          taskId: "blocked",
+          status: "blocked",
+          terminalOutcome: "blocked",
+          terminalSummary: "Writable session authorization required.",
+        }),
+        expect.objectContaining({
+          taskId: "failed",
+          status: "failed",
+          error: "Provider rejected the tool call.",
+        }),
+        expect.objectContaining({
+          taskId: "timed-out",
+          status: "timed_out",
+          error: "Provider timed out before producing output.",
+        }),
+      ]),
+    });
+  });
+
+  it("bounds terminal failure text with the canonical surrogate-safe task detail budget", async () => {
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [
+        task({
+          taskId: "oversized-error",
+          runtime: "subagent",
+          status: "failed",
+          error: "🚀".repeat(20_000),
+        }),
+      ],
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const [row] = (result.details as { tasks: Array<{ error?: string }> }).tasks;
+
+    if (!row?.error) {
+      throw new Error("Expected a sanitized terminal task failure.");
+    }
+    expect(row.error.length).toBeLessThanOrEqual(TASK_STATUS_DETAIL_MAX_CHARS);
+    expect(row.error.endsWith("…")).toBe(true);
+    for (const character of row.error) {
+      const code = character.charCodeAt(0);
+      expect(character.length > 1 || code < 0xd800 || code > 0xdfff).toBe(true);
+    }
+  });
+
+  it("strips internal provider context and redacts raw approval denial details", async () => {
+    const internalContext = [
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "[Internal task completion event]",
+      "providerAuthorization: private-provider-context",
+    ].join("\n");
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [
+        task({
+          taskId: "with-internal-context",
+          runtime: "subagent",
+          status: "failed",
+          error: `Permission denied by ACP runtime.\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${internalContext}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+        }),
+        task({
+          taskId: "only-internal-context",
+          runtime: "subagent",
+          status: "failed",
+          error: internalContext,
+        }),
+        task({
+          taskId: "approval-denied",
+          runtime: "acp",
+          status: "failed",
+          error: "Exec denied (gateway id=req-1, approval-timeout): bash -lc print-private-context",
+        }),
+      ],
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const rows = (result.details as { tasks: Array<{ taskId: string; error?: string }> }).tasks;
+
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: "with-internal-context",
+          error: "Permission denied by ACP runtime.",
+        }),
+        expect.objectContaining({
+          taskId: "approval-denied",
+          error: "Command did not run: approval timed out.",
+        }),
+      ]),
+    );
+    expect(rows.find((row) => row.taskId === "only-internal-context")).not.toHaveProperty("error");
+    expect(JSON.stringify(result.details)).not.toContain("private-provider-context");
+    expect(JSON.stringify(result.details)).not.toContain("print-private-context");
+  });
+
+  it.each([0, 1.5])("rejects invalid recentMinutes value %s", async (recentMinutes) => {
+    const tool = createSubagentsTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "list",
+        recentMinutes,
+      }),
+    ).rejects.toThrow("recentMinutes must be a positive integer");
+  });
+
+  it("lists and cancels retained policy-key tasks for a split-key caller", async () => {
+    // Regression for the ClawSweeper P2 finding on #137779: when the listing root switches to
+    // the durable key, task rows created by pre-change code still carry the policy key in
+    // owner_key. Without the fallback policy key, split-key callers (e.g. Telegram DM) lose
+    // sight of retained running tasks and cannot cancel them ("Task outside session tree").
+    const durableKey = "agent:main:telegram:direct:456";
+    const policyKey = "agent:main:telegram:default:direct:456";
+    const tasks = [
+      // Retained row from pre-change code: owner_key is the policy key.
+      task({
+        taskId: "retained-media",
+        runtime: "cli",
+        ownerKey: policyKey,
+        requesterSessionKey: policyKey,
+      }),
+      // Newly created row: owner_key is the durable key.
+      task({
+        taskId: "new-spawn",
+        runtime: "cli",
+        ownerKey: durableKey,
+        requesterSessionKey: durableKey,
+      }),
+    ];
+
+    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
+    const tool = createSubagentsTool({
+      agentSessionKey: durableKey,
+      callerPolicySessionKey: policyKey,
+      config: {},
+      listTasks: () => tasks,
+      cancelTask: cancelTask as never,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const rows = (result.details as { tasks: Array<{ taskId: string }> }).tasks;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "retained-media" }),
+        expect.objectContaining({ taskId: "new-spawn" }),
+      ]),
+    );
+
+    await expect(
+      tool.execute("cancel", { action: "cancel", taskId: "retained-media" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-media" });
+  });
+});

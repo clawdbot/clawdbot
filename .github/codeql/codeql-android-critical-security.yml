@@ -1,0 +1,30 @@
+name: openclaw-codeql-android-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  # Android canvas intentionally runs trusted A2UI JavaScript; keep this profile focused on exploitable WebView edges.
+  - exclude:
+      id: java/android/websettings-javascript-enabled
+  # Gateway TLS already pins verified certificate SHA-256 fingerprints. OkHttp CertificatePinner pins SPKI hashes,
+  # so this query is noisy for OpenClaw's TOFU/local-gateway trust model and does not belong in the critical profile.
+  - exclude:
+      id: java/android/missing-certificate-pinning
+
+paths:
+  - apps/android/app/src/main
+
+paths-ignore:
+  - "**/.gradle"
+  - "**/build"
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.*"
+  - "**/*Test.kt"
+  - "**/*Test.java"
+  - "**/*Benchmark.kt"
+  - apps/android/app/src/test
+  - apps/android/benchmark

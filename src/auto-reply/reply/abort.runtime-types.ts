@@ -1,15 +1,26 @@
+// Shared abort runtime types for cancellation and cutoff persistence.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 
-export type FastAbortResult = {
+/** Result from the fast abort path before normal reply dispatch starts. */
+type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
+  rejectionReason?: "finalizing";
   stoppedSubagents?: number;
+  failedSubagents?: number;
 };
 
+/** Runtime hook that may convert a message into an immediate abort action. */
 export type TryFastAbortFromMessage = (params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 }) => Promise<FastAbortResult>;
 
-export type FormatAbortReplyText = (stoppedSubagents?: number) => string;
+/** Formats the user-visible abort acknowledgement text. */
+export type FormatAbortReplyText = (
+  stoppedSubagents?: number,
+  rejectionReason?: FastAbortResult["rejectionReason"],
+  failedSubagents?: number,
+) => string;

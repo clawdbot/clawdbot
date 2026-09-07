@@ -1,58 +1,45 @@
-import { describe, expect, it } from "vitest";
-import { AcpRuntimeError, isAcpRuntimeError, withAcpRuntimeErrorBoundary } from "./errors.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
+import { AcpRuntimeError, formatAcpErrorChain } from "./errors.js";
 
-describe("withAcpRuntimeErrorBoundary", () => {
-  it("wraps generic errors with fallback code and source message", async () => {
-    await expect(
-      withAcpRuntimeErrorBoundary({
-        run: async () => {
-          throw new Error("boom");
-        },
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "fallback",
-      }),
-    ).rejects.toMatchObject({
-      name: "AcpRuntimeError",
-      code: "ACP_TURN_FAILED",
-      message: "boom",
-    });
-  });
+let tempDirs: string[] = [];
 
-  it("passes through existing ACP runtime errors", async () => {
-    const existing = new AcpRuntimeError("ACP_BACKEND_MISSING", "backend missing");
-    await expect(
-      withAcpRuntimeErrorBoundary({
-        run: async () => {
-          throw existing;
-        },
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "fallback",
-      }),
-    ).rejects.toBe(existing);
-  });
+function writeConfig(source: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-redact-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  return configPath;
+}
 
-  it("preserves ACP runtime codes from foreign package errors", async () => {
-    class ForeignAcpRuntimeError extends Error {
-      readonly code = "ACP_BACKEND_MISSING" as const;
-    }
+afterEach(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
 
-    const foreignError = new ForeignAcpRuntimeError("backend missing");
+describe("ACP runtime error redaction", () => {
+  it("keeps provider-token coverage when operator redact patterns are configured", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        redactPatterns: ["/internal-ticket-([A-Za-z0-9]+)/g"],
+      },
+    }`);
+    const providerToken = `ghp_${"a".repeat(20)}`;
+    const customSecret = "internal-ticket-12345";
 
-    await expect(
-      withAcpRuntimeErrorBoundary({
-        run: async () => {
-          throw foreignError;
-        },
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "fallback",
-      }),
-    ).rejects.toMatchObject({
-      name: "AcpRuntimeError",
-      code: "ACP_BACKEND_MISSING",
-      message: "backend missing",
-      cause: foreignError,
-    });
+    const output = withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+      formatAcpErrorChain(
+        new AcpRuntimeError("ACP_TURN_FAILED", `backend failed: ${providerToken} ${customSecret}`),
+      ),
+    );
 
-    expect(isAcpRuntimeError(foreignError)).toBe(true);
+    expect(output).not.toContain(providerToken);
+    expect(output).not.toContain(customSecret);
+    expect(output).toContain("backend failed");
   });
 });

@@ -1,3 +1,5 @@
+// Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -6,19 +8,18 @@ import {
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
-import {
-  buildPlatformRuntimeLogHints,
-  buildPlatformServiceStartHints,
-} from "../../daemon/runtime-hints.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
+import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
-export { resolveDaemonContainerContext };
 
+/** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
   const json = Boolean(jsonFlag);
   return {
@@ -27,17 +28,39 @@ export function createDaemonInstallActionContext(jsonFlag: unknown) {
   };
 }
 
-export function failIfNixDaemonInstallMode(
-  fail: (message: string, hints?: string[]) => void,
+/** Resolve installation refusal before service or state inspection. */
+export function resolveDaemonInstallBlockMessage(
+  service: "gateway" | "node",
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (!resolveIsNixMode(env)) {
-    return false;
+): string | undefined {
+  if (resolveIsNixMode(env)) {
+    return "Nix mode detected; service install is disabled.";
   }
-  fail("Nix mode detected; service install is disabled.");
-  return true;
+  // Node installation shares the Nix gate, not Gateway ownership policy.
+  if (service === "node") {
+    return undefined;
+  }
+  const mutationError = resolveGatewayServiceMutationError(
+    "install or rewrite the gateway service",
+    env,
+  );
+  if (mutationError) {
+    return `Gateway install blocked: ${String(mutationError)}`;
+  }
+  if (process.platform === "linux" && hasSudoToRootSystemdUserManagerMismatch(env)) {
+    return (
+      "Gateway install blocked: Refusing a sudo-to-root systemd user-service install because " +
+      "OpenClaw state and service files would belong to root while systemctl targets the " +
+      "invoking user's manager. Rerun the same command without sudo. If [unsafe-permissions] " +
+      "blocked the non-sudo command, repair the reported directory with `chmod go-w <path>` " +
+      "and retry; do not use sudo or --force to bypass it. " +
+      "See https://docs.openclaw.ai/cli/gateway#install-identity."
+    );
+  }
+  return undefined;
 }
 
+/** Build terminal style helpers for status output with no-color fallback. */
 export function createCliStatusTextStyles() {
   const rich = isRich();
   return {
@@ -51,6 +74,7 @@ export function createCliStatusTextStyles() {
   };
 }
 
+/** Pick the color function for a runtime status label. */
 export function resolveRuntimeStatusColor(status: string | undefined): (value: string) => string {
   const runtimeStatus = status ?? "unknown";
   return runtimeStatus === "running"
@@ -62,29 +86,7 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (arg === "--port") {
-      const next = programArguments[i + 1];
-      const parsed = parsePort(next);
-      if (parsed) {
-        return parsed;
-      }
-    }
-    if (arg?.startsWith("--port=")) {
-      const parsed = parsePort(arg.split("=", 2)[1]);
-      if (parsed) {
-        return parsed;
-      }
-    }
-  }
-  return null;
-}
-
+/** Pick the best local probe host for a configured Gateway bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
@@ -96,12 +98,9 @@ export function pickProbeHostForBind(
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
   }
-  if (bindMode === "lan") {
-    // Same as call.ts: self-connections should always target loopback.
-    // bind=lan controls which interfaces the server listens on (0.0.0.0),
-    // but co-located CLI probes should connect via 127.0.0.1.
-    return "127.0.0.1";
-  }
+  // Same as call.ts: self-connections should always target loopback.
+  // bind=lan controls which interfaces the server listens on (0.0.0.0),
+  // but co-located CLI probes should connect via 127.0.0.1.
   return "127.0.0.1";
 }
 
@@ -113,7 +112,8 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_NIX_MODE",
 ];
 
-export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
+/** Keep only daemon env keys safe to print in diagnostics. */
+function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
   if (!env) {
     return {};
   }
@@ -128,11 +128,34 @@ export function filterDaemonEnv(env: Record<string, string> | undefined): Record
   return filtered;
 }
 
+export function projectDaemonServiceForJson<
+  T extends { command?: GatewayServiceCommandConfig | null },
+>(service: T, { includeDefinitionPaths }: { includeDefinitionPaths: boolean }) {
+  const command = service.command;
+  if (!command) {
+    return service;
+  }
+  const environment = filterDaemonEnv(command.environment);
+  const publicCommand = {
+    ...command,
+    environment: Object.keys(environment).length > 0 ? environment : undefined,
+  };
+  delete publicCommand.managedDefinition;
+  delete publicCommand.managedOverrides;
+  // Node status retains definition paths in its shipped JSON contract.
+  if (!includeDefinitionPaths) {
+    delete publicCommand.definitionPaths;
+  }
+  return { ...service, command: publicCommand };
+}
+
+/** Format safe daemon env entries for status output. */
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   const filtered = filterDaemonEnv(env);
   return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
 
+/** Normalize listener address strings from platform socket tools. */
 export function normalizeListenerAddress(raw: string): string {
   let value = raw.trim();
   if (!value) {
@@ -143,54 +166,26 @@ export function normalizeListenerAddress(raw: string): string {
   return value.trim();
 }
 
-export function renderRuntimeHints(
-  runtime: { missingUnit?: boolean; status?: string } | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  logFile?: string | null,
-): string[] {
-  if (!runtime) {
-    return [];
-  }
-  const hints: string[] = [];
-  const fileLog = logFile ?? null;
-  if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.status === "stopped") {
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    hints.push(
-      ...buildPlatformRuntimeLogHints({
-        env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
-      }),
-    );
-  }
-  return hints;
-}
-
+/** Render install/start hints for the current service platform/container context. */
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const profile = env.OPENCLAW_PROFILE;
   const container = resolveDaemonContainerContext(env);
-  const hints = buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw gateway install", env),
-    startCommand: formatCliCommand("openclaw gateway", env),
+  if (container) {
+    return [`Restart the container or the service that manages it for ${container}.`];
+  }
+  const profile = env.OPENCLAW_PROFILE;
+  const installHint =
+    resolveDaemonInstallBlockMessage("gateway", env) ??
+    formatCliCommand("openclaw gateway install", env);
+  return buildPlatformServiceStartHints({
+    installHint,
+    startCommand: formatCliCommand("openclaw gateway start", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });
-  if (!container) {
-    return hints;
-  }
-  return [`Restart the container or the service that manages it for ${container}.`];
 }
 
+/** Drop generic systemd hints when a container-specific hint is clearer. */
 export function filterContainerGenericHints(
   hints: string[],
   env: NodeJS.ProcessEnv = process.env,

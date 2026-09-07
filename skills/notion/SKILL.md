@@ -1,174 +1,150 @@
 ---
 name: notion
-description: Notion API for creating and managing pages, databases, and blocks.
-homepage: https://developers.notion.com
+description: "Notion CLI/API for pages, Markdown content, data sources, files, comments, search, Workers, and raw API calls."
+homepage: https://developers.notion.com/cli/get-started/overview
 metadata:
   {
     "openclaw":
-      { "emoji": "📝", "requires": { "env": ["NOTION_API_KEY"] }, "primaryEnv": "NOTION_API_KEY" },
+      {
+        "emoji": "📝",
+        "requires": { "anyBins": ["ntn", "curl"] },
+        "primaryEnv": "NOTION_API_TOKEN",
+        "install":
+          [
+            {
+              "id": "node",
+              "kind": "node",
+              "package": "ntn",
+              "bins": ["ntn"],
+              "label": "Install official Notion CLI (npm)",
+            },
+          ],
+      },
   }
 ---
 
-# notion
+# Notion
 
-Use the Notion API to create/read/update pages, data sources (databases), and blocks.
+Prefer official `ntn` CLI. Use curl only when `ntn` is unavailable or a raw request is clearer.
 
 ## Setup
 
-1. Create an integration at https://notion.so/my-integrations
-2. Copy the API key (starts with `ntn_` or `secret_`)
-3. Store it:
-
 ```bash
-mkdir -p ~/.config/notion
-echo "ntn_your_key_here" > ~/.config/notion/api_key
+npm install -g ntn
+ntn --version
+ntn login
 ```
 
-4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
-
-## API Basics
-
-All requests need:
+Script/headless auth:
 
 ```bash
-NOTION_KEY=$(cat ~/.config/notion/api_key)
-curl -X GET "https://api.notion.com/v1/..." \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+export NOTION_API_TOKEN=secret_or_ntn_token
+export NOTION_API_VERSION=2026-03-11
+```
+
+`ntn api` sets `Authorization` and `Notion-Version` automatically. It uses CLI login by default, or `NOTION_API_TOKEN` when set.
+
+## Inspect
+
+```bash
+ntn doctor
+ntn api ls
+ntn api ls --json
+ntn api v1/comments --help
+ntn api v1/comments --spec -X POST
+ntn api v1/comments --docs -X POST
+```
+
+## Pages
+
+Markdown-first helpers:
+
+```bash
+ntn pages get <page-id>
+ntn pages get <page-id> --json
+ntn pages create --parent page:<page-id> --content '# Title\n\nBody'
+ntn pages create --parent data-source:<data-source-id> < page.md
+ntn pages update <page-id> --content '# Updated'
+ntn pages update <page-id> < page.md
+ntn pages trash <page-id> --yes
+```
+
+Notes:
+
+- `pages get` prints Markdown with page properties as frontmatter.
+- Content input: `--content`, stdin, or editor in a TTY.
+- Parent refs: `page:<id>`, `database:<id>`, `data-source:<id>`.
+- For properties/templates/full Pages API, use `ntn api v1/pages`.
+
+## Data sources
+
+```bash
+ntn datasources resolve <database-id>
+ntn datasources resolve <database-id> --json
+ntn datasources query <data-source-id>
+ntn datasources query <data-source-id> --limit 50 --json
+ntn datasources query <data-source-id> --sort 'Date desc'
+ntn datasources query <data-source-id> --filter '{"property":"Done","checkbox":{"equals":true}}'
+```
+
+Use `resolve` when you have a database ID. Query needs a data source ID.
+
+## Raw API
+
+```bash
+ntn api v1/users/me
+ntn api v1/search query=roadmap page_size:=10
+ntn api v1/pages 'parent[data_source_id]='"$DS_ID" 'properties[Name][title][0][text][content]=New item'
+ntn api "v1/pages/$PAGE_ID" -X PATCH in_trash:=true
+ntn api "v1/blocks/$PAGE_ID/children" -X PATCH \
+  'children[0][type]=paragraph' \
+  'children[0][paragraph][rich_text][0][text][content]=Hello'
+```
+
+Input syntax:
+
+- `path=value`: string body field.
+- `path:=json`: typed JSON body field.
+- `name==value`: query parameter.
+- `Header:Value`: request header.
+- `--data '<json>'` or stdin JSON for larger bodies.
+- Only one body source per request.
+
+## Files
+
+```bash
+ntn files create < image.png
+ntn files create --filename photo.png --content-type image/png < /tmp/photo
+ntn files create --external-url https://example.com/photo.png
+ntn files get <upload-id>
+ntn files list
+```
+
+## Workers
+
+```bash
+ntn workers new
+ntn workers deploy
+ntn workers list --json
+ntn workers runs list --json
+ntn workers runs logs <run-id>
+```
+
+Workers may require Business/Enterprise plan and workspace enablement.
+
+## Curl fallback
+
+```bash
+curl -sS "https://api.notion.com/v1/users/me" \
+  -H "Authorization: Bearer $NOTION_API_TOKEN" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+## Version notes
 
-## Common Operations
-
-**Search for pages and data sources:**
-
-```bash
-curl -X POST "https://api.notion.com/v1/search" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "page title"}'
-```
-
-**Get page:**
-
-```bash
-curl "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
-```
-
-**Get page content (blocks):**
-
-```bash
-curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
-```
-
-**Create page in a data source:**
-
-```bash
-curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "parent": {"database_id": "xxx"},
-    "properties": {
-      "Name": {"title": [{"text": {"content": "New Item"}}]},
-      "Status": {"select": {"name": "Todo"}}
-    }
-  }'
-```
-
-**Query a data source (database):**
-
-```bash
-curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "filter": {"property": "Status", "select": {"equals": "Active"}},
-    "sorts": [{"property": "Date", "direction": "descending"}]
-  }'
-```
-
-**Create a data source (database):**
-
-```bash
-curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "parent": {"page_id": "xxx"},
-    "title": [{"text": {"content": "My Database"}}],
-    "properties": {
-      "Name": {"title": {}},
-      "Status": {"select": {"options": [{"name": "Todo"}, {"name": "Done"}]}},
-      "Date": {"date": {}}
-    }
-  }'
-```
-
-**Update page properties:**
-
-```bash
-curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
-```
-
-**Add blocks to page:**
-
-```bash
-curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "children": [
-      {"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"text": {"content": "Hello"}}]}}
-    ]
-  }'
-```
-
-## Property Types
-
-Common property formats for database items:
-
-- **Title:** `{"title": [{"text": {"content": "..."}}]}`
-- **Rich text:** `{"rich_text": [{"text": {"content": "..."}}]}`
-- **Select:** `{"select": {"name": "Option"}}`
-- **Multi-select:** `{"multi_select": [{"name": "A"}, {"name": "B"}]}`
-- **Date:** `{"date": {"start": "2024-01-15", "end": "2024-01-16"}}`
-- **Checkbox:** `{"checkbox": true}`
-- **Number:** `{"number": 42}`
-- **URL:** `{"url": "https://..."}`
-- **Email:** `{"email": "a@b.com"}`
-- **Relation:** `{"relation": [{"id": "page_id"}]}`
-
-## Key Differences in 2025-09-03
-
-- **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
-- **Two IDs:** Each database now has both a `database_id` and a `data_source_id`
-  - Use `database_id` when creating pages (`parent: {"database_id": "..."}`)
-  - Use `data_source_id` when querying (`POST /v1/data_sources/{id}/query`)
-- **Search results:** Databases return as `"object": "data_source"` with their `data_source_id`
-- **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
-- **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
-
-## Notes
-
-- Page/database IDs are UUIDs (with or without dashes)
-- The API cannot set database view filters — that's UI-only
-- Rate limit: ~3 requests/second average, with `429 rate_limited` responses using `Retry-After`
-- Append block children: up to 100 children per request, up to two levels of nesting in a single append request
-- Payload size limits: up to 1000 block elements and 500KB overall
-- Use `is_inline: true` when creating data sources to embed them in pages
+- Current latest API version: `2026-03-11`.
+- Use `in_trash`, not `archived`.
+- Append block positioning uses `position`, not flat `after`.
+- `transcription` block renamed to `meeting_notes`.
+- Databases can contain multiple data sources; page parents generally use `data_source_id`.

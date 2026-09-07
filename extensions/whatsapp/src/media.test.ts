@@ -1,14 +1,18 @@
+// Whatsapp tests cover media plugin behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
-import sharp from "sharp";
+import { captureEnv, mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import {
+  createGrayscaleAlphaPngBuffer,
+  createSolidPngBuffer,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
+import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
 import {
   LocalMediaAccessError,
   loadWebMedia,
@@ -25,7 +29,6 @@ let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
-let fallbackPngBuffer: Buffer;
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
 let stateDirSnapshot: ReturnType<typeof captureEnv>;
@@ -36,71 +39,45 @@ async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   return file;
 }
 
-function buildDeterministicBytes(length: number): Buffer {
-  const buffer = Buffer.allocUnsafe(length);
-  let seed = 0x12345678;
-  for (let i = 0; i < length; i++) {
-    seed = (1103515245 * seed + 12345) & 0x7fffffff;
-    buffer[i] = seed & 0xff;
-  }
-  return buffer;
-}
-
 async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> {
   return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
-function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: number | bigint): T {
-  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
+async function expectLocalMediaAccessCode(promise: Promise<unknown>, code: string) {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(LocalMediaAccessError);
+    expect((error as { code?: unknown }).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected local media access error ${code}`);
 }
 
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
-  largeJpegBuffer = await sharp({
-    create: {
-      width: 400,
-      height: 400,
-      channels: 3,
-      background: "#ff0000",
-    },
-  })
-    .jpeg({ quality: 95 })
-    .toBuffer();
+  largeJpegBuffer = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
   largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
-  tinyPngBuffer = await sharp({
-    create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
-  })
-    .png()
-    .toBuffer();
+  tinyPngBuffer = createSolidPngBuffer(10, 10, { r: 0, g: 255, b: 0 });
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  alphaPngBuffer = await sharp({
-    create: {
-      width: 64,
-      height: 64,
-      channels: 4,
-      background: { r: 255, g: 0, b: 0, alpha: 0.5 },
-    },
-  })
-    .png()
-    .toBuffer();
+  alphaPngBuffer = createSolidPngBuffer(64, 64, { r: 255, g: 0, b: 0, a: 128 });
   alphaPngFile = await writeTempFile(alphaPngBuffer, ".png");
-  // Keep this small so the alpha-fallback test stays deterministic but fast.
-  const size = 24;
-  const raw = buildDeterministicBytes(size * size * 4);
-  fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
-    .png()
-    .toBuffer();
-  fallbackPngFile = await writeTempFile(fallbackPngBuffer, ".png");
-  const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
-  fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
-  const jpegOptimized = await optimizeImageToJpeg(fallbackPngBuffer, fallbackPngCap);
-  if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
-    throw new Error(
-      `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
-    );
+  for (const size of [24, 32, 40, 48, 64]) {
+    const buffer = createGrayscaleAlphaPngBuffer(size, size);
+    const smallestPng = await optimizeImageToPng(buffer, 1);
+    const cap = Math.max(1, Math.min(buffer.length, smallestPng.optimizedSize) - 1);
+    const jpegOptimized = await optimizeImageToJpeg(buffer, cap);
+    if (jpegOptimized.buffer.length <= cap) {
+      fallbackPngFile = await writeTempFile(buffer, ".png");
+      fallbackPngCap = cap;
+      break;
+    }
+  }
+  if (!fallbackPngFile) {
+    throw new Error("No PNG alpha fallback fixture could fit the JPEG cap");
   }
 });
 
@@ -175,19 +152,13 @@ describe("web media loading", () => {
     const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
+    expect(result.contentType).toBe("image/png");
   });
 
   it("includes URL + status in fetch errors", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: false,
-      body: true,
-      text: async () => "Not Found",
-      headers: { get: () => null },
-      status: 404,
-      statusText: "Not Found",
-      url: "https://example.com/missing.jpg",
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Not Found", { status: 404, statusText: "Not Found" }));
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -221,13 +192,11 @@ describe("web media loading", () => {
   });
 
   it("respects maxBytes for raw URL fetches", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.alloc(2048).buffer,
-      headers: { get: () => "image/png" },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array(2048), { headers: { "content-type": "image/png" } }),
+      );
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -249,23 +218,15 @@ describe("web media loading", () => {
   });
 
   it("uses content-disposition filename when available", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
-      headers: {
-        get: (name: string) => {
-          if (name === "content-disposition") {
-            return 'attachment; filename="report.pdf"';
-          }
-          if (name === "content-type") {
-            return "application/pdf";
-          }
-          return null;
+    const pdfBytes = Buffer.from("%PDF-1.4");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(Uint8Array.from(pdfBytes), {
+        headers: {
+          "content-disposition": 'attachment; filename="report.pdf"',
+          "content-type": "application/pdf",
         },
-      },
-      status: 200,
-    } as unknown as Response);
+      }),
+    );
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -281,14 +242,9 @@ describe("web media loading", () => {
       0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
     ]);
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
-      headers: { get: () => "image/gif" },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(gifBytes, { headers: { "content-type": "image/gif" } }));
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
@@ -304,8 +260,7 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
-    const meta = await sharp(result.buffer).metadata();
-    expect(meta.hasAlpha).toBe(true);
+    expect(result.buffer[25]).toBe(6);
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
@@ -317,41 +272,13 @@ describe("web media loading", () => {
   });
 });
 
-describe("Discord voice message input hardening", () => {
-  it("rejects unsafe voice message inputs", async () => {
-    const cases = [
-      {
-        name: "local path outside allowed media roots",
-        candidate: path.join(process.cwd(), "package.json"),
-        expectedMessage: /Local media path is not under an allowed directory/i,
-      },
-      {
-        name: "private-network URL",
-        candidate: "http://127.0.0.1/voice.ogg",
-        expectedMessage: /Failed to fetch media|Blocked|private|internal/i,
-      },
-      {
-        name: "non-http URL scheme",
-        candidate: "rtsp://example.com/voice.ogg",
-        expectedMessage: /Local media path is not under an allowed directory|ENOENT|no such file/i,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      await expect(
-        sendVoiceMessageDiscord("channel:123", testCase.candidate),
-        testCase.name,
-      ).rejects.toThrow(testCase.expectedMessage);
-    }
-  });
-});
-
 describe("local media root guard", () => {
   it("rejects local paths outside allowed roots", async () => {
     // Explicit roots that don't contain the temp file.
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows local paths under an explicit root", async () => {
@@ -365,71 +292,88 @@ describe("local media root guard", () => {
     const realpathSpy = vi.spyOn(fs, "realpath");
 
     try {
-      await expect(
+      await expectLocalMediaAccessCode(
         loadWebMedia("file://attacker/share/evil.png", 1024 * 1024, {
           localRoots: [resolvePreferredOpenClawTmpDir()],
         }),
-      ).rejects.toMatchObject({ code: "invalid-file-url" });
+        "invalid-file-url",
+      );
       expect(realpathSpy).not.toHaveBeenCalled();
     } finally {
       realpathSpy.mockRestore();
     }
   });
 
-  it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
-    const actualLstat = await fs.lstat(tinyPngFile);
-    const actualStat = await fs.stat(tinyPngFile);
-    const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+  it.each([
+    { name: "loads local media after a transient unknown Windows identity", persistent: false },
+    { name: "rejects local media when Windows identity remains unknown", persistent: true },
+  ])("$name", async ({ persistent }) => {
+    const file = await fs.realpath(tinyPngFile);
+    const actualLstatSync = fsSync.lstatSync;
+    // Keep the fixture's real root before the Windows platform mock changes temp-path resolution.
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
+    let unknownInspections = 0;
 
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const lstatSpy = vi
-      .spyOn(fs, "lstat")
-      .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
-    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
-
-    try {
-      const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-        localRoots: [resolvePreferredOpenClawTmpDir()],
+    await withMockedWindowsPlatform(async () => {
+      const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((filePath, options) => {
+        const stat = actualLstatSync(filePath, options);
+        if (
+          filePath === file &&
+          stat &&
+          typeof stat.dev === "bigint" &&
+          (persistent || unknownInspections === 0)
+        ) {
+          stat.dev = 0n;
+          unknownInspections++;
+        }
+        return stat;
       });
-      expect(result.kind).toBe("image");
-      expect(result.buffer.length).toBeGreaterThan(0);
-    } finally {
-      statSpy.mockRestore();
-      lstatSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+
+      await withRestoredMocks([lstatSpy], async () => {
+        const loaded = loadWebMedia(file, {
+          maxBytes: 1024 * 1024,
+          localRoots: [realTmpRoot],
+          optimizeImages: false,
+        });
+        if (persistent) {
+          await expectLocalMediaAccessCode(loaded, "path-not-allowed");
+          expect(unknownInspections).toBeGreaterThan(0);
+        } else {
+          const result = await loaded;
+          expect(result.kind).toBe("image");
+          expect(result.buffer).toEqual(tinyPngBuffer);
+          expect(unknownInspections).toBe(1);
+        }
+      });
+    });
   });
 
   it("rejects Windows network paths before filesystem checks", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const realpathSpy = vi.spyOn(fs, "realpath");
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
 
-    try {
-      await expect(
-        loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
-          localRoots: [resolvePreferredOpenClawTmpDir()],
-        }),
-      ).rejects.toMatchObject({ code: "network-path-not-allowed" });
-      expect(realpathSpy).not.toHaveBeenCalled();
-    } finally {
-      realpathSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    await withMockedWindowsPlatform(async () => {
+      const realpathSpy = vi.spyOn(fs, "realpath");
+
+      await withRestoredMocks([realpathSpy], async () => {
+        await expectLocalMediaAccessCode(
+          loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
+            localRoots: [realTmpRoot],
+          }),
+          "network-path-not-allowed",
+        );
+        expect(realpathSpy).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it("requires readFile override for localRoots bypass", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
       }),
-    ).rejects.toBeInstanceOf(LocalMediaAccessError);
-    await expect(
-      loadWebMedia(tinyPngFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-      }),
-    ).rejects.toMatchObject({ code: "unsafe-bypass" });
+      "unsafe-bypass",
+    );
   });
 
   it("allows any path when localRoots is 'any'", async () => {
@@ -442,50 +386,48 @@ describe("local media root guard", () => {
   });
 
   it("rejects filesystem root entries in localRoots", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, {
         localRoots: [path.parse(tinyPngFile).root],
       }),
-    ).rejects.toMatchObject({ code: "invalid-root" });
+      "invalid-root",
+    );
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "workspace", "tmp", "render.bin"), {
+    const workspaceResult = await loadWebMedia(
+      path.join(stateDir, "workspace", "tmp", "render.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(workspaceResult.kind).toBeUndefined();
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "sandboxes", "session-1", "frame.bin"), {
+    const sandboxResult = await loadWebMedia(
+      path.join(stateDir, "sandboxes", "session-1", "frame.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(sandboxResult.kind).toBeUndefined();
   });
 
   it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
@@ -493,16 +435,11 @@ describe("local media root guard", () => {
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
     const agentWorkspaceDir = path.join(stateDir, "workspace-clawdy");
 
-    await expect(
-      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
-        maxBytes: 1024 * 1024,
-        localRoots: [agentWorkspaceDir],
-        readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
-    );
+    const result = await loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+      maxBytes: 1024 * 1024,
+      localRoots: [agentWorkspaceDir],
+      readFile,
+    });
+    expect(result.kind).toBeUndefined();
   });
 });

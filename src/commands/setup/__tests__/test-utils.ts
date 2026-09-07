@@ -1,7 +1,14 @@
+/**
+ * Test doubles for setup and command prompt tests.
+ *
+ * These helpers provide typed RuntimeEnv and WizardPrompter mocks that fail
+ * fast when command code calls exit.
+ */
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 
+/** Creates a RuntimeEnv mock with exit throwing for assertion-friendly tests. */
 export const makeRuntime = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   log: vi.fn(),
   error: vi.fn(),
@@ -11,6 +18,7 @@ export const makeRuntime = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => 
   ...overrides,
 });
 
+/** Creates a WizardPrompter mock with inert defaults for prompt-heavy tests. */
 export const makePrompter = (overrides: Partial<WizardPrompter> = {}): WizardPrompter => ({
   intro: vi.fn(async () => {}),
   outro: vi.fn(async () => {}),

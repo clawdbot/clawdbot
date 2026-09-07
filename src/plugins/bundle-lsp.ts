@@ -1,28 +1,33 @@
-import fs from "node:fs";
+// Bundles language-server metadata exposed by plugins.
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
   loadEnabledBundleConfig,
   readBundleJsonObject,
+  resolveBundleJsonOpenFailure,
 } from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 
+/** LSP server config block loaded from plugin bundle metadata. */
 export type BundleLspServerConfig = Record<string, unknown>;
 
-export type BundleLspConfig = {
+/** Merged LSP config contributed by enabled plugin bundles. */
+type BundleLspConfig = {
   lspServers: Record<string, BundleLspServerConfig>;
 };
 
-export type BundleLspRuntimeSupport = {
+/** Runtime support summary for bundle-declared LSP servers. */
+type BundleLspRuntimeSupport = {
   hasStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -56,34 +61,37 @@ function resolveBundleLspConfigPaths(params: {
   rootDir: string;
 }): string[] {
   const declared = normalizeBundlePathList(params.raw.lspServers);
-  const defaults = fs.existsSync(path.join(params.rootDir, ".lsp.json")) ? [".lsp.json"] : [];
+  const defaults = pluginCacheExistsSync(path.join(params.rootDir, ".lsp.json"))
+    ? [".lsp.json"]
+    : [];
   return mergeBundlePathLists(defaults, declared);
 }
 
-function loadBundleLspConfigFile(params: {
-  rootDir: string;
-  relativePath: string;
-}): BundleLspConfig {
-  const absolutePath = path.resolve(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: true,
+function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string }): {
+  config: BundleLspConfig;
+  diagnostics: string[];
+} {
+  const result = readBundleJsonObject({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    onOpenFailure: (failure) =>
+      resolveBundleJsonOpenFailure({
+        failure,
+        relativePath: params.relativePath,
+        allowMissing: true,
+      }),
   });
-  if (!opened.ok) {
-    return { lspServers: {} };
+  if (!result.ok) {
+    return {
+      config: { lspServers: {} },
+      diagnostics: [
+        result.reason === "open"
+          ? result.error
+          : `unable to read ${params.relativePath}: ${result.error}`,
+      ],
+    };
   }
-  try {
-    const stat = fs.fstatSync(opened.fd);
-    if (!stat.isFile()) {
-      return { lspServers: {} };
-    }
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    return { lspServers: extractLspServerMap(raw) };
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return { config: { lspServers: extractLspServerMap(result.raw) }, diagnostics: [] };
 }
 
 function loadBundleLspConfig(params: {
@@ -109,19 +117,20 @@ function loadBundleLspConfig(params: {
     raw: manifestLoaded.raw,
     rootDir: params.rootDir,
   });
+  const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
-    merged = applyMergePatch(
-      merged,
-      loadBundleLspConfigFile({
-        rootDir: params.rootDir,
-        relativePath,
-      }),
-    ) as BundleLspConfig;
+    const loaded = loadBundleLspConfigFile({
+      rootDir: params.rootDir,
+      relativePath,
+    });
+    diagnostics.push(...loaded.diagnostics);
+    merged = applyMergePatch(merged, loaded.config) as BundleLspConfig;
   }
 
-  return { config: merged, diagnostics: [] };
+  return { config: merged, diagnostics };
 }
 
+/** Inspects whether one plugin bundle has supported LSP runtime servers. */
 export function inspectBundleLspRuntimeSupport(params: {
   pluginId: string;
   rootDir: string;
@@ -139,13 +148,16 @@ export function inspectBundleLspRuntimeSupport(params: {
   };
 }
 
+/** Loads and merges enabled bundle LSP config across plugin manifests. */
 export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): { config: BundleLspConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
   return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ lspServers: {} }),
     loadBundleConfig: loadBundleLspConfig,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),

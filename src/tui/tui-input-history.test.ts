@@ -1,3 +1,4 @@
+// Covers TUI input history navigation and persistence behavior.
 import { describe, expect, it } from "vitest";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 

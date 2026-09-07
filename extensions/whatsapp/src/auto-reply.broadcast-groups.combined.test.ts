@@ -1,17 +1,22 @@
+// Whatsapp tests cover auto reply.broadcast groups.combined plugin behavior.
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
+  createWebInboundDeliverySpies,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
+  sendWebDirectInboundMessage,
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -44,6 +49,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "sequential",
         "+1000": ["alfred", "baerbel"],
@@ -58,6 +64,86 @@ describe("broadcast groups", () => {
     resetLoadConfigMock();
   });
 
+  it("applies recipient and strategy changes on the same active listener", async () => {
+    const base = {
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
+    } satisfies OpenClawConfig;
+    const phases = [
+      { strategy: "sequential", recipients: ["alfred"] },
+      { strategy: "parallel", recipients: ["alfred", "baerbel"] },
+      { strategy: "sequential", recipients: ["baerbel", "alfred"] },
+      { strategy: "sequential", recipients: ["baerbel"] },
+    ] as const;
+    let phase: (typeof phases)[number] = phases[0];
+    const configure = () =>
+      setLoadConfigMock({
+        ...base,
+        broadcast: { strategy: phase.strategy, "+1000": [...phase.recipients] },
+      } satisfies OpenClawConfig);
+    let active = 0;
+    let peak = 0;
+    let gate = createDeferred<void>();
+    const seen: Array<{ agent: string; strategy?: string }> = [];
+    const resolver = vi.fn(
+      async (ctx: { SessionKey?: unknown }, _opts: unknown, cfg: OpenClawConfig) => {
+        seen.push({
+          agent: String(ctx.SessionKey).split(":")[1] ?? "",
+          strategy: cfg.broadcast?.strategy,
+        });
+        active += 1;
+        peak = Math.max(peak, active);
+        if (phase.strategy === "parallel" && active === 1) {
+          await gate.promise;
+        }
+        await Promise.resolve();
+        active -= 1;
+        return { text: "ok" };
+      },
+    );
+    configure();
+    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
+    try {
+      for (const [index, next] of phases.entries()) {
+        phase = next;
+        configure();
+        seen.length = 0;
+        peak = 0;
+        gate = createDeferred<void>();
+        const delivery = sendWebDirectInboundMessage({
+          onMessage,
+          spies,
+          id: `reload-${index}`,
+          from: "+1000",
+          to: "+2000",
+          body: "hello",
+        });
+        try {
+          if (phase.strategy === "parallel") {
+            await vi.waitFor(() => expect(peak).toBe(2));
+          }
+        } finally {
+          // A failed concurrency assertion must release the first recipient before teardown.
+          gate.resolve();
+          await delivery;
+        }
+        const expected = phase.recipients.map((agent) => ({ agent, strategy: phase.strategy }));
+        expect(seen).toHaveLength(expected.length);
+        expect(seen).toEqual(
+          phase.strategy === "parallel" ? expect.arrayContaining(expected) : expected,
+        );
+        expect(peak).toBe(phase.strategy === "parallel" ? 2 : 1);
+        expect(active).toBe(0);
+      }
+    } finally {
+      resetLoadConfigMock();
+    }
+  });
+
   it("shares group history across broadcast agents and clears after replying", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -65,6 +151,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "sequential",
         "123@g.us": ["alfred", "baerbel"],
@@ -154,6 +241,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "work" } }],
       broadcast: {
         strategy: "sequential",
         "123@g.us": ["alfred", "baerbel"],
@@ -196,15 +284,14 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "parallel",
         "+1000": ["alfred", "baerbel"],
       },
     } satisfies OpenClawConfig);
 
-    const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
+    const { sendMedia, reply, sendComposing } = createWebInboundDeliverySpies();
 
     let started = 0;
     let release: (() => void) | undefined;
@@ -224,20 +311,31 @@ describe("broadcast groups", () => {
 
     const { onMessage: capturedOnMessage } = await monitorWebChannelWithCapture(resolver);
 
-    await capturedOnMessage({
-      id: "m1",
-      from: "+1000",
-      conversationId: "+1000",
-      to: "+2000",
-      accountId: "default",
-      body: "hello",
-      timestamp: Date.now(),
-      chatType: "direct",
-      chatId: "direct:+1000",
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+    await capturedOnMessage(
+      createTestWebInboundMessage({
+        event: {
+          id: "m1",
+          timestamp: Date.now(),
+        },
+        payload: {
+          body: "hello",
+        },
+        platform: {
+          chatJid: "direct:+1000",
+          recipientJid: "+2000",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+        admission: {
+          accountId: "default",
+          conversation: {
+            kind: "direct",
+            id: "+1000",
+          },
+        },
+      }),
+    );
 
     expect(resolver).toHaveBeenCalledTimes(2);
     resetLoadConfigMock();

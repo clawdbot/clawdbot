@@ -1,3 +1,4 @@
+// Gateway token drift tests cover daemon detection of gateway token/config mismatches.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";

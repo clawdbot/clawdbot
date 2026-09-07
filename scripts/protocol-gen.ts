@@ -1,51 +1,66 @@
-import { promises as fs } from "node:fs";
+// Protocol Gen script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProtocolSchemas } from "../src/gateway/protocol/schema.js";
+import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
+import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
+import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
+import {
+  assertProtocolSchemaDocument,
+  buildProtocolSchemaDocument,
+} from "./lib/protocol-schema-document.mts";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
+const defaultOutputPath = path.join(repoRoot, "dist", "protocol.schema.json");
 
-async function writeJsonSchema() {
-  const definitions: Record<string, unknown> = {};
-  for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-    definitions[name] = schema;
+function resolveOutputPath(args: string[]): string {
+  let outputPath = defaultOutputPath;
+  let hasOutputPath = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg !== "--out") {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+    if (hasOutputPath) {
+      throw new Error("--out may only be specified once.");
+    }
+    const value = args[index + 1]?.trim();
+    if (!value || value === "--out") {
+      throw new Error("--out requires a path.");
+    }
+    outputPath = path.resolve(value);
+    hasOutputPath = true;
+    index += 1;
   }
-
-  const rootSchema = {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    $id: "https://openclaw.ai/protocol.schema.json",
-    title: "OpenClaw Gateway Protocol",
-    description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
-    oneOf: [
-      { $ref: "#/definitions/RequestFrame" },
-      { $ref: "#/definitions/ResponseFrame" },
-      { $ref: "#/definitions/EventFrame" },
-    ],
-    discriminator: {
-      propertyName: "type",
-      mapping: {
-        req: "#/definitions/RequestFrame",
-        res: "#/definitions/ResponseFrame",
-        event: "#/definitions/EventFrame",
-      },
-    },
-    definitions,
-  };
-
-  const distDir = path.join(repoRoot, "dist");
-  await fs.mkdir(distDir, { recursive: true });
-  const jsonSchemaPath = path.join(distDir, "protocol.schema.json");
-  await fs.writeFile(jsonSchemaPath, JSON.stringify(rootSchema, null, 2));
-  console.log(`wrote ${jsonSchemaPath}`);
-  return { jsonSchemaPath, schemaString: JSON.stringify(rootSchema) };
+  return outputPath;
 }
 
-async function main() {
-  await writeJsonSchema();
+function main() {
+  const document = buildProtocolSchemaDocument({
+    methods: listCoreGatewayMethodMetadata(),
+    schemas: ProtocolSchemas,
+  });
+  // The artifact is a build output with no committed baseline, so this contract
+  // check is the only guard between a degraded registry and the published
+  // schema; a regenerate-then-diff guard on it can never fail.
+  assertProtocolSchemaDocument(document);
+  const result = writeGeneratedOutput({
+    check: false,
+    next: JSON.stringify(document, null, 2),
+    outputPath: resolveOutputPath(process.argv.slice(2)),
+    repoRoot,
+  });
+  const displayPath = path.relative(repoRoot, result.outputPath);
+  console.log(
+    result.wrote
+      ? `[protocol-gen] wrote ${displayPath}`
+      : `[protocol-gen] unchanged ${displayPath}`,
+  );
 }
 
-main().catch((err) => {
+try {
+  main();
+} catch (err: unknown) {
   console.error(err);
   process.exit(1);
-});
+}

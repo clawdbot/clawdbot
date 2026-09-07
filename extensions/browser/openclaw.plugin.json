@@ -1,6 +1,22 @@
 {
   "id": "browser",
+  "cliCommands": [
+    {
+      "name": "browser",
+      "description": "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+      "hasSubcommands": true
+    }
+  ],
   "enabledByDefault": true,
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["browser"]
+  },
+  "contracts": {
+    "tools": ["browser"]
+  },
+  "commandAliases": [{ "name": "browser" }],
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

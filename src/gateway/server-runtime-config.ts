@@ -1,16 +1,23 @@
+// Gateway startup runtime-config resolver.
+// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
 import type {
   GatewayAuthConfig,
   GatewayBindMode,
   GatewayTailscaleConfig,
-} from "../config/config.js";
+} from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
+import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -19,14 +26,9 @@ import {
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
-export type GatewayRuntimeConfig = {
+type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
-  strictTransportSecurityHeader?: string;
   controlUiBasePath: string;
   controlUiRoot?: string;
   resolvedAuth: ResolvedGatewayAuth;
@@ -34,20 +36,77 @@ export type GatewayRuntimeConfig = {
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
-  canvasHostEnabled: boolean;
 };
 
+/** Startup and reload validate the same security policy against the serving listener. */
+export function assertGatewayRuntimeSecurityConfig(
+  params: Pick<
+    GatewayRuntimeConfig,
+    "bindHost" | "controlUiEnabled" | "resolvedAuth" | "tailscaleMode"
+  > & {
+    cfg: OpenClawConfig;
+    port: number;
+  },
+): void {
+  const { cfg, bindHost, controlUiEnabled, resolvedAuth, tailscaleMode } = params;
+  const authMode = resolvedAuth.mode;
+  const hasSharedSecret =
+    (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
+    (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
+  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dangerouslyAllowHostHeaderOriginFallback =
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+
+  assertGatewayAuthConfigured(resolvedAuth, cfg.gateway?.auth);
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    throw new Error(
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+    );
+  }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
+  }
+  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
+    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+  }
+  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+    throw new Error(
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+    );
+  }
+  if (
+    controlUiEnabled &&
+    !isLoopbackHost(bindHost) &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    // Remote Control UI must use explicit origins unless the operator deliberately accepts
+    // Host-header fallback; otherwise any reachable host name can become a browser origin.
+    throw new Error(
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+    );
+  }
+  if (authMode === "trusted-proxy" && !cfg.gateway?.trustedProxies?.length) {
+    throw new Error(
+      "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+    );
+  }
+}
+
+/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
   bind?: GatewayBindMode;
   host?: string;
   controlUiEnabled?: boolean;
-  openAiChatCompletionsEnabled?: boolean;
-  openResponsesEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
+  warnLegacyOpenClawEnvVars();
+
   // Tailscale serve/funnel hard-requires loopback.  When bind is not
   // explicitly set, we must resolve Tailscale mode *before* choosing the
   // bind default so that container auto-detection does not override the
@@ -62,6 +121,11 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+    );
+  }
+  if (bindMode === "tailnet" && bindHost === "0.0.0.0") {
+    throw new Error(
+      "gateway bind=tailnet could not resolve a Tailscale or loopback address; refusing wildcard fallback",
     );
   }
   if (bindMode === "custom") {
@@ -82,20 +146,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
-  const openAiChatCompletionsConfig = params.cfg.gateway?.http?.endpoints?.chatCompletions;
-  const openAiChatCompletionsEnabled =
-    params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
-  const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
-  const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
-  const strictTransportSecurityConfig =
-    params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
-  const strictTransportSecurityHeader =
-    strictTransportSecurityConfig === false
-      ? undefined
-      : typeof strictTransportSecurityConfig === "string" &&
-          strictTransportSecurityConfig.trim().length > 0
-        ? strictTransportSecurityConfig.trim()
-        : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
   const controlUiRoot =
@@ -113,67 +163,10 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
-  const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
-  const hasPassword =
-    typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
-  const hasSharedSecret =
-    (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
-  const canvasHostEnabled =
-    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
-
-  const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
-  const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const dangerouslyAllowHostHeaderOriginFallback =
-    params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
-
-  assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
-  if (tailscaleMode === "funnel" && authMode !== "password") {
-    throw new Error(
-      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
-    );
-  }
-  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
-  }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
-    throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
-    );
-  }
-  if (
-    controlUiEnabled &&
-    !isLoopbackHost(bindHost) &&
-    controlUiAllowedOrigins.length === 0 &&
-    !dangerouslyAllowHostHeaderOriginFallback
-  ) {
-    throw new Error(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
-    );
-  }
-
-  if (authMode === "trusted-proxy") {
-    if (trustedProxies.length === 0) {
-      throw new Error(
-        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
-      );
-    }
-  }
-
-  return {
+  const runtimeConfig = {
     bindHost,
     controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig: openAiChatCompletionsConfig
-      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
-      : undefined,
-    openResponsesEnabled,
-    openResponsesConfig: openResponsesConfig
-      ? { ...openResponsesConfig, enabled: openResponsesEnabled }
-      : undefined,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot,
     resolvedAuth,
@@ -181,6 +174,10 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleConfig,
     tailscaleMode,
     hooksConfig,
-    canvasHostEnabled,
   };
+  assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
+  if (hooksConfig) {
+    commitHooksConfigReload();
+  }
+  return runtimeConfig;
 }

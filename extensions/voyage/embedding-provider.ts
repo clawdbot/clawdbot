@@ -1,7 +1,8 @@
+// Voyage provider module implements model/runtime integration.
 import {
-  fetchRemoteEmbeddingVectors,
+  createRemoteEmbeddingProvider,
   normalizeEmbeddingModelWithPrefixes,
-  resolveRemoteEmbeddingBearerClient,
+  resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -22,7 +23,7 @@ const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage-code-3": 32000,
 };
 
-export function normalizeVoyageModel(model: string): string {
+function normalizeVoyageModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
     defaultModel: DEFAULT_VOYAGE_EMBEDDING_MODEL,
@@ -33,53 +34,18 @@ export function normalizeVoyageModel(model: string): string {
 export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
-  const client = await resolveVoyageEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
-
-  const embed = async (input: string[], input_type?: "query" | "document"): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-    const body: { model: string; input: string[]; input_type?: "query" | "document" } = {
-      model: client.model,
-      input,
-    };
-    if (input_type) {
-      body.input_type = input_type;
-    }
-
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      body,
-      errorPrefix: "voyage embeddings failed",
-    });
-  };
-
-  return {
-    provider: {
-      id: "voyage",
-      model: client.model,
-      maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
-        return vec ?? [];
-      },
-      embedBatch: async (texts) => embed(texts, "document"),
-    },
-    client,
-  };
-}
-
-export async function resolveVoyageEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
-): Promise<VoyageEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
+  const client = await resolveRemoteEmbeddingClient({
     provider: "voyage",
     options,
     defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+    normalizeModel: normalizeVoyageModel,
   });
-  const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  const provider = createRemoteEmbeddingProvider({
+    id: "voyage",
+    client,
+    errorPrefix: "voyage embeddings failed",
+    buildRequestFields: (kind) => ({ input_type: kind }),
+  });
+  provider.maxInputTokens = VOYAGE_MAX_INPUT_TOKENS[client.model];
+  return { provider, client };
 }

@@ -1,38 +1,49 @@
+import {
+  buildManifestModelProviderConfig,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
-export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/routers/kimi-k2p5-turbo";
-export const FIREWORKS_DEFAULT_CONTEXT_WINDOW = 256000;
-export const FIREWORKS_DEFAULT_MAX_TOKENS = 256000;
+const FIREWORKS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
+  providerId: "fireworks",
+  catalog: manifest.modelCatalog.providers.fireworks,
+});
+export const FIREWORKS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "fireworks",
+)!;
 
-const ZERO_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
+export const FIREWORKS_BASE_URL = FIREWORKS_MANIFEST_PROVIDER.baseUrl;
+export const FIREWORKS_DEFAULT_MODEL_ID = FIREWORKS_DEFAULT_MODEL_REF.slice("fireworks/".length);
+
+function requireFireworksManifestModel(id: string): ModelDefinitionConfig {
+  const model = FIREWORKS_MANIFEST_PROVIDER.models.find((entry) => entry.id === id);
+  if (!model) {
+    throw new Error(`Missing Fireworks modelCatalog row ${id}`);
+  }
+  return model;
+}
+
+const FIREWORKS_DEFAULT_MODEL = requireFireworksManifestModel(FIREWORKS_DEFAULT_MODEL_ID);
+
+export const FIREWORKS_DEFAULT_CONTEXT_WINDOW = FIREWORKS_DEFAULT_MODEL.contextWindow;
+export const FIREWORKS_DEFAULT_MAX_TOKENS = FIREWORKS_DEFAULT_MODEL.maxTokens;
+
+export function isFireworksCatalogModelId(modelId: string): boolean {
+  return FIREWORKS_MANIFEST_PROVIDER.models.some((model) => model.id === modelId);
+}
 
 export function buildFireworksCatalogModels(): ModelDefinitionConfig[] {
-  return [
-    {
-      id: FIREWORKS_DEFAULT_MODEL_ID,
-      name: "Kimi K2.5 Turbo (Fire Pass)",
-      reasoning: false, // Kimi K2.5 can expose reasoning in visible content on FirePass.
-      input: ["text", "image"],
-      cost: ZERO_COST,
-      contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-    },
-  ];
+  return FIREWORKS_MANIFEST_PROVIDER.models.map((model) => structuredClone(model));
 }
 
 export function buildFireworksProvider(): ModelProviderConfig {
-  return {
-    baseUrl: FIREWORKS_BASE_URL,
-    api: "openai-completions",
-    models: buildFireworksCatalogModels(),
-  };
+  return buildManifestModelProviderConfig({
+    providerId: "fireworks",
+    catalog: manifest.modelCatalog.providers.fireworks,
+  });
 }

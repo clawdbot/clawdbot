@@ -1,6 +1,8 @@
+// Resolves additional CA certificate settings for Node child processes.
 import fs from "node:fs";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
-export const LINUX_CA_BUNDLE_PATHS = [
+const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/certs/ca-certificates.crt",
   "/etc/pki/tls/certs/ca-bundle.crt",
   "/etc/ssl/ca-bundle.pem",
@@ -9,14 +11,29 @@ export const LINUX_CA_BUNDLE_PATHS = [
 export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
 
-export function resolveLinuxSystemCaBundle(
+export function resolveAutoNodeExtraCaCerts(
   params: {
+    env?: EnvMap;
     platform?: NodeJS.Platform;
+    execPath?: string;
     accessSync?: AccessSyncFn;
   } = {},
 ): string | undefined {
+  const env = params.env ?? process.env;
+  if (env.NODE_EXTRA_CA_CERTS?.trim()) {
+    return undefined;
+  }
+
   const platform = params.platform ?? process.platform;
+  const execPath = params.execPath ?? process.execPath;
   if (platform !== "linux") {
+    return undefined;
+  }
+
+  // Version-manager Node may not inherit system CAs; supply NODE_EXTRA_CA_CERTS.
+  const isVersionManagerRuntime =
+    Boolean(env.NVM_DIR?.trim()) || matchesVersionManagerPath(execPath, "linux-ca");
+  if (!isVersionManagerRuntime) {
     return undefined;
   }
 
@@ -30,39 +47,4 @@ export function resolveLinuxSystemCaBundle(
     }
   }
   return undefined;
-}
-
-export function isNodeVersionManagerRuntime(
-  env: EnvMap = process.env as EnvMap,
-  execPath: string = process.execPath,
-): boolean {
-  if (env.NVM_DIR?.trim()) {
-    return true;
-  }
-  return execPath.includes("/.nvm/");
-}
-
-export function resolveAutoNodeExtraCaCerts(
-  params: {
-    env?: EnvMap;
-    platform?: NodeJS.Platform;
-    execPath?: string;
-    accessSync?: AccessSyncFn;
-  } = {},
-): string | undefined {
-  const env = params.env ?? (process.env as EnvMap);
-  if (env.NODE_EXTRA_CA_CERTS?.trim()) {
-    return undefined;
-  }
-
-  const platform = params.platform ?? process.platform;
-  const execPath = params.execPath ?? process.execPath;
-  if (platform !== "linux" || !isNodeVersionManagerRuntime(env, execPath)) {
-    return undefined;
-  }
-
-  return resolveLinuxSystemCaBundle({
-    platform,
-    accessSync: params.accessSync,
-  });
 }

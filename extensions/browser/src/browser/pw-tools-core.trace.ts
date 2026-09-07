@@ -1,7 +1,11 @@
-import { writeViaSiblingTempPath } from "./output-atomic.js";
+/**
+ * Playwright trace lifecycle helpers for Browser plugin diagnostics.
+ */
+import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_TRACE_DIR } from "./paths.js";
 import { ensureContextState, getPageForTargetId } from "./pw-session.js";
 
+/** Starts Playwright tracing for the target page context. */
 export async function traceStartViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -23,23 +27,26 @@ export async function traceStartViaPlaywright(opts: {
   ctxState.traceActive = true;
 }
 
+/** Stops Playwright tracing and returns the committed trace zip path. */
 export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path: string;
-}): Promise<void> {
+}): Promise<string> {
   const page = await getPageForTargetId(opts);
   const context = page.context();
   const ctxState = ensureContextState(context);
   if (!ctxState.traceActive) {
     throw new Error("No active trace. Start a trace before stopping it.");
   }
-  await writeViaSiblingTempPath({
+  return await writeExternalFileWithinOutputRoot({
     rootDir: DEFAULT_TRACE_DIR,
-    targetPath: opts.path,
-    writeTemp: async (tempPath) => {
+    path: opts.path,
+    write: async (tempPath) => {
       await context.tracing.stop({ path: tempPath });
+      // Playwright owns the recording lifecycle. Once stop succeeds, a later
+      // fs-safe publication failure must not leave this context marked active.
+      ctxState.traceActive = false;
     },
   });
-  ctxState.traceActive = false;
 }

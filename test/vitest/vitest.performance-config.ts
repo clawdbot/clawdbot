@@ -1,3 +1,5 @@
+// Vitest performance config helper normalizes performance test environment settings.
+import path from "node:path";
 type EnvMap = Record<string, string | undefined>;
 
 const isEnabled = (value: string | undefined): boolean => {
@@ -18,42 +20,48 @@ const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
   return runnerOs === "windows";
 };
 
-type VitestExperimentalConfig = {
+type VitestPerformanceConfig = {
+  fsModuleCache?: true;
+  fsModuleCachePath?: string;
   experimental?: {
-    fsModuleCache?: true;
-    fsModuleCachePath?: string;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   };
 };
 
-export function loadVitestExperimentalConfig(
+// Linked worktrees may share node_modules; invalidating that cache would remove
+// another checkout's transforms. Keep writable cache ownership in this checkout.
+export function resolveVitestFsModuleCacheRoot(cwd = process.cwd()): string {
+  return path.join(cwd, ".cache", "vitest");
+}
+
+export function loadVitestPerformanceConfig(
   env: EnvMap = process.env,
   platform: NodeJS.Platform = process.platform,
-): VitestExperimentalConfig {
-  const experimental: {
-    fsModuleCache?: true;
-    fsModuleCachePath?: string;
-    importDurations?: { print: true };
-    printImportBreakdown?: true;
-  } = {};
+  cwd = process.cwd(),
+): VitestPerformanceConfig {
+  const config: VitestPerformanceConfig = {};
   const windowsEnv = isWindowsEnv(env, platform);
 
   if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    experimental.fsModuleCache = true;
+    config.fsModuleCache = true;
   }
   if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    experimental.fsModuleCache = true;
+    config.fsModuleCache = true;
   }
-  if (experimental.fsModuleCache && env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim()) {
-    experimental.fsModuleCachePath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH.trim();
+  if (config.fsModuleCache) {
+    // The default leaf cannot contain the scheduler's concurrent cache leaves:
+    // Vitest recursively removes its selected directory when lockfiles change.
+    config.fsModuleCachePath =
+      env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim() ||
+      path.join(resolveVitestFsModuleCacheRoot(cwd), "default");
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
-    experimental.importDurations = { print: true };
+    (config.experimental ??= {}).importDurations = { print: true };
   }
   if (isEnabled(env.OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN)) {
-    experimental.printImportBreakdown = true;
+    (config.experimental ??= {}).printImportBreakdown = true;
   }
 
-  return Object.keys(experimental).length > 0 ? { experimental } : {};
+  return config;
 }

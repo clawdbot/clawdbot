@@ -1,7 +1,8 @@
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+// Gateway node inventory and explicit/default target resolution.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
@@ -14,63 +15,6 @@ type DefaultNodeSelectionOptions = {
   preferLocalMac?: boolean;
 };
 
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
-async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {});
-    return parseNodeList(res);
-  } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
-      throw error;
-    }
-    const res = await callGatewayTool("node.pair.list", opts, {});
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
-
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
     normalizeOptionalLowercaseString(node.platform)?.startsWith("mac") === true &&
@@ -79,15 +23,25 @@ function isLocalMacNode(node: NodeListNode): boolean {
   );
 }
 
-function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
-  if (aConnectedAt !== bConnectedAt) {
-    return bConnectedAt - aConnectedAt;
+function compareNewestTimestamp(a?: number, b?: number): number {
+  const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
+  const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
+  return bValue - aValue;
+}
+
+function compareDefaultNodeOrder(
+  a: NodeListNode,
+  b: NodeListNode,
+  recencyField: "connectedAtMs" | "lastSeenAtMs",
+): number {
+  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
+  if (recencyOrder !== 0) {
+    return recencyOrder;
   }
   return a.nodeId.localeCompare(b.nodeId);
 }
 
+/** Selects the implicit node target when a tool call omits an explicit node query. */
 export function selectDefaultNodeFromList(
   nodes: NodeListNode[],
   options: DefaultNodeSelectionOptions = {},
@@ -103,14 +57,14 @@ export function selectDefaultNodeFromList(
   const connected = withCapability.filter((n) => n.connected);
   const candidates = connected.length > 0 ? connected : withCapability;
   if (candidates.length === 1) {
-    return candidates[0];
+    return candidates.at(0) ?? null;
   }
 
   const preferLocalMac = options.preferLocalMac ?? true;
   if (preferLocalMac) {
     const local = candidates.filter(isLocalMacNode);
     if (local.length === 1) {
-      return local[0];
+      return local.at(0) ?? null;
     }
   }
 
@@ -119,10 +73,10 @@ export function selectDefaultNodeFromList(
     return null;
   }
 
-  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Multiple candidates — pick the first connected canvas-capable node.
-  // For A2UI and other canvas operations, any node works since multi-node
-  // setups broadcast surfaces across devices.
+  // Once the pool is known to be offline, stale connection timestamps must not
+  // outrank the durable last-seen signal used to choose the wake target.
+  const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
+  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
   return ordered[0] ?? null;
 }
 
@@ -134,37 +88,47 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-export async function listNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
-  return loadNodes(opts);
+/** Lists the Gateway node inventory. */
+export async function listNodes(
+  opts: GatewayCallOptions,
+  signal?: AbortSignal,
+): Promise<NodeListNode[]> {
+  const res = await callGatewayTool("node.list", opts, {}, { signal });
+  return parseNodeList(res);
 }
 
+/** Resolves a node id from an already-loaded node list using shared node matching rules. */
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
   allowDefault = false,
+  options: { allowCompactDisplayName?: boolean } = {},
 ): string {
   return resolveNodeIdFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    allowCompactDisplayName: options.allowCompactDisplayName,
+    pickDefaultNode,
   });
 }
 
-export async function resolveNodeId(
+/** Loads nodes from the Gateway and resolves the requested or default node id. */
+export async function resolveAgentNodeId(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
 }
 
-export async function resolveNode(
+/** Loads nodes from the Gateway and returns the requested or default node record. */
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
+  const nodes = await listNodes(opts);
   return resolveNodeFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    pickDefaultNode,
   });
 }

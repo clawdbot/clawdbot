@@ -1,8 +1,6 @@
+// Covers approval request agent and session filters.
 import { describe, expect, it } from "vitest";
-import {
-  matchesApprovalRequestFilters,
-  matchesApprovalRequestSessionFilter,
-} from "./approval-request-filters.js";
+import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 
 describe("approval request filters", () => {
   it("matches explicit agent ids and session substrings", () => {
@@ -39,6 +37,11 @@ describe("approval request filters", () => {
   });
 
   it("rejects unsafe regex patterns in session filters", () => {
-    expect(matchesApprovalRequestSessionFilter(`${"a".repeat(28)}!`, ["(a+)+$"])).toBe(false);
+    expect(
+      matchesApprovalRequestFilters({
+        request: { sessionKey: `${"a".repeat(28)}!` },
+        sessionFilter: ["(a+)+$"],
+      }),
+    ).toBe(false);
   });
 });

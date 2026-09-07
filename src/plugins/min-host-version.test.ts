@@ -1,14 +1,14 @@
+// Verifies plugin minimum host version compatibility checks.
 import { describe, expect, it } from "vitest";
-import {
-  checkMinHostVersion,
-  MIN_HOST_VERSION_FORMAT,
-  parseMinHostVersionRequirement,
-  validateMinHostVersion,
-} from "./min-host-version.js";
+import { checkMinHostVersion, parseMinHostVersionRequirement } from "./min-host-version.js";
 
 const MIN_HOST_REQUIREMENT = {
   raw: ">=2026.3.22",
   minimumLabel: "2026.3.22",
+};
+const BETA_MIN_HOST_REQUIREMENT = {
+  raw: ">=2026.5.1-beta.1",
+  minimumLabel: "2026.5.1-beta.1",
 };
 
 function expectValidHostCheck(currentVersion: string, minHostVersion?: string) {
@@ -35,36 +35,49 @@ function expectHostCheckResult(params: {
   ).toEqual(params.expected);
 }
 
-function expectInvalidMinHostVersion(minHostVersion: string | number) {
-  expect(validateMinHostVersion(minHostVersion)).toBe(MIN_HOST_VERSION_FORMAT);
-  expectHostCheckResult({
-    currentVersion: "2026.3.22",
-    minHostVersion,
-    expected: {
-      ok: false,
-      kind: "invalid",
-      error: MIN_HOST_VERSION_FORMAT,
-    },
-  });
-}
-
 describe("min-host-version", () => {
   it("accepts empty metadata", () => {
-    expect(validateMinHostVersion(undefined)).toBeNull();
     expect(parseMinHostVersionRequirement(undefined)).toBeNull();
     expectValidHostCheck("2026.3.22");
   });
 
   it("parses semver floors", () => {
     expect(parseMinHostVersionRequirement(">=2026.3.22")).toEqual(MIN_HOST_REQUIREMENT);
+    expect(parseMinHostVersionRequirement(">=2026.5.1-beta.1")).toEqual(BETA_MIN_HOST_REQUIREMENT);
+    expect(parseMinHostVersionRequirement(">=2026.5.1+20260501")).toEqual({
+      raw: ">=2026.5.1+20260501",
+      minimumLabel: "2026.5.1+20260501",
+    });
+    expect(parseMinHostVersionRequirement(">=2026.5.1-beta..1")).toBeNull();
   });
 
-  it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
-    "rejects invalid floor syntax and host checks: %p",
-    (minHostVersion) => {
-      expectInvalidMinHostVersion(minHostVersion);
-    },
-  );
+  it("can parse legacy bare semver floors for runtime upgrade compatibility", () => {
+    expect(parseMinHostVersionRequirement("2026.3.22", { allowLegacyBareSemver: true })).toEqual({
+      raw: "2026.3.22",
+      minimumLabel: "2026.3.22",
+    });
+    expect(
+      parseMinHostVersionRequirement("2026.7.2-beta.2+build.7", {
+        allowLegacyBareSemver: true,
+      }),
+    ).toEqual({
+      raw: "2026.7.2-beta.2+build.7",
+      minimumLabel: "2026.7.2-beta.2+build.7",
+    });
+    expect(
+      checkMinHostVersion({
+        currentVersion: "2026.8.1",
+        minHostVersion: "2026.7.2-beta.2",
+        allowLegacyBareSemver: true,
+      }),
+    ).toEqual({
+      ok: true,
+      requirement: {
+        raw: "2026.7.2-beta.2",
+        minimumLabel: "2026.7.2-beta.2",
+      },
+    });
+  });
 
   it.each([
     {
@@ -98,6 +111,29 @@ describe("min-host-version", () => {
     "accepts equal or newer hosts: %s",
     (currentVersion) => {
       expectValidHostCheck(currentVersion, ">=2026.3.22");
+    },
+  );
+
+  it.each([
+    {
+      currentVersion: "2026.7.2-beta.1",
+      minHostVersion: ">=2026.7.2-beta.2",
+      expectedOk: false,
+    },
+    {
+      currentVersion: "2026.7.2-beta.2",
+      minHostVersion: ">=2026.7.2",
+      expectedOk: false,
+    },
+    {
+      currentVersion: "2026.7.2",
+      minHostVersion: ">=2026.7.2-beta.2",
+      expectedOk: true,
+    },
+  ] as const)(
+    "compares prerelease precedence: $currentVersion against $minHostVersion",
+    ({ currentVersion, minHostVersion, expectedOk }) => {
+      expect(checkMinHostVersion({ currentVersion, minHostVersion }).ok).toBe(expectedOk);
     },
   );
 });

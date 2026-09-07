@@ -1,3 +1,9 @@
+// Resolution helpers derive media-understanding timeouts, prompts, byte/char
+// caps, scope decisions, model entries, and concurrency.
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -6,22 +12,46 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export type ResolvedMediaModelEntry = {
+  entry: MediaUnderstandingModelConfig;
+  secretOwnerId?: string;
+};
+
+/** Default per-provider media-understanding runtime timeout in milliseconds. */
+const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const MIN_MEDIA_TIMEOUT_MS = 1000;
+
+/** Converts configured timeout seconds into a timer-safe millisecond deadline. */
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;
-  return Math.max(1000, Math.floor(value * 1000));
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return MIN_MEDIA_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(value * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+  );
 }
 
+/** Clamps an already-millisecond runtime timeout to the shared timer bounds. */
+export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
+}
+
+/** Resolves the provider prompt and appends length guidance for non-audio outputs. */
 export function resolvePrompt(
   capability: MediaUnderstandingCapability,
   prompt?: string,
@@ -34,6 +64,7 @@ export function resolvePrompt(
   return `${base} Respond in at most ${maxChars} characters.`;
 }
 
+/** Resolves the effective max response characters for a model entry and capability. */
 export function resolveMaxChars(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -49,6 +80,7 @@ export function resolveMaxChars(params: {
   return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
 }
 
+/** Resolves the effective input byte cap for a model entry and capability. */
 export function resolveMaxBytes(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -65,13 +97,7 @@ export function resolveMaxBytes(params: {
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
-export function resolveCapabilityConfig(
-  cfg: OpenClawConfig,
-  capability: MediaUnderstandingCapability,
-): MediaUnderstandingConfig | undefined {
-  return cfg.tools?.media?.[capability];
-}
-
+/** Maps the message context to an allow/deny decision for configured media scope rules. */
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
@@ -84,89 +110,70 @@ export function resolveScopeDecision(params: {
   });
 }
 
+/** Resolves configured model entries that can handle the requested media capability. */
 export function resolveModelEntries(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingModelConfig[] {
+}): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
-  const entries = [
-    ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
-    ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
-  ];
+  const entries = sharedModels.map((entry, index) => ({
+    entry,
+    secretOwnerId: runtimeMediaModelSecretOwnerId(index),
+  }));
   if (entries.length === 0) {
     return [];
   }
 
   return entries
-    .filter(({ entry, source }) => {
+    .filter(({ entry }) => {
       const caps = resolveEffectiveMediaEntryCapabilities({
         entry,
-        source,
         providerRegistry: params.providerRegistry,
       });
       if (!caps || caps.length === 0) {
-        if (source === "shared") {
-          if (shouldLogVerbose()) {
-            logVerbose(
-              `Skipping shared media model without capabilities: ${entry.provider ?? entry.command ?? "unknown"}`,
-            );
-          }
-          return false;
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Skipping shared media model without capabilities: ${entry.provider ?? entry.command ?? "unknown"}`,
+          );
         }
-        return true;
+        return false;
       }
       return caps.includes(capability);
     })
-    .map(({ entry }) => entry);
+    .toSorted((left, right) => {
+      const preferred = config?.preferredModel?.trim();
+      if (!preferred) {
+        return 0;
+      }
+      return (
+        preferredMediaModelRank(right.entry, preferred) -
+        preferredMediaModelRank(left.entry, preferred)
+      );
+    });
 }
 
+function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred: string): number {
+  if (entry.type === "cli" || entry.command) {
+    return preferred === `cli:${entry.command ?? ""}` ? 2 : 0;
+  }
+  const model = entry.model?.trim();
+  if (!model) {
+    return preferred === `provider:${entry.provider?.trim() ?? ""}` ? 2 : 0;
+  }
+  if (preferred === `${entry.provider?.trim() ?? ""}/${model}`) {
+    return 2;
+  }
+  return preferred === model ? 1 : 0;
+}
+
+/** Resolves the bounded media-understanding task concurrency from config. */
 export function resolveConcurrency(cfg: OpenClawConfig): number {
   const configured = cfg.tools?.media?.concurrency;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
     return Math.floor(configured);
   }
   return DEFAULT_MEDIA_CONCURRENCY;
-}
-
-export function resolveEntriesWithActiveFallback(params: {
-  cfg: OpenClawConfig;
-  capability: MediaUnderstandingCapability;
-  config?: MediaUnderstandingConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-  activeModel?: { provider: string; model?: string };
-}): MediaUnderstandingModelConfig[] {
-  const entries = resolveModelEntries({
-    cfg: params.cfg,
-    capability: params.capability,
-    config: params.config,
-    providerRegistry: params.providerRegistry,
-  });
-  if (entries.length > 0) {
-    return entries;
-  }
-  if (params.config?.enabled !== true) {
-    return entries;
-  }
-  const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) {
-    return entries;
-  }
-  const activeProvider = normalizeMediaProviderId(activeProviderRaw);
-  if (!activeProvider) {
-    return entries;
-  }
-  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
-  if (!capabilities || !capabilities.includes(params.capability)) {
-    return entries;
-  }
-  return [
-    {
-      type: "provider",
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    },
-  ];
 }

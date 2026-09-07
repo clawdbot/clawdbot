@@ -1,12 +1,35 @@
+// Mattermost plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
-  resolveThreadSessionKeys,
+  buildThreadAwareOutboundSessionRoute,
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { normalizeOutboundThreadId } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+/**
+ * Reads the peer chat-kind already recorded for `peerId` in an agent session
+ * key. Agent session keys are
+ * `agent:<agentId>:mattermost:<direct|group|channel>:<peerId>[:thread:...]`, so
+ * the segment right after `mattermost:` is the authoritative inbound chat kind.
+ */
+function mattermostSessionKeyPeerKind(
+  sessionKey: string | null | undefined,
+  peerId: string,
+): "direct" | "group" | "channel" | undefined {
+  if (!sessionKey || !peerId) {
+    return undefined;
+  }
+  const match = /^agent:[^:]+:mattermost:(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
+    sessionKey,
+  );
+  const kind = match?.[1]?.toLowerCase();
+  if (!kind || match?.[2] !== peerId) {
+    return undefined;
+  }
+  return kind as "direct" | "group" | "channel";
+}
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "mattermost");
@@ -27,27 +50,47 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
+  const hasExplicitUserKind = resolvedKind === "user" || lower.startsWith("user:");
+  // User ids map to inbound DM sender ids. Channel ids do not encode whether
+  // the conversation is public, private, or a group DM, so they stay inexact.
+  const recipientSessionExact = isUser && hasExplicitUserKind && /^[a-z0-9]{26}$/.test(rawId);
+  // A Mattermost private channel / group DM is authoritatively `group`, but it is
+  // addressed as `channel:<id>` (the same prefix as a public channel). Without an
+  // authoritative signal the outbound route would key it as `channel`, forking a
+  // phantom `channel:<id>` session from the inbound `group:<id>` one and breaking
+  // threaded/scheduled delivery (#95646). Honor a group signal from the resolved
+  // target, an explicit `group:` prefix, or the inbound session key for this peer.
+  const isGroup =
+    !isUser &&
+    (resolvedKind === "group" ||
+      (resolvedKind !== "channel" &&
+        (lower.startsWith("group:") ||
+          mattermostSessionKeyPeerKind(params.currentSessionKey, rawId) === "group")));
+  const kind: "direct" | "group" | "channel" = isUser ? "direct" : isGroup ? "group" : "channel";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "mattermost",
     accountId: params.accountId,
+    recipientSessionExact,
     peer: {
-      kind: isUser ? "direct" : "channel",
+      kind,
       id: rawId,
     },
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
+    chatType: kind,
+    // Origin identity must match inbound; only `to` uses the channel wire address.
+    from: isUser ? `mattermost:${rawId}` : `mattermost:${kind}:${rawId}`,
+    // Wire target stays `channel:<id>` for non-DMs: Mattermost posts to the channel
+    // id regardless of private/public, and `parseMattermostTarget` only accepts
+    // `channel:`/`user:`. The `group` distinction lives in the session key (peer.kind).
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
-  const threadId = normalizeOutboundThreadId(params.replyToId ?? params.threadId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: baseRoute.baseSessionKey,
-    threadId,
+  return buildThreadAwareOutboundSessionRoute({
+    route: baseRoute,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    currentSessionKey: params.currentSessionKey,
+    canRecoverCurrentThread: ({ route }) =>
+      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
-  return {
-    ...baseRoute,
-    sessionKey: threadKeys.sessionKey,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
 }

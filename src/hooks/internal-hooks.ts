@@ -5,19 +5,25 @@
  * like command processing, session lifecycle, etc.
  */
 
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionsPatchParams } from "../gateway/protocol/schema/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearLegacyPluginInternalHooks,
+  listLegacyPluginInternalHookEventKeys,
+  listLegacyPluginInternalHooks,
+} from "../plugins/legacy-internal-hook-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
   InternalHookEventType,
   InternalHookHandler,
 } from "./internal-hook-types.js";
+import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
 export type AgentBootstrapHookContext = {
@@ -58,7 +64,7 @@ export type MessageReceivedHookContext = {
   content: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
-  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  /** Channel identifier (for example "chat" or "support-chat") */
   channelId: string;
   /** Provider account ID for multi-account setups */
   accountId?: string;
@@ -66,14 +72,14 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: MessageHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
-};
-
-export type MessageReceivedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "received";
-  context: MessageReceivedHookContext;
 };
 
 export type MessageSentHookContext = {
@@ -85,7 +91,7 @@ export type MessageSentHookContext = {
   success: boolean;
   /** Error message if sending failed */
   error?: string;
-  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  /** Channel identifier (for example "chat" or "support-chat") */
   channelId: string;
   /** Provider account ID for multi-account setups */
   accountId?: string;
@@ -99,12 +105,6 @@ export type MessageSentHookContext = {
   groupId?: string;
 };
 
-export type MessageSentHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "sent";
-  context: MessageSentHookContext;
-};
-
 type MessageEnrichedBodyHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
@@ -116,7 +116,7 @@ type MessageEnrichedBodyHookContext = {
   bodyForAgent?: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
-  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  /** Channel identifier (for example "chat" or "support-chat") */
   channelId: string;
   /** Conversation/chat ID */
   conversationId?: string;
@@ -132,21 +132,21 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Path to the media file that was transcribed */
+  /** Ordered media facts available to preprocessing/transcription hooks. */
+  media?: MessageHookMediaFact[];
+  /** Original facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
+  /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
-  /** MIME type of the media */
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   mediaType?: string;
 };
 
 export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
   /** The transcribed text from audio */
   transcript: string;
-};
-
-export type MessageTranscribedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "transcribed";
-  context: MessageTranscribedHookContext;
 };
 
 export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
@@ -156,12 +156,6 @@ export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
   groupId?: string;
-};
-
-export type MessagePreprocessedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "preprocessed";
-  context: MessagePreprocessedHookContext;
 };
 
 export type SessionPatchHookContext = {
@@ -252,6 +246,7 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
  */
 export function clearInternalHooks(): void {
   handlers.clear();
+  clearLegacyPluginInternalHooks();
 }
 
 export function setInternalHooksEnabled(enabled: boolean): void {
@@ -262,12 +257,15 @@ export function setInternalHooksEnabled(enabled: boolean): void {
  * Get all registered event keys (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
   return (
-    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+    (handlers.get(type)?.length ?? 0) + listLegacyPluginInternalHooks(type).length > 0 ||
+    (handlers.get(`${type}:${action}`)?.length ?? 0) +
+      listLegacyPluginInternalHooks(`${type}:${action}`).length >
+      0
   );
 }
 
@@ -291,8 +289,16 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  // An admitted event finishes its snapshot even if a handler awaits across a reload or disable.
+  const typeHandlers = [
+    ...(handlers.get(event.type) ?? []),
+    ...listLegacyPluginInternalHooks(event.type),
+  ];
+  const specificKey = `${event.type}:${event.action}`;
+  const specificHandlers = [
+    ...(handlers.get(specificKey) ?? []),
+    ...listLegacyPluginInternalHooks(specificKey),
+  ];
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {
@@ -354,13 +360,6 @@ function hasStringContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "string";
 }
 
-function hasBooleanContextField<T extends Record<string, unknown>>(
-  context: Partial<T>,
-  key: keyof T,
-): boolean {
-  return typeof context[key] === "boolean";
-}
-
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
@@ -380,62 +379,6 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
     return false;
   }
   return Boolean(getHookContext<GatewayStartupHookContext>(event));
-}
-
-export function isMessageReceivedEvent(
-  event: InternalHookEvent,
-): event is MessageReceivedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "received")) {
-    return false;
-  }
-  const context = getHookContext<MessageReceivedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
-}
-
-export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "sent")) {
-    return false;
-  }
-  const context = getHookContext<MessageSentHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return (
-    hasStringContextField(context, "to") &&
-    hasStringContextField(context, "channelId") &&
-    hasBooleanContextField(context, "success")
-  );
-}
-
-export function isMessageTranscribedEvent(
-  event: InternalHookEvent,
-): event is MessageTranscribedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "transcribed")) {
-    return false;
-  }
-  const context = getHookContext<MessageTranscribedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return (
-    hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
-  );
-}
-
-export function isMessagePreprocessedEvent(
-  event: InternalHookEvent,
-): event is MessagePreprocessedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "preprocessed")) {
-    return false;
-  }
-  const context = getHookContext<MessagePreprocessedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return hasStringContextField(context, "channelId");
 }
 
 export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {

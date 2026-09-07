@@ -1,8 +1,12 @@
-import { collectChannelLegacyConfigRules } from "../channels/plugins/legacy-config.js";
-import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
+// Applies legacy config rules during load-time compatibility checks.
+import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-migrations.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
+export { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+export { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
+
+// Legacy checks use raw dotted paths so doctor can report exact config keys.
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
@@ -14,25 +18,12 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
-function collectExplicitRuleOwnedChannelIds(
-  extraRules: readonly LegacyConfigRule[],
-): ReadonlySet<string> | undefined {
-  const channelIds = new Set<string>();
-  for (const rule of extraRules) {
-    const [first, second] = rule.path;
-    if (first !== "channels" || typeof second !== "string" || second === "defaults") {
-      continue;
-    }
-    channelIds.add(second);
-  }
-  return channelIds.size > 0 ? channelIds : undefined;
-}
-
+/** Finds legacy config issues using built-in rules plus optional caller rules. */
 export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   extraRules: LegacyConfigRule[] = [],
-  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
@@ -41,12 +32,7 @@ export function findLegacyConfigIssues(
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
-  const explicitRuleOwnedChannelIds = collectExplicitRuleOwnedChannelIds(extraRules);
-  for (const rule of [
-    ...LEGACY_CONFIG_RULES,
-    ...collectChannelLegacyConfigRules(raw, touchedPaths, explicitRuleOwnedChannelIds),
-    ...extraRules,
-  ]) {
+  for (const rule of [...LEGACY_CONFIG_RULES, ...extraRules]) {
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {

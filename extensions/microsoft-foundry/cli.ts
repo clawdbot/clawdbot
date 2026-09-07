@@ -1,8 +1,12 @@
-import { execFile, execFileSync, spawn } from "node:child_process";
+// Microsoft Foundry plugin module implements cli behavior.
+import { execFileSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { runCommandWithTimeout, runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
@@ -33,7 +37,7 @@ function summarizeAzErrorMessage(raw: string): string {
   if (/aadsts\d+/i.test(normalized)) {
     return "Azure login failed for the selected tenant. Re-run `az login --use-device-code` and confirm the tenant is correct.";
   }
-  return normalized.slice(0, 300);
+  return truncateUtf16Safe(normalized, 300);
 }
 
 function buildAzCommandError(error: Error, stderr: string, stdout: string): Error {
@@ -48,30 +52,25 @@ export function execAz(args: string[]): string {
         encoding: "utf-8",
         timeout: 30_000,
         shell: process.platform === "win32",
+        killSignal: "SIGKILL",
       }),
     ) ?? ""
   );
 }
 
-export async function execAzAsync(args: string[]): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    execFile(
-      "az",
-      args,
-      {
-        encoding: "utf-8",
-        timeout: 30_000,
-        shell: process.platform === "win32",
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(buildAzCommandError(error, stderr ?? "", stdout ?? ""));
-          return;
-        }
-        resolve(normalizeStringifiedOptionalString(stdout) ?? "");
-      },
+async function execAzAsync(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await runExec("az", args, { logOutput: false, timeoutMs: 30_000 });
+    return normalizeStringifiedOptionalString(stdout) ?? "";
+  } catch (error) {
+    const commandError = error instanceof Error ? error : new Error(String(error));
+    const output = error as { stderr?: unknown; stdout?: unknown };
+    throw buildAzCommandError(
+      commandError,
+      typeof output.stderr === "string" ? output.stderr : "",
+      typeof output.stdout === "string" ? output.stdout : "",
     );
-  });
+  }
 }
 
 export function isAzCliInstalled(): boolean {
@@ -85,7 +84,7 @@ export function isAzCliInstalled(): boolean {
 
 export function getLoggedInAccount(): AzAccount | null {
   try {
-    return JSON.parse(execAz(["account", "show", "--output", "json"])) as AzAccount;
+    return parseAzJson(execAz(["account", "show", "--output", "json"]), "account") as AzAccount;
   } catch {
     return null;
   }
@@ -93,8 +92,9 @@ export function getLoggedInAccount(): AzAccount | null {
 
 export function listSubscriptions(): AzAccount[] {
   try {
-    const subs = JSON.parse(
+    const subs = parseAzJson(
       execAz(["account", "list", "--output", "json", "--all"]),
+      "subscriptions",
     ) as AzAccount[];
     return subs.filter((sub) => sub.state === "Enabled");
   } catch {
@@ -102,20 +102,28 @@ export function listSubscriptions(): AzAccount[] {
   }
 }
 
+function parseAzJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`Azure CLI returned malformed ${label} JSON.`);
+  }
+}
+
 type AccessTokenParams = {
+  scope?: string;
   subscriptionId?: string;
   tenantId?: string;
 };
 
 function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
-  const args = [
-    "account",
-    "get-access-token",
-    "--resource",
-    COGNITIVE_SERVICES_RESOURCE,
-    "--output",
-    "json",
-  ];
+  const args = ["account", "get-access-token"];
+  if (params?.scope) {
+    args.push("--scope", params.scope);
+  } else {
+    args.push("--resource", COGNITIVE_SERVICES_RESOURCE);
+  }
+  args.push("--output", "json");
   if (params?.subscriptionId) {
     args.push("--subscription", params.subscriptionId);
   } else if (params?.tenantId) {
@@ -125,14 +133,20 @@ function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
 }
 
 export function getAccessTokenResult(params?: AccessTokenParams): AzAccessToken {
-  return JSON.parse(execAz(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(execAz(buildAccessTokenArgs(params)), "access token") as AzAccessToken;
 }
 
 export async function getAccessTokenResultAsync(
   params?: AccessTokenParams,
 ): Promise<AzAccessToken> {
-  return JSON.parse(await execAzAsync(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(
+    await execAzAsync(buildAccessTokenArgs(params)),
+    "access token",
+  ) as AzAccessToken;
 }
+
+// Entra device codes default to 15 minutes; keep five minutes for az to finish.
+const AZ_LOGIN_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function azLoginDeviceCode(): Promise<void> {
   return azLoginDeviceCodeWithOptions({});
@@ -142,58 +156,49 @@ export async function azLoginDeviceCodeWithOptions(params: {
   tenantId?: string;
   allowNoSubscriptions?: boolean;
 }): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const maxCapturedLoginOutputChars = 8_000;
-    const args = [
-      "login",
-      "--use-device-code",
-      ...(params.tenantId ? ["--tenant", params.tenantId] : []),
-      ...(params.allowNoSubscriptions ? ["--allow-no-subscriptions"] : []),
-    ];
-    const child = spawn("az", args, {
-      stdio: ["inherit", "pipe", "pipe"],
-      shell: process.platform === "win32",
-    });
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    let stdoutLen = 0;
-    let stderrLen = 0;
-    const appendBoundedChunk = (chunks: string[], text: string, len: number): number => {
-      if (!text) {
-        return len;
-      }
-      chunks.push(text);
-      let total = len + text.length;
-      while (total > maxCapturedLoginOutputChars && chunks.length > 0) {
-        const removed = chunks.shift();
-        total -= removed?.length ?? 0;
-      }
-      return total;
-    };
-    child.stdout?.on("data", (chunk) => {
-      const text = String(chunk);
-      stdoutLen = appendBoundedChunk(stdoutChunks, text, stdoutLen);
-      process.stdout.write(text);
-    });
-    child.stderr?.on("data", (chunk) => {
-      const text = String(chunk);
-      stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
-      process.stderr.write(text);
-    });
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const output = normalizeOptionalString([...stderrChunks, ...stdoutChunks].join("")) ?? "";
-      reject(
-        new Error(
-          output
-            ? `az login exited with code ${code}: ${output}`
-            : `az login exited with code ${code}`,
-        ),
-      );
-    });
-    child.on("error", reject);
+  const maxCapturedLoginOutputChars = 8_000;
+  const args = [
+    "login",
+    "--use-device-code",
+    ...(params.tenantId ? ["--tenant", params.tenantId] : []),
+    ...(params.allowNoSubscriptions ? ["--allow-no-subscriptions"] : []),
+  ];
+  const chunks = { stdout: [] as string[], stderr: [] as string[] };
+  const lengths = { stdout: 0, stderr: 0 };
+  const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+  const appendOutput = (stream: "stdout" | "stderr", text: string): void => {
+    if (!text) {
+      return;
+    }
+    chunks[stream].push(text);
+    lengths[stream] += text.length;
+    while (lengths[stream] > maxCapturedLoginOutputChars && chunks[stream].length > 0) {
+      lengths[stream] -= chunks[stream].shift()?.length ?? 0;
+    }
+    process[stream].write(text);
+  };
+
+  const result = await runCommandWithTimeout(["az", ...args], {
+    timeoutMs: AZ_LOGIN_TIMEOUT_MS,
+    killProcessTree: true,
+    outputCapture: "discard",
+    onOutputChunk: (chunk, stream) => {
+      appendOutput(stream, decoders[stream].write(chunk));
+    },
   });
+
+  appendOutput("stdout", decoders.stdout.end());
+  appendOutput("stderr", decoders.stderr.end());
+  if (result.termination === "timeout") {
+    throw new Error("az login timed out after 20 minutes");
+  }
+  if (result.code === 0) {
+    return;
+  }
+  const output = normalizeOptionalString([...chunks.stderr, ...chunks.stdout].join("")) ?? "";
+  throw new Error(
+    output
+      ? `az login exited with code ${result.code}: ${output}`
+      : `az login exited with code ${result.code}`,
+  );
 }

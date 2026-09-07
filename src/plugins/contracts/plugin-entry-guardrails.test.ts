@@ -1,9 +1,10 @@
+// Plugin entry guardrail tests cover allowed plugin entrypoint imports and exports.
 import { existsSync, readFileSync } from "node:fs";
 import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../bundled-plugin-metadata.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const RUNTIME_ENTRY_HELPER_RE = /(^|\/)plugin-entry\.runtime\.[cm]?[jt]s$/;
@@ -32,7 +33,7 @@ const RE_EXPORT_STAR_RE =
 const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
 
 function listBundledPluginRoots() {
-  return loadPluginManifestRegistry({})
+  return loadPluginManifestRegistryCore({})
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => ({
       pluginId: plugin.id,
@@ -255,7 +256,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("does not advertise runtime helper sidecars as bundled plugin entry extensions", () => {
@@ -280,7 +281,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
@@ -292,7 +293,7 @@ describe("plugin entry guardrails", () => {
         }).map((failure) => `${pluginId}: ${failure}`),
     );
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
@@ -304,7 +305,7 @@ describe("plugin entry guardrails", () => {
         import "./setup.js";
         export { x };
         export * from "./barrel.js";
-        import { y } from "openclaw/plugin-sdk/testing";
+        import { y } from "openclaw/plugin-sdk/core";
       `,
       }).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);

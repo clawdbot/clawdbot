@@ -1,0 +1,1498 @@
+package ai.openclaw.app.chat
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+class ChatControllerTranscriptCacheTest {
+  private val gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+
+  private fun CoroutineScope.createCachedController(
+    cache: ChatTranscriptCache,
+    cacheScope: () -> ChatCacheScope? = { gatewayScope },
+    currentDefaultAgentId: () -> String? = { "main" },
+    currentDefaultAgentRevision: () -> Long = { 0L },
+    onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
+    onOfflineDefaultAgentRestored: (String) -> Unit = {},
+    requestGateway: suspend (method: String, paramsJson: String?) -> String,
+  ): ChatController =
+    createChatController(
+      transcriptCache = cache,
+      cacheScope = cacheScope,
+      currentDefaultAgentId = currentDefaultAgentId,
+      currentDefaultAgentRevision = currentDefaultAgentRevision,
+      onSessionDeleted = onSessionDeleted,
+      onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+      requestGateway = requestGateway,
+    )
+
+  private data class TranscriptKey(
+    val gatewayId: String,
+    val agentId: String,
+    val sessionKey: String,
+  )
+
+  private data class SavedTranscript(
+    val gatewayId: String,
+    val agentId: String,
+    val sessionKey: String,
+    val messages: List<ChatMessage>,
+  )
+
+  private data class SavedSessions(
+    val gatewayId: String,
+    val agentId: String,
+    val sessions: List<ChatSessionEntry>,
+  )
+
+  private class FakeTranscriptCache : ChatTranscriptCache {
+    val lastDefaultAgents = mutableMapOf<String, String>()
+    val transcripts = mutableMapOf<TranscriptKey, List<ChatMessage>>()
+    var sessions: List<ChatSessionEntry> = emptyList()
+    val sessionsByOwner = mutableMapOf<Pair<String, String>, List<ChatSessionEntry>>()
+    val savedTranscripts = mutableListOf<SavedTranscript>()
+    val savedSessions = mutableListOf<SavedSessions>()
+    val retainedSessionKeys = mutableListOf<String?>()
+    val deletedSessions = mutableListOf<Triple<String, String, String>>()
+    var beforeLastDefaultAgentLoad: suspend (String) -> Unit = {}
+    var beforeLastDefaultAgentSave: suspend (String, String) -> Unit = { _, _ -> }
+    var beforeSessionsLoad: suspend (String, String) -> Unit = { _, _ -> }
+
+    override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
+      val cached = lastDefaultAgents[gatewayId]
+      beforeLastDefaultAgentLoad(gatewayId)
+      return cached
+    }
+
+    override suspend fun saveLastDefaultAgentId(
+      gatewayId: String,
+      agentId: String,
+    ) {
+      beforeLastDefaultAgentSave(gatewayId, agentId)
+      lastDefaultAgents[gatewayId] = agentId
+    }
+
+    override suspend fun loadSessions(
+      gatewayId: String,
+      agentId: String,
+    ): List<ChatSessionEntry> {
+      val cached = sessionsByOwner[gatewayId to agentId] ?: sessions
+      beforeSessionsLoad(gatewayId, agentId)
+      return cached
+    }
+
+    override suspend fun loadTranscript(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ): List<ChatMessage> = transcripts[TranscriptKey(gatewayId, agentId, sessionKey)].orEmpty()
+
+    override suspend fun saveSessions(
+      gatewayId: String,
+      agentId: String,
+      sessions: List<ChatSessionEntry>,
+      retainedSessionKey: String?,
+    ) {
+      savedSessions += SavedSessions(gatewayId, agentId, sessions)
+      retainedSessionKeys += retainedSessionKey
+    }
+
+    override suspend fun saveTranscript(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+      messages: List<ChatMessage>,
+      sessionInfo: ChatSessionEntry?,
+    ) {
+      savedTranscripts += SavedTranscript(gatewayId, agentId, sessionKey, messages)
+    }
+
+    override suspend fun deleteSession(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ) {
+      deletedSessions += Triple(gatewayId, agentId, sessionKey)
+    }
+
+    override suspend fun clearGateway(gatewayId: String) {
+      lastDefaultAgents.remove(gatewayId)
+      transcripts.keys.removeAll { it.gatewayId == gatewayId }
+      sessionsByOwner.keys.removeAll { it.first == gatewayId }
+      savedTranscripts.removeAll { it.gatewayId == gatewayId }
+      savedSessions.removeAll { it.gatewayId == gatewayId }
+    }
+  }
+
+  private fun cachedMessage(
+    text: String,
+    role: String = "assistant",
+    timestampMs: Long = 1L,
+  ): ChatMessage =
+    ChatMessage(
+      id = "cached-$text",
+      role = role,
+      content = listOf(ChatMessageContent(type = "text", text = text)),
+      timestampMs = timestampMs,
+    )
+
+  @Test
+  fun offlineColdOpenShowsCachedTranscriptAndSessionsAndQueuesSend() =
+    runTest {
+      for (mainSessionKey in listOf("main", "agent:main:node-offline")) {
+        val cache = FakeTranscriptCache()
+        cache.transcripts[TranscriptKey("gateway-a", "main", mainSessionKey)] =
+          listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
+        cache.sessions = listOf(ChatSessionEntry(key = mainSessionKey, updatedAtMs = 5, displayName = "Main"))
+        val controller =
+          createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+
+        controller.loadCurrent(mainSessionKey)
+        advanceUntilIdle()
+
+        assertEquals(mainSessionKey, controller.sessionKey.value)
+        assertEquals(
+          listOf("cached hello", "cached reply"),
+          controller.messages.value.map { it.content.single().text },
+        )
+        assertTrue(controller.messagesFromCache.value)
+        assertEquals(listOf(mainSessionKey), controller.sessions.value.map { it.key })
+        assertFalse(controller.healthOk.value)
+
+        val accepted =
+          controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
+        assertTrue(accepted)
+        runCurrent()
+        val queued = controller.outboxItems.value.single()
+        assertEquals(ChatOutboxStatus.Queued, queued.status)
+        assertEquals("hi", queued.text)
+        assertEquals(listOf("cached hello", "cached reply"), controller.messages.value.map { it.content.single().text })
+      }
+    }
+
+  @Test
+  fun fullHistoryClearsOmittedRunUsageIndependentlyOfTranscriptRows() =
+    runTest {
+      val boundary = """{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}"""
+      val reset = """{"role":"system","content":[],"__openclaw":{"kind":"reset"}}"""
+      val assistant = """{"role":"assistant","content":"reply without usage"}"""
+      val transcripts = listOf("", assistant, "$boundary,$assistant", "$reset,$assistant", boundary, reset)
+      for (messages in transcripts) {
+        val cache = FakeTranscriptCache()
+        cache.sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 1L,
+              inputTokens = 18_420L,
+              outputTokens = 840L,
+              estimatedCostUsd = 0.023,
+            ),
+          )
+        val controller =
+          createCachedController(cache) { method, _ ->
+            when (method) {
+              "chat.history" -> {
+                """{"sessionId":"session-1","messages":[$messages],"sessionInfo":{"key":"main","updatedAt":999999,"totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+              }
+
+              "sessions.list" -> {
+                error("list unavailable; history must own its snapshot")
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+
+        controller.load("main")
+        advanceUntilIdle()
+
+        val row = controller.sessions.value.single()
+        assertEquals("History must clear missing input: $messages", null, row.inputTokens)
+        assertEquals(null, row.outputTokens)
+        assertEquals(null, row.estimatedCostUsd)
+        assertEquals(24_700L, row.totalTokens)
+        assertEquals(272_000L, row.contextTokens)
+        assertEquals(true, row.totalTokensFresh)
+      }
+    }
+
+  @Test
+  fun fullHistoryUsageDoesNotDependOnRetainedAssistantOrBoundaryTimestamps() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","inputTokens":2100,"outputTokens":160,"estimatedCostUsd":0.0045}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val row = controller.sessions.value.single()
+      assertEquals(2_100L, row.inputTokens)
+      assertEquals(160L, row.outputTokens)
+      assertEquals(0.0045, row.estimatedCostUsd)
+    }
+
+  @Test
+  fun partialMetadataEventsPreserveRunUsageButFullListClearsOmissions() =
+    runTest {
+      var usage = """, "inputTokens":18420, "outputTokens":840, "estimatedCostUsd":0.023"""
+      val controller =
+        createChatController { method, _ ->
+          if (method == "sessions.list") """{"sessions":[{"key":"main"$usage}]}""" else emptyChatGatewayResponse(method)
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      for (event in listOf("sessions.changed", "session.message")) {
+        controller.handleGatewayEvent(event, """{"session":{"key":"main","agentId":"main","label":"renamed","updatedAt":999999}}""")
+        advanceUntilIdle()
+        val row = controller.sessions.value.single()
+        assertEquals(18_420L, row.inputTokens)
+        assertEquals(840L, row.outputTokens)
+        assertEquals(0.023, row.estimatedCostUsd)
+      }
+
+      usage = ""
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val cleared = controller.sessions.value.single()
+      assertEquals(null, cleared.inputTokens)
+      assertEquals(null, cleared.outputTokens)
+      assertEquals(null, cleared.estimatedCostUsd)
+    }
+
+  @Test
+  fun compactionNotificationRefreshesTheAuthoritativeUsageSnapshot() =
+    runTest {
+      var usage = """, "inputTokens":18420, "outputTokens":840, "estimatedCostUsd":0.023"""
+      var messages = """{"role":"assistant","content":"before"}"""
+      val controller =
+        createChatController { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","messages":[$messages],"sessionInfo":{"key":"main"$usage}}"""
+            "sessions.list" -> """{"sessions":[{"key":"main"$usage}]}"""
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        840L,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      usage = ""
+      messages = """{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}"""
+      // Real compact notifications have a flattened session projection but omit cleared usage.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"compact","compacted":true,"sessionKey":"main","agentId":"main","permissionMode":null,"permissionModePending":false,"totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}""",
+      )
+      advanceUntilIdle()
+      val cleared = controller.sessions.value.single()
+      assertEquals(null, cleared.inputTokens)
+      assertEquals(null, cleared.outputTokens)
+      assertEquals(null, cleared.estimatedCostUsd)
+      assertEquals(
+        "compaction",
+        controller.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
+    }
+
+  @Test
+  fun sessionSelectionCandidatesFallBackToRequestedOwnersCacheWhenOffline() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.sessionsByOwner["gateway-a" to "scout"] =
+        listOf(
+          ChatSessionEntry(
+            key = "agent:scout:cached",
+            updatedAtMs = 10,
+            ownerAgentId = "scout",
+          ),
+        )
+      val controller =
+        createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+
+      val candidates = controller.fetchSessionSelectionCandidates("scout").orEmpty()
+
+      assertEquals(listOf("agent:scout:cached"), candidates.map { it.key })
+      assertEquals(listOf("scout"), candidates.map { it.ownerAgentId })
+      assertTrue(controller.sessions.value.isEmpty())
+    }
+
+  @Test
+  fun sessionSelectionCandidateCacheCancellationStopsBeforeNetworkRequest() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.beforeSessionsLoad = { _, _ -> throw CancellationException("superseded") }
+      var networkRequests = 0
+      val controller =
+        createCachedController(cache) { _, _ ->
+          networkRequests += 1
+          error("network must not run after cancellation")
+        }
+
+      try {
+        controller.fetchSessionSelectionCandidates("scout")
+        throw AssertionError("expected CancellationException to propagate")
+      } catch (_: CancellationException) {
+        // Owner lookup cancellation must stop before a stale network fallback can start.
+      }
+
+      assertEquals(0, networkRequests)
+    }
+
+  @Test
+  fun delayedCachedGlobalDigestIsScopedToTheRequestedOwner() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.sessionsByOwner["gateway-a" to "work"] =
+        listOf(
+          ChatSessionEntry(
+            key = "global",
+            updatedAtMs = 5,
+            observerDigest =
+              ai.openclaw.app.gateway.SessionObserverDigest(
+                sessionKey = "global",
+                agentId = "main",
+                runId = "run-main",
+                revision = 3,
+                updatedAt = 300,
+                headline = "Main owner",
+                health = "on-track",
+              ),
+          ),
+        )
+      val loadStarted = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      cache.beforeSessionsLoad = { gatewayId, agentId ->
+        if (gatewayId == "gateway-a" && agentId == "work") {
+          loadStarted.complete(Unit)
+          releaseLoad.await()
+        }
+      }
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { "work" },
+        ) { _, _ -> throw IllegalStateException("offline") }
+
+      controller.load("global", ownerAgentId = "work")
+      loadStarted.await()
+      releaseLoad.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("global"), controller.sessions.value.map { it.key })
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .observerDigest,
+      )
+    }
+
+  @Test
+  fun offlineCachedOwnerRebuildsCanonicalMainSessionBeforeComposerSend() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.lastDefaultAgents["gateway-a"] = "work"
+      lateinit var controller: ChatController
+      controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { null },
+          onOfflineDefaultAgentRestored = { agentId ->
+            controller.applyMainSessionKey("agent:$agentId:node-test")
+          },
+        ) { _, _ -> throw IllegalStateException("offline") }
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val owner = ChatComposerOwner("gateway-a", "work", "agent:work:node-test")
+      assertEquals("agent:work:node-test", controller.sessionKey.value)
+      assertTrue(controller.isCurrentComposerOwner(owner))
+    }
+
+  @Test
+  fun restoredPendingRunKeepsCachedTranscriptVisible() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.transcripts[TranscriptKey("gateway-a", "main", "main")] = listOf(cachedMessage("cached history"))
+      var historyAvailable = true
+      val controller =
+        createCachedController(cache) { method, _ ->
+          when (method) {
+            "chat.send" -> {
+              """{"runId":"run-pending","status":"started"}"""
+            }
+
+            "chat.history" -> {
+              if (!historyAvailable) throw IllegalStateException("offline")
+              historyResponse("session-main", listOf(ReplayHistoryMessage("assistant", "cached history", 1L)))
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("main")
+      runCurrent()
+      assertTrue(controller.sendMessageAwaitAcceptance("pending turn", "off", emptyList()))
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
+      historyAvailable = false
+
+      controller.switchSession("agent:other:main")
+      runCurrent()
+      controller.switchSession("main")
+      runCurrent()
+
+      assertEquals(
+        listOf("cached history", "pending turn"),
+        controller.messages.value.map { it.content.single().text },
+      )
+      assertTrue(controller.messagesFromCache.value)
+    }
+
+  @Test
+  fun cachedTranscriptEmitsFirstThenLiveHistoryReplacesWholesale() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.transcripts[TranscriptKey("gateway-a", "main", "main")] =
+        listOf(
+          cachedMessage("cached hello", role = "user", timestampMs = 10).copy(senderLabel = "Alex (Slack)"),
+          cachedMessage("stale line", role = "assistant", timestampMs = 11),
+        )
+      val historyGate = CompletableDeferred<Unit>()
+      val controller =
+        createCachedController(cache) { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              historyGate.await()
+              """
+              {
+                "sessionId": "session-1",
+                "messages": [
+                  { "role": "user", "content": "cached hello", "timestamp": 10, "senderLabel": "Alex (Slack)" },
+                  { "role": "assistant", "content": "fresh reply", "timestamp": 20 }
+                ]
+              }
+              """.trimIndent()
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("main")
+      runCurrent()
+
+      // Cached transcript is visible while chat.history is still in flight.
+      assertTrue(controller.messagesFromCache.value)
+      assertEquals(
+        listOf("cached hello", "stale line"),
+        controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
+      val cachedFirstMessageId =
+        controller.messages.value
+          .first()
+          .id
+
+      historyGate.complete(Unit)
+      advanceUntilIdle()
+
+      assertFalse(controller.messagesFromCache.value)
+      assertEquals(
+        listOf("cached hello", "fresh reply"),
+        controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
+      // Existing reconciliation keeps stable ids for rows the live history confirms.
+      val liveFirstMessageId =
+        controller.messages.value
+          .first()
+          .id
+      assertEquals(cachedFirstMessageId, liveFirstMessageId)
+      // Live history is written through to the cache.
+      val savedTranscript = cache.savedTranscripts.last()
+      assertEquals("gateway-a", savedTranscript.gatewayId)
+      assertEquals("main", savedTranscript.agentId)
+      assertEquals("main", savedTranscript.sessionKey)
+      assertEquals(
+        listOf("cached hello", "fresh reply"),
+        savedTranscript.messages.map { it.content.single().text },
+      )
+      assertEquals(listOf("Alex (Slack)", null), savedTranscript.messages.map { it.senderLabel })
+    }
+
+  @Test
+  fun switchSessionOfflineShowsCachedTranscriptForThatSession() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.transcripts[TranscriptKey("gateway-a", "other", "agent:other:main")] = listOf(cachedMessage("other session text"))
+      val controller =
+        createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(emptyList<ChatMessage>(), controller.messages.value)
+
+      controller.switchSession("agent:other:main")
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf("other session text"),
+        controller.messages.value.map { it.content.single().text },
+      )
+      assertTrue(controller.messagesFromCache.value)
+    }
+
+  @Test
+  fun sessionDeleteEventPurgesCachedSession() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val deletions = mutableListOf<ChatSessionDeletion>()
+      val controller =
+        createCachedController(
+          cache,
+          onSessionDeleted = deletions::add,
+        ) { method, _ -> emptyChatGatewayResponse(method) }
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"agent:old:main"}""",
+      )
+      advanceUntilIdle()
+
+      assertEquals(listOf(Triple("gateway-a", "old", "agent:old:main")), cache.deletedSessions)
+      assertEquals(
+        listOf(ChatSessionDeletion("gateway-a", "old", "agent:old:main", "main")),
+        deletions,
+      )
+    }
+
+  @Test
+  fun unscopedDeleteEventDoesNotGuessACacheOwner() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      var sessionListRequests = 0
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { "new-default" },
+        ) { method, _ ->
+          if (method == "sessions.list") sessionListRequests += 1
+          if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+        }
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"custom"}""",
+      )
+      advanceUntilIdle()
+
+      assertTrue(cache.deletedSessions.isEmpty())
+      assertEquals(1, sessionListRequests)
+    }
+
+  @Test
+  fun ownerlessDeleteDoesNotRetireSelectedSessionOutsideTheDrawerFilter() =
+    runTest {
+      for (sessionArchived in listOf(false, true)) {
+        val cache = FakeTranscriptCache()
+        val session = """{"key":"global","sessionId":"global-id","archived":$sessionArchived}"""
+        val controller =
+          createCachedController(cache, currentDefaultAgentId = { "owner-a" }) { method, params ->
+            when (method) {
+              "chat.history" -> {
+                """{"sessionId":"global-id","messages":[],"sessionInfo":$session}"""
+              }
+
+              "sessions.list" -> {
+                val archived = params.orEmpty().contains("\"archived\":true")
+                if (archived == sessionArchived) {
+                  """{"sessions":[$session],"hasMore":false}"""
+                } else {
+                  """{"sessions":[],"hasMore":false}"""
+                }
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+        controller.load("global", ownerAgentId = "owner-a")
+        advanceUntilIdle()
+        controller.refreshSessions(archived = !sessionArchived)
+        advanceUntilIdle()
+        assertEquals(
+          "global-id",
+          controller.sessions.value
+            .single { it.key == "global" }
+            .sessionId,
+        )
+
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"reason":"delete","sessionKey":"global"}""",
+        )
+        advanceUntilIdle()
+
+        assertEquals("global", controller.sessionKey.value)
+        assertTrue(cache.deletedSessions.isEmpty())
+        assertEquals(
+          "global-id",
+          controller.sessions.value
+            .single { it.key == "global" }
+            .sessionId,
+        )
+      }
+    }
+
+  @Test
+  fun ownerlessDeleteRefreshDoesNotCrossOwnersBeforeOwnedConfirmation() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val refreshStarted = CompletableDeferred<Unit>()
+      val releaseRefresh = CompletableDeferred<Unit>()
+      var deleting = false
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { "owner-a" },
+        ) { method, params ->
+          if (method == "sessions.list") {
+            val ownerA = params.orEmpty().contains("\"agentId\":\"owner-a\"")
+            if (deleting && ownerA) {
+              refreshStarted.complete(Unit)
+              releaseRefresh.await()
+              """{"sessions":[]}"""
+            } else {
+              val sessionId = if (ownerA) "owner-a-id" else "owner-b-id"
+              """{"sessions":[{"key":"global","sessionId":"$sessionId"}]}"""
+            }
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("global", ownerAgentId = "owner-a")
+      advanceUntilIdle()
+
+      deleting = true
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"global"}""",
+      )
+      refreshStarted.await()
+
+      try {
+        controller.load("global", ownerAgentId = "owner-b")
+        runCurrent()
+      } finally {
+        releaseRefresh.complete(Unit)
+      }
+      advanceUntilIdle()
+
+      assertEquals("global", controller.sessionKey.value)
+      assertEquals("owner-b", controller.sessionOwnerAgentId.value)
+      assertEquals(
+        "owner-b-id",
+        controller.sessions.value
+          .single()
+          .sessionId,
+      )
+      assertTrue(cache.deletedSessions.isEmpty())
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"global","agentId":"owner-a","sessionId":"owner-a-id"}""",
+      )
+      advanceUntilIdle()
+
+      assertEquals("global", controller.sessionKey.value)
+      assertEquals(
+        "owner-b-id",
+        controller.sessions.value
+          .single()
+          .sessionId,
+      )
+      assertEquals(listOf(Triple("gateway-a", "owner-a", "global")), cache.deletedSessions)
+    }
+
+  @Test
+  fun deleteEventForAnotherOwnerDoesNotMutateTheVisibleSessionList() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { "owner-b" },
+        ) { method, _ ->
+          if (method == "sessions.list") """{"sessions":[{"key":"custom"}]}""" else "{}"
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"delete","sessionKey":"custom","agentId":"owner-a"}""",
+      )
+      advanceUntilIdle()
+
+      assertEquals(listOf("custom"), controller.sessions.value.map { it.key })
+      assertEquals(listOf(Triple("gateway-a", "owner-a", "custom")), cache.deletedSessions)
+    }
+
+  @Test
+  fun sessionUpdatesStayBoundToTheVisibleOwnerAndRefreshAmbiguousEvents() =
+    runTest {
+      var sessionListRequests = 0
+      val controller =
+        createChatController(
+          currentDefaultAgentId = { "owner-a" },
+        ) { method, _ ->
+          if (method == "sessions.list") {
+            sessionListRequests += 1
+            """{"sessions":[{"key":"custom","label":"Original"}]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"custom","agentId":"owner-b","label":"Foreign"}}""",
+      )
+      controller.handleGatewayEvent(
+        "session.message",
+        """{"session":{"key":"custom","agentId":"owner-b","label":"Also foreign"}}""",
+      )
+      assertEquals(
+        "Original",
+        controller.sessions.value
+          .single()
+          .label,
+      )
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"custom","label":"Ambiguous"}}""",
+      )
+      advanceUntilIdle()
+
+      assertEquals(2, sessionListRequests)
+      assertEquals(
+        "Original",
+        controller.sessions.value
+          .single()
+          .label,
+      )
+    }
+
+  @Test
+  fun requestedUnscopedDeleteCarriesAndPurgesItsCapturedOwner() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      var deleteParams = ""
+      var defaultAgentId = "owner-a"
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { defaultAgentId },
+        ) { method, params ->
+          if (method == "sessions.delete") deleteParams = params.orEmpty()
+          when (method) {
+            "sessions.list" -> """{"sessions":[{"key":"custom"}]}"""
+            "sessions.delete" -> """{"deleted":true}"""
+            else -> "{}"
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val renderedRow = controller.sessions.value.single()
+      defaultAgentId = "owner-b"
+      val deletion = controller.deleteSession(renderedRow.key, ownerAgentId = renderedRow.ownerAgentId)
+      advanceUntilIdle()
+
+      assertEquals("gateway-a", deletion?.gatewayId)
+      assertEquals("owner-a", deletion?.agentId)
+      assertEquals("custom", deletion?.sessionKey)
+      assertTrue(deleteParams.contains("\"agentId\":\"owner-a\""))
+      assertEquals(listOf(Triple("gateway-a", "owner-a", "custom")), cache.deletedSessions)
+    }
+
+  @Test
+  fun openingUnscopedSessionRetainsTheRenderedOwnerAfterDefaultChanges() =
+    runTest {
+      var defaultAgentId = "owner-a"
+      var defaultAgentRevision = 1L
+      val historyOwners = mutableListOf<String>()
+      val controller =
+        createChatController(
+          cacheScope = { gatewayScope },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        ) { method, params ->
+          when (method) {
+            "sessions.list" -> {
+              """{"sessions":[{"key":"custom"}]}"""
+            }
+
+            "chat.history" -> {
+              historyOwners += if (params.orEmpty().contains("\"agentId\":\"owner-a\"")) "owner-a" else "owner-b"
+              """{"sessionId":"custom-id","messages":[]}"""
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val renderedRow = controller.sessions.value.single()
+      defaultAgentId = "owner-b"
+      defaultAgentRevision += 1
+
+      controller.switchSession(renderedRow.key, renderedRow.ownerAgentId)
+      advanceUntilIdle()
+
+      assertEquals("owner-a", controller.sessionOwnerAgentId.value)
+      assertEquals(listOf("owner-a"), historyOwners)
+
+      controller.onDefaultAgentChanged("owner-b")
+      advanceUntilIdle()
+
+      assertEquals("owner-a", controller.sessionOwnerAgentId.value)
+      assertEquals(listOf("owner-a"), historyOwners)
+    }
+
+  @Test
+  fun switchingOwnersDoesNotMergeSettingsOfAnUnscopedSession() =
+    runTest {
+      val controller =
+        createChatController(
+          cacheScope = { gatewayScope },
+          currentDefaultAgentId = { "owner-a" },
+        ) { method, params ->
+          when (method) {
+            "chat.history" -> {
+              if (params.orEmpty().contains("\"agentId\":\"owner-a\"")) {
+                """{"sessionId":"owner-a-id","messages":[],"sessionInfo":{"key":"global","sessionId":"owner-a-id","archived":true,"modelProvider":"openai","model":"gpt-5","permissionMode":"full","fastMode":true,"label":"Owner A"}}"""
+              } else {
+                """{"sessionId":"owner-b-id","messages":[],"sessionInfo":{"key":"global","sessionId":"owner-b-id","archived":true,"modelProvider":"anthropic","model":"claude-opus-4"}}"""
+              }
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[],"hasMore":false}"""
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+      controller.load("global", ownerAgentId = "owner-a")
+      advanceUntilIdle()
+      assertEquals(
+        ChatPermissionMode.Full,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+
+      controller.load("global", ownerAgentId = "owner-b")
+      advanceUntilIdle()
+
+      val selected = controller.sessions.value.single()
+      assertEquals("owner-b", selected.ownerAgentId)
+      assertEquals("owner-b-id", selected.sessionId)
+      assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+      assertEquals(null, selected.permissionMode)
+      assertEquals(null, selected.fastMode)
+      assertEquals(null, selected.label)
+    }
+
+  @Test
+  fun oldGatewayDeleteResponseDoesNotRemoveTheCurrentGatewayRow() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val deleteStarted = CompletableDeferred<Unit>()
+      val deleteGate = CompletableDeferred<Unit>()
+      var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      var defaultAgentId = "owner-a"
+      val controller =
+        createCachedController(
+          cache,
+          cacheScope = { currentScope },
+          currentDefaultAgentId = { defaultAgentId },
+        ) { method, _ ->
+          when (method) {
+            "sessions.list" -> {
+              """{"sessions":[{"key":"custom"}]}"""
+            }
+
+            "sessions.delete" -> {
+              deleteStarted.complete(Unit)
+              deleteGate.await()
+              """{"deleted":true}"""
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val oldRow = controller.sessions.value.single()
+      val deleteJob = launch { controller.deleteSession(oldRow.key, oldRow.ownerAgentId) }
+      deleteStarted.await()
+
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      defaultAgentId = "owner-b"
+      controller.onGatewayScopeChanging()
+      controller.refreshSessions()
+      runCurrent()
+      assertEquals(
+        "owner-b",
+        controller.sessions.value
+          .single()
+          .ownerAgentId,
+      )
+
+      deleteGate.complete(Unit)
+      deleteJob.join()
+      advanceUntilIdle()
+
+      assertEquals(listOf("custom"), controller.sessions.value.map { it.key })
+      assertEquals(
+        "owner-b",
+        controller.sessions.value
+          .single()
+          .ownerAgentId,
+      )
+      assertEquals(listOf(Triple("gateway-a", "owner-a", "custom")), cache.deletedSessions)
+    }
+
+  @Test
+  fun unsuccessfulDeleteResponseKeepsTheOfflineCopy() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { "owner-a" },
+        ) { method, _ ->
+          if (method == "sessions.delete") """{"deleted":false}""" else """{"sessions":[]}"""
+        }
+
+      assertEquals(null, controller.deleteSession("custom", ownerAgentId = "owner-a"))
+      advanceUntilIdle()
+
+      assertTrue(cache.deletedSessions.isEmpty())
+    }
+
+  @Test
+  fun liveSessionListIsWrittenThroughToCache() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      var sessionListParams = ""
+      val controller =
+        createCachedController(cache) { method, params ->
+          if (method == "sessions.list") sessionListParams = params.orEmpty()
+          when (method) {
+            "sessions.list" -> """{"sessions":[{"key":"main","updatedAt":7,"displayName":"Main"}]}"""
+            "chat.history" -> """{"sessionId":"session-1","messages":[]}"""
+            else -> "{}"
+          }
+        }
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertEquals("gateway-a", cache.savedSessions.last().gatewayId)
+      assertEquals("main", cache.savedSessions.last().agentId)
+      assertEquals(
+        listOf("main"),
+        cache.savedSessions
+          .last()
+          .sessions
+          .map { it.key },
+      )
+      assertEquals(null, cache.retainedSessionKeys.last())
+      assertEquals(listOf("main"), controller.sessions.value.map { it.key })
+      assertTrue(sessionListParams.contains("\"agentId\":\"main\""))
+    }
+
+  @Test
+  fun sessionListParsesGroupingAndUnreadMetadata() =
+    runTest {
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list") { _ ->
+            """
+            {
+              "sessions": [{
+                "key": "main",
+                "label": "Daily",
+                "category": "Work",
+                "pinned": true,
+                "archived": false,
+                "unread": true,
+                "lastReadAt": 10,
+                "markedUnreadAt": 15,
+                "lastActivityAt": 20
+              }]
+            }
+            """.trimIndent()
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(false, session.archived)
+      assertEquals(true, session.unread)
+      assertEquals(10L, session.lastReadAt)
+      assertEquals(15L, session.markedUnreadAt)
+      assertEquals(20L, session.lastActivityAt)
+    }
+
+  @Test
+  fun partialSessionChangedEventPreservesExistingMetadata() =
+    runTest {
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","pinned":true,"unread":true}]}""")
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"main","agentId":"main","lastActivityAt":30}}""",
+      )
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(true, session.unread)
+      assertEquals("green", session.color)
+      assertEquals(30L, session.lastActivityAt)
+    }
+
+  @Test
+  fun sessionListRetainsActiveHistoryAndDeepTranscriptWhenSelectionIsOmitted() =
+    runTest {
+      for (truncated in listOf(false, true)) {
+        val cache = FakeTranscriptCache()
+        val controller =
+          createCachedController(cache) { method, _ ->
+            when (method) {
+              "sessions.list" -> {
+                """{"totalCount":${if (truncated) 2 else 1},"hasMore":$truncated,"sessions":[{"key":"main","updatedAt":7}]}"""
+              }
+
+              "chat.history" -> {
+                """{"sessionId":"session-1","messages":[],"sessionInfo":{"key":"deep-session","sessionId":"session-1","modelProvider":"openai","model":"gpt-5"}}"""
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+
+        controller.load("deep-session")
+        advanceUntilIdle()
+
+        val selected = controller.sessions.value.single { it.key == "deep-session" }
+        assertEquals("session-1", selected.sessionId)
+        assertEquals("main", selected.ownerAgentId)
+        assertEquals("deep-session", cache.retainedSessionKeys.last())
+        assertEquals(controller.sessions.value, cache.savedSessions.last().sessions)
+      }
+    }
+
+  @Test
+  fun completeSessionListRetainsActiveTranscriptBeyondLocalCacheWindow() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val sessions =
+        (0 until MAX_CACHED_SESSIONS + 10).joinToString(",") { index ->
+          """{"key":"session-$index","updatedAt":${100 - index}}"""
+        }
+      val controller =
+        createCachedController(cache) { method, _ ->
+          when (method) {
+            "sessions.list" -> {
+              """{"totalCount":60,"hasMore":false,"sessions":[$sessions]}"""
+            }
+
+            "chat.history" -> {
+              """{"sessionId":"session-55","messages":[]}"""
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("session-55")
+      advanceUntilIdle()
+
+      assertEquals("session-55", cache.retainedSessionKeys.last())
+    }
+
+  @Test
+  fun oldGatewayHistoryResponseIsNeitherAppliedNorCachedAfterScopeChange() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val historyGate = CompletableDeferred<Unit>()
+      var currentScope = gatewayScope
+      val controller =
+        createCachedController(
+          cache,
+          cacheScope = { currentScope },
+        ) { method, _ ->
+          if (method == "chat.history") {
+            historyGate.await()
+            """{"sessionId":"old","messages":[{"role":"assistant","content":"old gateway"}]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+
+      controller.load("main")
+      runCurrent()
+      assertTrue(controller.historyLoading.value)
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      assertFalse(controller.historyLoading.value)
+      historyGate.complete(Unit)
+      advanceUntilIdle()
+
+      assertTrue(controller.messages.value.isEmpty())
+      assertTrue(cache.savedTranscripts.isEmpty())
+    }
+
+  @Test
+  fun oldGatewaySessionListIsNeitherAppliedNorCachedAfterScopeChange() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val sessionsGate = CompletableDeferred<Unit>()
+      var currentScope = gatewayScope
+      val controller =
+        createCachedController(
+          cache,
+          cacheScope = { currentScope },
+        ) { method, _ ->
+          if (method == "sessions.list") {
+            sessionsGate.await()
+            """{"sessions":[{"key":"old-gateway-session"}]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+
+      controller.refreshSessions()
+      runCurrent()
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      sessionsGate.complete(Unit)
+      advanceUntilIdle()
+
+      assertTrue(controller.sessions.value.isEmpty())
+      assertTrue(cache.savedSessions.isEmpty())
+    }
+
+  @Test
+  fun switchingGatewayScopeIsolatesCachedTranscriptAndSessionsThenRestoresThem() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.transcripts[TranscriptKey("gateway-a", "main", "main")] = listOf(cachedMessage("gateway A transcript"))
+      cache.sessionsByOwner["gateway-a" to "main"] = listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, displayName = "Gateway A"))
+      cache.sessionsByOwner["gateway-b" to "main"] = emptyList()
+      var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        createCachedController(
+          cache,
+          cacheScope = { currentScope },
+        ) { _, _ -> throw IllegalStateException("offline") }
+
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf("gateway A transcript"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("Gateway A"), controller.sessions.value.mapNotNull { it.displayName })
+
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.load("main")
+      advanceUntilIdle()
+      assertTrue(controller.messages.value.isEmpty())
+      assertTrue(controller.sessions.value.isEmpty())
+
+      currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 3)
+      controller.onGatewayScopeChanging()
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf("gateway A transcript"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("Gateway A"), controller.sessions.value.mapNotNull { it.displayName })
+    }
+
+  @Test
+  fun unscopedHistoryWaitsForAProvableDefaultOwner() =
+    runTest {
+      var historyRequestCount = 0
+      val controller =
+        createChatController(
+          transcriptCache = FakeTranscriptCache(),
+          cacheScope = { gatewayScope },
+          currentDefaultAgentId = { null },
+        ) { method, _ ->
+          if (method == "chat.history") historyRequestCount += 1
+          "{}"
+        }
+
+      controller.load("custom")
+      advanceUntilIdle()
+
+      assertEquals(0, historyRequestCount)
+      assertFalse(controller.historyLoading.value)
+      assertTrue(controller.messages.value.isEmpty())
+      assertEquals(null, controller.errorText.value)
+    }
+
+  @Test
+  fun offlineUnscopedHistoryUsesTheLastVerifiedGatewayOwner() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.lastDefaultAgents["gateway-a"] = "agent-a"
+      cache.transcripts[TranscriptKey("gateway-a", "agent-a", "custom")] = listOf(cachedMessage("offline custom"))
+      cache.sessionsByOwner["gateway-a" to "agent-a"] =
+        listOf(ChatSessionEntry(key = "custom", updatedAtMs = 1, displayName = "Offline custom"))
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { null },
+        ) { _, _ -> error("offline") }
+
+      controller.load("custom")
+      advanceUntilIdle()
+
+      assertEquals(listOf("offline custom"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("Offline custom"), controller.sessions.value.mapNotNull { it.displayName })
+      assertEquals(GatewayDefaultAgentOwner("gateway-a", "agent-a"), controller.composerDefaultAgentOwner.value)
+      assertFalse(controller.historyLoading.value)
+    }
+
+  @Test
+  fun defaultOwnerChangeClearsAndReloadsActiveUnscopedHistory() =
+    runTest {
+      var defaultAgentId: String? = "agent-a"
+      var defaultAgentRevision = 1L
+      val requestedOwners = mutableListOf<String>()
+      val cache = FakeTranscriptCache()
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        ) { method, params ->
+          when (method) {
+            "chat.history" -> {
+              val owner = if (params.orEmpty().contains("\"agentId\":\"agent-a\"")) "agent-a" else "agent-b"
+              requestedOwners += owner
+              """{"sessionId":"$owner","messages":[{"role":"assistant","content":"$owner history"}]}"""
+            }
+
+            "sessions.list" -> {
+              val owner = defaultAgentId ?: "unknown"
+              """{"sessions":[{"key":"custom","displayName":"$owner title","updatedAt":1}]}"""
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("custom")
+      advanceUntilIdle()
+      assertEquals(listOf("agent-a history"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("agent-a title"), controller.sessions.value.mapNotNull { it.displayName })
+
+      defaultAgentId = null
+      defaultAgentRevision += 1
+      controller.onDefaultAgentChanged(null)
+      runCurrent()
+      assertEquals(listOf("agent-a"), requestedOwners)
+      assertEquals(listOf("agent-a history"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("agent-a title"), controller.sessions.value.mapNotNull { it.displayName })
+
+      defaultAgentId = "agent-a"
+      defaultAgentRevision += 1
+      controller.onDefaultAgentChanged(defaultAgentId)
+      runCurrent()
+      assertEquals(listOf("agent-a"), requestedOwners)
+
+      defaultAgentId = "agent-b"
+      defaultAgentRevision += 1
+      controller.onDefaultAgentChanged(defaultAgentId)
+      advanceUntilIdle()
+
+      assertEquals(listOf("agent-a", "agent-b"), requestedOwners)
+      assertEquals("agent-b", cache.lastDefaultAgents["gateway-a"])
+      assertEquals(listOf("agent-b history"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("agent-b title"), controller.sessions.value.mapNotNull { it.displayName })
+      assertFalse(controller.historyLoading.value)
+    }
+
+  @Test
+  fun latestDefaultOwnerWinsWhenThePreviousCacheWriteFinishesLate() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val firstWriteStarted = CompletableDeferred<Unit>()
+      val releaseFirstWrite = CompletableDeferred<Unit>()
+      cache.beforeLastDefaultAgentSave = { _, agentId ->
+        if (agentId == "agent-a") {
+          firstWriteStarted.complete(Unit)
+          releaseFirstWrite.await()
+        }
+      }
+      var defaultAgentId: String? = "agent-a"
+      var defaultAgentRevision = 1L
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        ) { method, _ -> emptyChatGatewayResponse(method) }
+
+      controller.onDefaultAgentChanged("agent-a")
+      runCurrent()
+      firstWriteStarted.await()
+      defaultAgentId = "agent-b"
+      defaultAgentRevision += 1
+      controller.onDefaultAgentChanged("agent-b")
+      runCurrent()
+      releaseFirstWrite.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals("agent-b", cache.lastDefaultAgents["gateway-a"])
+    }
+
+  @Test
+  fun gatewayCachePurgeDeletesAnInFlightDefaultOwnerWriteAndInvalidatesQueuedWrites() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val firstWriteStarted = CompletableDeferred<Unit>()
+      val releaseFirstWrite = CompletableDeferred<Unit>()
+      cache.beforeLastDefaultAgentSave = { _, agentId ->
+        if (agentId == "agent-a") {
+          firstWriteStarted.complete(Unit)
+          releaseFirstWrite.await()
+        }
+      }
+      val controller =
+        createCachedController(cache) { method, _ -> emptyChatGatewayResponse(method) }
+
+      controller.onDefaultAgentChanged("agent-a")
+      runCurrent()
+      firstWriteStarted.await()
+      controller.onDefaultAgentChanged("agent-b")
+      val purge = launch { controller.clearGatewayCache("gateway-a") }
+      runCurrent()
+
+      releaseFirstWrite.complete(Unit)
+      purge.join()
+      advanceUntilIdle()
+
+      assertFalse(cache.lastDefaultAgents.containsKey("gateway-a"))
+      assertEquals(null, controller.composerDefaultAgentOwner.value)
+    }
+
+  @Test
+  fun liveDefaultOwnerWinsWhenPersistedOwnerLoadFinishesLate() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.lastDefaultAgents["gateway-a"] = "agent-b"
+      val cacheLoadStarted = CompletableDeferred<Unit>()
+      val releaseCacheLoad = CompletableDeferred<Unit>()
+      cache.beforeLastDefaultAgentLoad = {
+        cacheLoadStarted.complete(Unit)
+        releaseCacheLoad.await()
+      }
+      var defaultAgentId: String? = null
+      var defaultAgentRevision = 1L
+      val controller =
+        createCachedController(
+          cache,
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        ) { method, _ -> emptyChatGatewayResponse(method) }
+
+      controller.load("custom")
+      runCurrent()
+      cacheLoadStarted.await()
+      defaultAgentId = "agent-a"
+      defaultAgentRevision += 1
+      controller.onDefaultAgentChanged("agent-a")
+      runCurrent()
+      releaseCacheLoad.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(GatewayDefaultAgentOwner("gateway-a", "agent-a"), controller.composerDefaultAgentOwner.value)
+    }
+}

@@ -1,21 +1,27 @@
-import {
-  redactSensitiveUrl,
-  redactSensitiveUrlLikeString,
-} from "../shared/net/redact-sensitive-url.js";
-import { isMcpConfigRecord, toMcpStringRecord } from "./mcp-config-shared.js";
+/**
+ * HTTP MCP launch config normalization.
+ *
+ * MCP server setup uses this to validate SSE/streamable HTTP server records,
+ * sanitize headers, and redact sensitive URLs in diagnostics.
+ */
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { toMcpStringRecord } from "./mcp-config-shared.js";
 
+/** Supported HTTP-based MCP transport flavors. */
 export type HttpMcpTransportType = "sse" | "streamable-http";
 
-export type HttpMcpServerLaunchConfig = {
+type HttpMcpServerLaunchConfig = {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
 };
 
-export type HttpMcpServerLaunchResult =
+type HttpMcpServerLaunchResult =
   | { ok: true; config: HttpMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
+/** Normalizes an HTTP MCP server config record into a launchable transport config. */
 export function resolveHttpMcpServerLaunchConfig(
   raw: unknown,
   options?: {
@@ -24,7 +30,7 @@ export function resolveHttpMcpServerLaunchConfig(
     onMalformedHeaders?: (value: unknown) => void;
   },
 ): HttpMcpServerLaunchResult {
-  if (!isMcpConfigRecord(raw)) {
+  if (!isRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
   }
   if (typeof raw.url !== "string" || raw.url.trim().length === 0) {
@@ -49,7 +55,7 @@ export function resolveHttpMcpServerLaunchConfig(
 
   let headers: Record<string, string> | undefined;
   if (raw.headers !== undefined && raw.headers !== null) {
-    if (!isMcpConfigRecord(raw.headers)) {
+    if (!isRecord(raw.headers)) {
       options?.onMalformedHeaders?.(raw.headers);
     } else {
       headers = toMcpStringRecord(raw.headers, {
@@ -66,8 +72,4 @@ export function resolveHttpMcpServerLaunchConfig(
       headers,
     },
   };
-}
-
-export function describeHttpMcpServerLaunchConfig(config: HttpMcpServerLaunchConfig): string {
-  return redactSensitiveUrl(config.url);
 }

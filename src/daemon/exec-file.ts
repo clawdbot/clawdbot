@@ -1,32 +1,58 @@
-import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
+/** Native service control/inspection only; payload launchers own their full environment. */
+import { extractErrorCode } from "../infra/errors.js";
+import { createSanitizedCommandError } from "../process/exec-result.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
-export type ExecResult = { stdout: string; stderr: string; code: number };
+export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
+  code: number;
+  termination: SpawnResult["termination"] | "error";
+  errorCode?: string;
+};
 
+/** Runs a child process as UTF-8 and returns exit data instead of throwing on nonzero exit. */
 export async function execFileUtf8(
   command: string,
   args: string[],
-  options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    killSignal?: NodeJS.Signals | number;
+    windowsHide?: boolean;
+  } = {},
 ): Promise<ExecResult> {
-  return await new Promise<ExecResult>((resolve) => {
-    execFile(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
-      if (!error) {
-        resolve({
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-          code: 0,
-        });
-        return;
-      }
-
-      const e = error as { code?: unknown; message?: unknown };
-      const stderrText = stderr ?? "";
-      resolve({
-        stdout: stdout ?? "",
-        stderr:
-          stderrText ||
-          (typeof e.message === "string" ? e.message : typeof error === "string" ? error : ""),
-        code: typeof e.code === "number" ? e.code : 1,
-      });
-    });
-  });
+  try {
+    const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
+      [command, ...args],
+      {
+        baseEnv: resolveServiceManagerEnv(options.env),
+        cwd: options.cwd,
+        killSignal: options.killSignal,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: options.timeout,
+      },
+    );
+    const diagnostic =
+      termination === "exit"
+        ? ""
+        : createSanitizedCommandError({
+            timedOut: termination === "timeout" || termination === "no-output-timeout",
+            isTerminated: true,
+            signal,
+          }).message;
+    // A child can exit zero while handling termination; daemon actions must still fail.
+    return {
+      stdout,
+      stderr: [stderr, diagnostic].filter(Boolean).join("\n"),
+      code: termination === "exit" ? (code ?? 1) : code || 1,
+      termination,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const errorCode = extractErrorCode(error);
+    // Launch diagnostics omit argv; preserve errno separately so daemon owners
+    // never have to recover execution failures from sanitized prose.
+    return { stdout: "", stderr: message, code: 1, termination: "error", errorCode };
+  }
 }

@@ -1,9 +1,13 @@
+/**
+ * Shared test harness for plugin SDK contract tests that need temp fixtures.
+ */
 import { mkdirSync, type RmOptions } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll } from "vitest";
 
+/** Creates per-suite temp fixture helpers with automatic Vitest cleanup. */
 export function createPluginSdkTestHarness(options?: { cleanup?: RmOptions }) {
   let fixtureRoot = "";
   let caseId = 0;

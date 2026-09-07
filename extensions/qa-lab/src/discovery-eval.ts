@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Qa Lab plugin module implements discovery eval behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
 function readRequiredDiscoveryRefs() {
@@ -7,7 +8,7 @@ function readRequiredDiscoveryRefs() {
     | undefined;
   return (
     config?.requiredFiles ?? [
-      "repo/qa/scenarios/index.md",
+      "repo/qa/scenarios/index.yaml",
       "repo/extensions/qa-lab/src/suite.ts",
       "repo/docs/help/testing.md",
     ]

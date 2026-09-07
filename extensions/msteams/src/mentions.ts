@@ -6,20 +6,13 @@
  * 2. entities array with mention metadata
  */
 
-export type MentionEntity = {
+type MentionEntity = {
   type: "mention";
   text: string;
   mentioned: {
     id: string;
     name: string;
   };
-};
-
-export type MentionInfo = {
-  /** User/bot ID (e.g., "28:xxx" or AAD object ID) */
-  id: string;
-  /** Display name */
-  name: string;
 };
 
 /**
@@ -81,34 +74,4 @@ export function parseMentions(text: string): {
     text: formattedText,
     entities,
   };
-}
-
-/**
- * Build mention entities array from a list of mentions.
- * Use this when you already have the mention info and formatted text.
- */
-export function buildMentionEntities(mentions: MentionInfo[]): MentionEntity[] {
-  return mentions.map((mention) => ({
-    type: "mention",
-    text: `<at>${mention.name}</at>`,
-    mentioned: {
-      id: mention.id,
-      name: mention.name,
-    },
-  }));
-}
-
-/**
- * Format text with mentions using <at> tags.
- * This is a convenience function when you want to manually format mentions.
- */
-export function formatMentionText(text: string, mentions: MentionInfo[]): string {
-  let formatted = text;
-  for (const mention of mentions) {
-    // Replace @Name or @name with <at>Name</at>
-    const escapedName = mention.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const namePattern = new RegExp(`@${escapedName}`, "gi");
-    formatted = formatted.replace(namePattern, `<at>${mention.name}</at>`);
-  }
-  return formatted;
 }

@@ -1,32 +1,30 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+// Memory Lancedb tests cover memory lancedb plugin behavior.
+import { describe, expect, test } from "vitest";
+import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-function installTmpDirHarness(params: { prefix: string }) {
-  let tmpDir = "";
-  let dbPath = "";
+// Count embedding HTTP requests without replacing the real client or database.
+class OpenAIEmbeddingCallCounter {
+  count = 0;
+  private readonly realFetch = globalThis.fetch;
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
-    dbPath = path.join(tmpDir, "lancedb");
-  });
+  install(): void {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.openai.com") && url.includes("/embeddings")) {
+        this.count += 1;
+      }
+      return this.realFetch(input, init);
+    }) as typeof fetch;
+  }
 
-  afterEach(async () => {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  return {
-    getTmpDir: () => tmpDir,
-    getDbPath: () => dbPath,
-  };
+  restore(): void {
+    globalThis.fetch = this.realFetch;
+  }
 }
 
 // Live tests that require OpenAI API key and actually use LanceDB
@@ -84,7 +82,7 @@ describeLive("memory plugin live tests", () => {
     };
 
     // Register plugin
-    memoryPlugin.register(mockApi as any);
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
 
     // Check registration
     expect(registeredTools.length).toBe(3);
@@ -95,50 +93,141 @@ describeLive("memory plugin live tests", () => {
     expect(registeredServices.length).toBe(1);
 
     // Get tool functions
-    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
-    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-    const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+    const materialize = (name: string) => {
+      const toolOrFactory = registeredTools.find((entry) => entry.opts?.name === name)?.tool;
+      return typeof toolOrFactory === "function"
+        ? toolOrFactory({ agentId: "main", config: {} })
+        : toolOrFactory;
+    };
+    const storeTool = materialize("memory_store");
+    const recallTool = materialize("memory_recall");
+    const forgetTool = materialize("memory_forget");
+    const storedText = "The user prefers dark mode for all applications";
 
-    // Test store
-    const storeResult = await storeTool.execute("test-call-1", {
-      text: "The user prefers dark mode for all applications",
-      importance: 0.8,
-      category: "preference",
-    });
+    try {
+      // Test store
+      const storeResult = await storeTool.execute("test-call-1", {
+        text: storedText,
+        importance: 0.8,
+        category: "preference",
+      });
 
-    expect(storeResult.details?.action).toBe("created");
-    const storedId = storeResult.details?.id;
-    expect(storedId).toMatch(/.+/);
+      expect(storeResult.details?.action).toBe("created");
+      const storedId = storeResult.details?.id;
+      expect(storedId).toMatch(/.+/);
 
-    // Test recall
-    const recallResult = await recallTool.execute("test-call-2", {
-      query: "dark mode preference",
-      limit: 5,
-    });
+      // Test recall
+      const recallResult = await recallTool.execute("test-call-2", {
+        query: "dark mode preference",
+        limit: 5,
+      });
 
-    expect(recallResult.details?.count).toBeGreaterThan(0);
-    expect(recallResult.details?.memories?.[0]?.text).toContain("dark mode");
+      expect(recallResult.details?.count).toBeGreaterThan(0);
+      expect(recallResult.details?.memories?.[0]?.text).toContain("dark mode");
 
-    // Test duplicate detection
-    const duplicateResult = await storeTool.execute("test-call-3", {
-      text: "The user prefers dark mode for all applications",
-    });
+      // Test duplicate detection
+      const duplicateResult = await storeTool.execute("test-call-3", {
+        text: storedText,
+      });
 
-    expect(duplicateResult.details?.action).toBe("duplicate");
+      expect(duplicateResult.details).toEqual({
+        action: "already_present",
+        existingId: storedId,
+        existingText: storedText,
+      });
 
-    // Test forget
-    const forgetResult = await forgetTool.execute("test-call-4", {
-      memoryId: storedId,
-    });
+      // Test forget
+      const forgetResult = await forgetTool.execute("test-call-4", {
+        memoryId: storedId,
+      });
 
-    expect(forgetResult.details?.action).toBe("deleted");
+      expect(forgetResult.details?.action).toBe("deleted");
 
-    // Verify it's gone
-    const recallAfterForget = await recallTool.execute("test-call-5", {
-      query: "dark mode preference",
-      limit: 5,
-    });
+      // Verify it's gone
+      const recallAfterForget = await recallTool.execute("test-call-5", {
+        query: "dark mode preference",
+        limit: 5,
+      });
 
-    expect(recallAfterForget.details?.count).toBe(0);
+      expect(recallAfterForget.details?.count).toBe(0);
+    } finally {
+      for (const service of registeredServices) {
+        await service.stop?.();
+      }
+    }
   }, 60000); // 60s timeout for live API calls
+
+  test("skips retained user messages with real embeddings and LanceDB", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const registeredHooks: Record<string, ((...args: unknown[]) => unknown)[]> = {};
+    const services: Array<{ stop?: () => Promise<void> }> = [];
+    const logs: string[] = [];
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+        dbPath: getDbPath(),
+        autoCapture: true,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      registerTool: () => {},
+      registerCli: () => {},
+      registerService: (service: { stop?: () => Promise<void> }) => services.push(service),
+      on: (hookName: string, handler: (...args: unknown[]) => unknown) => {
+        (registeredHooks[hookName] ??= []).push(handler);
+      },
+      resolvePath: (p: string) => p,
+    };
+
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
+    const agentEnd = registeredHooks.agent_end?.[0];
+    expect(agentEnd).toBeTypeOf("function");
+
+    const counter = new OpenAIEmbeddingCallCounter();
+    counter.install();
+    try {
+      const sessionKey = "live-auto-capture-compaction";
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Fish for shell commands every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+      expect(counter.count).toBe(2);
+
+      // Model a compacted transcript retaining one already processed message.
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Zed for editing code every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+
+      expect(counter.count).toBe(3);
+    } finally {
+      counter.restore();
+      for (const service of services) {
+        await service.stop?.();
+      }
+    }
+  }, 60000);
 });

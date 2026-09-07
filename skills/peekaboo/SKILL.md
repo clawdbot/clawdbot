@@ -1,6 +1,6 @@
 ---
 name: peekaboo
-description: Capture and automate macOS UI with the Peekaboo CLI.
+description: "Capture and automate macOS UI with the Peekaboo CLI."
 homepage: https://peekaboo.boo
 metadata:
   {
@@ -25,166 +25,95 @@ metadata:
 
 # Peekaboo
 
-Peekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI
-elements, drive input, and manage apps/windows/menus. Commands share a snapshot
-cache and support `--json`/`-j` for scripting. Run `peekaboo` or
-`peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.
-Tip: run via `polter peekaboo` to ensure fresh builds.
+Use Peekaboo to inspect macOS UI, act on the intended target, and verify the result.
+The examples below use v4 syntax. Check `peekaboo --version` and the installed
+command's `--help`; for older versions, follow that version's help.
 
-## Features (all CLI capabilities, excluding agent/MCP)
+## OpenClaw Bridge
 
-Core
-
-- `bridge`: inspect Peekaboo Bridge host connectivity
-- `capture`: live capture or video ingest + frame extraction
-- `clean`: prune snapshot cache and temp files
-- `config`: init/show/edit/validate, providers, models, credentials
-- `image`: capture screenshots (screen/window/menu bar regions)
-- `learn`: print the full agent guide + tool catalog
-- `list`: apps, windows, screens, menubar, permissions
-- `permissions`: check Screen Recording/Accessibility status
-- `run`: execute `.peekaboo.json` scripts
-- `sleep`: pause execution for a duration
-- `tools`: list available tools with filtering/display options
-
-Interaction
-
-- `click`: target by ID/query/coords with smart waits
-- `drag`: drag & drop across elements/coords/Dock
-- `hotkey`: modifier combos like `cmd,shift,t`
-- `move`: cursor positioning with optional smoothing
-- `paste`: set clipboard -> paste -> restore
-- `press`: special-key sequences with repeats
-- `scroll`: directional scrolling (targeted + smooth)
-- `swipe`: gesture-style drags between targets
-- `type`: text + control keys (`--clear`, delays)
-
-System
-
-- `app`: launch/quit/relaunch/hide/unhide/switch/list apps
-- `clipboard`: read/write clipboard (text/images/files)
-- `dialog`: click/input/file/dismiss/list system dialogs
-- `dock`: launch/right-click/hide/show/list Dock items
-- `menu`: click/list application menus + menu extras
-- `menubar`: list/click status bar items
-- `open`: enhanced `open` with app targeting + JSON payloads
-- `space`: list/switch/move-window (Spaces)
-- `visualizer`: exercise Peekaboo visual feedback animations
-- `window`: close/minimize/maximize/move/resize/focus/list
-
-Vision
-
-- `see`: annotated UI maps, snapshot IDs, optional analysis
-
-Global runtime flags
-
-- `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`
-- `--no-remote`, `--bridge-socket <path>`
-
-## Quickstart (happy path)
+The OpenClaw macOS app hosts Peekaboo Bridge when Computer Control is enabled,
+its provider is Peekaboo, and Peekaboo Bridge is enabled. Keep the existing
+OpenClaw socket selection when running through that host:
 
 ```bash
-peekaboo permissions
-peekaboo list apps --json
-peekaboo see --annotate --path /tmp/peekaboo-see.png
-peekaboo click --on B1
-peekaboo type "Hello" --return
+export PEEKABOO_BRIDGE_SOCKET="${PEEKABOO_BRIDGE_SOCKET:-$HOME/Library/Application Support/OpenClaw/bridge.sock}"
+peekaboo bridge status --json
 ```
 
-## Common targeting parameters (most interaction commands)
+Confirm that the selected host and socket are the intended ones. Preserve an
+explicit `PEEKABOO_BRIDGE_SOCKET` or `--bridge-socket` selection. If the required
+host is unavailable, report that outcome; do not clear the selection or switch
+Computer Control providers to make a command succeed.
 
-- App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`
-- Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)
-- Element/coords: `--on`/`--id` (element ID), `--coords x,y`
-- Focus control: `--no-auto-focus`, `--space-switch`, `--bring-to-current-space`,
-  `--focus-timeout-seconds`, `--focus-retry-count`
+Permissions belong to the process or Bridge host performing the operation.
+Do not pass `--no-remote` unless the caller has the required permissions.
 
-## Common capture parameters
+## Find the installed command
 
-- Output: `--path`, `--format png|jpg`, `--retina`
-- Targeting: `--mode screen|window|frontmost`, `--screen-index`,
-  `--window-title`, `--window-id`
-- Analysis: `--analyze "prompt"`, `--annotate`
-- Capture engine: `--capture-engine auto|classic|cg|modern|sckit`
-
-## Common motion/typing parameters
-
-- Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)
-- Human-ish movement: `--profile human|linear`, `--wpm` (typing)
-- Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`
-
-## Examples
-
-### See -> click -> type (most reliable flow)
+Use leaf help for flags and targeting requirements instead of copying a flag
+between commands. Use root help to discover the available commands:
 
 ```bash
-peekaboo see --app Safari --window-title "Login" --annotate --path /tmp/see.png
-peekaboo click --on B3 --app Safari
-peekaboo type "user@example.com" --app Safari
-peekaboo press tab --count 1 --app Safari
-peekaboo type "supersecret" --app Safari --return
+peekaboo --help
+peekaboo app list --help
+peekaboo see --help
+peekaboo press --help
+peekaboo drag --help
 ```
 
-### Target by window id
+V4 removed these old command roots:
+
+| Old command | V4 command                                               |
+| ----------- | -------------------------------------------------------- |
+| `list apps` | `app list`                                               |
+| `image`     | `see --no-elements` for pixels without element detection |
+| `hotkey`    | `press` with chords such as `cmd+shift+t`                |
+| `swipe`     | `drag --from … --to …`                                   |
+
+For other operations, including clicking, typing, scrolling, and managing windows
+or menus, use `peekaboo <command> --help`. Put command options after the leaf
+command; `--json` requests structured output.
+
+## Inspect, act, verify
+
+Start with application inventory and a fresh view of the target:
 
 ```bash
-peekaboo list windows --app "Visual Studio Code" --json
-peekaboo click --window-id 12345 --coords 120,160
-peekaboo type "Hello from Peekaboo" --window-id 12345
+peekaboo app list --json
+peekaboo see --app Safari --window-title "Example" --annotate \
+  --path /tmp/peekaboo-example.png --json
 ```
 
-### Capture screenshots + analyze
+Read the returned elements before acting. Keep actions tied to the intended app,
+window, and fresh snapshot; do not reuse example element IDs. After an action,
+inspect the UI again and check the requested result. Refresh the observation when
+the window changes or a target becomes stale.
+
+For a screenshot without element detection:
 
 ```bash
-peekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png
-peekaboo image --app Safari --window-title "Dashboard" --analyze "Summarize KPIs"
-peekaboo see --mode screen --screen-index 0 --analyze "Summarize the dashboard"
+peekaboo see --mode screen --screen-index 0 --no-elements --retina \
+  --path /tmp/peekaboo-screen.png --json
 ```
 
-### Live capture (motion-aware)
+Raw keyboard chords require explicit foreground interaction or a fresh
+exact-window receipt accepted by `press`. Dragging always moves the shared cursor
+and requires `--foreground`. When foreground interaction is authorized:
 
 ```bash
-peekaboo capture live --mode region --region 100,100,800,600 --duration 30 \
-  --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture
+peekaboo press cmd+shift+t --app Safari --foreground --json
+peekaboo drag --from 100,500 --to 100,200 --duration 800ms --foreground --json
 ```
 
-### App + window management
+Use the actual target and coordinates from the current observation. Prefer
+explicit duration units such as `800ms`; consult each command's help for its
+options and prerequisites.
 
-```bash
-peekaboo app launch "Safari" --open https://example.com
-peekaboo window focus --app Safari --window-title "Example"
-peekaboo window set-bounds --app Safari --x 50 --y 50 --width 1200 --height 800
-peekaboo app quit --app Safari
-```
+## Troubleshooting
 
-### Menus, menubar, dock
-
-```bash
-peekaboo menu click --app Safari --item "New Window"
-peekaboo menu click --app TextEdit --path "Format > Font > Show Fonts"
-peekaboo menu click-extra --title "WiFi"
-peekaboo dock launch Safari
-peekaboo menubar list --json
-```
-
-### Mouse + gesture input
-
-```bash
-peekaboo move 500,300 --smooth
-peekaboo drag --from B1 --to T2
-peekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800
-peekaboo scroll --direction down --amount 6 --smooth
-```
-
-### Keyboard input
-
-```bash
-peekaboo hotkey --keys "cmd,shift,t"
-peekaboo press escape
-peekaboo type "Line 1\nLine 2" --delay 10
-```
-
-Notes
-
-- Requires Screen Recording + Accessibility permissions.
-- Use `peekaboo see --annotate` to identify targets before clicking.
+- For a removed-command error, use the replacement named by the installed CLI.
+- For host or permission failures, inspect `peekaboo bridge status --json` and
+  `peekaboo permissions status --json` for the selected host.
+- For targeting failures, read the leaf help and obtain fresh UI state with `see`.
+- On macOS 15+, the private window picker prompt is separate from the base
+  Screen Recording grant and can appear even when Bridge permissions are correct.

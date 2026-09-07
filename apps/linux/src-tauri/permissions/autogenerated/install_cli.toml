@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-cli"
+description = "Enables the install_cli command without any pre-configured scope."
+commands.allow = ["install_cli"]
+
+[[permission]]
+identifier = "deny-install-cli"
+description = "Denies the install_cli command without any pre-configured scope."
+commands.deny = ["install_cli"]

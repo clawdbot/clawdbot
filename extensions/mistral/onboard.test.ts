@@ -1,22 +1,17 @@
-import { describe, expect, it } from "vitest";
+// Mistral tests cover onboard plugin behavior.
 import {
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPrimaryAndFallbacks,
-} from "../../test/helpers/plugins/provider-onboard.js";
-import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
-import {
-  applyMistralConfig,
-  applyMistralProviderConfig,
-  MISTRAL_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { describe, expect, it } from "vitest";
+import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
+import { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
 
 describe("mistral onboard", () => {
   it("adds Mistral provider with correct settings", () => {
     const cfg = applyMistralConfig({});
-    expect(cfg.models?.providers?.mistral).toMatchObject({
-      baseUrl: "https://api.mistral.ai/v1",
-      api: "openai-completions",
-    });
+    expect(cfg.models?.providers?.mistral?.baseUrl).toBe("https://api.mistral.ai/v1");
+    expect(cfg.models?.providers?.mistral?.api).toBe("openai-completions");
     expectProviderOnboardPrimaryAndFallbacks({
       applyConfig: applyMistralConfig,
       modelRef: MISTRAL_DEFAULT_MODEL_REF,
@@ -39,18 +34,14 @@ describe("mistral onboard", () => {
     expect(mistralDefault?.maxTokens).toBe(16384);
   });
 
-  it("uses the bundled mistral default model definition", () => {
-    const bundled = buildBundledMistralModelDefinition();
+  it("uses the Mistral default model definition", () => {
+    const defaultDefinition = buildMistralModelDefinition();
     const cfg = applyMistralProviderConfig({});
     const defaultModel = cfg.models?.providers?.mistral?.models.find(
-      (model) => model.id === bundled.id,
+      (model) => model.id === defaultDefinition.id,
     );
 
-    expect(defaultModel).toMatchObject({
-      id: bundled.id,
-      contextWindow: bundled.contextWindow,
-      maxTokens: bundled.maxTokens,
-    });
+    expect(defaultModel).toEqual(defaultDefinition);
   });
 
   it("adds the expected alias for the default model", () => {

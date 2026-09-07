@@ -1,0 +1,31 @@
+title: Docker update migration
+
+scenario:
+  id: docker-update-migration
+  surface: cli
+  category: cli.updates-and-upgrades
+  coverage:
+    primary:
+      - cli.plugin-convergence
+    secondary:
+      - cli.update-status-and-rpc
+  objective: Verify published baseline plugin dependency debris is cleaned by the candidate update and post-update doctor flow.
+  successCriteria:
+    - A published baseline is configured with the plugin-dependency cleanup scenario.
+    - Legacy plugin dependency debris is present before candidate repair.
+    - Candidate update plus doctor cleans the legacy dependency roots and the final Gateway/status probes pass.
+  docsRefs:
+    - docs/cli/update.md
+    - docs/help/testing-updates-plugins.md
+    - docs/reference/test.md
+  codeRefs:
+    - scripts/e2e/upgrade-survivor-docker.sh
+    - scripts/e2e/lib/upgrade-survivor/run.sh
+    - src/commands/doctor/shared/post-core-plugin-convergence.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing update-migration Docker E2E lane and records QA Lab evidence for plugin convergence coverage.
+    args:
+      - --lane
+      - update-migration

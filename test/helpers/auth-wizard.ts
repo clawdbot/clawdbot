@@ -1,14 +1,18 @@
+// Auth wizard helpers drive authentication wizard flows in tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { loadPersistedAuthProfileStore } from "../../src/agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../src/agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeEnv } from "../../src/runtime.js";
-import { makeTempWorkspace } from "../../src/test-helpers/workspace.js";
 import { captureEnv } from "../../src/test-utils/env.js";
+import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "../../src/wizard/prompts.js";
+import { createWizardPrompter as createBaseWizardPrompter } from "./wizard-prompter.js";
 
-export const noopAsync = async () => {};
-export const noop = () => {};
+// Shared auth wizard test helpers for runtime/env setup.
 
+/** Create a RuntimeEnv whose exit method throws for assertions. */
 export function createExitThrowingRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -19,74 +23,67 @@ export function createExitThrowingRuntime(): RuntimeEnv {
   };
 }
 
+/** Create a WizardPrompter with default mock answers and caller overrides. */
 export function createWizardPrompter(
   overrides: Partial<WizardPrompter>,
   options?: { defaultSelect?: string },
 ): WizardPrompter {
-  return {
-    intro: vi.fn(noopAsync),
-    outro: vi.fn(noopAsync),
-    note: vi.fn(noopAsync),
-    select: vi.fn(async () => (options?.defaultSelect ?? "") as never),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: noop, stop: noop })),
-    ...overrides,
-  };
+  return createBaseWizardPrompter(overrides, { defaultSelect: options?.defaultSelect ?? "" });
 }
+
+/** Create isolated auth state and agent directories for auth tests. */
+type AuthTestEnv = {
+  stateDir: string;
+  agentDir: string;
+  cleanup: () => Promise<void>;
+};
 
 export async function setupAuthTestEnv(
   prefix = "openclaw-auth-",
   options?: { agentSubdir?: string },
-): Promise<{
-  stateDir: string;
-  agentDir: string;
-}> {
-  const stateDir = await makeTempWorkspace(prefix);
-  const agentDir = path.join(stateDir, options?.agentSubdir ?? "agent");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_AGENT_DIR = agentDir;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  await fs.mkdir(agentDir, { recursive: true });
-  return { stateDir, agentDir };
+): Promise<AuthTestEnv> {
+  clearRuntimeAuthProfileStoreSnapshots();
+  const state = await createOpenClawTestState({ prefix, layout: "state-only" });
+  try {
+    const agentDir = path.join(state.stateDir, options?.agentSubdir ?? "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+    return { stateDir: state.stateDir, agentDir, cleanup: state.cleanup };
+  } catch (error) {
+    // Ownership has not reached the caller, so release the acquired state here.
+    await state.cleanup();
+    throw error;
+  }
 }
 
-export type AuthTestLifecycle = {
-  setStateDir: (stateDir: string) => void;
+type AuthTestLifecycle = {
+  track: (env: AuthTestEnv) => void;
   cleanup: () => Promise<void>;
 };
 
+/** Capture env and track isolated OpenClaw state fixtures for cleanup. */
 export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
   const envSnapshot = captureEnv(envKeys);
-  let stateDir: string | null = null;
+  const cleanups: Array<() => Promise<void>> = [];
   return {
-    setStateDir(nextStateDir: string) {
-      stateDir = nextStateDir;
+    track(env) {
+      cleanups.push(env.cleanup);
     },
     async cleanup() {
-      if (stateDir) {
-        await fs.rm(stateDir, { recursive: true, force: true });
-        stateDir = null;
+      clearRuntimeAuthProfileStoreSnapshots();
+      for (const cleanup of cleanups.splice(0).reverse()) {
+        await cleanup();
       }
       envSnapshot.restore();
     },
   };
 }
 
-export function requireOpenClawAgentDir(): string {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-}
-
-export function authProfilePathForAgent(agentDir: string): string {
-  return path.join(agentDir, "auth-profiles.json");
-}
-
+/** Read auth profiles from the real SQLite-backed persistence owner. */
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
-  const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
-  return JSON.parse(raw) as T;
+  const store = loadPersistedAuthProfileStore(agentDir);
+  if (!store) {
+    throw new Error(`Expected SQLite auth profile store for ${agentDir}`);
+  }
+  return store as T;
 }

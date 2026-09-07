@@ -1,4 +1,6 @@
-import { normalizeChannelId } from "../channels/plugins/index.js";
+// Normalizes channel capability metadata from config and plugin manifests.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
@@ -16,53 +18,41 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   if (!isStringArray(capabilities)) {
     return undefined;
   }
-  const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(capabilities);
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function resolveAccountCapabilities(params: {
-  cfg?: { accounts?: Record<string, { capabilities?: CapabilitiesConfig }> } & {
-    capabilities?: CapabilitiesConfig;
-  };
-  accountId?: string | null;
-}): string[] | undefined {
-  const cfg = params.cfg;
-  if (!cfg) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeAccountId(params.accountId);
-
-  const accounts = cfg.accounts;
-  if (accounts && typeof accounts === "object") {
-    const match = resolveAccountEntry(accounts, normalizedAccountId);
-    if (match) {
-      return normalizeCapabilities(match.capabilities) ?? normalizeCapabilities(cfg.capabilities);
-    }
-  }
-
-  return normalizeCapabilities(cfg.capabilities);
-}
-
+/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;
   accountId?: string | null;
 }): string[] | undefined {
   const cfg = params.cfg;
-  const channel = normalizeChannelId(params.channel);
+  const channel = normalizeAnyChannelId(params.channel);
   if (!cfg || !channel) {
     return undefined;
   }
 
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = (channelsConfig?.[channel] ?? (cfg as Record<string, unknown>)[channel]) as
+  const channelConfig = channelsConfig?.[channel] as
     | {
         accounts?: Record<string, { capabilities?: CapabilitiesConfig }>;
         capabilities?: CapabilitiesConfig;
       }
     | undefined;
-  return resolveAccountCapabilities({
-    cfg: channelConfig,
-    accountId: params.accountId,
-  });
+  if (!channelConfig) {
+    return undefined;
+  }
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const accounts = channelConfig.accounts;
+  const accountConfig =
+    accounts && typeof accounts === "object"
+      ? resolveAccountEntry(accounts, normalizedAccountId)
+      : undefined;
+  // Account capabilities override channel capabilities; empty/object account values fall back.
+  return (
+    normalizeCapabilities(accountConfig?.capabilities) ??
+    normalizeCapabilities(channelConfig.capabilities)
+  );
 }

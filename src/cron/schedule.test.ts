@@ -1,15 +1,26 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  coerceFiniteScheduleNumber,
-  clearCronScheduleCacheForTest,
-  computeNextRunAtMs,
-  computePreviousRunAtMs,
-  getCronScheduleCacheSizeForTest,
-} from "./schedule.js";
+// Cron schedule tests cover schedule parsing and next-run calculations.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { Cron } from "croner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
+
+const cronConstructed = vi.hoisted(() => vi.fn());
+
+vi.mock("croner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("croner")>();
+  class ObservedCron<T = undefined> extends actual.Cron<T> {
+    constructor(...args: ConstructorParameters<typeof actual.Cron<T>>) {
+      super(...args);
+      cronConstructed(...args);
+    }
+  }
+  return { ...actual, Cron: ObservedCron };
+});
 
 describe("cron schedule", () => {
   beforeEach(() => {
-    clearCronScheduleCacheForTest();
+    cronConstructed.mockClear();
   });
 
   it("computes next run for cron expression with timezone", () => {
@@ -37,6 +48,337 @@ describe("cron schedule", () => {
     expect(new Date(next ?? 0).getUTCFullYear()).toBe(2026);
   });
 
+  describe("daylight-saving transitions", () => {
+    it.each([
+      {
+        label: "New York repeated hour retains the later same-day reminder",
+        timezone: "America/New_York",
+        expression: "30 1,3 * * *",
+        now: "2026-11-01T06:15:00.000Z",
+        next: "2026-11-01T08:30:00.000Z",
+        previous: "2026-11-01T05:30:00.000Z",
+      },
+      {
+        label: "New York repeated hour retains six-field reminders",
+        timezone: "America/New_York",
+        expression: "15 30 1,3 * * *",
+        now: "2026-11-01T06:15:00.000Z",
+        next: "2026-11-01T08:30:15.000Z",
+        previous: "2026-11-01T05:30:15.000Z",
+      },
+      {
+        label: "New York repeated hour skips duplicate per-minute occurrences",
+        timezone: "America/New_York",
+        expression: "* * * * *",
+        now: "2026-11-01T06:15:00.000Z",
+        next: "2026-11-01T07:00:00.000Z",
+        previous: "2026-11-01T05:59:00.000Z",
+      },
+      {
+        label: "New York repeated hour skips duplicate per-second occurrences",
+        timezone: "America/New_York",
+        expression: "* * * * * *",
+        now: "2026-11-01T06:15:00.000Z",
+        next: "2026-11-01T07:00:00.000Z",
+        previous: "2026-11-01T05:59:59.000Z",
+      },
+      {
+        label: "Oslo repeated hour retains the later same-day reminder",
+        timezone: "Europe/Oslo",
+        expression: "30 2,4 * * *",
+        now: "2026-10-25T01:15:00.000Z",
+        next: "2026-10-25T03:30:00.000Z",
+        previous: "2026-10-25T00:30:00.000Z",
+      },
+      {
+        label: "Lord Howe schedules the first occurrence of a half-hour fold",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1 * * *",
+        now: "2026-04-04T14:40:00.000Z",
+        next: "2026-04-04T14:45:00.000Z",
+        previous: "2026-04-03T14:45:00.000Z",
+      },
+      {
+        label: "Lord Howe repeated half-hour retains the later same-day reminder",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1,2 * * *",
+        now: "2026-04-04T15:10:00.000Z",
+        next: "2026-04-04T16:15:00.000Z",
+        previous: "2026-04-04T14:45:00.000Z",
+      },
+      {
+        label: "Lord Howe repeated half-hour skips duplicate per-second occurrences",
+        timezone: "Australia/Lord_Howe",
+        expression: "* * * * * *",
+        now: "2026-04-04T15:10:00.000Z",
+        next: "2026-04-04T15:30:00.000Z",
+        previous: "2026-04-04T14:59:59.000Z",
+      },
+      {
+        label: "New York skips a nonexistent spring-forward reminder",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-14T06:45:00.000Z",
+        next: "2027-03-15T06:30:00.000Z",
+        previous: "2027-03-13T07:30:00.000Z",
+      },
+      {
+        label: "New York previous occurrence never comes from its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-14T07:10:00.000Z",
+        next: "2027-03-15T06:30:00.000Z",
+        previous: "2027-03-13T07:30:00.000Z",
+      },
+      {
+        label: "New York keeps the valid occurrence before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "45 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:45:00.000Z",
+        previous: "2027-03-14T06:45:00.000Z",
+      },
+      {
+        label: "New York keeps six-field occurrences before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "15 45 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:45:15.000Z",
+        previous: "2027-03-14T06:45:15.000Z",
+      },
+      {
+        label: "New York keeps the final matching second before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "59 59 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:59:59.000Z",
+        previous: "2027-03-14T06:59:59.000Z",
+      },
+      {
+        label: "New York preserves the final valid second before a spring-forward gap",
+        timezone: "America/New_York",
+        expression: "59 59 1,2 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-15T05:59:59.000Z",
+        previous: "2027-03-14T06:59:59.000Z",
+      },
+      {
+        label: "Oslo skips a nonexistent spring-forward reminder",
+        timezone: "Europe/Oslo",
+        expression: "30 2 * * *",
+        now: "2026-03-29T00:45:00.000Z",
+        next: "2026-03-30T00:30:00.000Z",
+        previous: "2026-03-28T01:30:00.000Z",
+      },
+      {
+        label: "Lord Howe keeps the valid boundary after its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "15,30 2 * * *",
+        now: "2026-10-03T15:20:00.000Z",
+        next: "2026-10-03T15:30:00.000Z",
+        previous: "2026-10-02T16:00:00.000Z",
+      },
+      {
+        label: "Lord Howe keeps a valid later occurrence after its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "15,35 2 * * *",
+        now: "2026-10-03T15:20:00.000Z",
+        next: "2026-10-03T15:35:00.000Z",
+        previous: "2026-10-02T16:05:00.000Z",
+      },
+      {
+        label: "Lord Howe previous occurrence never comes from its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "15 2 * * *",
+        now: "2026-10-03T15:32:00.000Z",
+        next: "2026-10-04T15:15:00.000Z",
+        previous: "2026-10-02T15:45:00.000Z",
+      },
+      {
+        label: "Lord Howe keeps the valid occurrence before its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "15,45 1,2 * * *",
+        now: "2026-10-03T15:35:00.000Z",
+        next: "2026-10-03T15:45:00.000Z",
+        previous: "2026-10-03T15:15:00.000Z",
+      },
+      {
+        label: "Lord Howe keeps six-field occurrences before its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "10 15,45 1,2 * * *",
+        now: "2026-10-03T15:35:00.000Z",
+        next: "2026-10-03T15:45:10.000Z",
+        previous: "2026-10-03T15:15:10.000Z",
+      },
+      {
+        label: "Antarctica schedules the first occurrence of a two-hour fold",
+        timezone: "Antarctica/Troll",
+        expression: "0 2 * * *",
+        now: "2026-10-24T23:30:00.000Z",
+        next: "2026-10-25T00:00:00.000Z",
+        previous: "2026-10-24T00:00:00.000Z",
+      },
+      {
+        label: "Antarctica skips every repeated occurrence in a two-hour fold",
+        timezone: "Antarctica/Troll",
+        expression: "0 1,2,4 * * *",
+        now: "2026-10-25T01:30:00.000Z",
+        next: "2026-10-25T04:00:00.000Z",
+        previous: "2026-10-25T00:00:00.000Z",
+      },
+      {
+        label: "Antarctica skips duplicate per-second occurrences in a two-hour fold",
+        timezone: "Antarctica/Troll",
+        expression: "* * * * * *",
+        now: "2026-10-25T01:30:00.250Z",
+        next: "2026-10-25T03:00:00.000Z",
+        previous: "2026-10-25T00:59:59.000Z",
+      },
+      {
+        label: "Antarctica keeps the valid reminder after its two-hour spring gap",
+        timezone: "Antarctica/Troll",
+        expression: "30 2,3 * * *",
+        now: "2026-03-29T00:30:00.000Z",
+        next: "2026-03-29T01:30:00.000Z",
+        previous: "2026-03-28T03:30:00.000Z",
+      },
+      {
+        label: "Antarctica keeps the valid occurrence before its two-hour spring gap",
+        timezone: "Antarctica/Troll",
+        expression: "45 0,1,2,3,4 * * *",
+        now: "2026-03-29T01:10:00.000Z",
+        next: "2026-03-29T01:45:00.000Z",
+        previous: "2026-03-29T00:45:00.000Z",
+      },
+      {
+        label: "Antarctica keeps six-field occurrences before its two-hour spring gap",
+        timezone: "Antarctica/Troll",
+        expression: "15 45 0,1,2,3,4 * * *",
+        now: "2026-03-29T01:10:00.000Z",
+        next: "2026-03-29T01:45:15.000Z",
+        previous: "2026-03-29T00:45:15.000Z",
+      },
+      {
+        label: "New York skips a nonexistent annual reminder after multiple offset changes",
+        timezone: "America/New_York",
+        expression: "30 2 14 3 *",
+        now: "2026-07-01T00:00:00.000Z",
+        next: "2028-03-14T06:30:00.000Z",
+        previous: "2026-03-14T06:30:00.000Z",
+      },
+      {
+        label: "New York skips a nonexistent historical annual reminder",
+        timezone: "America/New_York",
+        expression: "30 2 8 3 *",
+        now: "2026-07-01T00:00:00.000Z",
+        next: "2027-03-08T07:30:00.000Z",
+        previous: "2025-03-08T07:30:00.000Z",
+      },
+      {
+        label: "Moscow keeps valid annual reminders beyond multiple historical rule changes",
+        timezone: "Europe/Moscow",
+        expression: "30 2 * 3 SUN#L",
+        now: "2007-03-01T00:00:00.000Z",
+        next: "2012-03-24T22:30:00.000Z",
+        previous: "1991-03-30T23:30:00.000Z",
+      },
+    ])("$label", ({ timezone, expression, now, next, previous }) => {
+      const schedule = { kind: "cron" as const, expr: expression, tz: timezone };
+      const nowMs = Date.parse(now);
+
+      expect(computeNextRunAtMs(schedule, nowMs)).toBe(Date.parse(next));
+      expect(computePreviousRunAtMs(schedule, nowMs)).toBe(Date.parse(previous));
+    });
+
+    it.each(["30 2 * 3 SUN#2", "0 30 2 * 3 SUN#2"])(
+      "skips nonexistent future occurrences but preserves historical timezone rules for %s",
+      (expression) => {
+        const schedule = { kind: "cron" as const, expr: expression, tz: "America/New_York" };
+        const nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+
+        expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
+        expect(computePreviousRunAtMs(schedule, nowMs)).toBe(
+          Date.parse("2006-03-12T07:30:00.000Z"),
+        );
+      },
+    );
+
+    it("never spills a nonexistent year-limited reminder into another year", () => {
+      const schedule = {
+        kind: "cron" as const,
+        expr: "0 30 2 14 3 * 2027",
+        tz: "America/New_York",
+      };
+      const nowMs = Date.parse("2026-07-01T00:00:00.000Z");
+
+      expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
+      expect(computePreviousRunAtMs(schedule, nowMs)).toBeUndefined();
+    });
+
+    it("recovers the first occurrence of a year-limited reminder during its repeated hour", () => {
+      const schedule = {
+        kind: "cron" as const,
+        expr: "0 30 1 1 11 * 2026",
+        tz: "America/New_York",
+      };
+      const nowMs = Date.parse("2026-11-01T06:15:00.000Z");
+
+      expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
+      expect(computePreviousRunAtMs(schedule, nowMs)).toBe(Date.parse("2026-11-01T05:30:00.000Z"));
+    });
+
+    it.each([
+      {
+        label: "next-second retry rejects a real spring-forward gap",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-14T06:45:00.000Z",
+        prior: "2027-03-13T07:30:00.000Z",
+        forcedPastCalls: 1,
+        expected: "2027-03-15T06:30:00.000Z",
+      },
+      {
+        label: "next-second retry selects the first real half-hour fold",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1 * * *",
+        now: "2026-04-04T14:40:00.000Z",
+        prior: "2026-04-03T14:45:00.000Z",
+        forcedPastCalls: 1,
+        expected: "2026-04-04T14:45:00.000Z",
+      },
+      {
+        label: "tomorrow retry rejects a real spring-forward gap",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-13T23:45:00.000Z",
+        prior: "2027-03-13T07:30:00.000Z",
+        forcedPastCalls: 2,
+        expected: "2027-03-15T06:30:00.000Z",
+      },
+      {
+        label: "tomorrow retry selects the first real half-hour fold",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1 * * *",
+        now: "2026-04-03T23:45:00.000Z",
+        prior: "2026-04-03T14:45:00.000Z",
+        forcedPastCalls: 2,
+        expected: "2026-04-04T14:45:00.000Z",
+      },
+    ])("$label", ({ timezone, expression, now, prior, forcedPastCalls, expected }) => {
+      const spy = vi.spyOn(Cron.prototype, "nextRun");
+      for (let count = 0; count < forcedPastCalls; count += 1) {
+        spy.mockImplementationOnce(() => new Date(prior));
+      }
+      try {
+        expect(
+          computeNextRunAtMs({ kind: "cron", expr: expression, tz: timezone }, Date.parse(now)),
+        ).toBe(Date.parse(expected));
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("throws a clear error when cron expr is missing at runtime", () => {
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     expect(() =>
@@ -47,19 +389,6 @@ describe("cron schedule", () => {
         nowMs,
       ),
     ).toThrow("invalid cron schedule: expr is required");
-  });
-
-  it("supports legacy cron field when expr is missing", () => {
-    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      {
-        kind: "cron",
-        cron: "0 9 * * 3",
-        tz: "America/Los_Angeles",
-      } as unknown as { kind: "cron"; expr: string; tz?: string },
-      nowMs,
-    );
-    expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
   it("computes next run for every schedule", () => {
@@ -77,7 +406,7 @@ describe("cron schedule", () => {
     expect(next).toBe(now + 30_000);
   });
 
-  it("handles string-typed everyMs and anchorMs from legacy persisted data", () => {
+  it("handles string-typed everyMs and anchorMs", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
     const next = computeNextRunAtMs(
@@ -103,14 +432,43 @@ describe("cron schedule", () => {
     expect(next).toBe(anchor + 30_000);
   });
 
-  it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
-    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs,
-    );
-    expect(next).toBeDefined();
-    expect(next!).toBeGreaterThan(nowMs);
+  it("advances when now matches a later every interval boundary", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const now = anchor + 30_000;
+    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, now);
+    expect(next).toBe(anchor + 60_000);
+  });
+
+  it("rejects every schedule numbers outside the ECMAScript Date range", () => {
+    expect(
+      computeNextRunAtMs({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
+    ).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
+    ).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 0.5, anchorMs: 0 }, 0)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: -1 }, 0)).toBeUndefined();
+  });
+
+  it("does not return an every occurrence outside the ECMAScript Date range", () => {
+    const anchorMs = MAX_DATE_TIMESTAMP_MS - 1;
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 2, anchorMs }, anchorMs)).toBeUndefined();
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["above Date range", MAX_DATE_TIMESTAMP_MS + 1],
+    ["below Date range", -MAX_DATE_TIMESTAMP_MS - 1],
+  ])("returns undefined instead of throwing for an invalid %s cursor", (_label, nowMs) => {
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 60_000 }, nowMs)).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
+    ).toBeUndefined();
+    expect(
+      computePreviousRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
+    ).toBeUndefined();
   });
 
   it("never returns a previous run that is at-or-after now", () => {
@@ -119,29 +477,70 @@ describe("cron schedule", () => {
       { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
       nowMs,
     );
-    if (previous !== undefined) {
-      expect(previous).toBeLessThan(nowMs);
-    }
+    expect(previous).toBe(Date.parse("2026-02-28T00:00:00.000Z"));
   });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    expect(getCronScheduleCacheSizeForTest()).toBe(0);
+    expect(
+      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs),
+    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    const initialConstructions = cronConstructed.mock.calls.length;
+    expect(
+      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs + 1_000),
+    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    expect(cronConstructed).toHaveBeenCalledTimes(initialConstructions);
 
-    const first = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs,
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-01T08:00:00.000Z"),
     );
-    const second = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs + 1_000,
+    const timezoneConstructions = cronConstructed.mock.calls.length;
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs + 1_000)).toBe(
+      Date.parse("2026-03-01T08:00:00.000Z"),
     );
-    const third = computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs);
+    expect(cronConstructed).toHaveBeenCalledTimes(timezoneConstructions);
+  });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
-    expect(third).toBeDefined();
-    expect(getCronScheduleCacheSizeForTest()).toBe(2);
+  it("promotes accessed entries to avoid premature LRU eviction", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+
+    // Touch the full 512-entry budget so earlier tests cannot affect eviction order.
+    for (let i = 0; i < 512; i++) {
+      expect(
+        computeNextRunAtMs(
+          { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
+          nowMs,
+        ),
+      ).toBeGreaterThan(nowMs);
+    }
+    cronConstructed.mockClear();
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 0 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-02T00:00:00.000Z"),
+    );
+    expect(cronConstructed).not.toHaveBeenCalled();
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2027-01-01T00:00:00.000Z"),
+    );
+    expect(cronConstructed).toHaveBeenCalledTimes(1);
+
+    // Read survivors before reintroducing the victim, since lookups also promote entries.
+    for (const [expr, expected] of [
+      ["0 0 * * *", "2026-03-02T00:00:00.000Z"],
+      ["2 0 * * *", "2026-03-01T00:02:00.000Z"],
+      ["0 0 1 1 *", "2027-01-01T00:00:00.000Z"],
+    ] as const) {
+      expect(computeNextRunAtMs({ kind: "cron", expr, tz: "UTC" }, nowMs)).toBe(
+        Date.parse(expected),
+      );
+    }
+    expect(cronConstructed).toHaveBeenCalledTimes(1);
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "1 0 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-01T00:01:00.000Z"),
+    );
+    expect(cronConstructed).toHaveBeenCalledTimes(2);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {
@@ -210,9 +609,31 @@ describe("coerceFiniteScheduleNumber", () => {
   it("returns undefined for invalid inputs", () => {
     expect(coerceFiniteScheduleNumber("")).toBeUndefined();
     expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
-    expect(coerceFiniteScheduleNumber(NaN)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("60000ms")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("0x10")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(MAX_DATE_TIMESTAMP_MS + 1)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(String(Number.MAX_SAFE_INTEGER + 1))).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs on-exit", () => {
+  it("never reports a time-due run for on-exit schedules (event-driven)", () => {
+    expect(computeNextRunAtMs({ kind: "on-exit", command: "sleep 1" }, Date.now())).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "on-exit", command: "make build", cwd: "/repo" }, 0),
+    ).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs stream", () => {
+  it("never reports a time-due run for event stream schedules", () => {
+    expect(computeNextRunAtMs({ kind: "stream", command: ["node", "events.mjs"] }, 0)).toBe(
+      undefined,
+    );
   });
 });

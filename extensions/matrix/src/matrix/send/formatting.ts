@@ -1,5 +1,9 @@
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+// Matrix helper module supports formatting behavior.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
+  markdownToMatrixBody,
   markdownToMatrixHtml,
   resolveMatrixMentionsInMarkdown,
   renderMarkdownToMatrixHtmlWithMentions,
@@ -8,33 +12,32 @@ import {
 import type { MatrixClient } from "../sdk.js";
 import {
   MsgType,
-  RelationType,
   type MatrixFormattedContent,
   type MatrixMediaMsgType,
   type MatrixRelation,
-  type MatrixReplyRelation,
   type MatrixTextContent,
   type MatrixTextMsgType,
-  type MatrixThreadRelation,
 } from "./types.js";
-
-const getCore = () => getMatrixRuntime();
 
 async function renderMatrixFormattedContent(params: {
   client: MatrixClient;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
-}): Promise<{ html?: string; mentions?: MatrixMentions }> {
+  tableMode?: MarkdownTableMode;
+}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
   const markdown = params.markdown ?? "";
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
   if (params.includeMentions === false) {
-    const html = markdownToMatrixHtml(markdown).trimEnd();
-    return { html: html || undefined };
+    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
+    return { body, html: html || undefined };
   }
   const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
     markdown,
     client: params.client,
+    tableMode: params.tableMode,
   });
-  return { html, mentions };
+  return { body, html, mentions };
 }
 
 export function buildTextContent(
@@ -61,13 +64,18 @@ export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { html, mentions } = await renderMatrixFormattedContent({
+  const { body, html, mentions } = await renderMatrixFormattedContent({
     client: params.client,
     markdown: params.markdown,
+    preparedBody: params.preparedBody,
     includeMentions: params.includeMentions,
+    tableMode: params.tableMode,
   });
+  params.content.body = body || params.content.body;
   if (mentions) {
     params.content["m.mentions"] = mentions;
   } else {
@@ -133,26 +141,8 @@ export function diffMatrixMentions(
   return delta;
 }
 
-export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
-  const trimmed = replyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return { "m.in_reply_to": { event_id: trimmed } };
-}
-
-export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
-  const trimmed = threadId.trim();
-  return {
-    rel_type: RelationType.Thread,
-    event_id: trimmed,
-    is_falling_back: true,
-    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
-  };
-}
-
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
-  const kind = getCore().media.mediaKindFromMime(contentType ?? "");
+  const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
       return MsgType.Image;
@@ -182,7 +172,7 @@ export function resolveMatrixVoiceDecision(opts: {
 function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
   // Matrix currently shares the core voice compatibility policy.
   // Keep this wrapper as the seam if Matrix policy diverges later.
-  return getCore().media.isVoiceCompatibleAudio({
+  return isVoiceMessageCompatibleAudio({
     contentType: opts.contentType,
     fileName: opts.fileName,
   });

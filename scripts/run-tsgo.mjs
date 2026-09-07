@@ -1,52 +1,9 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import {
-  acquireLocalHeavyCheckLockSync,
-  applyLocalTsgoPolicy,
-  shouldAcquireLocalHeavyCheckLockForTsgo,
-} from "./lib/local-heavy-check-runtime.mjs";
+import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs";
 
-const { args: finalArgs, env } = applyLocalTsgoPolicy(process.argv.slice(2), process.env);
-
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
-const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
-if (tsBuildInfoFile) {
-  fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
-}
-const releaseLock = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
-  ? acquireLocalHeavyCheckLockSync({
-      cwd: process.cwd(),
-      env,
-      toolName: "tsgo",
-    })
-  : () => {};
-
-try {
-  const result = spawnSync(tsgoPath, finalArgs, {
-    stdio: "inherit",
-    env,
-    shell: process.platform === "win32",
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  process.exitCode = result.status ?? 1;
-} finally {
-  releaseLock();
-}
-
-function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === name) {
-      return args[index + 1];
-    }
-    if (arg.startsWith(`${name}=`)) {
-      return arg.slice(name.length + 1);
-    }
-  }
-  return undefined;
-}
+await runNodeCliShim(import.meta.url, {
+  implementation: "./run-tsgo.mts",
+  failureTool: "tsgo",
+  // The implementation owns a detached compiler group and escalates after 5s.
+  // Its outer shim must stay alive long enough to finish that cleanup.
+  forceKillDelayMs: 10_000,
+});

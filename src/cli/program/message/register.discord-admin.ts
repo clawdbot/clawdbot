@@ -1,15 +1,15 @@
+// Discord-style admin command registration for roles, channels, members, events, and moderation.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register Discord admin and moderation message subcommands. */
 export function registerMessageDiscordAdminCommands(message: Command, helpers: MessageCliHelpers) {
   const role = message.command("role").description("Role actions");
   helpers
     .withMessageBase(
       role.command("info").description("List roles").requiredOption("--guild-id <id>", "Guild id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-info", opts);
-    });
+    .action((opts) => helpers.runMessageAction("role-info", opts));
 
   helpers
     .withMessageBase(
@@ -20,9 +20,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .requiredOption("--user-id <id>", "User id")
         .requiredOption("--role-id <id>", "Role id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-add", opts);
-    });
+    .action((opts) => helpers.runMessageAction("role-add", opts));
 
   helpers
     .withMessageBase(
@@ -33,18 +31,14 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .requiredOption("--user-id <id>", "User id")
         .requiredOption("--role-id <id>", "Role id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("role-remove", opts);
-    });
+    .action((opts) => helpers.runMessageAction("role-remove", opts));
 
   const channel = message.command("channel").description("Channel actions");
   helpers
     .withMessageBase(
       helpers.withRequiredMessageTarget(channel.command("info").description("Fetch channel info")),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("channel-info", opts);
-    });
+    .action((opts) => helpers.runMessageAction("channel-info", opts));
 
   helpers
     .withMessageBase(
@@ -53,9 +47,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .description("List channels")
         .requiredOption("--guild-id <id>", "Guild id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("channel-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("channel-list", opts));
 
   const member = message.command("member").description("Member actions");
   helpers
@@ -66,9 +58,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .requiredOption("--user-id <id>", "User id"),
     )
     .option("--guild-id <id>", "Guild id (Discord)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("member-info", opts);
-    });
+    .action((opts) => helpers.runMessageAction("member-info", opts));
 
   const voice = message.command("voice").description("Voice actions");
   helpers
@@ -79,9 +69,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .requiredOption("--guild-id <id>", "Guild id")
         .requiredOption("--user-id <id>", "User id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("voice-status", opts);
-    });
+    .action((opts) => helpers.runMessageAction("voice-status", opts));
 
   const event = message.command("event").description("Event actions");
   helpers
@@ -91,9 +79,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .description("List scheduled events")
         .requiredOption("--guild-id <id>", "Guild id"),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("event-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("event-list", opts));
 
   helpers
     .withMessageBase(
@@ -110,9 +96,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
     .option("--location <text>", "Event location")
     .option("--event-type <stage|external|voice>", "Event type")
     .option("--image <url>", "Cover image URL or local file path")
-    .action(async (opts) => {
-      await helpers.runMessageAction("event-create", opts);
-    });
+    .action((opts) => helpers.runMessageAction("event-create", opts));
 
   helpers
     .withMessageBase(
@@ -125,9 +109,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
     .option("--duration-min <n>", "Timeout duration minutes")
     .option("--until <iso>", "Timeout until")
     .option("--reason <text>", "Moderation reason")
-    .action(async (opts) => {
-      await helpers.runMessageAction("timeout", opts);
-    });
+    .action((opts) => helpers.runMessageAction("timeout", opts));
 
   helpers
     .withMessageBase(
@@ -138,9 +120,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
         .requiredOption("--user-id <id>", "User id"),
     )
     .option("--reason <text>", "Moderation reason")
-    .action(async (opts) => {
-      await helpers.runMessageAction("kick", opts);
-    });
+    .action((opts) => helpers.runMessageAction("kick", opts));
 
   helpers
     .withMessageBase(
@@ -152,7 +132,5 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
     )
     .option("--reason <text>", "Moderation reason")
     .option("--delete-days <n>", "Ban delete message days")
-    .action(async (opts) => {
-      await helpers.runMessageAction("ban", opts);
-    });
+    .action((opts) => helpers.runMessageAction("ban", opts));
 }

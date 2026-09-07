@@ -1,22 +1,17 @@
-import fs from "node:fs";
-import os from "node:os";
+/**
+ * Trash helpers for data under the Browser-owned config subtree.
+ */
 import path from "node:path";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { runExec } from "../process/exec.js";
+import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 
+/** Moves a path to trash only when it lives under allowed Browser roots. */
 export async function movePathToTrash(targetPath: string): Promise<string> {
-  try {
-    await runExec("trash", [targetPath], { timeoutMs: 10_000 });
-    return targetPath;
-  } catch {
-    const trashDir = path.join(os.homedir(), ".Trash");
-    fs.mkdirSync(trashDir, { recursive: true });
-    const base = path.basename(targetPath);
-    let dest = path.join(trashDir, `${base}-${Date.now()}`);
-    if (fs.existsSync(dest)) {
-      dest = path.join(trashDir, `${base}-${Date.now()}-${generateSecureToken(6)}`);
-    }
-    fs.renameSync(targetPath, dest);
-    return dest;
-  }
+  const { movePathToTrash: movePathToTrashWithAllowedRoots } =
+    await import("openclaw/plugin-sdk/browser-config");
+  return await movePathToTrashWithAllowedRoots(targetPath, {
+    // Managed browser data follows OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH, which
+    // may intentionally live outside the OS home. Limit authority to Browser's
+    // owned subtree; fs-safe also checks target identity, realpaths, and symlinks.
+    allowedRoots: [path.join(CONFIG_DIR, "browser")],
+  });
 }

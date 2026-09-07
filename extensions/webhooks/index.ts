@@ -1,3 +1,4 @@
+// Webhooks plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { resolveWebhooksPluginConfig } from "./src/config.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./src/http.js";
@@ -17,14 +18,13 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   });
 
   for (const route of routes) {
-    const taskFlow = api.runtime.taskFlow.bindSession({
+    const taskFlow = api.runtime.tasks.managedFlows.bindSession({
       sessionKey: route.sessionKey,
     });
     const target: TaskFlowWebhookTarget = {
       routeId: route.routeId,
       path: route.path,
       secretInput: route.secret,
-      secretConfigPath: `plugins.entries.webhooks.routes.${route.routeId}.secret`,
       defaultControllerId: route.controllerId,
       taskFlow,
     };

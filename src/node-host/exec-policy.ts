@@ -1,8 +1,35 @@
-import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+/** Evaluates node-host exec policy from security, approval, and allowlist context. */
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  requiresExecApproval,
+  resolveExecModePolicy,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+/** One config owner for system.run and plugin-hosted execution. */
+export function resolveNodeExecConfigPolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  defaultSecurity: ExecSecurity;
+  defaultAsk: ExecAsk;
+}) {
+  const agentExec = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
+    : undefined;
+  const globalExec = params.cfg.tools?.exec;
+  const layered = applyExecPolicyLayer(
+    applyExecPolicyLayer({ security: params.defaultSecurity, ask: params.defaultAsk }, globalExec),
+    agentExec,
+  );
+  return { agentExec, globalExec, ...resolveExecModePolicy(layered) };
+}
 
-export type SystemRunPolicyDecision = {
+type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+
+type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   shellWrapperBlocked: boolean;
@@ -21,6 +48,7 @@ export type SystemRunPolicyDecision = {
     }
 );
 
+/** Normalizes raw approval decisions from node-host payloads. */
 export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecision {
   if (value === "allow-once" || value === "allow-always") {
     return value;
@@ -28,8 +56,7 @@ export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecisio
   return null;
 }
 
-export function formatSystemRunAllowlistMissMessage(params?: {
-  shellWrapperBlocked?: boolean;
+function formatSystemRunAllowlistMissMessage(params?: {
   windowsShellWrapperBlocked?: boolean;
 }): string {
   if (params?.windowsShellWrapperBlocked) {
@@ -39,16 +66,10 @@ export function formatSystemRunAllowlistMissMessage(params?: {
       "approve once/always or run with --ask on-miss|always)"
     );
   }
-  if (params?.shellWrapperBlocked) {
-    return (
-      "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(shell wrappers like sh/bash/zsh -c require approval; " +
-      "approve once/always or run with --ask on-miss|always)"
-    );
-  }
   return "SYSTEM_RUN_DENIED: allowlist miss";
 }
 
+/** Combines exec security, allowlist analysis, and approval state into an allow/deny decision. */
 export function evaluateSystemRunPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -74,76 +95,16 @@ export function evaluateSystemRunPolicy(params: {
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
   const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;
   const approvedByAsk = params.approvalDecision !== null || params.approved === true;
-
-  if (params.security === "deny") {
-    return {
-      allowed: false,
-      eventReason: "security=deny",
-      errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
+  const requiresAsk =
+    params.security !== "deny" &&
+    requiresExecApproval({
+      ask: params.ask,
+      security: params.security,
       analysisOk,
       allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk: false,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  const requiresAsk = requiresExecApproval({
-    ask: params.ask,
-    security: params.security,
-    analysisOk,
-    allowlistSatisfied,
-    durableApprovalSatisfied: params.durableApprovalSatisfied,
-  });
-  if (requiresAsk && !approvedByAsk) {
-    return {
-      allowed: false,
-      eventReason: "approval-required",
-      errorMessage: "SYSTEM_RUN_DENIED: approval required",
-      analysisOk,
-      allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
-    if (params.durableApprovalSatisfied) {
-      return {
-        allowed: true,
-        analysisOk,
-        allowlistSatisfied,
-        shellWrapperBlocked,
-        windowsShellWrapperBlocked,
-        requiresAsk,
-        approvalDecision: params.approvalDecision,
-        approvedByAsk,
-      };
-    }
-    return {
-      allowed: false,
-      eventReason: "allowlist-miss",
-      errorMessage: formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked,
-        windowsShellWrapperBlocked,
-      }),
-      analysisOk,
-      allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  return {
-    allowed: true,
+      durableApprovalSatisfied: params.durableApprovalSatisfied,
+    });
+  const context = {
     analysisOk,
     allowlistSatisfied,
     shellWrapperBlocked,
@@ -151,5 +112,44 @@ export function evaluateSystemRunPolicy(params: {
     requiresAsk,
     approvalDecision: params.approvalDecision,
     approvedByAsk,
+  };
+
+  if (params.security === "deny") {
+    return {
+      allowed: false,
+      eventReason: "security=deny",
+      errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
+      ...context,
+    };
+  }
+
+  if (requiresAsk && !approvedByAsk) {
+    return {
+      allowed: false,
+      eventReason: "approval-required",
+      errorMessage: "SYSTEM_RUN_DENIED: approval required",
+      ...context,
+    };
+  }
+
+  if (
+    params.security === "allowlist" &&
+    (!analysisOk || !allowlistSatisfied) &&
+    !approvedByAsk &&
+    !params.durableApprovalSatisfied
+  ) {
+    return {
+      allowed: false,
+      eventReason: "allowlist-miss",
+      errorMessage: formatSystemRunAllowlistMissMessage({
+        windowsShellWrapperBlocked,
+      }),
+      ...context,
+    };
+  }
+
+  return {
+    allowed: true,
+    ...context,
   };
 }

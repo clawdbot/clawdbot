@@ -6,27 +6,25 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
 const (
-	workflowVersion          = 15
-	docsI18nEngineName       = "pi"
-	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
+	workflowVersion          = 17
+	promptVersion            = 32
 	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"
-	defaultOpenAIModel       = "gpt-5.4"
-	defaultAnthropicModel    = "claude-opus-4-6"
-	defaultFallbackProvider  = "openai"
-	defaultFallbackModelName = defaultOpenAIModel
+	envDocsI18nFallbackModel = "OPENCLAW_DOCS_I18N_FALLBACK_MODEL"
+	defaultOpenAIModel       = "gpt-5.6"
 )
+
+var translationTranscriptArtifactRE = regexp.MustCompile(`(?i)(?:\b(?:analysis|commentary|final|assistant|user)\s+to\s*=\s*(?:functions\.[a-z0-9_-]+|[a-z_]+)|\bto\s*=\s*(?:functions\.[a-z0-9_-]+|analysis|commentary|final)\b|\bfunctions\.[a-z0-9_-]+\b|/home/runner/work/|\.agents/skills/|\bforce_parallel\s*:|\bcode\s+omitted\b|\bomitted\s+reasoning\b|全民彩票|娱乐平台开户|娱乐平台|皇平台|彩票平台|一本道|毛片|高清视频免费|不卡免费播放)`)
 
 func cacheNamespace() string {
 	return fmt.Sprintf(
-		"wf=%d|engine=%s|provider=%s|model=%s",
+		"wf=%d|prompt=%d",
 		workflowVersion,
-		docsI18nEngineName,
-		docsPiProvider(),
-		docsPiModel(),
+		promptVersion,
 	)
 }
 
@@ -51,89 +49,11 @@ func normalizeText(text string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 }
 
-func docsPiProvider() string {
-	if value := strings.TrimSpace(os.Getenv(envDocsI18nProvider)); value != "" {
-		return value
-	}
-	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
-		return "openai"
-	}
-	if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != "" {
-		return "anthropic"
-	}
-	return defaultFallbackProvider
-}
-
-func docsPiModel() string {
+func docsI18nModel() string {
 	if value := strings.TrimSpace(os.Getenv(envDocsI18nModel)); value != "" {
 		return value
 	}
-	switch docsPiProvider() {
-	case "anthropic":
-		return defaultAnthropicModel
-	case "openai":
-		return defaultOpenAIModel
-	default:
-		return defaultFallbackModelName
-	}
-}
-
-func docsPiProviderArg() string {
-	provider := docsPiProvider()
-	if provider == "" {
-		return ""
-	}
-	if docsPiOmitProvider() {
-		return ""
-	}
-	if strings.Contains(docsPiModel(), "/") {
-		return ""
-	}
-	if hasDocsPiAgentDirOverride() {
-		return ""
-	}
-	if !isBuiltInPiProvider(provider) {
-		return ""
-	}
-	return provider
-}
-
-func docsPiModelRef() string {
-	model := docsPiModel()
-	if model == "" {
-		return ""
-	}
-	if strings.Contains(model, "/") {
-		return model
-	}
-	if docsPiOmitProvider() {
-		provider := docsPiProvider()
-		if provider == "" {
-			return model
-		}
-		return provider + "/" + model
-	}
-	if docsPiProviderArg() != "" {
-		return model
-	}
-	provider := docsPiProvider()
-	if provider == "" {
-		return model
-	}
-	return provider + "/" + model
-}
-
-func isBuiltInPiProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic", "openai":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasDocsPiAgentDirOverride() bool {
-	return strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")) != ""
+	return defaultOpenAIModel
 }
 
 func segmentID(relPath, textHash string) string {
@@ -166,6 +86,26 @@ func isWhitespace(b byte) bool {
 	default:
 		return false
 	}
+}
+
+func validateNoTranslationTranscriptArtifacts(source, translated string) error {
+	sourceLower := strings.ToLower(source)
+	for _, token := range []string{"<openclaw_docs_i18n_input>", "</openclaw_docs_i18n_input>"} {
+		if strings.Contains(strings.ToLower(translated), token) && !strings.Contains(sourceLower, token) {
+			return fmt.Errorf("agent transcript artifact leaked into translation: %q", token)
+		}
+	}
+	for _, match := range translationTranscriptArtifactRE.FindAllString(translated, -1) {
+		match = strings.TrimSpace(match)
+		if match == "" {
+			continue
+		}
+		if strings.Contains(sourceLower, strings.ToLower(match)) {
+			continue
+		}
+		return fmt.Errorf("agent transcript artifact leaked into translation: %q", match)
+	}
+	return nil
 }
 
 func fatal(err error) {

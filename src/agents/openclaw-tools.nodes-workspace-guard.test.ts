@@ -1,9 +1,11 @@
+// Verifies nodes outPath normalization and workspace-only sandbox enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => ({
   assertSandboxPath: vi.fn(async (params: { filePath: string; cwd: string; root: string }) => {
+    // Lightweight path resolver mirrors the sandbox escape check without touching disk.
     const root = `/${params.root.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")}`;
     const candidate = params.filePath.replace(/\\/g, "/");
     const input = candidate.startsWith("/") ? candidate : `${root}/${candidate}`;
@@ -36,6 +38,7 @@ vi.mock("./sandbox-paths.js", () => ({
 const WORKSPACE_ROOT = "/tmp/openclaw-workspace-nodes-guard";
 
 function createNodesToolHarness() {
+  // Guard wraps a minimal nodes tool so tests assert only argument rewriting.
   const nodesExecute = vi.fn(async () => ({
     content: [{ type: "text", text: "ok" }],
     details: {},

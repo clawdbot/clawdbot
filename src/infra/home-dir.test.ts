@@ -1,5 +1,6 @@
+// Tests OpenClaw home directory resolution.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -7,6 +8,8 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
+  resolveUserPath,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -79,6 +82,72 @@ describe("resolveEffectiveHomeDir", () => {
   ])("$name", ({ env, expected }) => {
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve(expected));
   });
+
+  it("derives home from PREFIX on Android/Termux when HOME is unset", () => {
+    const env = {
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/home")).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
+  it("prefers HOME over PREFIX-derived path on Termux", () => {
+    const env = {
+      HOME: "/data/data/com.termux/files/home",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/data/data/com.termux/files/home"));
+  });
+
+  it("ignores PREFIX without com.termux to avoid false positives in generic chroots", () => {
+    const env = {
+      PREFIX: "/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
+  });
+
+  it("ignores PREFIX values that only mention com.termux outside the Termux app root", () => {
+    const env = {
+      PREFIX: "/tmp/com.termux/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
+  });
+
+  it("uses Termux PREFIX for tilde expansion when HOME is unset", () => {
+    const env = {
+      OPENCLAW_HOME: "~/workspace",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(
+      resolveEffectiveHomeDir(env, () => {
+        throw new Error("no homedir");
+      }),
+    ).toBe(path.resolve("/data/data/com.termux/files/home/workspace"));
+  });
+
+  it("expands OPENCLAW_HOME when set to ~", () => {
+    const env = {
+      OPENCLAW_HOME: "~/svc",
+      HOME: "/home/alice",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
+  });
+
+  it("does not interpret $ patterns in HOME when expanding OPENCLAW_HOME tilde", () => {
+    const env = {
+      OPENCLAW_HOME: "~/state",
+      HOME: "/home/$&user",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/$&user/state"));
+  });
 });
 
 describe("resolveRequiredHomeDir", () => {
@@ -107,6 +176,22 @@ describe("resolveRequiredHomeDir", () => {
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
+  });
+
+  it("fails clearly when both home and cwd are unavailable", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+    const noHome = () => {
+      throw new Error("no home");
+    };
+
+    try {
+      expect(() => resolveRequiredHomeDir({}, noHome)).toThrow(/set OPENCLAW_HOME/i);
+      expect(() => resolveRequiredOsHomeDir({}, noHome)).toThrow(/set HOME/i);
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 
@@ -154,6 +239,12 @@ describe("expandHomePrefix", () => {
       input: "/tmp/x",
       expected: "/tmp/x",
     },
+    {
+      name: "does not interpret $ patterns in home when expanding tilde",
+      input: "~/x",
+      opts: { home: "/home/$&user" },
+      expected: "/home/$&user/x",
+    },
   ])("$name", ({ input, opts, expected }) => {
     expect(expandHomePrefix(input, opts)).toBe(expected);
   });
@@ -197,6 +288,13 @@ describe("resolveHomeRelativePath", () => {
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);
+  });
+});
+
+describe("resolveUserPath", () => {
+  it("preserves the historical falsy-input contract", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });
 

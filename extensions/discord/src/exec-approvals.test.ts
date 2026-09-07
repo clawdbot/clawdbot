@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord tests cover exec approvals plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getDiscordExecApprovalApprovers,
@@ -22,7 +23,7 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("auto-enables when owner approvers resolve and disables only when forced off", () => {
+  it("requires explicit enablement even when owner approvers resolve", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
@@ -33,13 +34,18 @@ describe("discord exec approvals", () => {
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ approvers: ["123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: {
           ...buildConfig(),
           commands: { ownerAllowFrom: ["discord:789"] },
         } as OpenClawConfig,
+      }),
+    ).toBe(false);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
       }),
     ).toBe(true);
     expect(
@@ -61,23 +67,46 @@ describe("discord exec approvals", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
-        allowFrom: ["123"],
-        dm: { allowFrom: ["456"] },
+        allowFrom: ["123", "456"],
         defaultTo: "user:789",
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 
   it("falls back to commands.ownerAllowFrom for exec approvers", () => {
     const cfg = {
       ...buildConfig(),
-      commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
+      commands: {
+        ownerAllowFrom: [
+          "discord:123",
+          "user:456",
+          "789",
+          "discord:<@987>",
+          "user:<@654>",
+          "pk:999",
+        ],
+      },
     } as OpenClawConfig;
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789", "987", "654"]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
+  });
+
+  it("rejects retired global owners without changing explicit approval targets", () => {
+    const cfg = {
+      ...buildConfig(),
+      commands: { ownerAllowFrom: ["discord:user:123"] },
+    } as OpenClawConfig;
+
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(
+      getDiscordExecApprovalApprovers({
+        cfg,
+        configOverride: { approvers: ["discord:user:456"] },
+      }),
+    ).toEqual(["456"]);
   });
 });

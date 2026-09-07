@@ -1,5 +1,6 @@
-import { Container, Spacer } from "@mariozechner/pi-tui";
-import { markdownTheme, theme } from "../theme/theme.js";
+// Assistant message component renders assistant responses and spacing in the TUI log.
+import { Container, Spacer } from "@earendil-works/pi-tui";
+import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
 export class AssistantMessageComponent extends Container {

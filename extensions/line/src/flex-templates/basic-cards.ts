@@ -1,3 +1,5 @@
+import { normalizeLineAction } from "../actions.js";
+// Line plugin module implements basic cards behavior.
 import { attachFooterText } from "./common.js";
 import type {
   Action,
@@ -5,7 +7,6 @@ import type {
   FlexBox,
   FlexBubble,
   FlexButton,
-  FlexCarousel,
   FlexComponent,
   FlexImage,
   FlexText,
@@ -51,25 +52,30 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
             } as FlexText,
           ],
         } as FlexBox,
-        // Body text in subtle container
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "text",
-              text: body,
-              size: "md",
-              color: "#444444",
-              wrap: true,
-              lineSpacing: "6px",
-            } as FlexText,
-          ],
-          margin: "xl",
-          paddingAll: "lg",
-          backgroundColor: "#F8F9FA",
-          cornerRadius: "lg",
-        } as FlexBox,
+        // Body text in subtle container, only when there is a body to show:
+        // LINE rejects the whole push when a Flex text is blank.
+        ...(body
+          ? [
+              {
+                type: "box",
+                layout: "vertical",
+                contents: [
+                  {
+                    type: "text",
+                    text: body,
+                    size: "md",
+                    color: "#444444",
+                    wrap: true,
+                    lineSpacing: "6px",
+                  } as FlexText,
+                ],
+                margin: "xl",
+                paddingAll: "lg",
+                backgroundColor: "#F8F9FA",
+                cornerRadius: "lg",
+              } as FlexBox,
+            ]
+          : []),
       ],
       paddingAll: "xl",
       backgroundColor: "#FFFFFF",
@@ -91,7 +97,7 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
  */
 export function createListCard(title: string, items: ListItem[]): FlexBubble {
   const itemContents: FlexComponent[] = items.slice(0, 8).map((item, index) => {
-    const itemContents: FlexComponent[] = [
+    const itemContentsLocal: FlexComponent[] = [
       {
         type: "text",
         text: item.title,
@@ -103,7 +109,7 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
     ];
 
     if (item.subtitle) {
-      itemContents.push({
+      itemContentsLocal.push({
         type: "text",
         text: item.subtitle,
         size: "sm",
@@ -140,7 +146,7 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
         {
           type: "box",
           layout: "vertical",
-          contents: itemContents,
+          contents: itemContentsLocal,
           flex: 1,
         } as FlexBox,
       ],
@@ -148,7 +154,7 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
     };
 
     if (item.action) {
-      itemBox.action = item.action;
+      itemBox.action = normalizeLineAction(item.action, 40);
     }
 
     return itemBox;
@@ -208,7 +214,7 @@ export function createImageCard(
       size: "full",
       aspectRatio: options?.aspectRatio ?? "20:13",
       aspectMode: options?.aspectMode ?? "cover",
-      action: options?.action,
+      action: options?.action === undefined ? undefined : normalizeLineAction(options.action, 40),
     } as FlexImage,
     body: {
       type: "box",
@@ -265,14 +271,18 @@ export function createActionCard(
           size: "xl",
           wrap: true,
         } as FlexText,
-        {
-          type: "text",
-          text: body,
-          size: "md",
-          wrap: true,
-          margin: "md",
-          color: "#666666",
-        } as FlexText,
+        ...(body
+          ? [
+              {
+                type: "text",
+                text: body,
+                size: "md",
+                wrap: true,
+                margin: "md",
+                color: "#666666",
+              } as FlexText,
+            ]
+          : []),
       ],
       paddingAll: "lg",
     },
@@ -283,7 +293,7 @@ export function createActionCard(
         (action, index) =>
           ({
             type: "button",
-            action: action.action,
+            action: normalizeLineAction(action.action, 40),
             style: index === 0 ? "primary" : "secondary",
             margin: index > 0 ? "sm" : undefined,
           }) as FlexButton,
@@ -303,93 +313,4 @@ export function createActionCard(
   }
 
   return bubble;
-}
-
-/**
- * Create a carousel container from multiple bubbles
- * LINE allows max 12 bubbles in a carousel
- */
-export function createCarousel(bubbles: FlexBubble[]): FlexCarousel {
-  return {
-    type: "carousel",
-    contents: bubbles.slice(0, 12),
-  };
-}
-
-/**
- * Create a notification bubble (for alerts, status updates)
- *
- * Editorial design: Bold status indicator with accent color,
- * clear typography, optional icon for context.
- */
-export function createNotificationBubble(
-  text: string,
-  options?: {
-    icon?: string;
-    type?: "info" | "success" | "warning" | "error";
-    title?: string;
-  },
-): FlexBubble {
-  // Color based on notification type
-  const colors = {
-    info: { accent: "#3B82F6", bg: "#EFF6FF" },
-    success: { accent: "#06C755", bg: "#F0FDF4" },
-    warning: { accent: "#F59E0B", bg: "#FFFBEB" },
-    error: { accent: "#EF4444", bg: "#FEF2F2" },
-  };
-  const typeColors = colors[options?.type ?? "info"];
-
-  const contents: FlexComponent[] = [];
-
-  // Accent bar
-  contents.push({
-    type: "box",
-    layout: "vertical",
-    contents: [],
-    width: "4px",
-    backgroundColor: typeColors.accent,
-    cornerRadius: "2px",
-  } as FlexBox);
-
-  // Content section
-  const textContents: FlexComponent[] = [];
-
-  if (options?.title) {
-    textContents.push({
-      type: "text",
-      text: options.title,
-      size: "md",
-      weight: "bold",
-      color: "#111111",
-      wrap: true,
-    } as FlexText);
-  }
-
-  textContents.push({
-    type: "text",
-    text,
-    size: options?.title ? "sm" : "md",
-    color: options?.title ? "#666666" : "#333333",
-    wrap: true,
-    margin: options?.title ? "sm" : undefined,
-  } as FlexText);
-
-  contents.push({
-    type: "box",
-    layout: "vertical",
-    contents: textContents,
-    flex: 1,
-    paddingStart: "lg",
-  } as FlexBox);
-
-  return {
-    type: "bubble",
-    body: {
-      type: "box",
-      layout: "horizontal",
-      contents,
-      paddingAll: "xl",
-      backgroundColor: typeColors.bg,
-    },
-  };
 }

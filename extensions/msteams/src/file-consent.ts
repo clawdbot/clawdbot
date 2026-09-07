@@ -9,7 +9,11 @@
  */
 
 import { lookup } from "node:dns/promises";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -17,7 +21,7 @@ import { buildUserAgent } from "./user-agent.js";
  * These are the Microsoft/SharePoint domains that Teams legitimately provides
  * as upload destinations in the FileConsentCard flow.
  */
-export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
+const CONSENT_UPLOAD_HOST_ALLOWLIST = [
   "sharepoint.com",
   "sharepoint.us",
   "sharepoint.de",
@@ -33,72 +37,10 @@ export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
 ] as const;
 
 /**
- * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
- * or link-local range that must never be reached via consent uploads.
+ * Returns true if the given IPv4 or IPv6 address is private, internal, or
+ * special-use and must never be reached via consent uploads.
  */
-export function isPrivateOrReservedIP(ip: string): boolean {
-  // Handle IPv4-mapped IPv6 first (e.g., ::ffff:127.0.0.1, ::ffff:10.0.0.1)
-  const ipv4MappedMatch = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (ipv4MappedMatch) {
-    return isPrivateOrReservedIP(ipv4MappedMatch[1]);
-  }
-
-  // IPv4 checks
-  const v4Parts = ip.split(".");
-  if (v4Parts.length === 4) {
-    const octets = v4Parts.map(Number);
-    // Validate all octets are integers in 0-255
-    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
-      return false;
-    }
-    const [a, b] = octets;
-    // 10.0.0.0/8
-    if (a === 10) {
-      return true;
-    }
-    // 172.16.0.0/12
-    if (a === 172 && b >= 16 && b <= 31) {
-      return true;
-    }
-    // 192.168.0.0/16
-    if (a === 192 && b === 168) {
-      return true;
-    }
-    // 127.0.0.0/8 (loopback)
-    if (a === 127) {
-      return true;
-    }
-    // 169.254.0.0/16 (link-local)
-    if (a === 169 && b === 254) {
-      return true;
-    }
-    // 0.0.0.0/8
-    if (a === 0) {
-      return true;
-    }
-  }
-
-  // IPv6 checks
-  const normalized = normalizeLowercaseStringOrEmpty(ip);
-  // ::1 loopback
-  if (normalized === "::1") {
-    return true;
-  }
-  // fe80::/10 link-local
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fe80")) {
-    return true;
-  }
-  // fc00::/7 unique-local (fc00:: and fd00::)
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) {
-    return true;
-  }
-  // :: unspecified
-  if (normalized === "::") {
-    return true;
-  }
-
-  return false;
-}
+const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Validate that a consent upload URL is safe to PUT to.
@@ -109,7 +51,7 @@ export function isPrivateOrReservedIP(ip: string): boolean {
  *
  * @throws Error if the URL fails validation
  */
-export async function validateConsentUploadUrl(
+async function validateConsentUploadUrl(
   url: string,
   opts?: {
     allowlist?: readonly string[];
@@ -156,7 +98,7 @@ export async function validateConsentUploadUrl(
   }
 }
 
-export interface FileConsentCardParams {
+interface FileConsentCardParams {
   filename: string;
   description?: string;
   sizeInBytes: number;
@@ -164,7 +106,7 @@ export interface FileConsentCardParams {
   context?: Record<string, unknown>;
 }
 
-export interface FileInfoCardParams {
+interface FileInfoCardParams {
   filename: string;
   contentUrl: string;
   uniqueId: string;
@@ -204,7 +146,7 @@ export function buildFileInfoCard(params: FileInfoCardParams) {
   };
 }
 
-export interface FileConsentUploadInfo {
+interface FileConsentUploadInfo {
   name: string;
   uploadUrl: string;
   contentUrl: string;
@@ -212,7 +154,7 @@ export interface FileConsentUploadInfo {
   fileType: string;
 }
 
-export interface FileConsentResponse {
+interface FileConsentResponse {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;
@@ -259,6 +201,7 @@ export async function uploadToConsentUrl(params: {
   buffer: Buffer;
   contentType?: string;
   fetchFn?: typeof fetch;
+  timeoutMs?: number;
   /** Override for testing — custom allowlist and DNS resolver */
   validationOpts?: {
     allowlist?: readonly string[];
@@ -268,16 +211,24 @@ export async function uploadToConsentUrl(params: {
   await validateConsentUploadUrl(params.url, params.validationOpts);
 
   const fetchFn = params.fetchFn ?? fetch;
-  const res = await fetchFn(params.url, {
-    method: "PUT",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      "Content-Type": params.contentType ?? "application/octet-stream",
-      "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+  const res = await fetchWithTimeout(
+    params.url,
+    {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": params.contentType ?? "application/octet-stream",
+        "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+      },
+      body: new Blob([bufferToBlobPart(params.buffer)]),
     },
-    body: new Uint8Array(params.buffer),
-  });
+    params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+    fetchFn,
+  );
 
+  // Consent uploads never consume the response payload. Cancel it on every
+  // status so the fetch implementation can release the underlying connection.
+  await res.body?.cancel().catch(() => undefined);
   if (!res.ok) {
     throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
   }

@@ -1,204 +1,99 @@
-import {
-  hasMediaNormalizationEntry,
-  resolveClosestAspectRatio,
-  resolveClosestResolution,
-  resolveClosestSize,
-  type MediaNormalizationEntry,
-} from "../media-generation/runtime-shared.js";
+/** Normalizes image generation request overrides against provider/model capabilities. */
+import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
+import { hasMediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 import type {
+  ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "./types.js";
 
-export type ResolvedImageGenerationOverrides = {
+type ResolvedImageGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  quality?: ImageGenerationQuality;
+  outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
   normalization?: ImageGenerationNormalization;
 };
 
-function finalizeImageNormalization(
-  normalization: ImageGenerationNormalization,
-): ImageGenerationNormalization | undefined {
-  return hasMediaNormalizationEntry(normalization.size) ||
-    hasMediaNormalizationEntry(normalization.aspectRatio) ||
-    hasMediaNormalizationEntry(normalization.resolution)
-    ? normalization
-    : undefined;
-}
-
+/** Returns supported image overrides plus ignored/normalized override metadata for replies. */
 export function resolveImageGenerationOverrides(params: {
   provider: ImageGenerationProvider;
+  model?: string;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  quality?: ImageGenerationQuality;
+  outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
 }): ResolvedImageGenerationOverrides {
-  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
-  const modeCaps = hasInputImages
+  // Edit and generate modes can expose different knobs for the same provider.
+  const modeCaps = params.inputImages?.length
     ? params.provider.capabilities.edit
     : params.provider.capabilities.generate;
   const geometry = params.provider.capabilities.geometry;
-  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
-  const normalization: ImageGenerationNormalization = {};
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
+  const sanitized = resolveMediaGeometryOverrides({
+    size: params.size,
+    aspectRatio: params.aspectRatio,
+    resolution: params.resolution,
+    capabilities: {
+      ...modeCaps,
+      sizes: params.model
+        ? (geometry?.sizesByModel?.[params.model] ?? geometry?.sizes)
+        : geometry?.sizes,
+      aspectRatios: params.model
+        ? (geometry?.aspectRatiosByModel?.[params.model] ?? geometry?.aspectRatios)
+        : geometry?.aspectRatios,
+      resolutions: params.model
+        ? (geometry?.resolutionsByModel?.[params.model] ?? geometry?.resolutions)
+        : geometry?.resolutions,
+    },
+    fallbackSizes: geometry?.sizes,
+  });
+  const ignoredOverrides: ImageGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
+  let { quality, outputFormat, background } = params;
 
-  if (size && (geometry?.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
-    const normalizedSize = resolveClosestSize({
-      requestedSize: size,
-      supportedSizes: geometry?.sizes,
-    });
-    if (normalizedSize && normalizedSize !== size) {
-      normalization.size = {
-        requested: size,
-        applied: normalizedSize,
-      };
-    }
-    size = normalizedSize;
+  if (quality && !(params.provider.capabilities.output?.qualities ?? []).includes(quality)) {
+    ignoredOverrides.push({ key: "quality", value: quality });
+    quality = undefined;
   }
-
-  if (!modeCaps.supportsSize && size) {
-    let translated = false;
-    if (modeCaps.supportsAspectRatio) {
-      const normalizedAspectRatio = resolveClosestAspectRatio({
-        requestedAspectRatio: aspectRatio,
-        requestedSize: size,
-        supportedAspectRatios: geometry?.aspectRatios,
-      });
-      if (normalizedAspectRatio) {
-        aspectRatio = normalizedAspectRatio;
-        normalization.aspectRatio = {
-          applied: normalizedAspectRatio,
-          derivedFrom: "size",
-        };
-        translated = true;
-      }
-    }
-    if (!translated) {
-      ignoredOverrides.push({ key: "size", value: size });
-    }
-    size = undefined;
-  }
-
-  if (aspectRatio && (geometry?.aspectRatios?.length ?? 0) > 0 && modeCaps.supportsAspectRatio) {
-    const normalizedAspectRatio = resolveClosestAspectRatio({
-      requestedAspectRatio: aspectRatio,
-      requestedSize: size,
-      supportedAspectRatios: geometry?.aspectRatios,
-    });
-    if (normalizedAspectRatio && normalizedAspectRatio !== aspectRatio) {
-      normalization.aspectRatio = {
-        requested: aspectRatio,
-        applied: normalizedAspectRatio,
-      };
-    }
-    aspectRatio = normalizedAspectRatio;
-  } else if (!modeCaps.supportsAspectRatio && aspectRatio) {
-    const derivedSize =
-      modeCaps.supportsSize && !size
-        ? resolveClosestSize({
-            requestedSize: params.size,
-            requestedAspectRatio: aspectRatio,
-            supportedSizes: geometry?.sizes,
-          })
-        : undefined;
-    let translated = false;
-    if (derivedSize) {
-      size = derivedSize;
-      normalization.size = {
-        applied: derivedSize,
-        derivedFrom: "aspectRatio",
-      };
-      translated = true;
-    }
-    if (!translated) {
-      ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    }
-    aspectRatio = undefined;
-  }
-
-  if (resolution && (geometry?.resolutions?.length ?? 0) > 0 && modeCaps.supportsResolution) {
-    const normalizedResolution = resolveClosestResolution({
-      requestedResolution: resolution,
-      supportedResolutions: geometry?.resolutions,
-    });
-    if (normalizedResolution && normalizedResolution !== resolution) {
-      normalization.resolution = {
-        requested: resolution,
-        applied: normalizedResolution,
-      };
-    }
-    resolution = normalizedResolution;
-  } else if (!modeCaps.supportsResolution && resolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  if (size && !modeCaps.supportsSize) {
-    ignoredOverrides.push({ key: "size", value: size });
-    size = undefined;
-  }
-
-  if (aspectRatio && !modeCaps.supportsAspectRatio) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (resolution && !modeCaps.supportsResolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
   if (
-    !normalization.aspectRatio &&
-    aspectRatio &&
-    ((!params.aspectRatio && params.size) || params.aspectRatio !== aspectRatio)
+    outputFormat &&
+    !(params.provider.capabilities.output?.formats ?? []).includes(outputFormat)
   ) {
-    const entry: MediaNormalizationEntry<string> = {
-      applied: aspectRatio,
-      ...(params.aspectRatio ? { requested: params.aspectRatio } : {}),
-      ...(!params.aspectRatio && params.size ? { derivedFrom: "size" } : {}),
-    };
-    normalization.aspectRatio = entry;
+    ignoredOverrides.push({ key: "outputFormat", value: outputFormat });
+    outputFormat = undefined;
   }
-
-  if (!normalization.size && size && params.size && params.size !== size) {
-    normalization.size = {
-      requested: params.size,
-      applied: size,
-    };
-  }
-
-  if (!normalization.aspectRatio && !params.aspectRatio && params.size && aspectRatio) {
-    normalization.aspectRatio = {
-      applied: aspectRatio,
-      derivedFrom: "size",
-    };
-  }
-
   if (
-    !normalization.resolution &&
-    resolution &&
-    params.resolution &&
-    params.resolution !== resolution
+    background &&
+    !(params.provider.capabilities.output?.backgrounds ?? []).includes(background)
   ) {
-    normalization.resolution = {
-      requested: params.resolution,
-      applied: resolution,
-    };
+    ignoredOverrides.push({ key: "background", value: background });
+    background = undefined;
   }
 
+  const { normalization } = sanitized;
   return {
-    size,
-    aspectRatio,
-    resolution,
+    size: sanitized.size,
+    aspectRatio: sanitized.aspectRatio,
+    resolution: sanitized.resolution,
+    quality,
+    outputFormat,
+    background,
     ignoredOverrides,
-    normalization: finalizeImageNormalization(normalization),
+    normalization:
+      hasMediaNormalizationEntry(normalization.size) ||
+      hasMediaNormalizationEntry(normalization.aspectRatio) ||
+      hasMediaNormalizationEntry(normalization.resolution)
+        ? normalization
+        : undefined,
   };
 }

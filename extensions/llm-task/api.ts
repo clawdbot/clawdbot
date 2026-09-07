@@ -1,1 +1,5 @@
-export * from "openclaw/plugin-sdk/llm-task";
+export {
+  definePluginEntry,
+  type AnyAgentTool,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/plugin-entry";

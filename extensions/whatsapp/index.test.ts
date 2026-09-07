@@ -1,13 +1,16 @@
-import { describe } from "vitest";
-import { assertBundledChannelEntries } from "../../test/helpers/bundled-channel-entry.ts";
-import entry from "./index.js";
-import setupEntry from "./setup-entry.js";
+// Whatsapp tests cover index plugin behavior.
+import { describe, expect, it } from "vitest";
+import { whatsappPlugin } from "./channel-plugin-api.js";
 
 describe("whatsapp bundled entries", () => {
-  assertBundledChannelEntries({
-    entry,
-    expectedId: "whatsapp",
-    expectedName: "WhatsApp",
-    setupEntry,
+  it("declares account config as channel-restart reload metadata", () => {
+    expect(whatsappPlugin.reload).toEqual({
+      configPrefixes: [
+        "channels.whatsapp.enabled",
+        "channels.whatsapp.accounts",
+        "channels.whatsapp.selfChatMode",
+      ],
+      noopPrefixes: ["channels.whatsapp", "messages.inbound", "messages.ackReactionScope"],
+    });
   });
 });

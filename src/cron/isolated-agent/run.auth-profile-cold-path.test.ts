@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Auth profile cold-path tests cover auth loading for isolated cron runs.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 
@@ -6,12 +7,10 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
 }));
 
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
-  resolveSessionAuthProfileOverrideMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
+  resolveSessionAuthSelectionMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -39,17 +38,11 @@ function makeParams(overrides?: Record<string, unknown>) {
 }
 
 describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
-  let previousFastTestEnv: string | undefined;
+  setupRunCronIsolatedAgentTurnSuite();
 
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
     hasAnyAuthProfileStoreSourceMock.mockReset();
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(false);
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
   });
 
   it("skips auth-profile override resolution when no sources exist", async () => {
@@ -57,6 +50,6 @@ describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
 
     expect(result.status).toBe("ok");
     expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

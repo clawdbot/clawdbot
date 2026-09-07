@@ -1,8 +1,9 @@
+// Covers package.json metadata readers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { readPackageName, readPackageVersion } from "./package-json.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { readPackageManagerSpec, readPackageName, readPackageVersion } from "./package-json.js";
 
 async function expectPackageMeta(params: {
   root: string;
@@ -15,10 +16,14 @@ async function expectPackageMeta(params: {
 
 describe("package-json helpers", () => {
   it("reads package version and trims package name", async () => {
-    await withTempDir({ prefix: "openclaw-package-json-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-package-json-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ version: " 1.2.3 ", name: "  @openclaw/demo  " }),
+        JSON.stringify({
+          version: " 1.2.3 ",
+          name: "  @openclaw/demo  ",
+          packageManager: " pnpm@12.0.0 ",
+        }),
         "utf8",
       );
 
@@ -27,6 +32,7 @@ describe("package-json helpers", () => {
         expectedVersion: "1.2.3",
         expectedName: "@openclaw/demo",
       });
+      await expect(readPackageManagerSpec(root)).resolves.toBe("pnpm@12.0.0");
     });
   });
 
@@ -72,7 +78,7 @@ describe("package-json helpers", () => {
   ])(
     "returns normalized nulls for $name",
     async ({ writePackageJson, expectedVersion, expectedName }) => {
-      await withTempDir({ prefix: "openclaw-package-json-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-package-json-" }, async (root) => {
         await writePackageJson(root);
         await expectPackageMeta({
           root,

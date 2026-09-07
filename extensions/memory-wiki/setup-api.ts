@@ -1,3 +1,4 @@
+// Memory Wiki API module exposes the plugin public contract.
 import { definePluginEntry } from "./api.js";
 import { migrateMemoryWikiLegacyConfig } from "./src/config-compat.js";
 

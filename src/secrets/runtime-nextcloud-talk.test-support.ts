@@ -1,12 +1,18 @@
+/** Shared Nextcloud Talk secrets runtime fixtures. */
 import { vi } from "vitest";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-const nextcloudTalkSecrets = loadBundledChannelSecretContractApi("nextcloud-talk");
+/** Test-only bootstrap registry mock for Nextcloud Talk secret surface tests. */
+const nextcloudTalkSecrets = loadChannelSecretContractApi({
+  channelId: "nextcloud-talk",
+  config: {},
+});
 if (!nextcloudTalkSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Nextcloud Talk secret contract api");
 }
 const nextcloudTalkAssignments = nextcloudTalkSecrets.collectRuntimeConfigAssignments;
 
+// Use the real bundled Nextcloud Talk contract while avoiding plugin bootstrap.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "nextcloud-talk"

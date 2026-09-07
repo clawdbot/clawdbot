@@ -1,9 +1,19 @@
+/**
+ * Runtime SDK subpath for building approval replies and exec approval presentations.
+ */
 export {
-  buildApprovalInteractiveReplyFromActionDescriptors,
+  // Shipped Plugin SDK compatibility alias; remove in the next major release.
+  buildApprovalButtonPresentation as buildApprovalPresentation,
+  buildApprovalPresentationFromActionDescriptors,
+  buildExecApprovalPresentation,
   buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
+  formatExecApprovalExpiresIn,
+  buildTypedApprovalPresentation,
+  buildTypedExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
   type ExecApprovalActionDescriptor,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
@@ -15,4 +25,7 @@ export {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
 } from "../infra/exec-approvals.js";
-export { buildPluginApprovalPendingReplyPayload } from "./approval-renderers.js";
+export {
+  buildPluginApprovalPendingReplyPayload,
+  buildTypedPluginApprovalPendingReplyPayload,
+} from "./approval-renderers.js";

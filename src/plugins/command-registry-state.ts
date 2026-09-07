@@ -1,96 +1,83 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+// Stores plugin command registry state for the current process lifecycle.
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
+import { requireActivePluginRegistry } from "./runtime.js";
+import type {
+  AgentPromptGuidance,
+  AgentPromptSurfaceKind,
+  OpenClawPluginCommandDefinition,
+} from "./types.js";
 
 export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
+  trustedOwnerStatusExposure?: true;
 };
-
-type PluginCommandState = {
-  pluginCommands: Map<string, RegisteredPluginCommand>;
-  registryLocked: boolean;
-};
-
-const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
-
-const getState = () =>
-  resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
-    pluginCommands: new Map<string, RegisteredPluginCommand>(),
-    registryLocked: false,
-  }));
-
-const getPluginCommandMap = () => getState().pluginCommands;
-
-export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>(), {
-  get(_target, property) {
-    const value = Reflect.get(getPluginCommandMap(), property, getPluginCommandMap());
-    return typeof value === "function" ? value.bind(getPluginCommandMap()) : value;
-  },
-});
-
-export function isPluginCommandRegistryLocked(): boolean {
-  return getState().registryLocked;
-}
-
-export function setPluginCommandRegistryLocked(locked: boolean): void {
-  getState().registryLocked = locked;
-}
 
 export function clearPluginCommands(): void {
-  pluginCommands.clear();
+  requireActivePluginRegistry().commands.length = 0;
 }
 
-export function clearPluginCommandsForPlugin(pluginId: string): void {
-  for (const [key, cmd] of pluginCommands.entries()) {
-    if (cmd.pluginId === pluginId) {
-      pluginCommands.delete(key);
+export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
+  return command.ownership === "reserved";
+}
+
+export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolean {
+  return (
+    (Array.isArray(command.requiredScopes) && command.requiredScopes.length > 0) ||
+    command.trustedOwnerStatusExposure === true
+  );
+}
+
+export function listRegisteredPluginAgentPromptGuidance(params?: {
+  surface?: AgentPromptSurfaceKind;
+  includeLegacyGlobalGuidance?: boolean;
+}): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  // Plugin discovery can complete in a different order on the next run; only
+  // canonical command ownership may decide bytes in the cached prompt prefix.
+  const commands = listRegisteredPluginCommands(requireActivePluginRegistry()).toSorted(
+    (left, right) => {
+      if (left.pluginId !== right.pluginId) {
+        return left.pluginId < right.pluginId ? -1 : 1;
+      }
+      return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+    },
+  );
+  for (const command of commands) {
+    for (const entry of command.agentPromptGuidance ?? []) {
+      const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
+        surface: params?.surface ? normalizeAgentPromptSurfaceKind(params.surface) : undefined,
+        includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
+      });
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      lines.push(trimmed);
     }
   }
+  return lines;
 }
 
-function resolvePluginNativeName(
-  command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
-  if (typeof providerOverride === "string" && providerOverride.trim()) {
-    return providerOverride.trim();
+function resolveAgentPromptGuidanceTextForSurface(
+  entry: AgentPromptGuidance,
+  params: {
+    surface?: AgentPromptSurfaceKind;
+    includeLegacyGlobalGuidance: boolean;
+  },
+): string | undefined {
+  if (typeof entry === "string") {
+    return params.includeLegacyGlobalGuidance ? entry.trim() : undefined;
   }
-  const defaultOverride = command.nativeNames?.default;
-  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
-    return defaultOverride.trim();
+  const text = entry.text.trim();
+  if (!params.surface) {
+    return text;
   }
-  return command.name;
-}
-
-export function getPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  if (
-    providerName &&
-    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
-  ) {
-    return [];
+  if (!entry.surfaces || entry.surfaces.length === 0) {
+    return params.includeLegacyGlobalGuidance ? text : undefined;
   }
-  return listProviderPluginCommandSpecs(provider);
-}
-
-/** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
+  return entry.surfaces.includes(params.surface) ? text : undefined;
 }

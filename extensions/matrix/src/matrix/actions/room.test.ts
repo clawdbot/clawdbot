@@ -1,8 +1,9 @@
+// Matrix tests cover room plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { getMatrixMemberInfo, getMatrixRoomInfo } from "./room.js";
 
-function createRoomClient() {
+function createRoomClient(altAliases?: string[]) {
   const getRoomStateEvent = vi.fn(async (_roomId: string, eventType: string) => {
     switch (eventType) {
       case "m.room.name":
@@ -10,15 +11,12 @@ function createRoomClient() {
       case "m.room.topic":
         return { topic: "Incidents" };
       case "m.room.canonical_alias":
-        return { alias: "#ops:example.org" };
+        return { alias: "#ops:example.org", alt_aliases: altAliases };
       default:
         throw new Error(`unexpected state event ${eventType}`);
     }
   });
-  const getJoinedRoomMembers = vi.fn(async () => [
-    { user_id: "@alice:example.org" },
-    { user_id: "@bot:example.org" },
-  ]);
+  const getJoinedRoomMembers = vi.fn(async () => ["@alice:example.org", "@bot:example.org"]);
   const getUserProfile = vi.fn(async () => ({
     displayname: "Alice",
     avatar_url: "mxc://example.org/alice",
@@ -38,8 +36,14 @@ function createRoomClient() {
 }
 
 describe("matrix room actions", () => {
-  it("returns room details from the resolved Matrix room id", async () => {
-    const { client, getJoinedRoomMembers, getRoomStateEvent } = createRoomClient();
+  it.each([
+    { name: "without alternative aliases", altAliases: undefined },
+    {
+      name: "with alternative aliases",
+      altAliases: ["#incidents:example.org", "#team:example.org"],
+    },
+  ])("returns room details $name", async ({ altAliases }) => {
+    const { client, getJoinedRoomMembers, getRoomStateEvent } = createRoomClient(altAliases);
 
     const result = await getMatrixRoomInfo("room:!ops:example.org", { client });
 
@@ -50,12 +54,12 @@ describe("matrix room actions", () => {
       name: "Ops Room",
       topic: "Incidents",
       canonicalAlias: "#ops:example.org",
-      altAliases: [],
+      altAliases: altAliases ?? [],
       memberCount: 2,
     });
   });
 
-  it("resolves optional room ids when looking up member info", async () => {
+  it("requires room membership when looking up member info", async () => {
     const { client, getUserProfile } = createRoomClient();
 
     const result = await getMatrixMemberInfo("@alice:example.org", {
@@ -75,5 +79,17 @@ describe("matrix room actions", () => {
       displayName: "Alice",
       roomId: "!ops:example.org",
     });
+  });
+
+  it("rejects profiles for users outside the room", async () => {
+    const { client, getUserProfile } = createRoomClient();
+
+    await expect(
+      getMatrixMemberInfo("@mallory:example.org", {
+        client,
+        roomId: "room:!ops:example.org",
+      }),
+    ).rejects.toThrow("User @mallory:example.org is not a member of room !ops:example.org");
+    expect(getUserProfile).not.toHaveBeenCalled();
   });
 });

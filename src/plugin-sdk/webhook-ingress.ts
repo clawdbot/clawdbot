@@ -1,3 +1,10 @@
+/**
+ * Public SDK subpath for webhook ingress guards, targets, and request helpers.
+ */
+import type { IncomingMessage } from "node:http";
+import { resolveRequestClientIpFromHeaders } from "../gateway/net.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+
 export {
   createBoundedCounter,
   createFixedWindowRateLimiter,
@@ -25,11 +32,14 @@ export {
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 export {
+  canonicalizeWebhookRouteKey,
   registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
+  normalizeWebhookPath,
+  resolveWebhookPath,
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
@@ -39,8 +49,19 @@ export {
   type RegisteredWebhookTarget,
   type WebhookTargetMatchResult,
 } from "./webhook-targets.js";
-export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
-export { resolveRequestClientIp } from "../gateway/net.js";
+export function resolveRequestClientIp(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): string | undefined {
+  // The Gateway validates managed ingress before plugin dispatch; raw requests remain fallback.
+  return (
+    getPluginRuntimeGatewayRequestScope()?.client?.clientIp ??
+    resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
+  );
+}
 export { createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";
+export { rawDataToString } from "../infra/ws.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
+export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";

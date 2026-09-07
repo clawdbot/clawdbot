@@ -1,3 +1,4 @@
+// Status command report tests cover terminal report line rendering from report sections.
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 
@@ -16,11 +17,13 @@ describe("buildStatusCommandReportLines", () => {
       overviewRows: [{ Item: "OS", Value: "macOS" }],
       showTaskMaintenanceHint: true,
       taskMaintenanceHint: "maintenance hint",
+      retainedLostTaskLine: "retained lost line",
       pluginCompatibilityLines: ["warn 1"],
       pairingRecoveryLines: ["pairing needed"],
+      modelSelectionLines: ["model warning"],
       securityAuditLines: ["audit line"],
       channelsColumns: [{ key: "Channel", header: "Channel" }],
-      channelsRows: [{ Channel: "telegram" }],
+      channelsRows: [{ Channel: "quietchat" }],
       sessionsColumns: [{ key: "Key", header: "Key" }],
       sessionsRows: [{ Key: "main" }],
       systemEventsRows: [{ Event: "queued" }],
@@ -38,11 +41,15 @@ describe("buildStatusCommandReportLines", () => {
       "table:Item:1",
       "",
       "muted(maintenance hint)",
+      "retained lost line",
       "",
       "# Plugin compatibility",
       "warn 1",
       "",
       "pairing needed",
+      "",
+      "# Model selection",
+      "model warning",
       "",
       "# Security audit",
       "audit line",
@@ -79,9 +86,10 @@ describe("buildStatusCommandReportLines", () => {
       taskMaintenanceHint: "ignored",
       pluginCompatibilityLines: [],
       pairingRecoveryLines: [],
+      modelSelectionLines: [],
       securityAuditLines: ["audit line"],
       channelsColumns: [{ key: "Channel", header: "Channel" }],
-      channelsRows: [{ Channel: "telegram" }],
+      channelsRows: [{ Channel: "quietchat" }],
       sessionsColumns: [{ key: "Key", header: "Key" }],
       sessionsRows: [{ Key: "main" }],
       footerLines: ["FAQ"],
@@ -92,5 +100,33 @@ describe("buildStatusCommandReportLines", () => {
     expect(lines).not.toContain("# Health");
     expect(lines).not.toContain("# Usage");
     expect(lines.at(-1)).toBe("FAQ");
+  });
+
+  it("renders empty channels and sessions as plain messages", async () => {
+    const lines = await buildStatusCommandReportLines({
+      heading: (text) => `# ${text}`,
+      muted: (text) => `muted(${text})`,
+      renderTable: createRenderTable(),
+      width: 120,
+      overviewRows: [{ Item: "OS", Value: "macOS" }],
+      showTaskMaintenanceHint: false,
+      taskMaintenanceHint: "ignored",
+      pluginCompatibilityLines: [],
+      pairingRecoveryLines: [],
+      modelSelectionLines: [],
+      securityAuditLines: ["audit line"],
+      channelsColumns: [{ key: "Channel", header: "Channel" }],
+      channelsRows: [],
+      sessionsColumns: [{ key: "Key", header: "Key" }],
+      sessionsRows: [],
+      footerLines: ["FAQ"],
+    });
+
+    expect(lines).toContain("# Channels");
+    expect(lines).toContain("muted(No channels configured)");
+    expect(lines).toContain("# Sessions");
+    expect(lines).toContain("muted(No sessions)");
+    expect(lines).not.toContain("table:Channel:0");
+    expect(lines).not.toContain("table:Key:0");
   });
 });

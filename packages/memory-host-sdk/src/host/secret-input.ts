@@ -1,27 +1,20 @@
+// Memory Host SDK module implements secret input behavior.
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-  resolveSecretInputRef,
-} from "../../../../src/config/types.secrets.js";
+} from "./openclaw-runtime-config.js";
 
+// Memory-specific facade for consuming gateway-resolved provider secret input.
+
+/** Return true when a configured memory secret contains a literal value or reference. */
 export function hasConfiguredMemorySecretInput(value: unknown): boolean {
   return hasConfiguredSecretInput(value);
 }
 
+/** Consume a secret value that the gateway runtime snapshot already resolved. */
 export function resolveMemorySecretInputString(params: {
   value: unknown;
   path: string;
 }): string | undefined {
-  const { ref } = resolveSecretInputRef({ value: params.value });
-  if (ref?.source === "env") {
-    const envValue = normalizeSecretInputString(process.env[ref.id]);
-    if (envValue) {
-      return envValue;
-    }
-  }
-  return normalizeResolvedSecretInputString({
-    value: params.value,
-    path: params.path,
-  });
+  return normalizeResolvedSecretInputString(params);
 }

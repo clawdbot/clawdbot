@@ -1,98 +1,140 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+// Gateway CLI backend connect tests exercise the minimal WebSocket handshake,
+// device identity payload, auth token forwarding, and backend request framing.
+import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { captureEnv } from "../test-utils/env.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 import {
-  connectTestGatewayClient,
-  ensurePairedTestGatewayClientIdentity,
-  getFreeGatewayPort,
-} from "./gateway-cli-backend.live-helpers.js";
-import { startGatewayServer } from "./server.js";
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "./minimal-gateway.test-helpers.js";
 
-const GATEWAY_CONNECT_TIMEOUT_MS = 90_000;
+const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 1_000;
+const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 15_000;
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-" });
 
-describe("gateway cli backend connect", () => {
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
+async function createTempDeviceIdentity() {
+  const tempRoot = await tempDirs.make("device");
+  return loadOrCreateDeviceIdentity({ path: path.join(tempRoot, "device.sqlite") });
+}
+
+async function startMinimalGatewayServer(params: { token: string }) {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const requests: string[] = [];
+  let connectParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      requests.push(frame.method ?? "");
+      if (frame.method === "connect") {
+        connectParams = frame.params as Record<string, unknown> | undefined;
+        expect(frame.params?.auth?.token).toBe(params.token);
+        expect(frame.params?.device?.nonce).toBe("test-nonce");
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            connId: "conn-1",
+            methods: ["health"],
+            snapshot: {
+              presence: [],
+              health: { ok: true },
+              stateVersion: { presence: 0, health: 0 },
+              uptimeMs: 0,
+            },
+            policy: {
+              maxPayload: 1,
+              maxBufferedBytes: 1,
+              tickIntervalMs: 60_000,
+            },
+          }),
+        );
+        return;
+      }
+      if (frame.method === "health") {
+        sendMinimalGatewayResponse(ws, frame.id, { ok: true });
+      }
+    });
   });
 
-  it(
-    "connects a same-process test gateway client in minimal mode",
-    async () => {
-      const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-      ]);
+  await new Promise<void>((resolve) => {
+    wss.once("listening", resolve);
+  });
+  const address = wss.address() as AddressInfo;
+  return {
+    requests,
+    get connectParams() {
+      return connectParams;
+    },
+    url: `ws://127.0.0.1:${address.port}`,
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+    },
+  };
+}
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-connect-home-"));
-      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
-      const bundledPluginsDir = path.join(tempHome, "openclaw-test-no-bundled-extensions");
+describe("gateway cli backend connect", () => {
+  beforeAll(async () => {
+    await tempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await tempDirs.cleanup();
+  });
+
+  it.each([
+    { label: "default capabilities", caps: undefined },
+    { label: "plugin approval capability", caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] },
+  ])(
+    "connects a test gateway client through the live helper with $label",
+    async ({ caps }) => {
       const token = `test-${Date.now()}`;
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.mkdir(bundledPluginsDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
-      );
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
-
-      const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      const deviceIdentity = await createTempDeviceIdentity();
+      const server = await startMinimalGatewayServer({ token });
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
         client = await connectTestGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: server.url,
           token,
           deviceIdentity,
+          timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          maxAttemptTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          ...(caps ? { caps } : {}),
+          requestTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          waitForEventLoopReady: false,
         });
         const health = await client.request("health", undefined, {
-          timeoutMs: 5_000,
+          timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
         });
-        expect(health).toMatchObject({
-          ok: true,
-        });
+        const connectClient = server.connectParams?.client as Record<string, unknown> | undefined;
+        expect(health.ok).toBe(true);
+        expect(connectClient?.id).toBe(GATEWAY_CLIENT_NAMES.TEST);
+        expect(connectClient?.displayName).toBe("vitest-live");
+        expect(connectClient?.version).toBe("dev");
+        expect(connectClient?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
+        expect(server.connectParams?.caps).toEqual(caps ?? []);
+        expect(server.requests).toEqual(["connect", "health"]);
       } finally {
-        await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
-        await server.close({ reason: "gateway connect regression complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
-        envSnapshot.restore();
+        await client
+          ?.stopAndWait({ timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS })
+          .catch(() => {});
+        await server.close();
       }
     },
-    GATEWAY_CONNECT_TIMEOUT_MS,
+    GATEWAY_CONNECT_TEST_TIMEOUT_MS,
   );
 });

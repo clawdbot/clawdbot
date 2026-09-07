@@ -1,3 +1,4 @@
+// Discord tests cover security doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 

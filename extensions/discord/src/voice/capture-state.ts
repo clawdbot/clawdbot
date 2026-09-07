@@ -1,94 +1,78 @@
 import type { Readable } from "node:stream";
 
-export type VoiceCaptureEntry = {
-  generation: number;
-  stream: Readable;
+type VoiceCaptureEntry = {
+  stream?: Readable;
+  startRecording?: () => void;
+  finalizeTimer?: ReturnType<typeof setTimeout>;
 };
 
-export type VoiceCaptureFinalizeTimer = {
-  generation: number;
-  timer: ReturnType<typeof setTimeout>;
-};
-
-export type VoiceCaptureState = {
-  activeSpeakers: Set<string>;
-  activeCaptureStreams: Map<string, VoiceCaptureEntry>;
-  captureFinalizeTimers: Map<string, VoiceCaptureFinalizeTimer>;
-  captureGenerations: Map<string, number>;
-};
+export type VoiceCaptureState = Map<string, VoiceCaptureEntry>;
 
 export function createVoiceCaptureState(): VoiceCaptureState {
-  return {
-    activeSpeakers: new Set(),
-    activeCaptureStreams: new Map(),
-    captureFinalizeTimers: new Map(),
-    captureGenerations: new Map(),
-  };
+  return new Map();
 }
 
 export function stopVoiceCaptureState(state: VoiceCaptureState): void {
-  for (const { timer } of state.captureFinalizeTimers.values()) {
-    clearTimeout(timer);
+  const captures = [...state.values()];
+  // Retire every capture before stream teardown can invoke retained callbacks.
+  state.clear();
+  for (const capture of captures) {
+    clearVoiceCaptureFinalizeTimer(capture);
+    capture.stream?.destroy();
   }
-  state.captureFinalizeTimers.clear();
-  for (const { stream } of state.activeCaptureStreams.values()) {
-    stream.destroy();
-  }
-  state.activeCaptureStreams.clear();
-  state.captureGenerations.clear();
-  state.activeSpeakers.clear();
 }
 
-export function getActiveVoiceCapture(
-  state: VoiceCaptureState,
-  userId: string,
-): VoiceCaptureEntry | undefined {
-  return state.activeCaptureStreams.get(userId);
-}
-
-export function isVoiceCaptureActive(state: VoiceCaptureState, userId: string): boolean {
-  return state.activeSpeakers.has(userId);
-}
-
-export function clearVoiceCaptureFinalizeTimer(
-  state: VoiceCaptureState,
-  userId: string,
-  generation?: number,
-): boolean {
-  const scheduled = state.captureFinalizeTimers.get(userId);
-  if (!scheduled || (generation !== undefined && scheduled.generation !== generation)) {
+export function clearVoiceCaptureFinalizeTimer(capture: VoiceCaptureEntry): boolean {
+  if (!capture.finalizeTimer) {
     return false;
   }
-  clearTimeout(scheduled.timer);
-  state.captureFinalizeTimers.delete(userId);
+  clearTimeout(capture.finalizeTimer);
+  delete capture.finalizeTimer;
   return true;
+}
+
+export async function waitForVoiceCaptureAdmission(params: {
+  capture: VoiceCaptureEntry;
+  conversationAuthorized: Promise<boolean>;
+  isRecordingCurrent: () => boolean;
+}): Promise<boolean> {
+  const recordingStarted = new Promise<void>((resolve) => {
+    params.capture.startRecording = resolve;
+  });
+  try {
+    await Promise.race([params.conversationAuthorized, recordingStarted]);
+  } catch (error) {
+    // Receive owns conversation failures once recording has its own authority.
+    if (!params.isRecordingCurrent()) {
+      throw error;
+    }
+  } finally {
+    delete params.capture.startRecording;
+  }
+  return params.isRecordingCurrent() || (await params.conversationAuthorized);
 }
 
 export function beginVoiceCapture(
   state: VoiceCaptureState,
   userId: string,
-  stream: Readable,
-): number {
-  const generation = (state.captureGenerations.get(userId) ?? 0) + 1;
-  state.captureGenerations.set(userId, generation);
-  state.activeSpeakers.add(userId);
-  state.activeCaptureStreams.set(userId, { generation, stream });
-  clearVoiceCaptureFinalizeTimer(state, userId, generation);
-  return generation;
+  stream?: Readable,
+): VoiceCaptureEntry {
+  const capture = { stream };
+  state.set(userId, capture);
+  return capture;
 }
 
 export function finishVoiceCapture(
   state: VoiceCaptureState,
   userId: string,
-  generation: number,
+  capture: VoiceCaptureEntry,
 ): boolean {
-  clearVoiceCaptureFinalizeTimer(state, userId, generation);
-  const activeCapture = state.activeCaptureStreams.get(userId);
-  if (activeCapture?.generation !== generation) {
+  clearVoiceCaptureFinalizeTimer(capture);
+  // An old decode can finish after silence finalized it and a new capture started.
+  if (state.get(userId) !== capture) {
     return false;
   }
-  state.activeCaptureStreams.delete(userId);
-  state.activeSpeakers.delete(userId);
+  state.delete(userId);
   return true;
 }
 
@@ -99,22 +83,17 @@ export function scheduleVoiceCaptureFinalize(params: {
   onFinalize?: (capture: VoiceCaptureEntry) => void;
 }): boolean {
   const { state, userId, delayMs, onFinalize } = params;
-  const capture = state.activeCaptureStreams.get(userId);
+  const capture = state.get(userId);
   if (!capture) {
     return false;
   }
-  clearVoiceCaptureFinalizeTimer(state, userId, capture.generation);
-  const timer = setTimeout(() => {
-    const activeCapture = state.activeCaptureStreams.get(userId);
-    if (!activeCapture || activeCapture.generation !== capture.generation) {
+  clearVoiceCaptureFinalizeTimer(capture);
+  capture.finalizeTimer = setTimeout(() => {
+    if (!finishVoiceCapture(state, userId, capture)) {
       return;
     }
-    state.captureFinalizeTimers.delete(userId);
-    state.activeCaptureStreams.delete(userId);
-    state.activeSpeakers.delete(userId);
-    onFinalize?.(activeCapture);
-    activeCapture.stream.destroy();
+    onFinalize?.(capture);
+    capture.stream?.destroy();
   }, delayMs);
-  state.captureFinalizeTimers.set(userId, { generation: capture.generation, timer });
   return true;
 }

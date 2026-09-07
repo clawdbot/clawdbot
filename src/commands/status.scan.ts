@@ -1,51 +1,34 @@
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+// Top-level text status scan entrypoint.
+// Human `status --all` and JSON status use their dedicated command paths.
+
 import { withProgress } from "../cli/progress.js";
-import { buildPluginCompatibilityNotices } from "../plugins/status.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
-import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
-import { scanStatusJsonWithPolicy } from "./status.scan.fast-json.js";
 
-export async function scanStatus(
-  opts: {
-    json?: boolean;
-    timeoutMs?: number;
-    all?: boolean;
-  },
-  _runtime: RuntimeEnv,
-): Promise<StatusScanResult> {
-  if (opts.json) {
-    return await scanStatusJsonWithPolicy(
-      {
-        timeoutMs: opts.timeoutMs,
-        all: opts.all,
-      },
-      _runtime,
-      {
-        commandName: "status --json",
-        resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannels(cfg),
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          await resolveStatusMemoryStatusSnapshot({
-            cfg,
-            agentStatus,
-            memoryPlugin,
-          }),
-      },
-    );
-  }
+/** Runs the text status scan. */
+export async function scanStatus(opts: {
+  timeoutMs?: number;
+  deep?: boolean;
+}): Promise<StatusScanResult> {
   return await withProgress(
     {
       label: "Scanning status…",
-      total: 10,
+      total: 9,
       enabled: true,
     },
     async (progress) => {
+      const isDetailedScan = opts.deep === true;
       const overview = await collectStatusScanOverview({
+        env: process.env,
         commandName: "status",
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
+        includeLiveChannelStatus: isDetailedScan,
+        includeChannelSetupRuntimeFallback: isDetailedScan,
+        fetchGitUpdate: isDetailedScan,
+        includeRegistryUpdate: isDetailedScan,
+        includeAdvertisedControlUiLinks: true,
         progress,
         labels: {
           loadingConfig: "Loading config…",
@@ -58,22 +41,13 @@ export async function scanStatus(
         },
       });
 
-      progress.setLabel("Checking plugins…");
-      const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
-      progress.tick();
-
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          await resolveStatusMemoryStatusSnapshot({
-            cfg,
-            agentStatus,
-            memoryPlugin,
-          }),
+        resolveMemory: async () => null,
         channelIssues: overview.channelIssues,
         channels: overview.channels,
-        pluginCompatibility,
+        pluginCompatibility: [],
       });
       progress.tick();
 

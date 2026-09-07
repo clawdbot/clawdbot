@@ -1,13 +1,13 @@
-import { hasBinary } from "../agents/skills.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { isRich, theme } from "../terminal/theme.js";
+// Implements docs link/search output for `openclaw docs`.
+import { readResponseWithLimit } from "../infra/http-body.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.SearchOpenClaw";
+const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
-const DEFAULT_SNIPPET_MAX = 220;
+const DOCS_SEARCH_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 
 type DocResult = {
   title: string;
@@ -15,103 +15,9 @@ type DocResult = {
   snippet?: string;
 };
 
-type NodeRunner = {
-  cmd: string;
-  args: string[];
+type DocsSearchResponse = {
+  results?: unknown;
 };
-
-type ToolRunOptions = {
-  input?: string;
-  timeoutMs?: number;
-};
-
-function resolveNodeRunner(): NodeRunner {
-  if (hasBinary("pnpm")) {
-    return { cmd: "pnpm", args: ["dlx"] };
-  }
-  if (hasBinary("npx")) {
-    return { cmd: "npx", args: ["-y"] };
-  }
-  throw new Error("Missing pnpm or npx; install a Node package runner.");
-}
-
-async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  const runner = resolveNodeRunner();
-  const argv = [runner.cmd, ...runner.args, tool, ...toolArgs];
-  return await runCommandWithTimeout(argv, {
-    timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-    input: options.input,
-  });
-}
-
-async function runTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  if (hasBinary(tool)) {
-    return await runCommandWithTimeout([tool, ...toolArgs], {
-      timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-      input: options.input,
-    });
-  }
-  return await runNodeTool(tool, toolArgs, options);
-}
-
-function extractLine(lines: string[], prefix: string): string | undefined {
-  const line = lines.find((value) => value.startsWith(prefix));
-  if (!line) {
-    return undefined;
-  }
-  return line.slice(prefix.length).trim();
-}
-
-function normalizeSnippet(raw: string | undefined, fallback: string): string {
-  const base = raw && raw.trim().length > 0 ? raw : fallback;
-  const cleaned = base.replace(/\s+/g, " ").trim();
-  if (!cleaned) {
-    return "";
-  }
-  if (cleaned.length <= DEFAULT_SNIPPET_MAX) {
-    return cleaned;
-  }
-  return `${cleaned.slice(0, DEFAULT_SNIPPET_MAX - 3)}...`;
-}
-
-function firstParagraph(text: string): string {
-  return (
-    text
-      .split(/\n\s*\n/)
-      .map((chunk) => chunk.trim())
-      .find(Boolean) ?? ""
-  );
-}
-
-function parseSearchOutput(raw: string): DocResult[] {
-  const normalized = raw.replace(/\r/g, "");
-  const blocks = normalized
-    .split(/\n(?=Title: )/g)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-
-  const results: DocResult[] = [];
-  for (const block of blocks) {
-    const lines = block.split("\n");
-    const title = extractLine(lines, "Title:");
-    const link = extractLine(lines, "Link:");
-    if (!title || !link) {
-      continue;
-    }
-    const content = extractLine(lines, "Content:");
-    const contentIndex = lines.findIndex((line) => line.startsWith("Content:"));
-    const body =
-      contentIndex >= 0
-        ? lines
-            .slice(contentIndex + 1)
-            .join("\n")
-            .trim()
-        : "";
-    const snippet = normalizeSnippet(content, firstParagraph(body));
-    results.push({ title, link, snippet: snippet || undefined });
-  }
-  return results;
-}
 
 function escapeMarkdown(text: string): string {
   return text.replace(/[()[\]]/g, "\\$&");
@@ -158,9 +64,76 @@ async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
   runtime.log(markdown.trimEnd());
 }
 
-export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
+async function fetchDocsSearch(query: string): Promise<DocResult[]> {
+  const url = new URL(SEARCH_API);
+  url.searchParams.set("q", query);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
+    });
+    let payload: DocsSearchResponse;
+    try {
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as DocsSearchResponse;
+    } catch (cause) {
+      throw new Error("Docs search response is malformed JSON", { cause });
+    }
+    return parseDocsSearchResults(payload.results);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseDocsSearchResults(raw: unknown): DocResult[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const results: DocResult[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.title !== "string" || typeof entry.link !== "string") {
+      continue;
+    }
+    results.push({
+      title: entry.title,
+      link: entry.link,
+      snippet:
+        typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
+    });
+  }
+  return results;
+}
+
+/** Search hosted docs, or print the docs homepage when no query is provided. */
+export async function docsSearchCommand(
+  queryParts: string[],
+  runtime: RuntimeEnv,
+  options: { json?: boolean } = {},
+) {
   const query = queryParts.join(" ").trim();
   if (!query) {
+    if (options.json) {
+      writeRuntimeJson(runtime, {
+        query: null,
+        url: "https://docs.openclaw.ai/",
+        results: [],
+      });
+      return;
+    }
     const docs = formatDocsLink("/", "docs.openclaw.ai");
     if (isRich()) {
       runtime.log(`${theme.muted("Docs:")} ${docs}`);
@@ -172,21 +145,19 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     return;
   }
 
-  const payload = JSON.stringify({ query });
-  const res = await runTool(
-    "mcporter",
-    ["call", SEARCH_TOOL, "--args", payload, "--output", "text"],
-    { timeoutMs: SEARCH_TIMEOUT_MS },
-  );
+  let results: DocResult[];
+  try {
+    results = await fetchDocsSearch(query);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Docs search failed: ${message}`, { cause: error });
+  }
 
-  if (res.code !== 0) {
-    const err = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
-    runtime.error(`Docs search failed: ${err}`);
-    runtime.exit(1);
+  if (options.json) {
+    writeRuntimeJson(runtime, { query, results });
     return;
   }
 
-  const results = parseSearchOutput(res.stdout);
   if (isRich()) {
     renderRichResults(query, results, runtime);
     return;

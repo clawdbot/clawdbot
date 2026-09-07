@@ -1,9 +1,11 @@
+// Verifies invalid-config errors include stable codes and details.
 import { describe, expect, it, vi } from "vitest";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
-  formatInvalidConfigLogMessage,
-  logInvalidConfigOnce,
+  isDoctorRecoverableInvalidConfigError,
+  isInvalidConfigError,
   throwInvalidConfig,
 } from "./io.invalid-config.js";
 
@@ -26,57 +28,65 @@ describe("config io invalid config formatting", () => {
     expect(details).toContain("- <root>: root problem");
   });
 
-  it("formats the logger message with the escaped newline separator", () => {
-    expect(formatInvalidConfigLogMessage("/tmp/openclaw.json", "- gateway.port: bad")).toBe(
-      "Invalid config at /tmp/openclaw.json:\\n- gateway.port: bad",
-    );
-  });
-
   it("creates INVALID_CONFIG errors with inline details", () => {
-    const err = createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: bad") as Error & {
-      code?: string;
-      details?: string;
-    };
+    const err = createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: bad");
 
     expect(err.message).toBe("Invalid config at /tmp/openclaw.json:\n- gateway.port: bad");
+    expect(err.name).toBe("InvalidConfigError");
     expect(err.code).toBe("INVALID_CONFIG");
     expect(err.details).toBe("- gateway.port: bad");
+    expect(isInvalidConfigError(err)).toBe(true);
+    expect(isDoctorRecoverableInvalidConfigError(err)).toBe(true);
+    expect(
+      isDoctorRecoverableInvalidConfigError(
+        createInvalidConfigError("/tmp/openclaw.json", "manual repair", {
+          recovery: "manual",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isInvalidConfigError(Object.assign(new Error(err.message), { code: "INVALID_CONFIG" })),
+    ).toBe(true);
+    expect(isInvalidConfigError(new Error(err.message))).toBe(false);
   });
 
-  it("logs invalid config details only once per path", () => {
+  it("throws INVALID_CONFIG after logging each distinct diagnostic once", () => {
     const logger = { error: vi.fn() };
-    const loggedConfigPaths = new Set<string>();
-
-    logInvalidConfigOnce({
-      configPath: "/tmp/openclaw.json",
-      details: "- gateway.port: bad",
-      logger,
-      loggedConfigPaths,
-    });
-    logInvalidConfigOnce({
-      configPath: "/tmp/openclaw.json",
-      details: "- gateway.port: worse",
-      logger,
-      loggedConfigPaths,
-    });
-
-    expect(logger.error).toHaveBeenCalledOnce();
-    expect(logger.error).toHaveBeenCalledWith(
-      "Invalid config at /tmp/openclaw.json:\\n- gateway.port: bad",
-    );
-  });
-
-  it("throws INVALID_CONFIG after logging the formatted details", () => {
-    const logger = { error: vi.fn() };
-
-    expect(() =>
+    const loggedConfigPaths = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+    const throwInvalid = (message: string) =>
       throwInvalidConfig({
         configPath: "/tmp/openclaw.json",
-        issues: [{ path: "nope", message: "Unknown key(s): nope" }],
+        issues: [{ path: "nope", message }],
         logger,
-        loggedConfigPaths: new Set<string>(),
-      }),
-    ).toThrowError("Invalid config at /tmp/openclaw.json:\n- nope: Unknown key(s): nope");
-    expect(logger.error).toHaveBeenCalledOnce();
+        loggedConfigPaths,
+      });
+
+    for (const message of ["first error", "first error", "second error", "second error"]) {
+      expect(() => throwInvalid(message)).toThrowError(
+        `Invalid config at /tmp/openclaw.json:\n- nope: ${message}`,
+      );
+    }
+    expect(logger.error.mock.calls).toEqual([
+      ["Invalid config at /tmp/openclaw.json:\n- nope: first error"],
+      ["Invalid config at /tmp/openclaw.json:\n- nope: second error"],
+    ]);
+  });
+
+  it("retries diagnostic emission after the logger throws", () => {
+    const logger = { error: vi.fn() };
+    logger.error.mockImplementationOnce(() => {
+      throw new Error("logger unavailable");
+    });
+    const loggedConfigPaths = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+    const throwInvalid = () =>
+      throwInvalidConfig({
+        configPath: "/tmp/openclaw.json",
+        issues: [{ path: "nope", message: "invalid" }],
+        logger,
+        loggedConfigPaths,
+      });
+    expect(throwInvalid).toThrow("logger unavailable");
+    expect(throwInvalid).toThrow("Invalid config at /tmp/openclaw.json:");
+    expect(logger.error).toHaveBeenCalledTimes(2);
   });
 });

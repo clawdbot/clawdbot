@@ -1,3 +1,4 @@
+// TS topology shared fixture helper models a shared library export.
 export function sharedThing() {
   return "shared";
 }

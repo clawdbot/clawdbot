@@ -5,7 +5,6 @@ export type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
   ProviderCatalogContext,
-  ProviderDiscoveryContext,
   ProviderPrepareDynamicModelContext,
   ProviderRuntimeModel,
 } from "../plugins/types.js";
@@ -13,11 +12,14 @@ export type {
 export {
   applyProviderDefaultModel,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  discoverOpenAICompatibleLocalModels,
   discoverOpenAICompatibleSelfHostedProvider,
-  promptAndConfigureOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../plugins/provider-self-hosted-setup.js";
+export { discoverOpenAICompatibleLocalModels } from "../plugins/provider-self-hosted-discovery.js";
+export {
+  defineSelfHostedOpenAICompatibleProvider,
+  type SelfHostedOpenAICompatibleProviderOptions,
+} from "./provider-model-shared.js";

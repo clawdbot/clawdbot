@@ -1,15 +1,13 @@
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+// Mattermost plugin module implements monitor slash behavior.
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   type MattermostClient,
 } from "./client.js";
-import {
-  listSkillCommandsForAgents,
-  parseStrictPositiveInteger,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "./runtime-api.js";
+import { listSkillCommandsForAgents, type OpenClawConfig, type RuntimeEnv } from "./runtime-api.js";
 import {
   DEFAULT_COMMAND_SPECS,
   isSlashCommandsEnabled,
@@ -21,10 +19,6 @@ import {
   type MattermostSlashCommandConfig,
 } from "./slash-commands.js";
 import { activateSlashCommands } from "./slash-state.js";
-
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
 
 function buildSlashCommands(params: {
   cfg: OpenClawConfig;
@@ -152,11 +146,9 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
   try {
     const teams = await fetchMattermostUserTeams(params.client, params.botUserId);
-    const envPort = parseStrictPositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
-    const slashGatewayPort = envPort ?? params.cfg.gateway?.port ?? 18789;
     const slashCallbackUrl = resolveCallbackUrl({
       config: slashConfig,
-      gatewayPort: slashGatewayPort,
+      gatewayPort: resolveGatewayPort(params.cfg),
       gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
     });
 

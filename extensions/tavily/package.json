@@ -1,15 +1,39 @@
 {
   "name": "@openclaw/tavily-plugin",
-  "version": "2026.4.19-beta.1",
-  "private": true,
+  "version": "2026.9.2",
   "description": "OpenClaw Tavily plugin",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.3.18"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/tavily-plugin",
+      "npmSpec": "@openclaw/tavily-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.2"
+    },
+    "build": {
+      "openclawVersion": "2026.9.2",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   }
 }

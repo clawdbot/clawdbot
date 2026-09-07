@@ -1,0 +1,380 @@
+import type { RouteId } from "../../app-route-paths.ts";
+import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+
+export const CONNECTION_SETTINGS_TARGET_IDS = {
+  host: "settings-connection-host",
+} as const;
+
+// Stable scroll-target id predates the dedicated Notifications page; keeping it
+// preserves old deep links and the settings-search hash.
+export const COMMUNICATION_SETTINGS_TARGET_IDS = {
+  notifications: "settings-communications-notifications",
+  meetingCapture: "settings-communications-meeting-capture",
+} as const;
+
+export const PROFILE_SETTINGS_TARGET_IDS = {
+  identity: "settings-profile-identity",
+  githubConnections: "settings-profile-github-connections",
+} as const;
+
+export type SettingsSearchTarget = {
+  readonly routeId: RouteId;
+  readonly labelKey: string;
+  readonly hash: string;
+  readonly searchKeys: readonly string[];
+  readonly nativeSearchKeys?: Readonly<
+    Record<string, (snapshot: NativeDeviceSettingsSnapshot) => boolean>
+  >;
+  readonly search?: string;
+  readonly aliases?: string;
+  readonly requiresIdentity?: true;
+  readonly requiresNativeDeviceSettings?: true;
+};
+
+// Keep destinations and translation keys together without importing page
+// renderers: settings search runs before the destination page is loaded.
+export const SETTINGS_SEARCH_TARGETS = {
+  meetingCapture: {
+    routeId: "communications",
+    labelKey: "meetingCapture.title",
+    search: "?section=transcripts",
+    hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.meetingCapture}`,
+    searchKeys: ["meetingCapture.description", "meetingCapture.sources"],
+    aliases: "recording transcription meetings autoStart",
+  },
+  meetings: {
+    routeId: "meetings",
+    labelKey: "tabs.meetings",
+    hash: "",
+    searchKeys: ["subtitles.meetings"],
+    aliases: "meeting notes library reader archive",
+  },
+  device: {
+    routeId: "device",
+    labelKey: "tabs.device",
+    hash: "",
+    searchKeys: [],
+    nativeSearchKeys: {
+      "configPage.deviceSettings.app": (snapshot) => snapshot.app !== undefined,
+      "configPage.deviceSettings.appearance": (snapshot) => snapshot.app?.appearance !== undefined,
+      "configPage.deviceSettings.notificationsEnabled": (snapshot) =>
+        snapshot.app?.notificationsEnabled !== undefined,
+      "configPage.deviceSettings.showDockIcon": (snapshot) =>
+        snapshot.app?.showDockIcon !== undefined,
+      "configPage.deviceSettings.launchAtLogin": (snapshot) =>
+        snapshot.app?.launchAtLogin !== undefined,
+      "configPage.deviceSettings.quickChat": (snapshot) =>
+        snapshot.app?.quickChatEnabled !== undefined,
+      "configPage.deviceSettings.capabilities": (snapshot) => snapshot.capabilities !== undefined,
+      "configPage.deviceSettings.camera": (snapshot) =>
+        snapshot.capabilities?.cameraEnabled !== undefined,
+      "configPage.deviceSettings.keepAwake": (snapshot) =>
+        snapshot.capabilities?.keepAwakeEnabled !== undefined,
+      "configPage.deviceSettings.healthSummary": (snapshot) =>
+        snapshot.capabilities?.healthSummaryAvailable === true &&
+        snapshot.capabilities.healthSummaryEnabled !== undefined,
+      "configPage.deviceSettings.panels.diagnostics": (snapshot) =>
+        snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.licenses": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.about": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.watch": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.computerControl": (snapshot) =>
+        snapshot.capabilities?.computerControlEnabled !== undefined,
+      "configPage.deviceSettings.browser": (snapshot) => snapshot.browser !== undefined,
+      "configPage.deviceSettings.cookieSync": (snapshot) => snapshot.browser !== undefined,
+      "configPage.deviceSettings.developer": (snapshot) =>
+        snapshot.app?.debugPaneEnabled !== undefined,
+    },
+  },
+  devicePermissions: {
+    routeId: "device-permissions",
+    labelKey: "tabs.devicePermissions",
+    hash: "",
+    searchKeys: [
+      "configPage.deviceSettings.systemAccess",
+      "configPage.deviceSettings.location",
+      "configPage.deviceSettings.preciseLocation",
+    ],
+    nativeSearchKeys: {
+      "configPage.deviceSettings.permissions.contacts.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "contacts"),
+      "configPage.deviceSettings.permissions.calendars.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "calendars"),
+      "configPage.deviceSettings.permissions.reminders.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "reminders"),
+      "configPage.deviceSettings.permissions.photos.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "photos"),
+      "configPage.deviceSettings.activePresence": (snapshot) =>
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined,
+    },
+  },
+  deviceTalk: {
+    routeId: "talk",
+    labelKey: "configPage.deviceTalk.wakeEnabled",
+    hash: "",
+    requiresNativeDeviceSettings: true,
+    searchKeys: [],
+    nativeSearchKeys: {
+      "configPage.deviceTalk.talkEnabled": (snapshot) => snapshot.voice.talkEnabled !== undefined,
+      "configPage.deviceTalk.talkButtonEnabled": (snapshot) =>
+        snapshot.voice.talkButtonEnabled !== undefined,
+      "configPage.deviceTalk.talkBackgroundEnabled": (snapshot) =>
+        snapshot.voice.talkBackgroundEnabled !== undefined,
+      "configPage.deviceTalk.speakerphoneEnabled": (snapshot) =>
+        snapshot.voice.speakerphoneEnabled !== undefined,
+    },
+  },
+  updates: {
+    routeId: "updates",
+    labelKey: "tabs.updates",
+    hash: "#config-section-update",
+    searchKeys: ["updates.page.checkForUpdates", "updates.page.automaticUpdates"],
+  },
+  channels: {
+    routeId: "channels",
+    labelKey: "quickSettings.channels.title",
+    hash: "",
+    searchKeys: ["quickSettings.channels.connect"],
+    aliases: "telegram discord slack whatsapp signal imessage",
+  },
+  security: {
+    routeId: "security",
+    labelKey: "quickSettings.security.title",
+    hash: "",
+    searchKeys: [
+      "quickSettings.security.gatewayAuth",
+      "quickSettings.security.execPolicy",
+      "quickSettings.security.browserEnabled",
+      "quickSettings.security.toolProfile",
+    ],
+  },
+  secrets: {
+    routeId: "secrets",
+    labelKey: "tabs.secrets",
+    hash: "",
+    searchKeys: [],
+    aliases: "env team store",
+  },
+  system: {
+    routeId: "connection",
+    labelKey: "quickSettings.system.gatewayHost",
+    hash: `#${CONNECTION_SETTINGS_TARGET_IDS.host}`,
+    searchKeys: [
+      "quickSettings.system.cpu",
+      "quickSettings.system.memory",
+      "quickSettings.system.disk",
+      "quickSettings.system.loadAverage",
+      "quickSettings.system.runtime",
+    ],
+    aliases: "system uptime node address pid",
+  },
+  personal: {
+    routeId: "profile",
+    labelKey: "profilePage.identity.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.identity}`,
+    searchKeys: [
+      "profilePage.identity.description",
+      "profilePage.identity.avatar",
+      "profilePage.identity.chooseAvatar",
+      "profilePage.identity.displayName",
+      "profilePage.identity.linkedEmails",
+    ],
+    aliases: "profile avatar image email",
+    requiresIdentity: true,
+  },
+  githubConnections: {
+    routeId: "profile",
+    labelKey: "githubConnections.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.githubConnections}`,
+    searchKeys: [
+      "githubConnections.mine",
+      "githubConnections.system",
+      "githubConnections.forMe",
+      "githubConnections.forSystem",
+    ],
+    aliases:
+      "github oauth account connection publication authentication auth status dashboard actions",
+  },
+  modelBehavior: {
+    ...SETTINGS_ROUTE_TARGETS.modelBehavior,
+    labelKey: "quickSettings.model.title",
+    searchKeys: [
+      "quickSettings.model.model",
+      "quickSettings.model.thinking",
+      "quickSettings.model.fastMode",
+      "quickSettings.model.thinkingLevels.off",
+      "quickSettings.model.thinkingLevels.low",
+      "quickSettings.model.thinkingLevels.medium",
+      "quickSettings.model.thinkingLevels.high",
+      "quickSettings.model.fastModes.auto",
+      "quickSettings.model.fastModes.fast",
+      "quickSettings.model.fastModes.standard",
+    ],
+  },
+  appearanceLanguage: {
+    ...SETTINGS_ROUTE_TARGETS.appearanceLanguage,
+    labelKey: "quickSettings.language",
+    searchKeys: ["configView.syncedHint"],
+    aliases: "locale translation",
+  },
+  appearanceTheme: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.theme",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
+    searchKeys: [
+      "configView.appearance.chooseTheme",
+      "configView.appearance.importedTheme",
+      "configView.appearance.import",
+      "configView.appearance.importFromTweakcn",
+      "configView.appearance.browseTweakcn",
+    ],
+    aliases: "tweakcn light dark system",
+  },
+  appearanceAccent: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.accent",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
+    searchKeys: [
+      "configView.appearance.accentHint",
+      "configView.appearance.customAccent",
+      "configView.appearance.accents.default",
+      "configView.appearance.accents.claw",
+      "configView.appearance.accents.coral",
+      "configView.appearance.accents.amber",
+      "configView.appearance.accents.mint",
+      "configView.appearance.accents.teal",
+      "configView.appearance.accents.blue",
+      "configView.appearance.accents.violet",
+      "configView.appearance.accents.pink",
+      "configView.appearance.accents.slate",
+    ],
+    aliases: "colour swatch palette highlight green purple neutral",
+  },
+  appearanceTextSize: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.textSize",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
+    searchKeys: [
+      "configView.textSizes.small",
+      "configView.textSizes.default",
+      "configView.textSizes.large",
+      "configView.textSizes.xl",
+      "configView.textSizes.xxl",
+    ],
+    aliases: "scale",
+  },
+  appearanceSidebar: {
+    ...SETTINGS_ROUTE_TARGETS.appearanceSidebar,
+    labelKey: "configView.sidebarPrefs.title",
+    searchKeys: [
+      "configView.sidebarPrefs.hint",
+      "configView.sidebarPrefs.liveActivity",
+      "configView.sidebarPrefs.liveActivityHint",
+      "chat.sidebar.hiddenSessionSections",
+      "configView.sessionObserver.title",
+      "configView.sessionObserver.hint",
+      "configView.sessionObserver.toggle",
+      "configView.sessionObserver.toggleHint",
+      "configView.sessionObserver.resolvedModel",
+      "configView.sessionObserver.modelPicker",
+      "configView.sessionObserver.modelPickerHint",
+    ],
+  },
+  appearanceChat: {
+    routeId: "appearance",
+    labelKey: "configView.chatPrefs.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
+    searchKeys: [
+      "configView.chatPrefs.messageWidth",
+      "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.collapseTaskProgress",
+      "configView.chatPrefs.collapseTaskProgressHint",
+      "chat.sendShortcut",
+      "chat.sendShortcutEnter",
+      "chat.sendShortcutModifierEnter",
+      "chat.followUpMode",
+      "chat.followUpModeSteer",
+      "chat.followUpModeQueue",
+      "chat.followUpModeServer",
+      "chat.followUpModeLoading",
+      "chat.followUpModeUsingServer",
+      "chat.followUpModeOverriding",
+      "chat.followUpModeReset",
+      "chat.catalogOpenTarget",
+      "chat.catalogOpenTargetViewer",
+      "chat.catalogOpenTargetTerminal",
+      "chat.composer.cameraInput",
+      "chat.composer.systemDefaultCamera",
+      "chat.composer.microphoneInput",
+      "chat.composer.systemDefaultMicrophone",
+      "chat.composer.holdToRecordSetting",
+      "chat.composer.holdToRecordSettingDescription",
+    ],
+    aliases:
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
+  },
+  appearanceConnection: {
+    routeId: "appearance",
+    labelKey: "configView.connection.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
+    searchKeys: [
+      "configView.connection.gateway",
+      "configView.connection.status",
+      "configView.connection.assistant",
+    ],
+    aliases: "version",
+  },
+  notifications: {
+    routeId: "notifications",
+    labelKey: "configView.notifications.title",
+    hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
+    searchKeys: [
+      "configView.notifications.browserSupport",
+      "configView.notifications.permission",
+      "configView.notifications.status",
+      "configView.notifications.subscribed",
+      "configView.notifications.notSubscribed",
+      "configView.notifications.enable",
+      "configView.notifications.nativeTitle",
+      "configView.notifications.openSystemSettings",
+    ],
+    aliases: "vapid gateway",
+  },
+  // Workspace pages without config schemas need explicit search destinations.
+  usage: {
+    routeId: "usage",
+    labelKey: "profilePage.usageStatistics",
+    hash: "",
+    searchKeys: [
+      "profilePage.usageStatisticsDescription",
+      "usage.heatmap.title",
+      "usage.heatmap.subtitle",
+      "usage.overview.title",
+    ],
+    aliases: "stats statistics analytics tokens costs activity streaks",
+  },
+  sessions: {
+    routeId: "sessions",
+    labelKey: "sessionsView.title",
+    hash: "",
+    searchKeys: [
+      "sessionsView.subtitle",
+      "sessionsView.archived",
+      "sessionsView.archivedOnlyTooltip",
+    ],
+    aliases: "history archive overrides",
+  },
+  worktrees: {
+    routeId: "worktrees",
+    labelKey: "worktrees.title",
+    hash: "",
+    searchKeys: ["worktrees.subtitle"],
+    aliases: "git checkout branch cleanup",
+  },
+} as const satisfies Record<string, SettingsSearchTarget>;

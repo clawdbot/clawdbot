@@ -1,3 +1,6 @@
+/**
+ * Tests provider web search contract suite behavior.
+ */
 import { describe, expect, it } from "vitest";
 import { createWebSearchProviderContractFields } from "./provider-web-search-contract.js";
 
@@ -65,7 +68,7 @@ describe("createWebSearchProviderContractFields", () => {
       selectionPluginId: "ollama",
     });
 
-    expect(fields.inactiveSecretPaths).toEqual([]);
+    expect(fields.inactiveSecretPaths).toStrictEqual([]);
     expect(fields.getCredentialValue({ apiKey: "ignored" })).toBeUndefined();
 
     const searchConfig = { apiKey: "ignored" };

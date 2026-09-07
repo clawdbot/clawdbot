@@ -1,7 +1,43 @@
+// Msteams tests cover media helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 
 describe("msteams media-helpers", () => {
+  const mediaInputClassCases: Array<{
+    name: string;
+    mime: Array<[input: string, expected: string]>;
+    filename: Array<[input: string, expected: string]>;
+  }> = [
+    {
+      name: "data URLs",
+      mime: [
+        ["data:image/png;base64,iVBORw0KGgo=", "image/png"],
+        ["data:image/jpeg;base64,/9j/4AAQ", "image/jpeg"],
+        ["data:image/gif;base64,R0lGOD", "image/gif"],
+      ],
+      filename: [
+        ["data:image/png;base64,iVBORw0KGgo=", "image.png"],
+        ["data:image/jpeg;base64,/9j/4AAQ", "image.jpg"],
+      ],
+    },
+    {
+      name: "local paths",
+      mime: [
+        ["/tmp/image.png", "image/png"],
+        ["/Users/test/photo.jpg", "image/jpeg"],
+      ],
+      filename: [
+        ["/tmp/screenshot.png", "screenshot.png"],
+        ["/Users/test/photo.jpg", "photo.jpg"],
+      ],
+    },
+    {
+      name: "tilde paths",
+      mime: [["~/Downloads/image.gif", "image/gif"]],
+      filename: [["~/Downloads/image.gif", "image.gif"]],
+    },
+  ];
+
   describe("getMimeType", () => {
     it("detects png from URL", async () => {
       expect(await getMimeType("https://example.com/image.png")).toBe("image/png");
@@ -24,23 +60,14 @@ describe("msteams media-helpers", () => {
       expect(await getMimeType("https://example.com/image.png?v=123")).toBe("image/png");
     });
 
-    it("handles data URLs", async () => {
-      expect(await getMimeType("data:image/png;base64,iVBORw0KGgo=")).toBe("image/png");
-      expect(await getMimeType("data:image/jpeg;base64,/9j/4AAQ")).toBe("image/jpeg");
-      expect(await getMimeType("data:image/gif;base64,R0lGOD")).toBe("image/gif");
+    it.each(mediaInputClassCases)("handles $name", async ({ mime }) => {
+      for (const [input, expected] of mime) {
+        expect(await getMimeType(input)).toBe(expected);
+      }
     });
 
     it("handles data URLs without base64", async () => {
       expect(await getMimeType("data:image/svg+xml,%3Csvg")).toBe("image/svg+xml");
-    });
-
-    it("handles local paths", async () => {
-      expect(await getMimeType("/tmp/image.png")).toBe("image/png");
-      expect(await getMimeType("/Users/test/photo.jpg")).toBe("image/jpeg");
-    });
-
-    it("handles tilde paths", async () => {
-      expect(await getMimeType("~/Downloads/image.gif")).toBe("image/gif");
     });
 
     it("defaults to application/octet-stream for unknown extensions", async () => {
@@ -75,27 +102,30 @@ describe("msteams media-helpers", () => {
       expect(await extractFilename("https://example.com/images/2024/photo.png")).toBe("photo.png");
     });
 
+    it.each([
+      ["https://example.com/files/My%20report.pdf", "My report.pdf"],
+      ["https://example.com/files/r%C3%A9sum%C3%A9.pdf", "résumé.pdf"],
+      ["https://example.com/files/100%25.png", "100%.png"],
+      ["https://example.com/files/bad%ZZ.pdf", "bad%ZZ.pdf"],
+      ["https://example.com/files/folder%2Fsecret.png", "folder%2Fsecret.png"],
+      ["https://example.com/files/folder%5Csecret.png", "folder%5Csecret.png"],
+    ])("preserves the safe display filename from %s", async (url, expected) => {
+      expect(await extractFilename(url)).toBe(expected);
+    });
+
     it("handles URLs without extension by deriving from MIME", async () => {
       // Now defaults to application/octet-stream → .bin fallback
       expect(await extractFilename("https://example.com/images/photo")).toBe("photo.bin");
     });
 
-    it("handles data URLs", async () => {
-      expect(await extractFilename("data:image/png;base64,iVBORw0KGgo=")).toBe("image.png");
-      expect(await extractFilename("data:image/jpeg;base64,/9j/4AAQ")).toBe("image.jpg");
+    it.each(mediaInputClassCases)("handles $name", async ({ filename }) => {
+      for (const [input, expected] of filename) {
+        expect(await extractFilename(input)).toBe(expected);
+      }
     });
 
     it("handles document data URLs", async () => {
       expect(await extractFilename("data:application/pdf;base64,JVBERi0")).toBe("file.pdf");
-    });
-
-    it("handles local paths", async () => {
-      expect(await extractFilename("/tmp/screenshot.png")).toBe("screenshot.png");
-      expect(await extractFilename("/Users/test/photo.jpg")).toBe("photo.jpg");
-    });
-
-    it("handles tilde paths", async () => {
-      expect(await extractFilename("~/Downloads/image.gif")).toBe("image.gif");
     });
 
     it("returns fallback for empty URL", async () => {
@@ -134,6 +164,7 @@ describe("msteams media-helpers", () => {
     it("returns true for file:// URLs", () => {
       expect(isLocalPath("file:///tmp/image.png")).toBe(true);
       expect(isLocalPath("file://localhost/tmp/image.png")).toBe(true);
+      expect(isLocalPath("FILE:///C:/Users/test/image.png")).toBe(true);
     });
 
     it("returns true for absolute paths", () => {

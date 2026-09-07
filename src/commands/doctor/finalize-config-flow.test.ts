@@ -1,3 +1,4 @@
+// Doctor finalize config-flow tests cover final repair summaries and config mutation completion.
 import { describe, expect, it, vi } from "vitest";
 import { finalizeDoctorConfigFlow } from "./finalize-config-flow.js";
 

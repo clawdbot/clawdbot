@@ -1,4 +1,6 @@
+// Signal plugin module implements setup surface behavior.
 import {
+  createSetupTranslator,
   createDetectedBinaryStatus,
   setSetupChannelEnabled,
   type ChannelSetupWizard,
@@ -8,57 +10,84 @@ import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
-  normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
-  signalSetupAdapter,
 } from "./setup-core.js";
 
+const t = createSetupTranslator();
+
 const channel = "signal" as const;
+const configuredLabel = t("wizard.channels.statusConfigured");
+const unconfiguredLabel = t("wizard.channels.statusNeedsSetup");
+const managedStatus = createDetectedBinaryStatus({
+  channelLabel: "Signal",
+  binaryLabel: "signal-cli",
+  configuredLabel,
+  unconfiguredLabel,
+  configuredHint: t("wizard.channels.statusSignalCliFound"),
+  unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
+  configuredScore: 1,
+  unconfiguredScore: 0,
+  resolveConfigured: ({ cfg, accountId }) =>
+    accountId
+      ? resolveSignalAccount({ cfg, accountId }).configured
+      : listSignalAccountIds(cfg).some(
+          (resolvedAccountId) =>
+            resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
+        ),
+  resolveBinaryPath: ({ cfg, accountId }) => {
+    const transport = resolveSignalAccount({ cfg, accountId }).transport;
+    return transport.kind === "managed-native" ? transport.cliPath : "signal-cli";
+  },
+  detectBinary,
+});
 
 export const signalSetupWizard: ChannelSetupWizard = {
   channel,
-  status: createDetectedBinaryStatus({
-    channelLabel: "Signal",
-    binaryLabel: "signal-cli",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "signal-cli found",
-    unconfiguredHint: "signal-cli missing",
-    configuredScore: 1,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? resolveSignalAccount({ cfg, accountId }).configured
-        : listSignalAccountIds(cfg).some(
-            (resolvedAccountId) =>
-              resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
-          ),
-    resolveBinaryPath: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.cliPath ?? "signal-cli",
-    detectBinary,
-  }),
+  status: {
+    ...managedStatus,
+    resolveStatusLines: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return (await managedStatus.resolveStatusLines?.(params)) ?? [];
+      }
+      return [`Signal: ${params.configured ? configuredLabel : unconfiguredLabel}`];
+    },
+    resolveSelectionHint: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return await managedStatus.resolveSelectionHint?.(params);
+      }
+      return params.configured ? configuredLabel : unconfiguredLabel;
+    },
+    resolveQuickstartScore: async (params) => {
+      if (resolveSignalAccount(params).transport.kind === "managed-native") {
+        return await managedStatus.resolveQuickstartScore?.(params);
+      }
+      return params.configured ? 1 : 0;
+    },
+  },
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
     if (!options?.allowSignalInstall) {
       return undefined;
     }
+    const transport = resolveSignalAccount({ cfg, accountId }).transport;
+    if (transport.kind !== "managed-native") {
+      return undefined;
+    }
     const currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-      resolveSignalAccount({ cfg, accountId }).config.cliPath ??
+      (transport.kind === "managed-native" ? transport.cliPath : undefined) ??
       "signal-cli";
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
-      message: cliDetected
-        ? "signal-cli detected. Reinstall/update now?"
-        : "signal-cli not found. Install now?",
+      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {
       return undefined;
     }
     try {
+      await options?.beforePersistentEffect?.();
       const result = await installSignalCli(runtime);
       if (result.ok && result.cliPath) {
         await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
@@ -78,7 +107,10 @@ export const signalSetupWizard: ChannelSetupWizard = {
   },
   credentials: [],
   textInputs: [
-    createSignalCliPathTextInput(async ({ currentValue }) => {
+    createSignalCliPathTextInput(async ({ cfg, accountId, currentValue }) => {
+      if (resolveSignalAccount({ cfg, accountId }).transport.kind !== "managed-native") {
+        return false;
+      }
       return !(await detectBinary(currentValue ?? "signal-cli"));
     }),
     signalNumberTextInput,
@@ -87,5 +119,3 @@ export const signalSetupWizard: ChannelSetupWizard = {
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };

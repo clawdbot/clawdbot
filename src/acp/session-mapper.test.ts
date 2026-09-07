@@ -1,6 +1,7 @@
+/** Tests ACP metadata session-key resolution against Gateway defaults and lookups. */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { parseSessionMeta, resolveSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveAcpSessionKey } from "./session-mapper.js";
 
 function createGateway(resolveLabelKey = "agent:main:label"): {
   gateway: GatewayClient;
@@ -27,7 +28,7 @@ describe("acp session mapper", () => {
     const { gateway, request } = createGateway();
     const meta = parseSessionMeta({ sessionLabel: "support", sessionKey: "agent:main:main" });
 
-    const key = await resolveSessionKey({
+    const key = await resolveAcpSessionKey({
       meta,
       fallbackKey: "acp:fallback",
       gateway,
@@ -43,7 +44,7 @@ describe("acp session mapper", () => {
     const { gateway, request } = createGateway();
     const meta = parseSessionMeta({ sessionKey: "agent:main:override" });
 
-    const key = await resolveSessionKey({
+    const key = await resolveAcpSessionKey({
       meta,
       fallbackKey: "acp:fallback",
       gateway,

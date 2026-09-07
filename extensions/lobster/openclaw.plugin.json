@@ -1,7 +1,19 @@
 {
   "id": "lobster",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Lobster",
-  "description": "Typed workflow tool with resumable approvals.",
+  "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
+  "catalog": { "featured": true, "order": 50 },
+  "contracts": {
+    "tools": ["lobster"]
+  },
+  "toolMetadata": {
+    "lobster": {
+      "optional": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

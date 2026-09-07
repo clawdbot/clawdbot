@@ -1,5 +1,6 @@
+// Scope resolver for message command secrets: infer channel/account from flags and targets.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 
 function resolveScopedChannelCandidate(value: unknown): string | undefined {
@@ -50,6 +51,7 @@ function resolveScopedAccountId(value: unknown): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+/** Resolve the narrowest channel/account secret scope visible from message CLI inputs. */
 export function resolveMessageSecretScope(params: {
   channel?: unknown;
   target?: unknown;

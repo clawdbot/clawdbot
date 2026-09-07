@@ -1,3 +1,4 @@
+// Msteams tests cover monitor plugin behavior.
 import { once } from "node:events";
 import type { Server } from "node:http";
 import { createConnection, type AddressInfo } from "node:net";

@@ -1,3 +1,6 @@
+/**
+ * Agent result builders and extractors shared by gateway tests.
+ */
 type AgentDeltaEvent = {
   runId: string;
   stream: "assistant";
@@ -51,6 +54,7 @@ function extractCliStreamJsonText(text: string): string | null {
   return resultText ?? assistantText;
 }
 
+/** Extracts normalized assistant text from gateway agent result payloads. */
 export function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
   const payloads = Array.isArray(record.payloads) ? record.payloads : [];
@@ -64,6 +68,7 @@ export function extractPayloadText(result: unknown): string {
   return extractCliStreamJsonText(joined) ?? joined;
 }
 
+/** Builds a minimal assistant delta result payload. */
 export function buildAssistantDeltaResult(params: {
   opts: unknown;
   emit: (event: AgentDeltaEvent) => void;

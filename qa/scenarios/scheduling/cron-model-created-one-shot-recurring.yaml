@@ -1,0 +1,288 @@
+title: Model-created one-shot and recurring cron jobs
+
+scenario:
+  id: cron-model-created-one-shot-recurring
+  surface: cron
+  runtimePairLane: core
+  coverage:
+    primary:
+      - automation.agent-cron-tool
+    secondary:
+      - automation.model-authored-cron-jobs
+      - automation.isolated-cron-execution-dedup
+      - automation.scheduler-persistence
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - qa-cron-operator
+  objective: Verify a live model can author one-off and recurring cron jobs whose natural scheduler behavior matches their requested semantics.
+  successCriteria:
+    - The model creates exactly one `at` job and one `every` job through the cron tool.
+    - Both jobs persist the concrete creator tool surface as explicit default authority.
+    - The one-off job fires naturally once and is deleted after success.
+    - The recurring job fires naturally at least twice, remains enabled, and advances its next run.
+    - Stored jobs use isolated agent turns with no delivery side effects.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/agents/tools/cron-tool.ts
+    - src/cron/service/timer.ts
+    - extensions/qa-lab/src/cron-run-wait.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    suiteIsolation: isolated
+    summary: Ask the live model to create one-off and recurring jobs, then verify stored shape and natural scheduler outcomes over the isolated Gateway.
+    channel: qa-channel
+    transportPolicy:
+      senderAllowlist:
+        - qa-cron-operator
+    config:
+      requiredProviderMode: live-frontier
+      conversationPrefix: cron-model-author
+      authorDoneMarker: CRON-MODEL-AUTHOR-OK
+      oneShotDelayMs: 240000
+      recurringEveryMs: 20000
+
+flow:
+  steps:
+    - name: model authors exact one-off and recurring jobs
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: suffix
+          value:
+            expr: randomUUID().slice(0, 8)
+        - set: conversationId
+          value:
+            expr: "`${config.conversationPrefix}-${suffix}`"
+        - set: oneShotName
+          value:
+            expr: "`qa-model-at-${suffix}`"
+        - set: recurringName
+          value:
+            expr: "`qa-model-every-${suffix}`"
+        - set: oneShotPayloadMarker
+          value:
+            expr: "`QA-MODEL-AT-PAYLOAD-${suffix}`"
+        - set: recurringPayloadMarker
+          value:
+            expr: "`QA-MODEL-EVERY-PAYLOAD-${suffix}`"
+        - set: authorStartedAt
+          value:
+            expr: Date.now()
+        - set: oneShotAt
+          value:
+            expr: "new Date(authorStartedAt + config.oneShotDelayMs).toISOString()"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId: qa-cron-operator
+            senderName: QA Cron Operator
+            text:
+              expr: "`Use the cron tool now. Create exactly two jobs and do not run either manually. Job 1: name '${oneShotName}', one-off absolute at '${oneShotAt}', isolated agent turn, payload message 'Reply exactly ${oneShotPayloadMarker}', delivery none. Job 2: name '${recurringName}', recurring every ${config.recurringEveryMs / 1000} seconds using an every schedule, isolated agent turn, payload message 'Reply exactly ${recurringPayloadMarker}', delivery none. After both tool calls succeed, reply exactly ${config.authorDoneMarker}.`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.authorDoneMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 180000)
+          saveAs: authorReply
+        - set: cronToolCalls
+          value:
+            expr: "(authorReply.toolCalls ?? []).filter((toolCall) => toolCall.name === 'cron')"
+        - assert:
+            expr: "(authorReply.toolCalls ?? []).length === 2 && cronToolCalls.length === 2 && cronToolCalls.every((toolCall) => toolCall.arguments?.job && typeof toolCall.arguments.job === 'object')"
+            message:
+              expr: "`expected exactly two native cron add calls, saw ${JSON.stringify(authorReply.toolCalls ?? [])}`"
+        - call: waitForCondition
+          saveAs: jobs
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 }).then((page) => { const matches = page.jobs.filter((job) => job.name === oneShotName || job.name === recurringName); return matches.length === 2 ? matches : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - set: oneShotJob
+          value:
+            expr: "jobs.find((job) => job.name === oneShotName)"
+        - set: recurringJob
+          value:
+            expr: "jobs.find((job) => job.name === recurringName)"
+        - assert:
+            expr: "oneShotJob.schedule.kind === 'at' && oneShotJob.schedule.at === oneShotAt"
+            message:
+              expr: "`model created wrong one-off schedule: ${JSON.stringify(oneShotJob?.schedule)}`"
+        - assert:
+            expr: "oneShotJob.deleteAfterRun === true"
+            message: model-created one-off did not receive delete-after-success semantics
+        - assert:
+            expr: "recurringJob.schedule.kind === 'every' && recurringJob.schedule.everyMs === config.recurringEveryMs"
+            message:
+              expr: "`model created wrong recurring schedule: ${JSON.stringify(recurringJob?.schedule)}`"
+        - assert:
+            expr: "jobs.every((job) => job.sessionTarget === 'isolated' && job.payload.kind === 'agentTurn' && job.delivery?.mode === 'none')"
+            message:
+              expr: "`model created unsafe job shape: ${JSON.stringify(jobs)}`"
+        - assert:
+            expr: "jobs.every((job) => Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.length > 0 && job.payload.toolsAllow.includes('cron') && !job.payload.toolsAllow.includes('*') && job.payload.toolsAllowIsDefault === true)"
+            message:
+              expr: "`model-created jobs did not persist concrete default authority: ${JSON.stringify(jobs.map((job) => job.payload))}`"
+      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority-counts=${jobs.map((job) => job.payload.toolsAllow.length).join(',')}`"
+
+    - name: scheduler fires one-off once and recurring repeatedly
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: oneShotRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                expr: oneShotJob.id
+              afterTs:
+                ref: authorStartedAt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, config.oneShotDelayMs + 120000)
+        - assert:
+            expr: "oneShotRun.status === 'ok'"
+            message:
+              expr: "`model-created one-off failed: ${JSON.stringify(oneShotRun)}`"
+        - call: waitForCondition
+          saveAs: recurringRuns
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('cron.runs', { id: recurringJob.id, limit: 20, sortDir: 'desc' }, { timeoutMs: 30000 }).then((page) => { const runs = page.entries.filter((entry) => entry.ts >= authorStartedAt && entry.status === 'ok'); return runs.length >= 2 ? runs : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 1000
+        - set: preRestartRecurringTs
+          value:
+            expr: "Math.max(...recurringRuns.map((entry) => entry.ts))"
+        - set: preRestartBaseUrl
+          value:
+            expr: env.gateway.baseUrl
+        - set: preRestartTransportCursor
+          value:
+            expr: state.getSnapshot().cursor
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= preRestartTransportCursor ? true : undefined"
+            - 10000
+            - 25
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: "Promise.resolve(ctx)"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - assert:
+            expr: "env.gateway.baseUrl === preRestartBaseUrl"
+            message:
+              expr: "`gateway restart changed address from ${preRestartBaseUrl} to ${env.gateway.baseUrl}`"
+        - call: env.gateway.call
+          saveAs: postRestartBaselinePage
+          args:
+            - cron.runs
+            - id:
+                expr: recurringJob.id
+              limit: 20
+              sortDir: desc
+            - timeoutMs: 30000
+        - set: postRestartBaselineTs
+          value:
+            expr: "Math.max(preRestartRecurringTs, ...postRestartBaselinePage.entries.map((entry) => entry.ts))"
+        - call: waitForCondition
+          saveAs: postRestartRecurringRun
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('cron.runs', { id: recurringJob.id, limit: 20, sortDir: 'desc' }, { timeoutMs: 30000 }).then((page) => page.entries.find((entry) => entry.ts > postRestartBaselineTs && entry.status === 'ok'))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 1000
+        - call: env.gateway.call
+          saveAs: finalList
+          args:
+            - cron.list
+            - includeDisabled: true
+            - timeoutMs: 30000
+        - set: finalRecurring
+          value:
+            expr: "finalList.jobs.find((job) => job.id === recurringJob.id)"
+        - assert:
+            expr: "!finalList.jobs.some((job) => job.id === oneShotJob.id)"
+            message: successful model-created one-off was not deleted
+        - assert:
+            expr: "Boolean(finalRecurring?.enabled) && finalRecurring.state.nextRunAtMs > Date.now()"
+            message:
+              expr: "`recurring job did not remain scheduled: ${JSON.stringify(finalRecurring)}`"
+        - assert:
+            expr: "finalRecurring.state.nextRunAtMs > recurringJob.state.nextRunAtMs"
+            message:
+              expr: "`recurring next run did not advance from ${recurringJob.state.nextRunAtMs}: ${JSON.stringify(finalRecurring)}`"
+        - assert:
+            expr: "JSON.stringify([...(finalRecurring.payload.toolsAllow ?? [])].sort()) === JSON.stringify([...(recurringJob.payload.toolsAllow ?? [])].sort()) && finalRecurring.payload.toolsAllowIsDefault === true"
+            message:
+              expr: "`recurring authority changed across restart: before=${JSON.stringify(recurringJob.payload)} after=${JSON.stringify(finalRecurring?.payload)}`"
+        - assert:
+            expr: "finalList.jobs.length === 1 && finalList.jobs[0].id === recurringJob.id"
+            message:
+              expr: "`gateway restart replayed or created unexpected cron jobs: ${JSON.stringify(finalList.jobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
+        - call: env.gateway.call
+          saveAs: oneShotRunsPage
+          args:
+            - cron.runs
+            - id:
+                expr: oneShotJob.id
+              limit: 20
+              sortDir: desc
+            - timeoutMs: 30000
+        - set: oneShotRuns
+          value:
+            expr: "oneShotRunsPage.entries.filter((entry) => entry.ts >= authorStartedAt && ['ok', 'error', 'skipped'].includes(entry.status))"
+        - assert:
+            expr: "oneShotRuns.length === 1"
+            message:
+              expr: "`expected exactly one one-off run, got ${JSON.stringify(oneShotRuns)}`"
+        - set: cronDeliveryMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && [oneShotPayloadMarker, recurringPayloadMarker].some((marker) => String(message.text ?? '').includes(marker)))"
+        - assert:
+            expr: "cronDeliveryMessages.length === 0"
+            message:
+              expr: "`delivery-none cron jobs emitted payload markers: ${JSON.stringify(cronDeliveryMessages.map((message) => message.text))}`"
+        - call: env.gateway.call
+          args:
+            - cron.remove
+            - id:
+                expr: recurringJob.id
+            - timeoutMs: 30000
+      detailsExpr: "`one-shot=${oneShotRun.status}; one-shot-runs=${oneShotRuns.length}; one-shot-present=${finalList.jobs.some((job) => job.id === oneShotJob.id)}; recurring-runs=${recurringRuns.length}; recurring-enabled=${finalRecurring.enabled}; recurring-next-before=${recurringJob.state.nextRunAtMs}; recurring-next-after=${finalRecurring.state.nextRunAtMs}; post-restart=${postRestartRecurringRun.status}; post-restart-ts=${postRestartBaselineTs}->${postRestartRecurringRun.ts}; restart-address=${preRestartBaseUrl}->${env.gateway.baseUrl}; final-job-count=${finalList.jobs.length}; delivery-marker-outbound=${cronDeliveryMessages.length}`"

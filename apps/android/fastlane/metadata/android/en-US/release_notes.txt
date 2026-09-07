@@ -1,0 +1,7 @@
+View your connected machine's desktop from your phone, and follow live subagent progress in chat.
+
+Organize conversations with session groups, nested threads, and colors. Switch agents more easily and receive reply notifications.
+
+Keeps queued messages and offline history intact across reconnects, recovers truncated replies, and preserves shared attachments.
+
+Improves Talk playback, photo orientation, notification consent, and connections through Gateway proxy paths.

@@ -1,14 +1,61 @@
-import { describe, expect, it } from "vitest";
+// Tests subagent inspection command routing and authorization.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
-  COMMAND,
-  COMMAND_KILL,
-  COMMAND_STEER,
-  resolveHandledPrefix,
-  resolveRequesterSessionKey,
-  resolveSubagentsAction,
-  stopWithText,
-} from "./commands-subagents-dispatch.js";
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
+import type { MsgContext } from "../templating.js";
+import { handleAcpCommand } from "./commands-acp.js";
+import { handleSubagentsCommand } from "./commands-subagents.js";
+import { resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
+
+vi.mock("../../agents/subagents/registry/subagent-control-scope.js", () => ({
+  listControlledSubagentRuns: listControlledSubagentRunsMock,
+}));
+
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+  const values: string[] = [];
+  for (const entry of allowFrom) {
+    const value = String(entry).trim();
+    if (value) {
+      values.push(value);
+    }
+  }
+  return values;
+};
+
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
+
+function registerOwnerEnforcingTelegramPlugin() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct" },
+          }),
+          commands: { enforceOwnerForCommands: true },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+            resolveAllowFrom: () => ["*"],
+            formatAllowFrom,
+          },
+        },
+        source: "test",
+      },
+    ]),
+  );
+}
 
 function buildParams(
   commandBody: string,
@@ -58,6 +105,19 @@ function buildParams(
 }
 
 describe("subagents command dispatch", () => {
+  beforeEach(() => {
+    previousPluginRegistry = getActivePluginRegistry();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (previousPluginRegistry) {
+      setActivePluginRegistry(previousPluginRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it("prefers native command target session keys", () => {
     const params = buildParams("/subagents list", {
       CommandSource: "native",
@@ -76,40 +136,72 @@ describe("subagents command dispatch", () => {
     expect(resolveRequesterSessionKey(params)).toBe("agent:main:whatsapp:direct:u1");
   });
 
-  it("maps slash aliases to the right handled prefix", () => {
-    expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
-    expect(resolveHandledPrefix("/kill 1")).toBe(COMMAND_KILL);
-    expect(resolveHandledPrefix("/steer 1 continue")).toBe(COMMAND_STEER);
-    expect(resolveHandledPrefix("/unknown")).toBeNull();
+  it.each([
+    "/focus target",
+    "/unfocus",
+    "/subagentsXYZ",
+    "/agentsXYZ",
+    "/kill 1",
+    "/steer hi",
+    "/unknown",
+  ])("does not dispatch unrelated command %s", async (command) => {
+    expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
+    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
   });
 
-  it("maps prefixes and args to subagent actions", () => {
-    const listTokens = ["list"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: listTokens })).toBe("list");
-    expect(listTokens).toEqual([]);
+  it.each(["help", "foo", "steer 1 continue", "agents"])(
+    "shows %s help without reading session state",
+    async (action) => {
+      const params = buildParams(`/subagents ${action}`, { SessionKey: "" });
+      const result = await handleSubagentsCommand(params, true);
+      expect(result?.reply?.text).toContain("/subagents list");
+      expect(result?.reply?.text).toContain("/session unbind");
+      expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    },
+  );
 
-    const killTokens = ["1"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND_KILL, restTokens: killTokens })).toBe(
-      "kill",
-    );
-    expect(killTokens).toEqual(["1"]);
+  it.each(["/acpXYZ", "/acp@otherbot help"])(
+    "does not dispatch ACP lookalike %s",
+    async (command) => {
+      expect(await handleAcpCommand(buildParams(command), true)).toBeNull();
+    },
+  );
 
-    const steerTokens = ["1", "continue"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND_STEER, restTokens: steerTokens })).toBe(
-      "steer",
-    );
-  });
-
-  it("returns null for invalid /subagents actions", () => {
-    const restTokens = ["foo"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens })).toBeNull();
-    expect(restTokens).toEqual(["foo"]);
-  });
-
-  it("builds stop replies", () => {
-    expect(stopWithText("hello")).toEqual({
-      shouldContinue: false,
-      reply: { text: "hello" },
+  it("rejects native subagents commands from non-owner senders when the plugin enforces owner-only commands", async () => {
+    registerOwnerEnforcingTelegramPlugin();
+    const cfg = {
+      commands: { allowFrom: { "*": ["*"] } },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:999",
+      SenderId: "999",
+      CommandSource: "native",
+      SessionKey: "agent:main:telegram:slash-session",
+      CommandTargetSessionKey: "agent:main:telegram:target",
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
     });
+    const params = buildParams("/subagents list", ctx as unknown as Record<string, unknown>);
+    params.cfg = cfg;
+    params.command.senderId = auth.senderId;
+    params.command.senderIsOwner = auth.senderIsOwner;
+    params.command.isAuthorizedSender = auth.isAuthorizedSender;
+    params.command.ownerList = auth.ownerList;
+    params.command.from = auth.from;
+    params.command.to = auth.to;
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+    expect(result).toEqual({ shouldContinue: false });
+    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
   });
 });

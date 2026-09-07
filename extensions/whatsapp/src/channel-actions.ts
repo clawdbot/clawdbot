@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements channel actions behavior.
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
@@ -80,5 +81,6 @@ export function describeWhatsAppMessageActions(params: {
   if (gate("polls")) {
     actions.add("poll");
   }
+  actions.add("upload-file");
   return { actions: Array.from(actions) };
 }

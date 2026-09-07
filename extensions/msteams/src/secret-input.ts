@@ -1,3 +1,4 @@
+// Msteams plugin module implements secret input behavior.
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,

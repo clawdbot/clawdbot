@@ -1,18 +1,8 @@
+// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
-export type PluginCapabilityKind =
-  | "cli-backend"
-  | "text-inference"
-  | "speech"
-  | "realtime-transcription"
-  | "realtime-voice"
-  | "media-understanding"
-  | "image-generation"
-  | "web-search"
-  | "agent-harness"
-  | "context-engine"
-  | "channel";
+export type PluginCapabilityKind = ReturnType<typeof buildPluginCapabilityEntries>[number]["kind"];
 
 export type PluginInspectShape =
   | "hook-only"
@@ -25,26 +15,49 @@ export type PluginCapabilityEntry = {
   ids: string[];
 };
 
-export type PluginShapeSummary = {
+type PluginShapeSummary = {
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
   capabilities: PluginCapabilityEntry[];
-  usesLegacyBeforeAgentStart: boolean;
 };
 
-export function buildPluginCapabilityEntries(
+type PluginShapeParams = {
+  plugin: PluginRegistry["plugins"][number];
+  report: Pick<
+    PluginRegistry,
+    "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors" | "sessionCatalogs"
+  >;
+};
+
+function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
-): PluginCapabilityEntry[] {
+  report: Pick<PluginRegistry, "sessionCatalogs">,
+) {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
+    { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
+    { kind: "document-extractors" as const, ids: plugin.contracts?.documentExtractors ?? [] },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
+    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
+    { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
+    { kind: "web-content-extractors" as const, ids: plugin.contracts?.webContentExtractors ?? [] },
+    { kind: "web-fetch" as const, ids: plugin.webFetchProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "migration-provider" as const, ids: plugin.migrationProviderIds },
+    { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    {
+      kind: "session-catalog" as const,
+      ids: report.sessionCatalogs
+        .filter((entry) => entry.pluginId === plugin.id)
+        .map((entry) => entry.provider.id),
+    },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
       kind: "context-engine" as const,
@@ -54,74 +67,46 @@ export function buildPluginCapabilityEntries(
           : [],
     },
     { kind: "channel" as const, ids: plugin.channelIds },
+    { kind: "gateway-discovery" as const, ids: plugin.gatewayDiscoveryServiceIds },
   ].filter((entry) => entry.ids.length > 0);
 }
 
-export function derivePluginInspectShape(params: {
-  capabilityCount: number;
-  typedHookCount: number;
-  customHookCount: number;
-  toolCount: number;
-  commandCount: number;
-  cliCount: number;
-  serviceCount: number;
-  gatewayMethodCount: number;
-  httpRouteCount: number;
-}): PluginInspectShape {
-  if (params.capabilityCount > 1) {
+function derivePluginInspectShape(
+  { plugin, report }: PluginShapeParams,
+  capabilityCount: number,
+): PluginInspectShape {
+  if (capabilityCount > 1) {
     return "hybrid-capability";
   }
-  if (params.capabilityCount === 1) {
+  if (capabilityCount === 1) {
     return "plain-capability";
   }
   const hasOnlyHooks =
-    params.typedHookCount + params.customHookCount > 0 &&
-    params.toolCount === 0 &&
-    params.commandCount === 0 &&
-    params.cliCount === 0 &&
-    params.serviceCount === 0 &&
-    params.gatewayMethodCount === 0 &&
-    params.httpRouteCount === 0;
+    plugin.commands.length === 0 &&
+    plugin.cliCommands.length === 0 &&
+    plugin.services.length === 0 &&
+    plugin.httpRoutes === 0 &&
+    (report.typedHooks.some((entry) => entry.pluginId === plugin.id) ||
+      report.hooks.some((entry) => entry.pluginId === plugin.id)) &&
+    !report.tools.some((entry) => entry.pluginId === plugin.id) &&
+    !(report.gatewayMethodDescriptors ?? []).some(
+      (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
+    );
   if (hasOnlyHooks) {
     return "hook-only";
   }
   return "non-capability";
 }
 
-export function buildPluginShapeSummary(params: {
-  plugin: PluginRegistry["plugins"][number];
-  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools">;
-}): PluginShapeSummary {
-  const capabilities = buildPluginCapabilityEntries(params.plugin);
-  const typedHookCount = params.report.typedHooks.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
-  const customHookCount = params.report.hooks.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
-  const toolCount = params.report.tools.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
+export function buildPluginShapeSummary(params: PluginShapeParams): PluginShapeSummary {
+  const capabilities = buildPluginCapabilityEntries(params.plugin, params.report);
   const capabilityCount = capabilities.length;
-  const shape = derivePluginInspectShape({
-    capabilityCount,
-    typedHookCount,
-    customHookCount,
-    toolCount,
-    commandCount: params.plugin.commands.length,
-    cliCount: params.plugin.cliCommands.length,
-    serviceCount: params.plugin.services.length,
-    gatewayMethodCount: params.plugin.gatewayMethods.length,
-    httpRouteCount: params.plugin.httpRoutes,
-  });
+  const shape = derivePluginInspectShape(params, capabilityCount);
 
   return {
     shape,
     capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
     capabilityCount,
     capabilities,
-    usesLegacyBeforeAgentStart: params.report.typedHooks.some(
-      (entry) => entry.pluginId === params.plugin.id && entry.hookName === "before_agent_start",
-    ),
   };
 }

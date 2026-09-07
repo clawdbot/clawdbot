@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel config write authorization and scope helpers.
+ */
 export {
   authorizeConfigWrite,
   canBypassConfigWritePolicy,

@@ -1,6 +1,8 @@
+// Test helpers for session conversation registry keys and thread suffixes.
 import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
 import { createTestRegistry } from "./channel-plugins.js";
 
+// Mirrors generic thread suffix handling without loading real channel plugins.
 function resolveGenericSessionConversation(params: { rawId: string }) {
   const parsed = parseThreadSessionSuffix(params.rawId);
   const id = parsed.baseSessionKey ?? params.rawId;
@@ -49,77 +51,39 @@ function resolveFeishuSessionConversation(params: { kind: "group" | "channel"; r
   };
 }
 
+/** Builds channel registry stubs with conversation resolvers for session tests. */
 export function createSessionConversationTestRegistry() {
   return createTestRegistry([
-    {
-      pluginId: "discord",
+    ...(
+      [
+        { id: "discord", label: "Discord", preferSessionLookupForAnnounceTarget: true },
+        { id: "slack", label: "Slack" },
+        { id: "matrix", label: "Matrix" },
+      ] as const
+    ).map(({ id, label, ...metaOverrides }) => ({
+      pluginId: id,
       source: "test",
       plugin: {
-        id: "discord",
+        id,
         meta: {
-          id: "discord",
-          label: "Discord",
-          selectionLabel: "Discord",
-          docsPath: "/channels/discord",
-          blurb: "Discord test stub.",
+          id,
+          label,
+          selectionLabel: label,
+          docsPath: `/channels/${id}`,
+          blurb: `${label} test stub.`,
+          ...metaOverrides,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
           resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+          resolveSessionTarget: ({ id: targetId }: { id: string }) => `channel:${targetId}`,
         },
         config: {
           listAccountIds: () => ["default"],
           resolveAccount: () => ({}),
         },
       },
-    },
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: {
-        id: "slack",
-        meta: {
-          id: "slack",
-          label: "Slack",
-          selectionLabel: "Slack",
-          docsPath: "/channels/slack",
-          blurb: "Slack test stub.",
-        },
-        capabilities: { chatTypes: ["direct", "channel", "thread"] },
-        messaging: {
-          resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-        },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({}),
-        },
-      },
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: {
-        id: "matrix",
-        meta: {
-          id: "matrix",
-          label: "Matrix",
-          selectionLabel: "Matrix",
-          docsPath: "/channels/matrix",
-          blurb: "Matrix test stub.",
-        },
-        capabilities: { chatTypes: ["direct", "channel", "thread"] },
-        messaging: {
-          resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-        },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({}),
-        },
-      },
-    },
+    })),
     {
       pluginId: "telegram",
       source: "test",
@@ -134,6 +98,8 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "group", "thread"] },
         messaging: {
+          resolveSessionTarget: ({ kind, id }: { kind: string; id: string }) =>
+            kind === "group" ? id : `channel:${id}`,
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: resolveTelegramSessionConversation,
         },

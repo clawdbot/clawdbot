@@ -1,34 +1,69 @@
 ---
-summary: "How the macOS app reports gateway/Baileys health states"
+summary: "How the macOS app reports gateway/channel health states"
 read_when:
   - Debugging mac app health indicators
-title: "Health Checks (macOS)"
+title: "Health checks (macOS)"
 ---
 
-# Health Checks on macOS
+# Health checks on macOS
 
-How to see whether the linked channel is healthy from the menu bar app.
+The macOS app reads channel health from the Gateway. Configured channels do
+not need a linked-session field to report a healthy state. Explicitly disabled
+accounts stay inactive and cannot provide a healthy fallback.
 
 ## Menu bar
 
-- Status dot now reflects Baileys health:
-  - Green: linked + socket opened recently.
-  - Orange: connecting/retrying.
-  - Red: logged out or probe failed.
-- Secondary line reads "linked · auth 12m" or shows the failure reason.
-- "Run Health Check" menu item triggers an on-demand probe.
+The menu shows actionable health problems: an orange failure reason or a red
+login requirement. Healthy and pending states stay quiet. Opening the menu
+refreshes health on demand.
 
 ## Settings
 
-- General tab gains a Health card showing: linked auth age, session-store path/count, last check time, last error/status code, and buttons for Run Health Check / Reveal Logs.
-- Uses a cached snapshot so the UI loads instantly and falls back gracefully when offline.
-- **Channels tab** surfaces channel status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
+- In the native **Connection… → Connection** tab, **Local Gateway** shows a health row: status
+  dot, channel summary, and an optional failure detail line, with **Retry now** and
+  **Open logs** buttons.
+- **Dashboard → Settings → Channels** surfaces per-channel status and controls (login QR,
+  logout, probe, last disconnect/error).
 
-## How the probe works
+The health row uses these states:
 
-- App runs `openclaw health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.
-- Cache the last good snapshot and the last error separately to avoid flicker; show the timestamp of each.
+- Green: the selected linked or configured channel has no reported failure.
+- Orange: a channel or health request reports a failure. An unlinked channel
+  also stays orange when another configured channel is healthy.
+- Red: linking is required and no healthy configured channel is available.
+- Gray: health is pending or the selected channel is disabled or not configured.
+
+The summary can read "Telegram ready", "Telegram running", or
+"linked · auth 12m". The app honors the Gateway's startup and reconnect grace
+windows; transient transport flags alone do not mark a channel degraded.
+Reported failures such as a stale socket or unavailable inbound processing
+still take precedence over a ready-looking connection.
+
+A missing HTTP status does not by itself mean a timeout; the app preserves
+the Gateway's reported probe error.
+
+## How health refresh works
+
+The app calls the Gateway's `health` RPC over its existing WebSocket
+connection (not a CLI shell-out) every ~60s and on demand. This reads the
+Gateway's health snapshot; it does not request an active channel probe or
+send messages. The app caches the last
+good snapshot and the last error separately so the UI loads instantly and
+does not flicker while offline.
+
+The native health row follows the Primary Gateway.
+Switching Primary immediately clears the previous Gateway's cached status;
+delayed replies from that Gateway cannot replace the new results. Reconnecting
+to the same Gateway retains its last good health snapshot while a fresh check
+runs. Connection errors stay with the Gateway that reported them.
 
 ## When in doubt
 
-- You can still use the CLI flow in [Gateway health](/gateway/health) (`openclaw status`, `openclaw status --deep`, `openclaw health --json`) and tail `/tmp/openclaw/openclaw-*.log` for `web-heartbeat` / `web-reconnect`.
+Use the CLI flow in [Gateway health](/gateway/health) (`openclaw status`,
+`openclaw status --deep`, `openclaw health --json`) and run
+`openclaw logs --follow`, filtering for `web-heartbeat` / `web-reconnect`.
+
+## Related
+
+- [Gateway health](/gateway/health)
+- [macOS app](/platforms/macos)

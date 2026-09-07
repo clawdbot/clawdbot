@@ -1,3 +1,8 @@
+/**
+ * Shared channel config-write policy helpers.
+ *
+ * Authorizes config writes by origin/target channel and account scope.
+ */
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
@@ -11,20 +16,29 @@ type ChannelConfigWithAccounts = {
 };
 
 type ConfigWritePolicyConfig = {
-  channels?: Record<string, ChannelConfigWithAccounts>;
+  channels?: Record<string, unknown>;
 };
 
+/**
+ * Channel/account scope used to evaluate config write policy.
+ */
 export type ConfigWriteScopeLike<TChannelId extends string = string> = {
   channelId?: TChannelId | null;
   accountId?: string | null;
 };
 
+/**
+ * Target affected by a config write command.
+ */
 export type ConfigWriteTargetLike<TChannelId extends string = string> =
   | { kind: "global" }
   | { kind: "channel"; scope: { channelId: TChannelId } }
   | { kind: "account"; scope: { channelId: TChannelId; accountId: string } }
   | { kind: "ambiguous"; scopes: ConfigWriteScopeLike<TChannelId>[] };
 
+/**
+ * Authorization result for a config write under channel configWrites policy.
+ */
 export type ConfigWriteAuthorizationResultLike<TChannelId extends string = string> =
   | { allowed: true }
   | {
@@ -36,18 +50,6 @@ export type ConfigWriteAuthorizationResultLike<TChannelId extends string = strin
       };
     };
 
-function listConfigWriteTargetScopes<TChannelId extends string>(
-  target?: ConfigWriteTargetLike<TChannelId>,
-): ConfigWriteScopeLike<TChannelId>[] {
-  if (!target || target.kind === "global") {
-    return [];
-  }
-  if (target.kind === "ambiguous") {
-    return target.scopes;
-  }
-  return [target.scope];
-}
-
 function resolveChannelConfig(
   cfg: ConfigWritePolicyConfig,
   channelId?: string | null,
@@ -55,7 +57,10 @@ function resolveChannelConfig(
   if (!channelId) {
     return undefined;
   }
-  return cfg.channels?.[channelId];
+  const channelConfig = cfg.channels?.[channelId];
+  return channelConfig != null && typeof channelConfig === "object" && !Array.isArray(channelConfig)
+    ? (channelConfig as ChannelConfigWithAccounts)
+    : undefined;
 }
 
 function resolveChannelAccountConfig(
@@ -65,6 +70,9 @@ function resolveChannelAccountConfig(
   return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
 }
 
+/**
+ * Resolves whether config writes are enabled for a channel/account scope.
+ */
 export function resolveChannelConfigWritesShared(params: {
   cfg: ConfigWritePolicyConfig;
   channelId?: string | null;
@@ -79,6 +87,9 @@ export function resolveChannelConfigWritesShared(params: {
   return value !== false;
 }
 
+/**
+ * Authorizes a channel-initiated config write against origin and target policy.
+ */
 export function authorizeConfigWriteShared<TChannelId extends string>(params: {
   cfg: ConfigWritePolicyConfig;
   origin?: ConfigWriteScopeLike<TChannelId>;
@@ -91,6 +102,7 @@ export function authorizeConfigWriteShared<TChannelId extends string>(params: {
   if (params.target?.kind === "ambiguous") {
     return { allowed: false, reason: "ambiguous-target" };
   }
+  // Both the message origin and the target section can disable channel-initiated config writes.
   if (
     params.origin?.channelId &&
     !resolveChannelConfigWritesShared({
@@ -105,33 +117,30 @@ export function authorizeConfigWriteShared<TChannelId extends string>(params: {
       blockedScope: { kind: "origin", scope: params.origin },
     };
   }
-  const seen = new Set<string>();
-  for (const target of listConfigWriteTargetScopes(params.target)) {
-    if (!target.channelId) {
-      continue;
-    }
-    const key = `${target.channelId}:${normalizeAccountId(target.accountId)}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
+  const target = params.target;
+  if (target && target.kind !== "global") {
+    const scope: ConfigWriteScopeLike<TChannelId> = target.scope;
     if (
+      scope.channelId &&
       !resolveChannelConfigWritesShared({
         cfg: params.cfg,
-        channelId: target.channelId,
-        accountId: target.accountId,
+        channelId: scope.channelId,
+        accountId: scope.accountId,
       })
     ) {
       return {
         allowed: false,
         reason: "target-disabled",
-        blockedScope: { kind: "target", scope: target },
+        blockedScope: { kind: "target", scope },
       };
     }
   }
   return { allowed: true };
 }
 
+/**
+ * Resolves an explicit channel/account scope into a config write target.
+ */
 export function resolveExplicitConfigWriteTargetShared<TChannelId extends string>(
   scope: ConfigWriteScopeLike<TChannelId>,
 ): ConfigWriteTargetLike<TChannelId> {
@@ -145,6 +154,9 @@ export function resolveExplicitConfigWriteTargetShared<TChannelId extends string
   return { kind: "account", scope: { channelId: scope.channelId, accountId } };
 }
 
+/**
+ * Infers the config write target from a config path.
+ */
 export function resolveConfigWriteTargetFromPathShared<TChannelId extends string>(params: {
   path: string[];
   normalizeChannelId: (raw: string) => TChannelId | null | undefined;
@@ -174,6 +186,9 @@ export function resolveConfigWriteTargetFromPathShared<TChannelId extends string
   });
 }
 
+/**
+ * Checks whether an internal admin client can bypass channel config write policy.
+ */
 export function canBypassConfigWritePolicyShared(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
@@ -185,6 +200,9 @@ export function canBypassConfigWritePolicyShared(params: {
   );
 }
 
+/**
+ * Formats the user-facing denial message for a blocked config write.
+ */
 export function formatConfigWriteDeniedMessageShared<TChannelId extends string>(params: {
   result: Exclude<ConfigWriteAuthorizationResultLike<TChannelId>, { allowed: true }>;
   fallbackChannelId?: TChannelId | null;

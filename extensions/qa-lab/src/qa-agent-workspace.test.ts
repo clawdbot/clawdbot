@@ -1,22 +1,34 @@
+// Qa Lab tests cover qa agent workspace plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs: string[] = [];
+const { cleanup, makeTempDir } = createTempDirHarness();
 
-async function makeTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+afterEach(cleanup);
 
 describe("seedQaAgentWorkspace", () => {
+  it.each([
+    ["win32", "junction"],
+    ["linux", "dir"],
+    ["darwin", "dir"],
+  ] as const)("uses the expected repo link type on %s", async (platform, linkType) => {
+    const workspaceDir = await makeTempDir("qa-workspace-link-type-");
+    const repoRoot = await makeTempDir("qa-repo-link-type-");
+    const originalPlatform = process.platform;
+    const symlink = vi.spyOn(fs, "symlink").mockResolvedValue(undefined);
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      await seedQaAgentWorkspace({ workspaceDir, repoRoot });
+      expect(symlink).toHaveBeenCalledWith(repoRoot, path.join(workspaceDir, "repo"), linkType);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      symlink.mockRestore();
+    }
+  });
+
   it("creates a repo symlink when a repo root is provided", async () => {
     const workspaceDir = await makeTempDir("qa-workspace-");
     const repoRoot = await makeTempDir("qa-repo-");
@@ -27,8 +39,6 @@ describe("seedQaAgentWorkspace", () => {
     const repoLinkPath = path.join(workspaceDir, "repo");
     const stat = await fs.lstat(repoLinkPath);
     expect(stat.isSymbolicLink()).toBe(true);
-    expect(await fs.readFile(path.join(repoLinkPath, "README.md"), "utf8")).toContain(
-      "repo marker",
-    );
+    expect(await fs.readFile(path.join(repoLinkPath, "README.md"), "utf8")).toBe("repo marker\n");
   });
 });

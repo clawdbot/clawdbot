@@ -1,9 +1,9 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+/**
+ * Android node capability policy-config regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
 
 describe("unwrapRemoteConfigSnapshot", () => {
   it("reads direct config snapshot payload from GatewayClient.request", () => {

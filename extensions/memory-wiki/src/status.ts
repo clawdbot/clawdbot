@@ -1,12 +1,16 @@
+// Memory Wiki plugin module implements status behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { inferWikiPageKind, toWikiPageSummary, type WikiPageKind } from "./markdown.js";
+import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
-export type MemoryWikiStatusWarning = {
+type MemoryWikiStatusWarning = {
   code:
     | "vault-missing"
     | "obsidian-cli-missing"
@@ -19,6 +23,8 @@ export type MemoryWikiStatusWarning = {
 };
 
 export type MemoryWikiStatus = {
+  vaultScope: ResolvedMemoryWikiConfig["vault"]["scope"];
+  agentId: string | null;
   vaultMode: ResolvedMemoryWikiConfig["vaultMode"];
   renderMode: ResolvedMemoryWikiConfig["vault"]["renderMode"];
   vaultPath: string;
@@ -46,7 +52,7 @@ export type MemoryWikiStatus = {
   warnings: MemoryWikiStatusWarning[];
 };
 
-export type MemoryWikiDoctorFix = {
+type MemoryWikiDoctorFix = {
   code: MemoryWikiStatusWarning["code"];
   message: string;
 };
@@ -60,19 +66,11 @@ export type MemoryWikiDoctorReport = {
 
 type ResolveMemoryWikiStatusDeps = {
   appConfig?: OpenClawConfig;
+  callerAgentId?: string;
   pathExists?: (inputPath: string) => Promise<boolean>;
   listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
   resolveCommand?: (command: string) => Promise<string | null>;
 };
-
-async function pathExists(inputPath: string): Promise<boolean> {
-  try {
-    await fs.access(inputPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function collectVaultCounts(vaultPath: string): Promise<{
   pageCounts: Record<WikiPageKind, number>;
@@ -94,45 +92,46 @@ async function collectVaultCounts(vaultPath: string): Promise<{
   };
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
-    const entries = await fs
-      .readdir(path.join(vaultPath, dir), { withFileTypes: true })
-      .catch(() => []);
+    const entries = await walkMemoryWikiDirectory(vaultPath, dir);
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
+      if (
+        entry.kind !== "file" ||
+        !entry.relativePath.endsWith(".md") ||
+        path.basename(entry.relativePath) === "index.md"
+      ) {
         continue;
       }
-      const kind = inferWikiPageKind(path.join(dir, entry.name));
-      if (kind) {
-        pageCounts[kind] += 1;
+      const absolutePath = path.join(vaultPath, entry.relativePath);
+      const relativeToVault = entry.relativePath.split(path.sep).join("/");
+      const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
+      if (raw === null) {
+        continue;
       }
-      if (dir === "sources") {
-        const absolutePath = path.join(vaultPath, dir, entry.name);
-        const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
-        if (!raw) {
-          continue;
-        }
-        const page = toWikiPageSummary({
-          absolutePath,
-          relativePath: path.join(dir, entry.name),
-          raw,
-        });
-        if (!page) {
-          continue;
-        }
-        if (page.sourceType === "memory-bridge-events") {
-          sourceCounts.bridgeEvents += 1;
-        } else if (page.sourceType === "memory-bridge") {
-          sourceCounts.bridge += 1;
-        } else if (
-          page.provenanceMode === "unsafe-local" ||
-          page.sourceType === "memory-unsafe-local"
-        ) {
-          sourceCounts.unsafeLocal += 1;
-        } else if (!page.sourceType) {
-          sourceCounts.native += 1;
-        } else {
-          sourceCounts.other += 1;
-        }
+      const page = toWikiPageSummary({
+        absolutePath,
+        relativePath: relativeToVault,
+        raw,
+      });
+      if (!page) {
+        continue;
+      }
+      pageCounts[page.kind] += 1;
+      if (page.kind !== "source") {
+        continue;
+      }
+      if (page.sourceType === "memory-bridge-events") {
+        sourceCounts.bridgeEvents += 1;
+      } else if (page.sourceType === "memory-bridge") {
+        sourceCounts.bridge += 1;
+      } else if (
+        page.provenanceMode === "unsafe-local" ||
+        page.sourceType === "memory-unsafe-local"
+      ) {
+        sourceCounts.unsafeLocal += 1;
+      } else if (!page.sourceType) {
+        sourceCounts.native += 1;
+      } else {
+        sourceCounts.other += 1;
       }
     }
   }
@@ -215,15 +214,21 @@ export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
   deps?: ResolveMemoryWikiStatusDeps,
 ): Promise<MemoryWikiStatus> {
+  const agentId = resolveMemoryWikiVaultAgentId(config);
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);
   const bridgePublicArtifactCount =
-    deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled
-      ? (
-          await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
+    deps?.appConfig &&
+    config.vaultMode === "bridge" &&
+    config.bridge.enabled &&
+    config.bridge.readMemoryArtifacts
+      ? filterMemoryWikiBridgeArtifacts({
+          config,
+          callerAgentId: deps.callerAgentId,
+          artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
             cfg: deps.appConfig,
-          })
-        ).length
+          }),
+        }).length
       : null;
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
@@ -246,6 +251,8 @@ export async function resolveMemoryWikiStatus(
       };
 
   return {
+    vaultScope: config.vault.scope,
+    agentId,
     vaultMode: config.vaultMode,
     renderMode: config.vault.renderMode,
     vaultPath: config.vault.path,
@@ -302,6 +309,7 @@ export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus): MemoryWik
 export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
   const lines = [
     `Wiki vault mode: ${status.vaultMode}`,
+    `Vault scope: ${status.vaultScope}${status.agentId ? ` (${status.agentId})` : ""}`,
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
     `Render mode: ${status.renderMode}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,

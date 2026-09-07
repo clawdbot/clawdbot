@@ -1,9 +1,29 @@
 {
   "id": "cloudflare-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["cloudflare-ai-gateway"],
-  "providerAuthEnvVars": {
-    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+  "modelPricing": {
+    "providers": {
+      "cloudflare-ai-gateway": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "cloudflare-ai-gateway",
+        "envVars": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1,8 +1,18 @@
+/**
+ * Browser filesystem path helpers.
+ *
+ * Defines browser output roots and resolves upload/media references while
+ * enforcing root-scoped path access for Browser tool file inputs.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  resolveExistingPathsWithinRoot,
+  resolveStrictExistingPathsWithinRoot,
+} from "../sdk-security-runtime.js";
+import { CONFIG_DIR } from "../utils.js";
+export { resolveExistingPathsWithinRoot };
 
 const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
 
@@ -22,255 +32,247 @@ function canUseNodeFs(): boolean {
   }
 }
 
-export const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
+const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
   ? resolvePreferredOpenClawTmpDir()
   : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
+/** Default root directory for browser trace files. */
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
+/** Default root directory for browser downloads. */
 export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
+/** Default root directory for browser upload inputs. */
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
+/** Default root directory for managed inbound media references. */
+const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
-type InvalidPathResult = { ok: false; error: string };
+type ExistingPathsResult = Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>;
+type StrictExistingPathsResult = Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>;
 
-function invalidPath(scopeLabel: string): InvalidPathResult {
-  return {
-    ok: false,
-    error: `Invalid path: must stay within ${scopeLabel}`,
-  };
+type UploadPathResolutionOptions = {
+  requestedPaths: string[];
+  uploadDir?: string;
+  inboundMediaDir?: string;
+};
+
+type ResolvedManagedInboundMediaRef =
+  | { ok: true; path: string; uploadRootPrecedence: boolean }
+  | { ok: false; error: string }
+  | null;
+
+type DecodedInboundMediaId = { ok: true; path: string } | { ok: false; error: string };
+
+function normalizeUploadPathSource(source: string): string {
+  const trimmed = source.trim();
+  if (/^media:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
 }
 
-async function resolveRealPathIfExists(targetPath: string): Promise<string | undefined> {
+function decodeInboundMediaId(value: string, source: string): DecodedInboundMediaId {
+  let id: string;
   try {
-    return await fs.realpath(targetPath);
+    id = decodeURIComponent(value);
   } catch {
-    return undefined;
+    return { ok: false, error: `Invalid media reference: ${source}` };
   }
+  if (
+    !id ||
+    id === "." ||
+    id === ".." ||
+    id.includes("/") ||
+    id.includes("\\") ||
+    id.includes("\0")
+  ) {
+    return { ok: false, error: `Invalid media reference: ${source}` };
+  }
+  return { ok: true, path: id };
 }
 
-async function resolveTrustedRootRealPath(rootDir: string): Promise<string | undefined> {
-  try {
-    const rootLstat = await fs.lstat(rootDir);
-    if (!rootLstat.isDirectory() || rootLstat.isSymbolicLink()) {
-      return undefined;
-    }
-    return await fs.realpath(rootDir);
-  } catch {
-    return undefined;
-  }
-}
-
-async function validateCanonicalPathWithinRoot(params: {
-  rootRealPath: string;
-  candidatePath: string;
-  expect: "directory" | "file";
-}): Promise<"ok" | "not-found" | "invalid"> {
-  try {
-    const candidateLstat = await fs.lstat(params.candidatePath);
-    if (candidateLstat.isSymbolicLink()) {
-      return "invalid";
-    }
-    if (params.expect === "directory" && !candidateLstat.isDirectory()) {
-      return "invalid";
-    }
-    if (params.expect === "file" && !candidateLstat.isFile()) {
-      return "invalid";
-    }
-    if (params.expect === "file" && candidateLstat.nlink > 1) {
-      return "invalid";
-    }
-    const candidateRealPath = await fs.realpath(params.candidatePath);
-    return isPathInside(params.rootRealPath, candidateRealPath) ? "ok" : "invalid";
-  } catch (err) {
-    return isNotFoundPathError(err) ? "not-found" : "invalid";
-  }
-}
-
-export function resolvePathWithinRoot(params: {
-  rootDir: string;
-  requestedPath: string;
-  scopeLabel: string;
-  defaultFileName?: string;
-}): { ok: true; path: string } | { ok: false; error: string } {
-  const root = path.resolve(params.rootDir);
-  const raw = params.requestedPath.trim();
-  if (!raw) {
-    if (!params.defaultFileName) {
-      return { ok: false, error: "path is required" };
-    }
-    return { ok: true, path: path.join(root, params.defaultFileName) };
-  }
-  const resolved = path.resolve(root, raw);
-  const rel = path.relative(root, resolved);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-    return { ok: false, error: `Invalid path: must stay within ${params.scopeLabel}` };
-  }
-  return { ok: true, path: resolved };
-}
-
-export async function resolveWritablePathWithinRoot(params: {
-  rootDir: string;
-  requestedPath: string;
-  scopeLabel: string;
-  defaultFileName?: string;
-}): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  const lexical = resolvePathWithinRoot(params);
-  if (!lexical.ok) {
-    return lexical;
+function resolveManagedInboundMediaRef(
+  source: string,
+  inboundMediaDir: string,
+): ResolvedManagedInboundMediaRef {
+  const normalizedSource = normalizeUploadPathSource(source);
+  if (!normalizedSource) {
+    return null;
   }
 
-  const rootDir = path.resolve(params.rootDir);
-  const rootRealPath = await resolveTrustedRootRealPath(rootDir);
-  if (!rootRealPath) {
-    return invalidPath(params.scopeLabel);
-  }
-
-  const requestedPath = lexical.path;
-  const parentDir = path.dirname(requestedPath);
-  const parentStatus = await validateCanonicalPathWithinRoot({
-    rootRealPath,
-    candidatePath: parentDir,
-    expect: "directory",
-  });
-  if (parentStatus !== "ok") {
-    return invalidPath(params.scopeLabel);
-  }
-
-  const targetStatus = await validateCanonicalPathWithinRoot({
-    rootRealPath,
-    candidatePath: requestedPath,
-    expect: "file",
-  });
-  if (targetStatus === "invalid") {
-    return invalidPath(params.scopeLabel);
-  }
-
-  return lexical;
-}
-
-export function resolvePathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): { ok: true; paths: string[] } | { ok: false; error: string } {
-  const resolvedPaths: string[] = [];
-  for (const raw of params.requestedPaths) {
-    const pathResult = resolvePathWithinRoot({
-      rootDir: params.rootDir,
-      requestedPath: raw,
-      scopeLabel: params.scopeLabel,
-    });
-    if (!pathResult.ok) {
-      return { ok: false, error: pathResult.error };
-    }
-    resolvedPaths.push(pathResult.path);
-  }
-  return { ok: true, paths: resolvedPaths };
-}
-
-export async function resolveExistingPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
-  return await resolveCheckedPathsWithinRoot({
-    ...params,
-    allowMissingFallback: true,
-  });
-}
-
-export async function resolveStrictExistingPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
-  return await resolveCheckedPathsWithinRoot({
-    ...params,
-    allowMissingFallback: false,
-  });
-}
-
-async function resolveCheckedPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-  allowMissingFallback: boolean;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
-  const rootDir = path.resolve(params.rootDir);
-  // Keep historical behavior for missing roots and rely on openFileWithinRoot for final checks.
-  const rootRealPath = await resolveRealPathIfExists(rootDir);
-
-  const isInRoot = (relativePath: string) =>
-    Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
-
-  const resolveExistingRelativePath = async (
-    requestedPath: string,
-  ): Promise<
-    { ok: true; relativePath: string; fallbackPath: string } | { ok: false; error: string }
-  > => {
-    const raw = requestedPath.trim();
-    const lexicalPathResult = resolvePathWithinRoot({
-      rootDir,
-      requestedPath,
-      scopeLabel: params.scopeLabel,
-    });
-    if (lexicalPathResult.ok) {
-      return {
-        ok: true,
-        relativePath: path.relative(rootDir, lexicalPathResult.path),
-        fallbackPath: lexicalPathResult.path,
-      };
-    }
-    if (!rootRealPath || !raw || !path.isAbsolute(raw)) {
-      return lexicalPathResult;
-    }
+  if (/^media:\/\//i.test(normalizedSource)) {
+    const rawUriMatch = /^media:\/\/[^/?#]*([^?#]*)/iu.exec(normalizedSource);
+    const rawPath = rawUriMatch?.[1] ?? "";
+    let parsed: URL;
     try {
-      const resolvedExistingPath = await fs.realpath(raw);
-      const relativePath = path.relative(rootRealPath, resolvedExistingPath);
-      if (!isInRoot(relativePath)) {
-        return lexicalPathResult;
-      }
-      return {
-        ok: true,
-        relativePath,
-        fallbackPath: resolvedExistingPath,
-      };
+      parsed = new URL(normalizedSource);
     } catch {
-      return lexicalPathResult;
+      return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
     }
-  };
-
-  const resolvedPaths: string[] = [];
-  for (const raw of params.requestedPaths) {
-    const pathResult = await resolveExistingRelativePath(raw);
-    if (!pathResult.ok) {
-      return { ok: false, error: pathResult.error };
-    }
-
-    let opened: Awaited<ReturnType<typeof openFileWithinRoot>> | undefined;
-    try {
-      opened = await openFileWithinRoot({
-        rootDir,
-        relativePath: pathResult.relativePath,
-      });
-      resolvedPaths.push(opened.realPath);
-    } catch (err) {
-      if (params.allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
-        // Preserve historical behavior for paths that do not exist yet.
-        resolvedPaths.push(pathResult.fallbackPath);
-        continue;
-      }
-      if (err instanceof SafeOpenError && err.code === "outside-workspace") {
-        return {
-          ok: false,
-          error: `File is outside ${params.scopeLabel}`,
-        };
-      }
+    if (parsed.hostname !== "inbound") {
       return {
         ok: false,
-        error: `Invalid path: must stay within ${params.scopeLabel} and be a regular non-symlink file`,
+        error: `Unsupported media reference location: ${parsed.hostname || "(missing)"}`,
       };
-    } finally {
-      await opened?.handle.close().catch(() => {});
     }
+    if (!rawPath.startsWith("/") || rawPath.slice(1).includes("/") || rawPath.includes("\\")) {
+      return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
+    }
+    const decoded = decodeInboundMediaId(rawPath.slice(1), normalizedSource);
+    return decoded?.ok
+      ? {
+          ok: true,
+          path: path.join(inboundMediaDir, decoded.path),
+          uploadRootPrecedence: false,
+        }
+      : decoded;
   }
-  return { ok: true, paths: resolvedPaths };
+
+  const relativeMatch = /^(?:\.\/)?media\/inbound\/([^/\\]+)$/u.exec(normalizedSource);
+  if (!relativeMatch?.[1]) {
+    return null;
+  }
+  const decoded = decodeInboundMediaId(relativeMatch[1], normalizedSource);
+  return decoded?.ok
+    ? {
+        ok: true,
+        path: path.join(inboundMediaDir, decoded.path),
+        uploadRootPrecedence: true,
+      }
+    : decoded;
+}
+
+async function isDirectInboundMediaFile(params: {
+  inboundMediaDir: string;
+  resolvedPath: string;
+}): Promise<boolean> {
+  let inboundRoot: string;
+  try {
+    inboundRoot = await fs.realpath(params.inboundMediaDir);
+  } catch {
+    inboundRoot = path.resolve(params.inboundMediaDir);
+  }
+  const relativePath = path.relative(inboundRoot, params.resolvedPath);
+  return (
+    Boolean(relativePath) &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath) &&
+    !relativePath.includes("/") &&
+    !relativePath.includes("\\")
+  );
+}
+
+async function resolveDirectInboundMediaPath(params: {
+  inboundMediaDir: string;
+  requestedPath: string;
+  strict: boolean;
+}): Promise<ExistingPathsResult> {
+  const inboundPathsResult = params.strict
+    ? await resolveStrictExistingPathsWithinRoot({
+        rootDir: params.inboundMediaDir,
+        requestedPaths: [params.requestedPath],
+        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
+      })
+    : await resolveExistingPathsWithinRoot({
+        rootDir: params.inboundMediaDir,
+        requestedPaths: [params.requestedPath],
+        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
+      });
+  if (!inboundPathsResult.ok) {
+    return inboundPathsResult;
+  }
+  const resolvedPath = inboundPathsResult.paths[0] ?? params.requestedPath;
+  if (
+    !(await isDirectInboundMediaFile({
+      inboundMediaDir: params.inboundMediaDir,
+      resolvedPath,
+    }))
+  ) {
+    return {
+      ok: false,
+      error: `Invalid media reference: must be a direct child of inbound media directory (${params.inboundMediaDir})`,
+    };
+  }
+  return inboundPathsResult;
+}
+
+/** Resolve upload paths and managed media references into existing file paths. */
+export async function resolveExistingUploadPaths({
+  requestedPaths,
+  uploadDir = DEFAULT_UPLOAD_DIR,
+  inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
+}: UploadPathResolutionOptions): Promise<ExistingPathsResult> {
+  const paths: string[] = [];
+  for (const requestedPath of requestedPaths) {
+    const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
+    if (managedMediaPathResult?.ok === false) {
+      return managedMediaPathResult;
+    }
+
+    if (managedMediaPathResult?.uploadRootPrecedence !== false) {
+      const uploadPathsResult =
+        managedMediaPathResult?.uploadRootPrecedence === true
+          ? await resolveStrictExistingPathsWithinRoot({
+              rootDir: uploadDir,
+              requestedPaths: [requestedPath],
+              scopeLabel: `uploads directory (${uploadDir})`,
+            })
+          : await resolveExistingPathsWithinRoot({
+              rootDir: uploadDir,
+              requestedPaths: [requestedPath],
+              scopeLabel: `uploads directory (${uploadDir})`,
+            });
+      if (uploadPathsResult.ok) {
+        paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+        continue;
+      }
+    }
+
+    const inboundPathsResult = await resolveDirectInboundMediaPath({
+      inboundMediaDir,
+      requestedPath: managedMediaPathResult?.path ?? requestedPath,
+      strict: false,
+    });
+    if (!inboundPathsResult.ok) {
+      return inboundPathsResult;
+    }
+    paths.push(inboundPathsResult.paths[0] ?? requestedPath);
+  }
+  return { ok: true, paths };
+}
+
+/** Strictly resolve upload paths under the upload root only. */
+export async function resolveStrictExistingUploadPaths({
+  requestedPaths,
+  uploadDir = DEFAULT_UPLOAD_DIR,
+  inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
+}: UploadPathResolutionOptions): Promise<StrictExistingPathsResult> {
+  const paths: string[] = [];
+  for (const requestedPath of requestedPaths) {
+    const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
+    if (managedMediaPathResult?.ok === false) {
+      return managedMediaPathResult;
+    }
+
+    if (managedMediaPathResult?.uploadRootPrecedence !== false) {
+      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+        rootDir: uploadDir,
+        requestedPaths: [requestedPath],
+        scopeLabel: `uploads directory (${uploadDir})`,
+      });
+      if (uploadPathsResult.ok) {
+        paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+        continue;
+      }
+    }
+
+    const inboundPathsResult = await resolveDirectInboundMediaPath({
+      inboundMediaDir,
+      requestedPath: managedMediaPathResult?.path ?? requestedPath,
+      strict: true,
+    });
+    if (!inboundPathsResult.ok) {
+      return inboundPathsResult;
+    }
+    paths.push(inboundPathsResult.paths[0] ?? requestedPath);
+  }
+  return { ok: true, paths };
 }

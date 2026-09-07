@@ -1,74 +1,83 @@
+// Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
-import { setMSTeamsRuntime } from "../runtime.js";
+import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
 
-export function createMessageHandlerDeps(cfg: OpenClawConfig) {
-  const enqueueSystemEvent = vi.fn();
-  const recordInboundSession = vi.fn(async (_params: { sessionKey: string }) => undefined);
-  const resolveAgentRoute = vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-    sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
-    agentId: "main",
-    accountId: "default",
-    mainSessionKey: "agent:main:main",
-    lastRoutePolicy: "session" as const,
-    matchedBy: "default" as const,
-  }));
+type MessageHandlerDepsOptions = {
+  enqueueSystemEvent?: ReturnType<typeof vi.fn>;
+  readAllowFromStore?: ReturnType<typeof vi.fn>;
+  upsertPairingRequest?: ReturnType<typeof vi.fn>;
+  recordInboundSession?: ReturnType<typeof vi.fn>;
+  resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
+  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  getTeamDetails?: ReturnType<typeof vi.fn>;
+};
 
-  setMSTeamsRuntime({
-    logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent },
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-      text: {
-        hasControlCommand: () => false,
-        resolveTextChunkLimit: () => 4000,
-      },
-      routing: { resolveAgentRoute },
-      reply: {
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-      },
-      session: {
-        recordInboundSession,
-        resolveStorePath: () => "/tmp/test-store",
-      },
-    },
-  } as unknown as PluginRuntime);
+export function createMessageHandlerDeps(
+  cfg: OpenClawConfig,
+  options: MessageHandlerDepsOptions = {},
+) {
+  const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const readAllowFromStore = options.readAllowFromStore ?? vi.fn(async () => []);
+  const upsertPairingRequest = options.upsertPairingRequest ?? vi.fn(async () => null);
+  const recordInboundSession =
+    options.recordInboundSession ?? vi.fn(async (_params: { sessionKey: string }) => undefined);
+  const resolveAgentRoute =
+    options.resolveAgentRoute ??
+    vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
+      sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
+      agentId: "main",
+      accountId: "default",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session" as const,
+      matchedBy: "default" as const,
+    }));
+  const getTeamDetails =
+    options.getTeamDetails ?? vi.fn(async () => ({ aadGroupId: "team-aad-group" }));
+
+  installMSTeamsTestRuntime({
+    enqueueSystemEvent,
+    readAllowFromStore,
+    upsertPairingRequest,
+    recordInboundSession,
+    resolveAgentRoute,
+    hasControlCommand: options.hasControlCommand,
+    isControlCommandMessage: options.isControlCommandMessage,
+    shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+    shouldHandleTextCommands: options.shouldHandleTextCommands,
+    createInboundDebouncer: options.createInboundDebouncer,
+    resolveInboundDebounceMs: options.resolveInboundDebounceMs,
+    resolveTextChunkLimit: () => 4000,
+    resolveStorePath: () => "/tmp/test-store",
+  });
+
+  const conversationStore = {
+    get: vi.fn<MSTeamsMessageHandlerDeps["conversationStore"]["get"]>(async () => null),
+    upsert: vi.fn(async () => undefined),
+    list: vi.fn(async () => []),
+    remove: vi.fn(async () => false),
+    findPreferredDmByUserId: vi.fn(async () => null),
+  } satisfies MSTeamsMessageHandlerDeps["conversationStore"];
 
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
-    conversationStore: {
-      get: vi.fn(async () => null),
-      upsert: vi.fn(async () => undefined),
-      list: vi.fn(async () => []),
-      remove: vi.fn(async () => false),
-      findPreferredDmByUserId: vi.fn(async () => null),
-      findByUserId: vi.fn(async () => null),
-    } satisfies MSTeamsMessageHandlerDeps["conversationStore"],
+    conversationStore,
     pollStore: {
       recordVote: vi.fn(async () => null),
     } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
@@ -80,10 +89,14 @@ export function createMessageHandlerDeps(cfg: OpenClawConfig) {
   };
 
   return {
+    conversationStore,
     deps,
     enqueueSystemEvent,
+    readAllowFromStore,
+    upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
+    getTeamDetails,
   };
 }
 

@@ -64,6 +64,9 @@ final class VoiceWakeTester {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw SpeechRecognitionRequestPolicy.PolicyError.onDeviceRecognitionUnavailable
+        }
         recognizer.defaultTaskHint = .dictation
 
         guard Self.hasPrivacyStrings else {
@@ -79,6 +82,8 @@ final class VoiceWakeTester {
         }
 
         let granted = try await Self.ensurePermissions()
+        // The test panel may close while a system permission prompt is open.
+        try Task.checkCancellation()
         guard granted else {
             throw NSError(
                 domain: "VoiceWakeTester",
@@ -101,9 +106,12 @@ final class VoiceWakeTester {
         self.audioEngine = engine
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        self.recognitionRequest?.taskHint = .dictation
         let request = self.recognitionRequest
+        if let request {
+            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+                request,
+                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
+        }
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -116,7 +124,7 @@ final class VoiceWakeTester {
         }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(buffer)
+            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
         }
 
         engine.prepare()
@@ -230,15 +238,23 @@ final class VoiceWakeTester {
         if self.holdingAfterDetect {
             return
         }
-        if let match, !match.command.isEmpty {
+        let triggerOnlyMatch = match == nil
+            ? VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+                transcript: text,
+                triggers: self.currentTriggers,
+                trimWake: WakeWordGate.stripWake)
+            : nil
+        let acceptedMatch = match.flatMap { $0.command.isEmpty ? nil : $0 } ?? triggerOnlyMatch
+        if let match = acceptedMatch {
             self.holdingAfterDetect = true
-            self.detectedText = match.command
-            self.logger.info("voice wake detected (test) (len=\(match.command.count))")
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+            let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
+            self.detectedText = detectedText
+            self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
+            await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
-                onUpdate(.detected(match.command))
+                onUpdate(.detected(detectedText))
             }
             return
         }
@@ -286,22 +302,14 @@ final class VoiceWakeTester {
             transcript: transcript,
             triggers: triggers,
             segments: segments)
-        let gaps = Self.debugCandidateGaps(triggers: triggers, segments: segments)
-        let segmentSummary = Self.debugSegments(segments)
         let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
 
         self.logger.debug(
             "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
                 "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
-                "\(matchSummary) gaps=[\(gaps, privacy: .private)] segments=[\(segmentSummary, privacy: .private)]")
-    }
-
-    private static func debugSegments(_ segments: [WakeWordSegment]) -> String {
-        segments.map { seg in
-            let start = String(format: "%.2f", seg.start)
-            let end = String(format: "%.2f", seg.end)
-            return "\(seg.text)@\(start)-\(end)"
-        }.joined(separator: ", ")
+                "\(matchSummary) " +
+                "gaps=[\(Self.debugCandidateGaps(triggers: triggers, segments: segments), privacy: .private)] " +
+                "segments=[\(VoiceWakeRecognitionDebugSupport.segmentSummary(segments), privacy: .private)]")
     }
 
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {
@@ -360,31 +368,6 @@ final class VoiceWakeTester {
         }
     }
 
-    private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
-        Task { [weak self] in
-            guard let self else { return }
-            let detectedAt = Date()
-            let hardStop = detectedAt.addingTimeInterval(6) // cap overall listen after trigger
-
-            while !self.isStopping {
-                let now = Date()
-                if now >= hardStop { break }
-                if let last = self.lastHeard, now.timeIntervalSince(last) >= silenceWindow {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if !self.isStopping {
-                self.stop()
-                await MainActor.run { AppStateStore.shared.stopVoiceEars() }
-                if let detectedText {
-                    self.logger.info("voice wake hold finished; len=\(detectedText.count)")
-                    Task { @MainActor in onUpdate(.detected(detectedText)) }
-                }
-            }
-        }
-    }
-
     private func scheduleSilenceCheck(
         triggers: [String],
         onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void)
@@ -399,20 +382,26 @@ final class VoiceWakeTester {
             guard !self.isStopping, !self.holdingAfterDetect else { return }
             guard let lastSeenAt, let lastText else { return }
             guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
-            guard let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            let gateConfig = WakeWordGateConfig(triggers: triggers)
+            let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
                 transcript: lastText,
                 triggers: triggers,
-                config: WakeWordGateConfig(triggers: triggers),
+                config: gateConfig,
                 trimWake: WakeWordGate.stripWake)
-            else { return }
+                ?? VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+                    transcript: lastText,
+                    triggers: triggers,
+                    trimWake: WakeWordGate.stripWake)
+            guard let match else { return }
             self.holdingAfterDetect = true
-            self.detectedText = match.command
-            self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+            let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
+            self.detectedText = detectedText
+            self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
+            await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
-                onUpdate(.detected(match.command))
+                onUpdate(.detected(detectedText))
             }
         }
     }

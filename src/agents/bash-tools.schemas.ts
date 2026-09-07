@@ -1,44 +1,72 @@
-import { Type } from "@sinclair/typebox";
+/**
+ * TypeBox schemas for shell/process tools exposed to model providers.
+ *
+ * Keep these schemas provider-friendly: flat fields, string enums, and explicit
+ * descriptions that match runtime validation.
+ */
+import { Type } from "typebox";
+import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
+const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
+const PROCESS_TOOL_ACTIONS = [
+  "list",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+] as const;
+
+/** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
-  yieldMs: Type.Optional(
-    Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
+  title: executionTitleSchema(),
+  command: Type.String({ description: "Shell command." }),
+  workdir: Type.Optional(
+    Type.String({
+      description: "Omit/empty string: default; whitespace-only invalid.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
+  env: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description: "Literal overrides; no expansion. Omit to inherit.",
+    }),
+  ),
+  yieldMs: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
+      description: "Milliseconds before backgrounding; default 10000.",
+    }),
+  ),
+  background: Type.Optional(
+    Type.Boolean({
+      description: "Background now; timeoutSeconds applies.",
+    }),
+  ),
+  timeoutSeconds: Type.Optional(
+    Type.Number({
+      description: "Process lifetime in seconds; 0 disables.",
     }),
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
+      description: "PTY for TTY-required CLIs/coding agents.",
     }),
   ),
   elevated: Type.Optional(
     Type.Boolean({
-      description: "Run on the host with elevated permissions (if allowed)",
+      description: "Host elevation if allowed.",
     }),
   ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host/target (auto|sandbox|gateway|node).",
-    }),
-  ),
-  security: Type.Optional(
-    Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
-    }),
-  ),
+  host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
+    description: "Omit/auto: inherit configured host.",
+  }),
   ask: Type.Optional(
     Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
+      description:
+        "Requests stricter approvals under tools.exec.mode and host policy; channel-origin calls cannot override host ask=off.",
     }),
   ),
   node: Type.Optional(
@@ -48,9 +76,29 @@ export const execSchema = Type.Object({
   ),
 });
 
+/** Exec parameters when no process-control continuation is authorized. */
+export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+
+/** Parameters exposed by node-only exec surfaces. */
+export const nodeExecSchema = Type.Object({
+  title: execSchema.properties.title,
+  command: execSchema.properties.command,
+  workdir: execSchema.properties.workdir,
+  env: execSchema.properties.env,
+  timeoutSeconds: execSchema.properties.timeoutSeconds,
+  host: optionalStringEnum(["node"] as const, {
+    description: "Exec target. Only node is available on this tool surface.",
+  }),
+  node: execSchema.properties.node,
+});
+
+/** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  action: Type.String({
+    enum: [...PROCESS_TOOL_ACTIONS],
+    description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
+  }),
+  sessionId: Type.Optional(Type.String({ description: "Required for every action except list." })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
@@ -64,7 +112,8 @@ export const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
+      description:
+        "For poll: wait up to this many milliseconds before returning; max 30000 ms, higher values are clamped to 30000",
       minimum: 0,
     }),
   ),

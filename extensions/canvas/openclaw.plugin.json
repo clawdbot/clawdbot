@@ -1,0 +1,49 @@
+{
+  "id": "canvas",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [{ "id": "canvas-custom-root-documents-to-core" }]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "Canvas",
+  "description": "Presents hosted widget documents on paired macOS panels.",
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": ["canvas"]
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "canvasHost",
+      "plugins.entries.canvas.config.host"
+    ]
+  },
+  "uiHints": {
+    "host": {
+      "label": "Widget Presenter",
+      "help": "Controls hosted widget document and renderer routes.",
+      "advanced": true
+    },
+    "host.enabled": {
+      "label": "Widget Presenter Enabled",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

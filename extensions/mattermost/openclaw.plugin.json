@@ -1,9 +1,14 @@
 {
   "id": "mattermost",
-  "channels": ["mattermost"],
-  "channelEnvVars": {
-    "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
+  "name": "Mattermost",
+  "description": "OpenClaw Mattermost channel plugin.",
+  "doctorContract": {
+    "configRepair": true
   },
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["mattermost"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

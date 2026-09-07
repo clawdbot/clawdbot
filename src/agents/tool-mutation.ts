@@ -1,25 +1,11 @@
+/** Tool mutation and replay-safety classification. */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { asRecord } from "./tool-display-record.js";
-
-const MUTATING_TOOL_NAMES = new Set([
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "bash",
-  "process",
-  "message",
-  "sessions_spawn",
-  "sessions_send",
-  "cron",
-  "gateway",
-  "canvas",
-  "nodes",
-  "session_status",
-]);
+} from "@openclaw/normalization-core/string-coerce";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
+import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
 
 const READ_ONLY_ACTIONS = new Set([
   "get",
@@ -36,31 +22,88 @@ const READ_ONLY_ACTIONS = new Set([
   "inspect",
   "check",
   "probe",
+  "runs",
 ]);
 
-const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
-
-const MESSAGE_MUTATING_ACTIONS = new Set([
-  "send",
-  "reply",
-  "thread_reply",
-  "threadreply",
-  "edit",
-  "delete",
-  "react",
-  "pin",
-  "unpin",
+const PROCESS_MUTATING_ACTIONS = new Set([
+  "write",
+  "send_keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
 ]);
 
-export type ToolMutationState = {
+const PROCESS_REPLAY_SAFE_ACTIONS = new Set(["list", "log"]);
+
+const MESSAGE_READ_ONLY_ACTIONS = new Set([
+  "reactions",
+  "read",
+  "list_pins",
+  "permissions",
+  "thread_list",
+  "search",
+  "sticker_search",
+  "member_info",
+  "role_info",
+  "emoji_list",
+  "channel_info",
+  "channel_list",
+  "voice_status",
+  "event_list",
+]);
+
+const REPLAY_SAFE_TOOL_NAMES = new Set([
+  "agents_list",
+  "conversations_list",
+  "find",
+  "get_goal",
+  "glob",
+  "grep",
+  "view_image",
+  "ls",
+  "memory_get",
+  "pdf",
+  "read",
+  "search",
+  "sessions_history",
+  "sessions_list",
+  "sessions_search",
+  "tool_describe",
+  "tool_search",
+  "web_fetch",
+  "web_search",
+  "x_search",
+]);
+
+const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
+const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
+const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
+
+const READ_ONLY_SHELL_COMMANDS = new Set([
+  "cat",
+  "grep",
+  "head",
+  "ls",
+  "pwd",
+  "rg",
+  "stat",
+  "tail",
+  "wc",
+]);
+
+const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
+const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
+
+const UNSAFE_RG_FLAGS = new Set(["--hostname-bin", "--pre", "--pre-glob", "--search-zip", "-z"]);
+const UNSAFE_RG_VALUE_FLAGS = ["--hostname-bin", "--pre", "--pre-glob"] as const;
+const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
+
+type ToolMutationState = {
   mutatingAction: boolean;
-  actionFingerprint?: string;
-};
-
-export type ToolActionRef = {
-  toolName: string;
-  meta?: string;
-  actionFingerprint?: string;
+  replaySafe: boolean;
 };
 
 function normalizeActionName(value: unknown): string | undefined {
@@ -68,45 +111,155 @@ function normalizeActionName(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function normalizeFingerprintValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const normalized = value.trim();
-    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
+function readShellCommand(record: Record<string, unknown> | undefined): string | undefined {
+  const command = record?.command ?? record?.cmd;
+  if (typeof command !== "string") {
+    return undefined;
   }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return normalizeLowercaseStringOrEmpty(String(value));
-  }
-  return undefined;
+  const trimmed = command.trim();
+  return trimmed || undefined;
 }
 
-function appendFingerprintAlias(
-  parts: string[],
-  record: Record<string, unknown> | undefined,
-  label: string,
-  keys: string[],
-): boolean {
-  for (const key of keys) {
-    const value = normalizeFingerprintValue(record?.[key]);
-    if (!value) {
+function tokenizeSimpleShellCommand(command: string): string[] | undefined {
+  if (/[;&|<>\n\r`]/.test(command) || command.includes("\\")) {
+    return undefined;
+  }
+  for (const char of SHELL_EXPANSION_CHARS) {
+    if (command.includes(char)) {
+      return undefined;
+    }
+  }
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  for (const char of command) {
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
       continue;
     }
-    parts.push(`${label}=${value}`);
-    return true;
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote) {
+    return undefined;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens.length > 0 ? tokens : undefined;
+}
+
+function isReadOnlySedCommand(tokens: readonly string[]): boolean {
+  const args = tokens.slice(1);
+  if (args.some((token) => token === "--in-place" || token.startsWith("--in-place="))) {
+    return false;
+  }
+  if (args.some((token) => token.startsWith("-") && token !== "-" && token.includes("i"))) {
+    return false;
+  }
+  // `sed -e 'w /tmp/out'` and mixed scripts are easy to misclassify. Only
+  // allow the simple line-print shape that agents use for file inspection.
+  if (args.some((token) => token === "-e" || token === "--expression")) {
+    return false;
+  }
+  let sawSuppressAutoPrint = false;
+  let expression: string | undefined;
+  for (const token of args) {
+    if (token === "--in-place" || token.startsWith("--in-place=")) {
+      return false;
+    }
+    if (token === "--quiet" || token === "--silent") {
+      sawSuppressAutoPrint = true;
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      if (token.includes("i")) {
+        return false;
+      }
+      if (token.includes("n")) {
+        sawSuppressAutoPrint = true;
+      }
+      continue;
+    }
+    expression ??= token;
+    break;
+  }
+  return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+}
+
+function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
+  return tokens.some((token) => {
+    const normalized = normalizeLowercaseStringOrEmpty(token);
+    return (
+      UNSAFE_RG_FLAGS.has(normalized) ||
+      UNSAFE_RG_VALUE_FLAGS.some((flag) => normalized.startsWith(`${flag}=`))
+    );
+  });
+}
+
+function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
+  if (
+    tokens.some((token) => {
+      const normalized = normalizeLowercaseStringOrEmpty(token);
+      return (
+        normalized === "--web" ||
+        normalized.startsWith("--web=") ||
+        /^-[a-z]*w[a-z]*(?:=.*)?$/.test(normalized)
+      );
+    })
+  ) {
+    return false;
+  }
+  const area = normalizeLowercaseStringOrEmpty(tokens[1]);
+  const action = normalizeLowercaseStringOrEmpty(tokens[2]);
+  if (area === "search") {
+    return action.length > 0;
+  }
+  if (area === "pr") {
+    return READ_ONLY_GH_PR_SUBCOMMANDS.has(action);
+  }
+  if (area === "issue") {
+    return READ_ONLY_GH_ISSUE_SUBCOMMANDS.has(action);
   }
   return false;
 }
 
-export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
-  if (!normalized) {
+function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
+  if (!command) {
     return false;
   }
-  return (
-    MUTATING_TOOL_NAMES.has(normalized) ||
-    normalized.endsWith("_actions") ||
-    normalized.startsWith("message_") ||
-    normalized.includes("send")
-  );
+  const tokens = tokenizeSimpleShellCommand(command);
+  if (!tokens) {
+    return false;
+  }
+  const executable = normalizeLowercaseStringOrEmpty(tokens[0]);
+  if (executable === "rg" && hasUnsafeRipgrepFlag(tokens)) {
+    return false;
+  }
+  if (READ_ONLY_SHELL_COMMANDS.has(executable)) {
+    return true;
+  }
+  if (executable === "sed") {
+    return isReadOnlySedCommand(tokens);
+  }
+  if (executable === "gh") {
+    return isReadOnlyGhCommand(tokens);
+  }
+  return false;
 }
 
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
@@ -118,28 +271,41 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
+    case "sessions_spawn":
+    case "sessions_send":
+    case "conversations_send":
+    case "conversations_turn":
+    case "create_goal":
+    case "update_goal":
+      return true;
     case "exec":
     case "bash":
-    case "sessions_send":
-      return true;
+      return !isPlainReadOnlyShellCommand(readShellCommand(record));
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
     case "message":
-      return (
-        (action != null && MESSAGE_MUTATING_ACTIONS.has(action)) ||
-        typeof record?.content === "string" ||
-        typeof record?.message === "string"
-      );
+      // Message actions are an extensible plugin surface. Only known lookup
+      // actions are replay-safe; missing and future actions fail closed.
+      return action == null || !MESSAGE_READ_ONLY_ACTIONS.has(action);
+    case "sessions":
+      return action !== "group_list";
+    case "computer":
+      return !isComputerObservationAction(action, record?.dialogAction);
+    case "mobile_ui":
+      return action == null || !MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
-      return action === "kill" || action === "steer";
+      return action === "cancel" || action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
+    case "gateway":
+      return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action !== "list";
+    case "nodes":
+      return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (isAutomationsToolName(normalized) || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
-      }
-      if (normalized === "nodes") {
-        return action == null || action !== "list";
       }
       if (normalized.endsWith("_actions")) {
         return action == null || !READ_ONLY_ACTIONS.has(action);
@@ -152,76 +318,61 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   }
 }
 
-export function buildToolActionFingerprint(
-  toolName: string,
-  args: unknown,
-  meta?: string,
-): string | undefined {
-  if (!isMutatingToolCall(toolName, args)) {
-    return undefined;
-  }
-  const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
+/** Return true only for tool calls whose structured contract proves replay safety. */
+export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
-  const parts = [`tool=${normalizedTool}`];
-  if (action) {
-    parts.push(`action=${action}`);
+  if (REPLAY_SAFE_TOOL_NAMES.has(normalized)) {
+    return true;
   }
-  let hasStableTarget = false;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "path", [
-      "path",
-      "file_path",
-      "filePath",
-      "filepath",
-      "file",
-    ]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "oldpath", ["oldPath", "old_path"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "newpath", ["newPath", "new_path"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "to", ["to", "target"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "messageid", ["messageId", "message_id"]) ||
-    hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "sessionkey", ["sessionKey", "session_key"]) ||
-    hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
-  hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
-  hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
-  const normalizedMeta = normalizeOptionalLowercaseString(meta?.trim().replace(/\s+/g, " "));
-  // Meta text often carries volatile details (for example "N chars").
-  // Prefer stable arg-derived keys for matching; only fall back to meta
-  // when no stable target key is available.
-  if (normalizedMeta && !hasStableTarget) {
-    parts.push(`meta=${normalizedMeta}`);
+  switch (normalized) {
+    case "exec":
+    case "bash":
+      return false;
+    case "process":
+      return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
+    case "message":
+      return action != null && MESSAGE_READ_ONLY_ACTIONS.has(action);
+    case "subagents":
+      return action == null || action === "list";
+    case "sessions":
+      return action === "group_list";
+    case "session_status":
+      return !isMutatingToolCall(normalized, args);
+    case "browser":
+      return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+    case "computer":
+      return isComputerObservationAction(action, record?.dialogAction);
+    case "mobile_ui":
+      return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
+    case "skill_workshop":
+      return action === "list" || action === "inspect" || action === "read";
+    case "transcripts":
+      return action === "status";
+    case "gateway":
+      return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "portal":
+      return action === "list";
+    case "nodes":
+      return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
+    default: {
+      if (isAutomationsToolName(normalized) || normalized === "canvas") {
+        return action != null && READ_ONLY_ACTIONS.has(action);
+      }
+      return false;
+    }
   }
-  return parts.join("|");
 }
 
 export function buildToolMutationState(
   toolName: string,
   args: unknown,
-  meta?: string,
+  options?: { ownerKey?: string },
 ): ToolMutationState {
-  const actionFingerprint = buildToolActionFingerprint(toolName, args, meta);
+  const ownerDeclaredMutation = options?.ownerKey !== undefined;
   return {
-    mutatingAction: actionFingerprint != null,
-    actionFingerprint,
+    mutatingAction: ownerDeclaredMutation || isMutatingToolCall(toolName, args),
+    replaySafe: ownerDeclaredMutation ? false : isReplaySafeToolCall(toolName, args),
   };
-}
-
-export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
-  if (existing.actionFingerprint != null || next.actionFingerprint != null) {
-    // For mutating flows, fail closed: only clear when both fingerprints exist and match.
-    return (
-      existing.actionFingerprint != null &&
-      next.actionFingerprint != null &&
-      existing.actionFingerprint === next.actionFingerprint
-    );
-  }
-  return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
 }

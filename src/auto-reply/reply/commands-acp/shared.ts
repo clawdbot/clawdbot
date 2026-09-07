@@ -1,25 +1,27 @@
+// Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
-import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
-import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
-import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
-import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
+import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 
 export const COMMAND = "/acp";
-export const ACP_SPAWN_USAGE =
+const ACP_SPAWN_USAGE =
   "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].";
-export const ACP_STEER_USAGE =
+const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
 export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";
@@ -34,8 +36,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export { SESSION_ID_RE } from "../../../sessions/session-id.js";
-
 export type AcpAction =
   | "spawn"
   | "cancel"
@@ -54,10 +54,10 @@ export type AcpAction =
   | "install"
   | "help";
 
-export type AcpSpawnThreadMode = "auto" | "here" | "off";
-export type AcpSpawnBindMode = "here" | "off";
+type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnBindMode = "here" | "off";
 
-export type ParsedSpawnInput = {
+type ParsedSpawnInput = {
   agentId: string;
   mode: AcpRuntimeSessionMode;
   thread: AcpSpawnThreadMode;
@@ -66,17 +66,17 @@ export type ParsedSpawnInput = {
   label?: string;
 };
 
-export type ParsedSteerInput = {
+type ParsedSteerInput = {
   sessionToken?: string;
   instruction: string;
 };
 
-export type ParsedSingleValueCommandInput = {
+type ParsedSingleValueCommandInput = {
   value: string;
   sessionToken?: string;
 };
 
-export type ParsedSetCommandInput = {
+type ParsedSetCommandInput = {
   key: string;
   value: string;
   sessionToken?: string;
@@ -84,13 +84,6 @@ export type ParsedSetCommandInput = {
 
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
-
-export function stopWithText(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
   const action = normalizeOptionalLowercaseString(tokens[0]);
@@ -184,7 +177,7 @@ function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnTh
 export function parseSpawnInput(
   params: HandleCommandsParams,
   tokens: string[],
-): { ok: true; value: ParsedSpawnInput } | { ok: false; error: string } {
+): Result<ParsedSpawnInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let mode: AcpRuntimeSessionMode = "persistent";
   let thread = resolveDefaultSpawnThreadMode(params);
@@ -194,7 +187,7 @@ export function parseSpawnInput(
   let label: string | undefined;
   let rawAgentId: string | undefined;
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const token = normalizedTokens[i] ?? "";
 
     const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
@@ -324,14 +317,12 @@ export function parseSpawnInput(
   };
 }
 
-export function parseSteerInput(
-  tokens: string[],
-): { ok: true; value: ParsedSteerInput } | { ok: false; error: string } {
+export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,
@@ -373,7 +364,7 @@ export function parseSteerInput(
 export function parseSingleValueCommandInput(
   tokens: string[],
   usage: string,
-): { ok: true; value: ParsedSingleValueCommandInput } | { ok: false; error: string } {
+): Result<ParsedSingleValueCommandInput, string> {
   const value = normalizeOptionalString(tokens[0]) ?? "";
   if (!value) {
     return { ok: false, error: usage };
@@ -391,9 +382,7 @@ export function parseSingleValueCommandInput(
   };
 }
 
-export function parseSetCommandInput(
-  tokens: string[],
-): { ok: true; value: ParsedSetCommandInput } | { ok: false; error: string } {
+export function parseSetCommandInput(tokens: string[]): Result<ParsedSetCommandInput, string> {
   const key = normalizeOptionalString(tokens[0]) ?? "";
   const value = normalizeOptionalString(tokens[1]) ?? "";
   if (!key || !value) {
@@ -456,7 +445,7 @@ export function resolveAcpHelpText(): string {
     "Notes:",
     "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
-    "- /focus and /unfocus also work with ACP session keys.",
+    "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
 }
@@ -471,6 +460,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
   const parts = [
     options.runtimeMode ? `runtimeMode=${options.runtimeMode}` : null,
     options.model ? `model=${options.model}` : null,
+    options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
@@ -529,7 +519,7 @@ export async function withAcpCommandErrorBoundary<T>(params: {
     const result = await params.run();
     return params.onSuccess(result);
   } catch (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: params.fallbackCode,

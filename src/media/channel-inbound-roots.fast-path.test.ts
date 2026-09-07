@@ -1,3 +1,4 @@
+// Channel inbound root fast-path tests cover cached media root resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -10,6 +11,7 @@ vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 import {
   resolveChannelInboundAttachmentRoots,
+  resolveChannelInboundAttachmentRootsForChannel,
   resolveChannelRemoteInboundAttachmentRoots,
 } from "./channel-inbound-roots.js";
 
@@ -26,7 +28,7 @@ function unableToResolve(dirName: string, artifactBasename: string): Error {
 function createContext(provider: string, accountId = "work"): MsgContext {
   return {
     Body: "hi",
-    From: "imessage:work:demo",
+    From: "localchat:work:demo",
     To: "+2000",
     ChatType: "direct",
     Provider: provider,
@@ -42,7 +44,7 @@ describe("channel inbound roots fast path", () => {
   it("prefers media contract artifacts over full channel bootstrap", () => {
     publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
       ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        if (dirName === "localchat" && artifactBasename === "media-contract-api.js") {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
               `/local/${accountId}`,
@@ -59,18 +61,18 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelInboundAttachmentRoots({
         cfg,
-        ctx: createContext("imessage"),
+        ctx: createContext("localchat"),
       }),
     ).toEqual(["/local/work"]);
     expect(
       resolveChannelRemoteInboundAttachmentRoots({
         cfg,
-        ctx: createContext("imessage"),
+        ctx: createContext("localchat"),
       }),
     ).toEqual(["/remote/work"]);
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "imessage",
+        dirName: "localchat",
         artifactBasename: "media-contract-api.js",
       },
     );
@@ -86,26 +88,83 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelRemoteInboundAttachmentRoots({
         cfg,
-        ctx: createContext("whatsapp"),
+        ctx: createContext("mobilechat"),
       }),
     ).toBeUndefined();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "whatsapp",
+        dirName: "mobilechat",
         artifactBasename: "media-contract-api.js",
       },
     );
     expect(
       publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
     ).not.toHaveBeenCalledWith({
-      dirName: "whatsapp",
+      dirName: "mobilechat",
       artifactBasename: "contract-api.js",
     });
     expect(
       publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
     ).not.toHaveBeenCalledWith({
-      dirName: "whatsapp",
+      dirName: "mobilechat",
       artifactBasename: "index.js",
     });
+  });
+
+  it("preserves partial media contract modules when a missing resolver is checked first", () => {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
+      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+        if (dirName === "partialchat" && artifactBasename === "media-contract-api.js") {
+          return {
+            resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
+              `/partial/${accountId}`,
+            ],
+          };
+        }
+        throw unableToResolve(dirName, artifactBasename);
+      },
+    );
+
+    expect(
+      resolveChannelRemoteInboundAttachmentRoots({
+        cfg,
+        ctx: createContext("partialchat"),
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveChannelInboundAttachmentRoots({
+        cfg,
+        ctx: createContext("partialchat"),
+      }),
+    ).toEqual(["/partial/work"]);
+  });
+
+  it("resolves local inbound roots from explicit channel context", () => {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
+      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+        if (dirName === "toolchat" && artifactBasename === "media-contract-api.js") {
+          return {
+            resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
+              `/tool/${accountId}`,
+            ],
+          };
+        }
+        throw unableToResolve(dirName, artifactBasename);
+      },
+    );
+
+    expect(
+      resolveChannelInboundAttachmentRootsForChannel({
+        cfg,
+        channelId: "toolchat",
+        accountId: "personal",
+      }),
+    ).toEqual(["/tool/personal"]);
+    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
+      {
+        dirName: "toolchat",
+        artifactBasename: "media-contract-api.js",
+      },
+    );
   });
 });

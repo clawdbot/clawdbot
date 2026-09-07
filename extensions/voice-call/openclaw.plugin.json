@@ -1,17 +1,26 @@
 {
   "id": "voice-call",
-  "channelEnvVars": {
-    "voice-call": [
-      "TELNYX_API_KEY",
-      "TELNYX_CONNECTION_ID",
-      "TELNYX_PUBLIC_KEY",
-      "TWILIO_ACCOUNT_SID",
-      "TWILIO_AUTH_TOKEN",
-      "PLIVO_AUTH_ID",
-      "PLIVO_AUTH_TOKEN",
-      "NGROK_AUTHTOKEN",
-      "NGROK_DOMAIN"
-    ]
+  "doctorContract": {
+    "resolveSessionStoreAgentIds": true,
+    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }]
+  },
+  "name": "Voice Call",
+  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "cliCommands": [
+    {
+      "name": "voicecall",
+      "description": "Voice call utilities",
+      "hasSubcommands": true
+    }
+  ],
+  "skills": ["./skills"],
+  "commandAliases": [{ "name": "voicecall" }],
+  "activation": {
+    "onStartup": true,
+    "onCommands": ["voicecall"]
+  },
+  "contracts": {
+    "tools": ["voice_call"]
   },
   "uiHints": {
     "provider": {
@@ -36,6 +45,11 @@
       "label": "Inbound Greeting",
       "advanced": true
     },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
+      "advanced": true
+    },
     "telnyx.apiKey": {
       "label": "Telnyx API Key",
       "sensitive": true
@@ -53,6 +67,10 @@
     "twilio.authToken": {
       "label": "Twilio Auth Token",
       "sensitive": true
+    },
+    "twilio.region": {
+      "label": "Twilio Region",
+      "advanced": true
     },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
@@ -72,6 +90,11 @@
     },
     "tailscale.mode": {
       "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.port": {
+      "label": "Tailscale HTTPS Port",
+      "help": "External HTTPS port. Funnel supports 443, 8443, or 10000; Serve accepts any valid port.",
       "advanced": true
     },
     "tailscale.path": {
@@ -97,6 +120,7 @@
     },
     "streaming.enabled": {
       "label": "Enable Streaming",
+      "help": "Classic streaming transcription currently requires the Twilio call provider.",
       "advanced": true
     },
     "streaming.provider": {
@@ -129,13 +153,75 @@
       "label": "Realtime Instructions",
       "advanced": true
     },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Controls the shared openclaw_agent_consult tool.",
+      "advanced": true
+    },
+    "realtime.consultPolicy": {
+      "label": "Realtime Consult Policy",
+      "help": "Guides when the realtime voice model should call openclaw_agent_consult.",
+      "advanced": true
+    },
+    "realtime.consultThinkingLevel": {
+      "label": "Consult Thinking Level",
+      "help": "Optional override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
+    "realtime.consultFastMode": {
+      "label": "Consult Fast Mode",
+      "help": "Optional fast mode override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
+    "realtime.fastContext.enabled": {
+      "label": "Enable Fast Realtime Context",
+      "help": "Searches memory/session context before the full consult agent.",
+      "advanced": true
+    },
+    "realtime.fastContext.timeoutMs": {
+      "label": "Fast Context Timeout",
+      "advanced": true
+    },
+    "realtime.fastContext.maxResults": {
+      "label": "Fast Context Result Limit",
+      "advanced": true
+    },
+    "realtime.fastContext.sources": {
+      "label": "Fast Context Sources",
+      "advanced": true
+    },
+    "realtime.fastContext.fallbackToConsult": {
+      "label": "Fallback To Full Consult",
+      "advanced": true
+    },
+    "realtime.agentContext.enabled": {
+      "label": "Enable Agent Voice Context",
+      "help": "Injects a compact agent identity and workspace context capsule into realtime voice instructions.",
+      "advanced": true
+    },
+    "realtime.agentContext.maxChars": {
+      "label": "Agent Voice Context Limit",
+      "advanced": true
+    },
+    "realtime.agentContext.includeIdentity": {
+      "label": "Include Agent Identity",
+      "advanced": true
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      "label": "Include Agent Workspace Files",
+      "advanced": true
+    },
+    "realtime.agentContext.files": {
+      "label": "Agent Voice Context Files",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
     },
     "tts.provider": {
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "help": "Deep-merges with top-level tts (Microsoft is ignored for calls).",
       "advanced": true
     },
     "tts.providers": {
@@ -153,6 +239,15 @@
     "store": {
       "label": "Call Log Store Path",
       "advanced": true
+    },
+    "agentId": {
+      "label": "Response Agent ID",
+      "help": "Agent used for voice responses and session storage. Defaults to the sole configured agent; set explicitly for a multi-agent fleet.",
+      "advanced": true
+    },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory, per-call to isolate every call, or main to share the configured agent's main session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -202,7 +297,11 @@
             "type": "string"
           },
           "authToken": {
-            "type": "string"
+            "type": ["string", "object"]
+          },
+          "region": {
+            "type": "string",
+            "enum": ["us1", "ie1", "au1"]
           }
         }
       },
@@ -239,6 +338,38 @@
       },
       "inboundGreeting": {
         "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       },
       "outbound": {
         "type": "object",
@@ -301,6 +432,12 @@
           "mode": {
             "type": "string",
             "enum": ["off", "serve", "funnel"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 443
           },
           "path": {
             "type": "string"
@@ -401,6 +538,21 @@
           "instructions": {
             "type": "string"
           },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
+          },
+          "consultPolicy": {
+            "type": "string",
+            "enum": ["auto", "substantive", "always"]
+          },
+          "consultThinkingLevel": {
+            "type": "string",
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
+          },
+          "consultFastMode": {
+            "type": "boolean"
+          },
           "tools": {
             "type": "array",
             "items": {
@@ -440,6 +592,60 @@
                 }
               },
               "required": ["type", "name", "description", "parameters"]
+            }
+          },
+          "fastContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1
+              },
+              "maxResults": {
+                "type": "number",
+                "minimum": 1
+              },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["memory", "sessions"]
+                }
+              },
+              "fallbackToConsult": {
+                "type": "boolean"
+              }
+            }
+          },
+          "agentContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxChars": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "includeIdentity": {
+                "type": "boolean"
+              },
+              "includeWorkspaceFiles": {
+                "type": "boolean"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
             }
           },
           "providers": {
@@ -516,7 +722,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
@@ -524,8 +730,16 @@
                   "model": {
                     "type": "string"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "speed": {
                     "type": "number",
@@ -542,13 +756,21 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
                   },
-                  "voiceId": {
+                  "speakerVoiceId": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
                   },
                   "modelId": {
                     "type": "string"
@@ -603,8 +825,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -641,8 +871,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -677,7 +915,7 @@
               "type": "object",
               "properties": {
                 "apiKey": {
-                  "type": "string"
+                  "type": ["string", "object"]
                 }
               },
               "additionalProperties": true
@@ -700,6 +938,14 @@
       "store": {
         "type": "string"
       },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call", "main"]
+      },
       "responseModel": {
         "type": "string"
       },
@@ -713,6 +959,14 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"]
+    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
+    "secretInputs": {
+      "paths": [
+        { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "streaming.providers.*.apiKey", "expected": "string" },
+        { "path": "tts.providers.*.apiKey", "expected": "string" }
+      ]
+    }
   }
 }

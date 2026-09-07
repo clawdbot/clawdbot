@@ -1,3 +1,4 @@
+// Reaction message id tests cover channel action message id extraction and normalization.
 import { describe, expect, it } from "vitest";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 

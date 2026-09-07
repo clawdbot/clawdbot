@@ -1,10 +1,14 @@
+// Preferred provider tests cover auth-choice provider selection and runtime provider discovery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolvePluginProvidersCore as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
+
+type ResolvePluginProvidersOptions = Parameters<typeof resolvePluginProvidersFn>[0];
 
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
-const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
-const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
+const resolveProviderPluginChoiceCore = vi.hoisted(() => vi.fn());
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(() => []));
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
@@ -13,14 +17,14 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/provider-wizard.js", () => ({
-  resolveProviderPluginChoice,
+  resolveProviderPluginChoiceCore,
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders,
+  resolvePluginProvidersCore,
 }));
 
-import { resolvePreferredProviderForAuthChoice } from "./auth-choice.preferred-provider.js";
+import { resolvePreferredProviderForAuthChoice } from "../plugins/provider-auth-choice-preference.js";
 
 describe("resolvePreferredProviderForAuthChoice", () => {
   beforeEach(() => {
@@ -28,8 +32,8 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
     resolveManifestProviderAuthChoices.mockReturnValue([]);
-    resolvePluginProviders.mockReturnValue([]);
-    resolveProviderPluginChoice.mockReturnValue(null);
+    resolvePluginProvidersCore.mockReturnValue([]);
+    resolveProviderPluginChoiceCore.mockReturnValue(null);
   });
 
   it("prefers manifest metadata when available", async () => {
@@ -44,7 +48,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     await expect(resolvePreferredProviderForAuthChoice({ choice: "openai-api-key" })).resolves.toBe(
       "openai",
     );
-    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("normalizes legacy auth choices before plugin lookup", async () => {
@@ -63,8 +67,8 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     await expect(resolvePreferredProviderForAuthChoice({ choice: "claude-cli" })).resolves.toBe(
       "anthropic",
     );
-    expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
-    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(resolveProviderPluginChoiceCore).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("passes explicit env through legacy auth normalization", async () => {
@@ -99,18 +103,18 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     await expect(resolvePreferredProviderForAuthChoice({ choice: "chutes" })).resolves.toBe(
       "chutes",
     );
-    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("passes untrusted-workspace filtering through setup-provider fallback lookup", async () => {
-    resolvePluginProviders.mockReturnValue([
+    resolvePluginProvidersCore.mockReturnValue([
       {
         id: "demo-provider",
         label: "Demo Provider",
         auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
       },
     ] as never);
-    resolveProviderPluginChoice.mockReturnValue({
+    resolveProviderPluginChoiceCore.mockReturnValue({
       provider: { id: "demo-provider" },
       method: { id: "api-key" },
     });
@@ -121,11 +125,11 @@ describe("resolvePreferredProviderForAuthChoice", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).resolves.toBe("demo-provider");
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "setup",
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    expect(resolvePluginProvidersCore).toHaveBeenCalledOnce();
+    const [pluginProviderOptions] = resolvePluginProvidersCore.mock.calls[0] as unknown as [
+      ResolvePluginProvidersOptions,
+    ];
+    expect(pluginProviderOptions?.mode).toBe("setup");
+    expect(pluginProviderOptions?.includeUntrustedWorkspacePlugins).toBe(false);
   });
 });

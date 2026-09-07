@@ -1,7 +1,14 @@
+/** Tests bootstrap mode selection for primary, cron, heartbeat, and sandboxed runs. */
 import { describe, expect, it } from "vitest";
-import { resolveBootstrapMode } from "./bootstrap-mode.js";
+import { isHeartbeatLifecycleRunKind, resolveBootstrapMode } from "./bootstrap-mode.js";
 
 describe("resolveBootstrapMode", () => {
+  it("classifies heartbeat runs as heartbeat lifecycle turns", () => {
+    expect(isHeartbeatLifecycleRunKind("heartbeat")).toBe(true);
+    expect(isHeartbeatLifecycleRunKind("cron")).toBe(false);
+    expect(isHeartbeatLifecycleRunKind("default")).toBe(false);
+  });
+
   it("returns none when bootstrap is not pending", () => {
     expect(
       resolveBootstrapMode({
@@ -41,7 +48,7 @@ describe("resolveBootstrapMode", () => {
     ).toBe("limited");
   });
 
-  it("returns none for cron, heartbeat, and non-primary runs", () => {
+  it("returns none for background and non-primary runs", () => {
     expect(
       resolveBootstrapMode({
         bootstrapPending: true,
@@ -74,7 +81,7 @@ describe("resolveBootstrapMode", () => {
     ).toBe("none");
   });
 
-  it("returns none when the run cannot access bootstrap files normally", () => {
+  it("returns limited when the run cannot access bootstrap files normally", () => {
     expect(
       resolveBootstrapMode({
         bootstrapPending: true,
@@ -84,6 +91,6 @@ describe("resolveBootstrapMode", () => {
         isCanonicalWorkspace: true,
         hasBootstrapFileAccess: false,
       }),
-    ).toBe("none");
+    ).toBe("limited");
   });
 });

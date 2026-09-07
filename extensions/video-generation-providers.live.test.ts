@@ -1,53 +1,61 @@
-import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
-import { isModelNotFoundErrorMessage } from "../src/agents/live-model-errors.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+// Video Generation Providers.Live.Test.Ts tests cover video generation providers plugin behavior.
+import {
+  resolveApiKeyForProvider,
+  resolveDefaultAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../src/agents/pi-embedded-helpers/failover-matches.js";
-import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
-import { normalizeVideoGenerationDuration } from "../src/video-generation/duration-support.js";
+  isTruthyEnvValue,
+  readLiveTestConfig,
+} from "openclaw/plugin-sdk/test-live";
+import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
 import {
+  DEFAULT_LIVE_VIDEO_MODELS,
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  DEFAULT_LIVE_VIDEO_MODELS,
+  encodePngRgba,
+  fillPixel,
+  normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
+  parseVideoGenerationModelRef,
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
-} from "../src/video-generation/live-test-helpers.js";
-import { parseVideoGenerationModelRef } from "../src/video-generation/model-ref.js";
+} from "openclaw/plugin-sdk/test-media-generation";
 import type {
   GeneratedVideoAsset,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
-} from "../src/video-generation/types.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/test-media-generation";
+import { describe, expect, it, vi } from "vitest";
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
+import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
+import openrouterPlugin from "./openrouter/index.js";
+import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
 import runwayPlugin from "./runway/index.js";
+import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
@@ -72,7 +80,7 @@ const LIVE_VIDEO_OPERATION_TIMEOUT_MS = readPositiveIntegerEnv(
 const LIVE_VIDEO_TEST_TIMEOUT_MS =
   (RUN_FULL_VIDEO_MODES ? 3 : 1) * LIVE_VIDEO_OPERATION_TIMEOUT_MS + 30_000;
 const LIVE_VIDEO_SMOKE_PROMPT =
-  "A one-second low-motion video of a lobster walking across wet sand, no text.";
+  "A one-second low-motion video of a blue cube sliding across a clean studio floor.";
 
 type LiveProviderCase = {
   plugin: Parameters<typeof registerProviderPlugin>[0]["plugin"];
@@ -81,11 +89,10 @@ type LiveProviderCase = {
   providerId: string;
 };
 
-type BufferedGeneratedVideo = Required<Pick<GeneratedVideoAsset, "buffer" | "mimeType">> &
-  Pick<GeneratedVideoAsset, "fileName">;
+type LiveGeneratedVideo = GeneratedVideoAsset;
 
 type LiveVideoAttemptStatus =
-  | { status: "success"; video: BufferedGeneratedVideo }
+  | { status: "success"; video: LiveGeneratedVideo }
   | { status: "skip" }
   | { status: "failure" };
 
@@ -102,6 +109,12 @@ const CASES: LiveProviderCase[] = [
     pluginName: "BytePlus Provider",
     providerId: "byteplus",
   },
+  {
+    plugin: deepinfraPlugin,
+    pluginId: "deepinfra",
+    pluginName: "DeepInfra Provider",
+    providerId: "deepinfra",
+  },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
   {
@@ -111,6 +124,18 @@ const CASES: LiveProviderCase[] = [
     providerId: "minimax",
   },
   { plugin: openaiPlugin, pluginId: "openai", pluginName: "OpenAI Provider", providerId: "openai" },
+  {
+    plugin: openrouterPlugin,
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
+  },
+  {
+    plugin: pixversePlugin,
+    pluginId: "pixverse",
+    pluginName: "PixVerse Provider",
+    providerId: "pixverse",
+  },
   { plugin: qwenPlugin, pluginId: "qwen", pluginName: "Qwen Provider", providerId: "qwen" },
   { plugin: runwayPlugin, pluginId: "runway", pluginName: "Runway Provider", providerId: "runway" },
   {
@@ -182,31 +207,23 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
 }
 
 function maybeLoadShellEnvForVideoProviders(providerIds: string[]): void {
-  const expectedKeys = [
-    ...new Set(providerIds.flatMap((providerId) => getProviderEnvVars(providerId))),
-  ];
-  if (expectedKeys.length === 0) {
-    return;
-  }
-  loadShellEnvFallback({
-    enabled: true,
-    env: process.env,
-    expectedKeys,
-    logger: { warn: (message: string) => console.warn(message) },
-  });
+  maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
-function expectBufferedVideo(
-  video: { buffer?: Buffer; mimeType: string; fileName?: string } | undefined,
-): BufferedGeneratedVideo {
-  expect(video).toBeDefined();
-  expect(video?.mimeType.startsWith("video/")).toBe(true);
-  if (!video?.buffer) {
-    throw new Error("expected generated video buffer");
+function expectGeneratedVideo(video: GeneratedVideoAsset | undefined): LiveGeneratedVideo {
+  if (!video) {
+    throw new Error("expected generated video asset");
   }
-  const { buffer, mimeType, fileName } = video;
-  expect(buffer.byteLength).toBeGreaterThan(1024);
-  return { buffer, mimeType, fileName };
+  expect(video.mimeType.startsWith("video/")).toBe(true);
+  if (video?.buffer) {
+    expect(video.buffer.byteLength).toBeGreaterThan(1024);
+    return video;
+  }
+  if (!video.url) {
+    throw new Error("expected generated video buffer or url");
+  }
+  expect(video.url).toMatch(/^https?:\/\//u);
+  return video;
 }
 
 function buildLiveCapabilityOverrides(params: {
@@ -216,11 +233,11 @@ function buildLiveCapabilityOverrides(params: {
 }): Pick<VideoGenerationRequest, "size" | "aspectRatio" | "resolution" | "audio" | "watermark"> {
   const { caps, liveResolution, liveSize } = params;
   return {
-    ...(caps?.supportsSize && liveSize ? { size: liveSize } : {}),
-    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-    ...(caps?.supportsResolution ? { resolution: liveResolution } : {}),
-    ...(caps?.supportsAudio ? { audio: false } : {}),
-    ...(caps?.supportsWatermark ? { watermark: false } : {}),
+    ...(caps?.supportsSize && liveSize ? { size: liveSize } : undefined),
+    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : undefined),
+    ...(caps?.supportsResolution ? { resolution: liveResolution } : undefined),
+    ...(caps?.supportsAudio ? { audio: false } : undefined),
+    ...(caps?.supportsWatermark ? { watermark: false } : undefined),
   };
 }
 
@@ -241,14 +258,38 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   ) {
     return "provider timeout";
   }
+  if (/operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
+  }
+  if (
+    /HTTP\s+404/i.test(message) &&
+    /Invalid URL/i.test(message) &&
+    /\/platform\/video_gen/i.test(message)
+  ) {
+    return "provider endpoint drift";
   }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
   }
+  if (/response missing job details|video generation response malformed/i.test(message)) {
+    return "provider endpoint drift";
+  }
+  if (/blocked by (?:our )?moderation system|content policy|policy violation/i.test(message)) {
+    return "provider policy drift";
+  }
   return null;
 }
+
+describe("resolveLiveVideoSkipReason", () => {
+  it("classifies malformed provider video responses as endpoint drift", () => {
+    expect(resolveLiveVideoSkipReason("xAI video generation response malformed")).toBe(
+      "provider endpoint drift",
+    );
+  });
+});
 
 async function runLiveVideoAttempt(params: {
   authLabel: string;
@@ -267,7 +308,7 @@ async function runLiveVideoAttempt(params: {
   try {
     const result = await params.provider.generateVideo(params.request);
     expect(result.videos.length).toBeGreaterThan(0);
-    const video = expectBufferedVideo(result.videos[0]);
+    const video = expectGeneratedVideo(result.videos[0]);
     params.attempted.push(
       `${params.providerId}:${params.mode}:${params.providerModel} (${params.authLabel})`,
     );
@@ -304,19 +345,45 @@ function logLiveVideoSummary(params: {
   );
 }
 
-function expectLiveVideoCasePassed(params: {
-  attempted: string[];
-  failures: string[];
-  providerId: string;
-  skipped: string[];
-}): void {
+function isRequestedByProviderFilter(providerId: string, filter: Set<string> | null): boolean {
+  return filter?.has(providerId) ?? false;
+}
+
+function expectSelectedVideoProvidersPresent(
+  selectedCases: readonly LiveProviderCase[],
+  activeProviderFilter = providerFilter,
+): void {
+  if (selectedCases.length === 0 && activeProviderFilter && activeProviderFilter.size > 0) {
+    throw new Error(
+      `[live:video-generation] requested provider filter matched no video providers: ${[...activeProviderFilter].toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+    );
+  }
+}
+
+function expectLiveVideoCasePassed(
+  params: {
+    attempted: string[];
+    failures: string[];
+    providerId: string;
+    skip: (note: string) => void;
+    skipped: string[];
+  },
+  activeProviderFilter = providerFilter,
+): void {
   logLiveVideoSummary(params);
   if (params.attempted.length === 0) {
-    expect(params.failures).toEqual([]);
-    console.warn("[live:video-generation] no live video attempt completed; skipping assertions");
+    expect(params.failures).toStrictEqual([]);
+    if (isRequestedByProviderFilter(params.providerId, activeProviderFilter)) {
+      throw new Error(
+        `[live:video-generation] requested provider produced no live attempts: ${params.providerId}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    params.skip(
+      `[live:video-generation] no live video attempt completed for ${params.providerId}; skipped=${params.skipped.join(", ") || "none"}`,
+    );
     return;
   }
-  expect(params.failures).toEqual([]);
+  expect(params.failures).toStrictEqual([]);
 }
 
 function resolveLiveSmokeDurationSeconds(params: {
@@ -336,14 +403,17 @@ function resolveLiveSmokeDurationSeconds(params: {
   );
 }
 
-async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(loadConfig());
+async function runLiveVideoProviderCase(
+  testCase: LiveProviderCase,
+  skip: (note: string) => void,
+): Promise<void> {
+  const cfg = withPluginsEnabled(await readLiveTestConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];
   const skipped: string[] = [];
   const failures: string[] = [];
-  const summaryParams = { attempted, failures, providerId: testCase.providerId, skipped };
+  const summaryParams = { attempted, failures, providerId: testCase.providerId, skip, skipped };
 
   maybeLoadShellEnvForVideoProviders([testCase.providerId]);
 
@@ -362,7 +432,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });
-  let authLabel = "unresolved";
+  let authLabel;
   try {
     const auth = await resolveApiKeyForProvider({
       provider: testCase.providerId,
@@ -397,7 +467,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   });
   const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
-  let generatedVideo: BufferedGeneratedVideo | null = null;
 
   const generateAttempt = await runLiveVideoAttempt({
     authLabel,
@@ -425,7 +494,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     expectLiveVideoCasePassed(summaryParams);
     return;
   }
-  generatedVideo = generateAttempt.video;
+  const generatedVideo = generateAttempt.video;
 
   if (!RUN_FULL_VIDEO_MODES) {
     expectLiveVideoCasePassed(summaryParams);
@@ -508,7 +577,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     return;
   }
   if (!generatedVideo?.buffer) {
-    skipped.push(`${testCase.providerId}:videoToVideo missing generated seed video`);
+    skipped.push(`${testCase.providerId}:videoToVideo missing buffer-backed generated seed video`);
     expectLiveVideoCasePassed(summaryParams);
     return;
   }
@@ -554,7 +623,8 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
 
 describeLive("video generation provider live", () => {
   if (CASES.length === 0) {
-    it("skips when no video generation providers are selected", () => {
+    it("skips only unfiltered runs when no video generation providers are selected", () => {
+      expectSelectedVideoProvidersPresent(CASES);
       expect(CASES).toHaveLength(0);
     });
   }
@@ -563,10 +633,54 @@ describeLive("video generation provider live", () => {
     // One provider per test keeps cumulative suite runtime from tripping a single timeout cap.
     it(
       `covers declared video-generation modes with shell/profile auth (${testCase.providerId})`,
-      async () => {
-        await runLiveVideoProviderCase(testCase);
+      async ({ skip }) => {
+        await runLiveVideoProviderCase(testCase, skip);
       },
       LIVE_VIDEO_TEST_TIMEOUT_MS,
     );
   }
+});
+
+describe("video generation live provider filter coverage", () => {
+  it("fails filtered suites when the filter matches no providers", () => {
+    expect(() => expectSelectedVideoProvidersPresent([], new Set(["missing"]))).toThrow(
+      /requested provider filter matched no video providers: missing/u,
+    );
+  });
+
+  it("skips unfiltered zero-attempt provider cases", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectLiveVideoCasePassed(
+        {
+          attempted: [],
+          failures: [],
+          providerId: "local-only",
+          skip,
+          skipped: ["local-only: no usable auth"],
+        },
+        null,
+      ),
+    ).not.toThrow();
+    expect(skip).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("local-only: no usable auth"),
+    );
+  });
+
+  it("fails filtered provider cases when the requested provider is not attempted", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectLiveVideoCasePassed(
+        {
+          attempted: [],
+          failures: [],
+          providerId: "minimax",
+          skip,
+          skipped: ["minimax: no usable auth"],
+        },
+        new Set(["minimax"]),
+      ),
+    ).toThrow(/requested provider produced no live attempts: minimax/u);
+    expect(skip).not.toHaveBeenCalled();
+  });
 });

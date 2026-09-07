@@ -1,3 +1,4 @@
+// Anthropic Vertex tests cover provider discovery.import guard plugin behavior.
 import { describe, expect, it } from "vitest";
 
 describe("anthropic-vertex provider discovery entry", () => {

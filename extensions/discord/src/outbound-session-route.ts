@@ -1,10 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
+// Discord plugin module implements outbound session route behavior.
+import { buildThreadAwareOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 export type ResolveDiscordOutboundSessionRouteParams = {
@@ -26,10 +23,13 @@ export function resolveDiscordOutboundSessionRoute(
   if (!parsed) {
     return null;
   }
-  const isDm = parsed.kind === "user";
+  const explicitThreadId = params.threadId == null ? undefined : String(params.threadId).trim();
+  const peerId = explicitThreadId || parsed.id;
+  const isDm = parsed.kind === "user" && !explicitThreadId;
+  const recipientSessionExact = /^\d+$/.test(peerId);
   const peer: RoutePeer = {
     kind: isDm ? "direct" : "channel",
-    id: parsed.id,
+    id: peerId,
   };
   const baseSessionKey = buildOutboundBaseSessionKey({
     cfg: params.cfg,
@@ -38,22 +38,20 @@ export function resolveDiscordOutboundSessionRoute(
     accountId: params.accountId,
     peer,
   });
-  const explicitThreadId = normalizeOutboundThreadId(params.threadId);
-  const threadCandidate = explicitThreadId ?? normalizeOutboundThreadId(params.replyToId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: threadCandidate,
+  return buildThreadAwareOutboundSessionRoute({
+    route: {
+      sessionKey: baseSessionKey,
+      baseSessionKey,
+      recipientSessionExact,
+      peer,
+      chatType: isDm ? ("direct" as const) : ("channel" as const),
+      from: isDm ? `discord:${peerId}` : `discord:channel:${peerId}`,
+      to: isDm ? `user:${peerId}` : `channel:${peerId}`,
+    },
+    threadId: params.threadId,
+    precedence: ["threadId"],
     useSuffix: false,
   });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isDm ? ("direct" as const) : ("channel" as const),
-    from: isDm ? `discord:${parsed.id}` : `discord:channel:${parsed.id}`,
-    to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId: explicitThreadId ?? undefined,
-  };
 }
 
 function resolveDiscordOutboundTargetKindHint(params: {
@@ -75,5 +73,5 @@ function resolveDiscordOutboundTargetKindHint(params: {
   if (/^(user:|discord:|@|<@!?)/i.test(target)) {
     return "user";
   }
-  return undefined;
+  return "channel";
 }

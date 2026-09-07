@@ -1,5 +1,7 @@
+// Covers WSL detection from platform and release files.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
@@ -30,13 +32,8 @@ let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
 let isWSL: typeof import("./wsl.js").isWSL;
 let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 describe("wsl detection", () => {
@@ -48,9 +45,9 @@ describe("wsl detection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
-    delete process.env.WSL_INTEROP;
-    delete process.env.WSL_DISTRO_NAME;
-    delete process.env.WSLENV;
+    deleteTestEnvValue("WSL_INTEROP");
+    deleteTestEnvValue("WSL_DISTRO_NAME");
+    deleteTestEnvValue("WSLENV");
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
     setPlatform("linux");
@@ -60,9 +57,7 @@ describe("wsl detection", () => {
   afterEach(() => {
     envSnapshot.restore();
     resetWSLStateForTests();
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -70,8 +65,13 @@ describe("wsl detection", () => {
     ["WSL_INTEROP", "/run/WSL/123_interop"],
     ["WSLENV", "PATH/l"],
   ])("detects WSL from %s", (key, value) => {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
     expect(isWSLEnv()).toBe(true);
+  });
+
+  it("detects WSL from an explicit env map", () => {
+    expect(isWSLEnv({ WSL_DISTRO_NAME: "Ubuntu" })).toBe(true);
+    expect(isWSLEnv({})).toBe(false);
   });
 
   it("reads /proc/version for sync WSL detection when env vars are absent", () => {
@@ -123,7 +123,7 @@ describe("wsl detection", () => {
   });
 
   it("short-circuits async detection from WSL env vars without reading osrelease", async () => {
-    process.env.WSL_DISTRO_NAME = "Ubuntu";
+    setTestEnvValue("WSL_DISTRO_NAME", "Ubuntu");
 
     await expect(isWSL()).resolves.toBe(true);
     expect(readFileMock).not.toHaveBeenCalled();

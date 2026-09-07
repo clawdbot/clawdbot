@@ -1,7 +1,17 @@
 import Foundation
-import Photos
 import OpenClawKit
+import Photos
 import UIKit
+
+enum PhotoLibraryAccess {
+    static func authorizationStatus() -> PHAuthorizationStatus {
+        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+
+    static func canRead(_ status: PHAuthorizationStatus) -> Bool {
+        status == .authorized || status == .limited
+    }
+}
 
 final class PhotoLibraryService: PhotosServicing {
     // The gateway WebSocket has a max payload size; returning large base64 blobs
@@ -15,7 +25,7 @@ final class PhotoLibraryService: PhotosServicing {
 
     func latest(params: OpenClawPhotosLatestParams) async throws -> OpenClawPhotosLatestPayload {
         let status = await Self.ensureAuthorization()
-        guard status == .authorized || status == .limited else {
+        guard PhotoLibraryAccess.canRead(status) else {
             throw NSError(domain: "Photos", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "PHOTOS_PERMISSION_REQUIRED: grant Photos permission",
             ])
@@ -34,7 +44,10 @@ final class PhotoLibraryService: PhotosServicing {
         let formatter = ISO8601DateFormatter()
 
         assets.enumerateObjects { asset, _, stop in
-            if results.count >= limit { stop.pointee = true; return }
+            if results.count >= limit {
+                stop.pointee = true
+                return
+            }
             if let payload = try? Self.renderAsset(
                 asset,
                 maxWidth: maxWidth,
@@ -56,7 +69,7 @@ final class PhotoLibraryService: PhotosServicing {
 
     private static func ensureAuthorization() async -> PHAuthorizationStatus {
         // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        PhotoLibraryAccess.authorizationStatus()
     }
 
     private static func renderAsset(
@@ -139,7 +152,7 @@ final class PhotoLibraryService: PhotosServicing {
             if newWidth >= currentImage.size.width {
                 break
             }
-            currentImage = resize(image: currentImage, targetWidth: newWidth)
+            currentImage = self.resize(image: currentImage, targetWidth: newWidth)
         }
 
         throw NSError(domain: "Photos", code: 4, userInfo: [

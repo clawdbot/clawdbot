@@ -1,12 +1,11 @@
-import {
-  isRecord,
-  sanitizeTerminalText,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-runtime";
+// Imessage plugin module implements watch error log behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_WATCH_ERROR_MESSAGE_CHARS = 200;
 
-export type SanitizedIMessageWatchErrorPayload = {
+type SanitizedIMessageWatchErrorPayload = {
   code?: number;
   message?: string;
 };

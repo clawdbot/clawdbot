@@ -1,0 +1,195 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import {
+  hasSessionTranscriptMessage,
+  loadSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
+  updateSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
+import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { log } from "../logger.js";
+import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
+import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+
+export function flushSessionManagerTranscript(sessionManager: AttemptSessionManager): void {
+  sessionManager.flushPendingPersistence();
+}
+
+export function removeTrailingMidTurnPrecheckAssistantError(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: AttemptSessionManager;
+}): void {
+  const messages = params.activeSession.agent.state.messages;
+  const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
+  const preserveTrailing = (entry: ReturnType<AttemptSessionManager["getEntries"]>[number]) =>
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info" ||
+    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
+  const persistedTail = params.sessionManager
+    .getEntries()
+    .findLast((entry) => !preserveTrailing(entry));
+  // New guarded writes omit the signal. Retain cleanup for an already-persisted legacy error.
+  const hasPersistedError =
+    persistedTail?.type === "message" && isMidTurnPrecheckAssistantError(persistedTail.message);
+  const removedPersistedError =
+    hasPersistedError &&
+    params.sessionManager.removeTrailingEntries(
+      (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
+      {
+        preserveTrailing,
+      },
+    ) > 0;
+  if (removedActiveError) {
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
+  if (hasPersistedError && removedActiveError && !removedPersistedError) {
+    log.warn(
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
+    );
+  }
+}
+
+export function normalizeCompactionRecoveryTranscriptTail(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: AttemptSessionManager;
+}): number {
+  const messages = params.activeSession.agent.state.messages;
+  const continuableMessages = trimToContinuableTail(messages) ?? [];
+
+  // This is the single recovery owner for compaction exits that hand control
+  // back to a continuation. AgentCore rejects assistant tails before providers run.
+  const removedEntries = params.sessionManager.removeTrailingEntries(
+    (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
+  params.activeSession.agent.state.messages =
+    removedEntries > 0
+      ? sanitizeCompactionReplayMessages(params.sessionManager.buildSessionContext().messages)
+      : continuableMessages.length === messages.length
+        ? messages
+        : continuableMessages;
+  return removedEntries;
+}
+
+// Applies quota-resume TTL maintenance to only the active attempt session.
+export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
+  agentId: string;
+  storePath: string;
+  sessionKey: string;
+}): Promise<ConfigSessionEntry | undefined> {
+  const entry = loadSessionEntry({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+  });
+  if (!entry?.quotaSuspension) {
+    return entry;
+  }
+  const now = Date.now();
+  const maintenance = resolveQuotaSuspensionEntryMaintenance({ entry, now });
+  if (!maintenance.patch) {
+    return entry;
+  }
+  const updated = await updateSessionEntry(
+    {
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    },
+    (currentEntry) =>
+      resolveQuotaSuspensionEntryMaintenance({
+        entry: currentEntry,
+        now,
+      }).patch,
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+    },
+  );
+  return updated ?? entry;
+}
+
+export async function resolveAttemptTrajectorySessionFile(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<string> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId });
+  if (!storePath || !params.sessionKey) {
+    return params.sessionFile;
+  }
+  return (
+    await resolveSessionTranscriptRuntimeTarget({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    })
+  ).sessionKey;
+}
+
+type ExistingAttemptTranscriptState = {
+  hasBootstrapTranscriptState: boolean;
+};
+
+export async function resolveExistingAttemptTranscriptState(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionManager?: EmbeddedRunAttemptParams["sessionManager"];
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<ExistingAttemptTranscriptState> {
+  // The supplied manager owns this transcript; a borrowed durable identity is not its history.
+  if (params.sessionManager) {
+    return {
+      hasBootstrapTranscriptState: params.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "message"),
+    };
+  }
+  const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
+  const storePath =
+    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
+  const sessionId = normalizeOptionalString(params.sessionTarget?.sessionId) ?? params.sessionId;
+  const sessionKey =
+    normalizeOptionalString(params.sessionTarget?.sessionKey) ??
+    normalizeOptionalString(params.sessionKey);
+  let hasBootstrapTranscriptState = false;
+  if (storePath && sessionKey) {
+    try {
+      hasBootstrapTranscriptState = await hasSessionTranscriptMessage({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+    } catch {
+      hasBootstrapTranscriptState = false;
+    }
+  }
+  return { hasBootstrapTranscriptState };
+}

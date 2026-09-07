@@ -1,4 +1,0 @@
-# Copied schema files
-# (needed for the build but otherwise redundant)
-*.json
-!server_to_client_with_standard_catalog.json

@@ -1,43 +1,27 @@
+/**
+ * Regression coverage for core tool allow/deny policy helpers.
+ * Verifies sandbox policy resolution, explicit lists, and tool matching.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
-  applyOwnerOnlyToolPolicy,
+  isRuntimeToolAllowed,
+  createRuntimeToolMatcher,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
+import {
   collectExplicitAllowlist,
+  couldNormalizeToolNamePrefixToAllowedTool,
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
-  isOwnerOnlyToolName,
-  normalizeToolName,
-  resolveOwnerOnlyToolApprovalClass,
+  hasRestrictiveAllowPolicy,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
-import type { AnyAgentTool } from "./tools/common.js";
-
-function createOwnerPolicyTools() {
-  return [
-    {
-      name: "read",
-      execute: async () => ({ content: [], details: {} }) as any,
-    },
-    {
-      name: "cron",
-      ownerOnly: true,
-      execute: async () => ({ content: [], details: {} }) as any,
-    },
-    {
-      name: "gateway",
-      ownerOnly: true,
-      execute: async () => ({ content: [], details: {} }) as any,
-    },
-    {
-      name: "whatsapp_login",
-      execute: async () => ({ content: [], details: {} }) as any,
-    },
-  ] as unknown as AnyAgentTool[];
-}
 
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
@@ -55,7 +39,7 @@ describe("tool-policy", () => {
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("automations");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
@@ -70,66 +54,38 @@ describe("tool-policy", () => {
   });
 
   it("normalizes tool names and aliases", () => {
-    expect(normalizeToolName(" BASH ")).toBe("exec");
-    expect(normalizeToolName("apply-patch")).toBe("apply_patch");
-    expect(normalizeToolName("READ")).toBe("read");
+    expect(normalizeToolPolicyName(" BASH ")).toBe("exec");
+    expect(normalizeToolPolicyName("apply-patch")).toBe("apply_patch");
+    expect(normalizeToolPolicyName("READ")).toBe("read");
+    // Pre-rename scheduler tool name from persisted config (RFC 0026).
+    expect(normalizeToolPolicyName("cron")).toBe("automations");
+    expect(normalizeToolPolicyName("automations")).toBe("automations");
   });
 
-  it("identifies owner-only tools", () => {
-    expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
-    expect(isOwnerOnlyToolName("cron")).toBe(true);
-    expect(isOwnerOnlyToolName("gateway")).toBe(true);
-    expect(isOwnerOnlyToolName("nodes")).toBe(true);
-    expect(isOwnerOnlyToolName("read")).toBe(false);
+  it.each(["constructor", "__proto__"])(
+    "preserves the literal tool name %s in aliases and groups",
+    (name) => {
+      expect(normalizeToolPolicyName(name)).toBe(name);
+      expect(expandToolGroups([name])).toEqual([name]);
+    },
+  );
+
+  it.each(["constructor", "__proto__"])("matches literal %s prefixes only when allowed", (name) => {
+    expect(couldNormalizeToolNamePrefixToAllowedTool(name.slice(0, 3), new Set([name]))).toBe(true);
+    expect(couldNormalizeToolNamePrefixToAllowedTool("other", new Set([name]))).toBe(false);
+    expect(couldNormalizeToolNamePrefixToAllowedTool(name, new Set(["other"]))).toBe(false);
   });
 
-  it("exposes stable approval classes for shared owner-only fallbacks", () => {
-    expect(resolveOwnerOnlyToolApprovalClass("whatsapp_login")).toBe("interactive");
-    expect(resolveOwnerOnlyToolApprovalClass("cron")).toBe("control_plane");
-    expect(resolveOwnerOnlyToolApprovalClass("gateway")).toBe("control_plane");
-    expect(resolveOwnerOnlyToolApprovalClass("nodes")).toBe("exec_capable");
-    expect(resolveOwnerOnlyToolApprovalClass("read")).toBeUndefined();
+  it.each(["ba", "bash", "apply-", "cron"])("retains declared alias prefix %s", (prefix) => {
+    expect(
+      couldNormalizeToolNamePrefixToAllowedTool(
+        prefix,
+        new Set(["exec", "apply_patch", "automations"]),
+      ),
+    ).toBe(true);
   });
 
-  it("keeps ACP owner-only backstops aligned with the HTTP deny list", () => {
-    const sharedBackstops = DEFAULT_GATEWAY_HTTP_TOOL_DENY.flatMap((name) => {
-      const approvalClass = resolveOwnerOnlyToolApprovalClass(name);
-      return approvalClass ? ([[name, approvalClass]] as const) : [];
-    });
-
-    expect(Object.fromEntries(sharedBackstops)).toEqual({
-      cron: "control_plane",
-      gateway: "control_plane",
-      nodes: "exec_capable",
-      whatsapp_login: "interactive",
-    });
-  });
-
-  it("strips owner-only tools for non-owner senders", async () => {
-    const tools = createOwnerPolicyTools();
-    const filtered = applyOwnerOnlyToolPolicy(tools, false);
-    expect(filtered.map((t) => t.name)).toEqual(["read"]);
-  });
-
-  it("keeps owner-only tools for the owner sender", async () => {
-    const tools = createOwnerPolicyTools();
-    const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
-  });
-
-  it("honors ownerOnly metadata for custom tool names", async () => {
-    const tools = [
-      {
-        name: "custom_admin_tool",
-        ownerOnly: true,
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
-    expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
-  });
-
-  it("preserves explicit alsoAllow hints when allow is empty", () => {
+  it("collects explicit allowlist entries", () => {
     expect(
       collectExplicitAllowlist([
         {
@@ -139,37 +95,52 @@ describe("tool-policy", () => {
     ).toContain("optional-demo");
   });
 
-  it("strips nodes for non-owner senders via fallback policy", () => {
-    const tools = [
-      {
-        name: "read",
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "nodes",
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
+  it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["lobster"] })])).toEqual([
+      "lobster",
+      DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    ]);
+    expect(
+      collectExplicitAllowlist([pickSandboxToolPolicy({ allow: [], alsoAllow: ["lobster"] })]),
+    ).toEqual(["*", "lobster"]);
+  });
 
-    expect(applyOwnerOnlyToolPolicy(tools, false).map((tool) => tool.name)).toEqual(["read"]);
-    expect(applyOwnerOnlyToolPolicy(tools, true).map((tool) => tool.name)).toEqual([
-      "read",
-      "nodes",
+  it("preserves explicit alsoAllow wildcards for plugin discovery", () => {
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["*"] })])).toEqual(["*"]);
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
+      "*",
     ]);
   });
-});
 
-describe("TOOL_POLICY_CONFORMANCE", () => {
-  it("matches exported TOOL_GROUPS exactly", () => {
-    expect(TOOL_POLICY_CONFORMANCE.toolGroups).toEqual(TOOL_GROUPS);
+  it("does not treat additive allow-all policies as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ alsoAllow: ["optional-demo"] }))).toBe(
+      false,
+    );
+    expect(
+      hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: [], alsoAllow: ["optional-demo"] })),
+    ).toBe(false);
   });
 
-  it("is JSON-serializable", () => {
-    expect(() => JSON.stringify(TOOL_POLICY_CONFORMANCE)).not.toThrow();
+  it("still treats explicit bounded allowlists as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: ["read"] }))).toBe(true);
   });
 });
 
 describe("sandbox tool policy", () => {
+  it.each(["constructor", "__proto__"])("applies allow and deny to literal %s", (name) => {
+    const allow = { allow: [` ${name.toUpperCase()} `] };
+    const deny = { allow: ["*"], deny: [` ${name.toUpperCase()} `] };
+    for (const matches of [
+      (policy: SandboxToolPolicy, tool: string) => isToolAllowed(policy, tool),
+      (policy: SandboxToolPolicy, tool: string) => isToolAllowedByPolicyName(tool, policy),
+    ]) {
+      expect(matches(allow, name)).toBe(true);
+      expect(matches(allow, "other")).toBe(false);
+      expect(matches(deny, name)).toBe(false);
+      expect(matches(deny, "other")).toBe(true);
+    }
+  });
+
   it("allows all tools with * allow", () => {
     const policy: SandboxToolPolicy = { allow: ["*"], deny: [] };
     expect(isToolAllowed(policy, "browser")).toBe(true);
@@ -225,7 +196,7 @@ describe("resolveSandboxToolPolicyForAgent", () => {
       source: "global",
       key: "tools.sandbox.tools.allow",
     });
-    expect(resolved.allow).toEqual([]);
+    expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).toEqual(["browser"]);
 
     const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
@@ -239,17 +210,55 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.allow).toEqual(["read", "image"]);
+    expect(resolved.allow).toEqual(["read", "view_image"]);
     expect(resolved.deny).toEqual(["browser"]);
   });
 
-  it("does not auto-add image when explicitly denied", () => {
+  it("does not auto-add view_image when explicitly denied", () => {
     const cfg = {
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["image"] } } },
+      tools: { sandbox: { tools: { allow: ["read"], deny: ["view_image"] } } },
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
-    expect(resolved.deny).toEqual(["image"]);
+    expect(resolved.deny).toEqual(["view_image"]);
+  });
+});
+
+describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", () => {
+  it("allows the renamed tool through persisted legacy allow lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { allow: ["cron"] })).toBe(true);
+  });
+
+  it("denies the renamed tool through persisted legacy deny lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { deny: ["cron"] })).toBe(false);
+  });
+});
+
+describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76749)", () => {
+  it("does not deny apply_patch when write is denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
+  });
+
+  it("still denies apply_patch when apply_patch is explicitly denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["apply_patch"] })).toBe(false);
+  });
+
+  it("still allows apply_patch via write in the allow list", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"], deny: [] })).toBe(true);
+  });
+
+  it("denies apply_patch when both write and apply_patch are denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write", "apply_patch"] })).toBe(
+      false,
+    );
+  });
+
+  it("keeps runtime write compatibility out of construction planning", () => {
+    expect(isRuntimeToolAllowed("apply_patch", ["write"])).toBe(true);
+    expect(createRuntimeToolMatcher(["write"], false)("apply_patch")).toBe(false);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply-patch"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply_*"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["group:fs"])).toBe(true);
   });
 });

@@ -1,20 +1,21 @@
+// Internal task-flow registry facade for runtime modules.
 export {
   createTaskFlowForTask,
-  createFlowRecord,
   createManagedTaskFlow,
   deleteTaskFlowRecordById,
-  findLatestTaskFlowForOwnerKey,
+  ensureTaskFlowRegistryReady,
   failFlow,
   finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
-  listTaskFlowsForOwnerKey,
+  prepareTaskMirroredFlowSync,
+  publishTaskFlowAfterAtomicStore,
   requestFlowCancel,
+  reloadTaskFlowRegistryFromStore,
   resolveTaskFlowForLookupToken,
-  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
-  syncFlowFromTask,
+  syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 

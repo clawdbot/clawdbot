@@ -1,0 +1,187 @@
+// Live verification for extra-params behavior against provider APIs.
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
+import type { StreamFn } from "./runtime/index.js";
+
+const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
+const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]);
+const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
+
+const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
+const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
+
+describeLive("embedded agent extra params (live)", () => {
+  it("applies config max_completion_tokens alias to openai streamFn", async () => {
+    // This is live because token-limit alias behavior is enforced by OpenAI's
+    // API, not just by local payload mutation.
+    const model: Model<"openai-responses"> = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    };
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              // OpenAI Responses enforces a minimum max_output_tokens of 16.
+              params: {
+                max_completion_tokens: 16,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const agent: { streamFn: StreamFn } = { streamFn: streamSimple };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", model.id);
+
+    const stream = await agent.streamFn(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "Write the alphabet letters A through Z as words separated by commas.",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      { apiKey: OPENAI_KEY },
+    );
+
+    let stopReason: string | undefined;
+    let outputTokens: number | undefined;
+    for await (const event of stream) {
+      if (event.type === "done") {
+        stopReason = event.reason;
+        outputTokens = event.message.usage.output;
+      }
+    }
+
+    expect(stopReason).toBeTypeOf("string");
+    expect(outputTokens).toBeTypeOf("number");
+    // Should respect max_completion_tokens from config (16) — allow a small buffer for provider rounding.
+    expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
+  }, 30_000);
+
+  it("verifies OpenAI fast-mode service_tier semantics against the live API", async () => {
+    // service_tier is provider-defined response metadata; mocked wrappers cannot
+    // prove that the live API accepts both values.
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${OPENAI_KEY}`,
+    };
+
+    const runProbe = async (serviceTier: "default" | "priority") => {
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "gpt-5.4",
+          input: "Reply with OK.",
+          max_output_tokens: 32,
+          service_tier: serviceTier,
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: { message?: string };
+        service_tier?: string;
+        status?: string;
+      };
+      expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+      return json;
+    };
+
+    const standard = await runProbe("default");
+    expect(standard.service_tier).toBe("default");
+    expect(standard.status).toBe("completed");
+
+    const fast = await runProbe("priority");
+    expect(fast.service_tier).toBe("priority");
+    expect(fast.status).toBe("completed");
+  }, 45_000);
+});
+
+describeAnthropicLive("embedded agent extra params (anthropic live)", () => {
+  it("verifies Claude Opus 5 default fallback against the live API", async () => {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": ANTHROPIC_KEY,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
+    };
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "claude-opus-5",
+        max_tokens: 32,
+        fallbacks: "default",
+        messages: [{ role: "user", content: "Reply with OK." }],
+      }),
+    });
+    const json = (await res.json()) as {
+      error?: { message?: string };
+      model?: string;
+      stop_reason?: string;
+    };
+
+    expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+    expect(json.model).toBe("claude-opus-5");
+    expect(json.stop_reason).toBe("end_turn");
+  }, 45_000);
+
+  it("verifies Claude Opus 5 native fast-mode contract against the live API", async () => {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "fast-mode-2026-02-01",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-5",
+        max_tokens: 32,
+        speed: "fast",
+        messages: [{ role: "user", content: "Reply with OK." }],
+      }),
+    });
+    const json = (await res.json()) as {
+      error?: { message?: string; type?: string };
+      stop_reason?: string;
+      usage?: { speed?: string };
+    };
+
+    if (!res.ok) {
+      if (res.status === 429) {
+        expect(json.error?.type).toBe("rate_limit_error");
+        expect(json.error?.message).toContain("fast mode");
+        return;
+      }
+      expect(res.status).toBe(529);
+      expect(json.error?.type).toBe("overloaded_error");
+      return;
+    }
+
+    expect(json.usage?.speed).toBe("fast");
+    expect(json.stop_reason).toBe("end_turn");
+  }, 45_000);
+});

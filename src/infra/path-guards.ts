@@ -1,51 +1,41 @@
+// Exposes generic path guard helpers with fs-safe defaults.
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isPathInside } from "@openclaw/fs-safe/path";
+import "./fs-safe-defaults.js";
 
-const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
-const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
-const PARENT_SEGMENT_PREFIX = /^\.\.(?:[\\/]|$)/u;
+// Generic path guard facade for containment checks and safe relative paths.
+export {
+  hasNodeErrorCode,
+  isNotFoundPathError,
+  normalizeWindowsPathForComparison,
+  safeStatSync,
+} from "@openclaw/fs-safe/path";
+export { isPathInside };
 
-export function normalizeWindowsPathForComparison(input: string): string {
-  let normalized = path.win32.normalize(input);
-  if (normalized.startsWith("\\\\?\\")) {
-    normalized = normalized.slice(4);
-    if (normalized.toUpperCase().startsWith("UNC\\")) {
-      normalized = `\\\\${normalized.slice(4)}`;
-    }
+/** Returns true only when target is a descendant of root, not root itself. */
+export function isPathStrictlyInside(root: string, target: string): boolean {
+  return isPathInside(root, target) && !isPathInside(target, root);
+}
+
+/**
+ * Normalize a Windows path for boundary math whose result is handed back to callers.
+ *
+ * Unlike `normalizeWindowsPathForComparison`, this preserves case: `path.win32.relative`
+ * already matches roots case-insensitively, so lowercasing only corrupts the returned
+ * relative path — and callers create files from it on a case-preserving filesystem.
+ * Extended-length prefix stripping stays, or `\\?\`-prefixed inputs read as boundary escapes.
+ */
+export function normalizeWindowsPathPreservingCase(input: string): string {
+  // Mirrors normalizeWindowsPathForComparison step for step, minus the lowercasing,
+  // so the only behavior that shifts is the case of the characters handed back.
+  // fs-safe 0.5.2 keeps surrounding whitespace (it can disguise reserved names),
+  // so this mirror must not trim either.
+  const normalized = path.win32.normalize(input);
+  if (!normalized.startsWith("\\\\?\\")) {
+    return normalized;
   }
-  return normalizeLowercaseStringOrEmpty(normalized.replaceAll("/", "\\"));
-}
-
-export function isNodeError(value: unknown): value is NodeJS.ErrnoException {
-  return Boolean(
-    value && typeof value === "object" && "code" in (value as Record<string, unknown>),
-  );
-}
-
-export function hasNodeErrorCode(value: unknown, code: string): boolean {
-  return isNodeError(value) && value.code === code;
-}
-
-export function isNotFoundPathError(value: unknown): boolean {
-  return isNodeError(value) && typeof value.code === "string" && NOT_FOUND_CODES.has(value.code);
-}
-
-export function isSymlinkOpenError(value: unknown): boolean {
-  return isNodeError(value) && typeof value.code === "string" && SYMLINK_OPEN_CODES.has(value.code);
-}
-
-export function isPathInside(root: string, target: string): boolean {
-  if (process.platform === "win32") {
-    const rootForCompare = normalizeWindowsPathForComparison(path.win32.resolve(root));
-    const targetForCompare = normalizeWindowsPathForComparison(path.win32.resolve(target));
-    const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return (
-      relative === "" || (!PARENT_SEGMENT_PREFIX.test(relative) && !path.win32.isAbsolute(relative))
-    );
-  }
-
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(target);
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative === "" || (!PARENT_SEGMENT_PREFIX.test(relative) && !path.isAbsolute(relative));
+  const withoutPrefix = normalized.slice(4);
+  return withoutPrefix.toUpperCase().startsWith("UNC\\")
+    ? `\\\\${withoutPrefix.slice(4)}`
+    : withoutPrefix;
 }

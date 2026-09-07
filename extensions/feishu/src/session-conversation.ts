@@ -1,6 +1,7 @@
+// Feishu plugin module implements session conversation behavior.
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 
-export function resolveFeishuParentConversationCandidates(rawId: string): string[] {
+function resolveFeishuParentConversationCandidates(rawId: string): string[] {
   const parsed = parseFeishuConversationId({ conversationId: rawId });
   if (!parsed) {
     return [];
@@ -18,7 +19,6 @@ export function resolveFeishuParentConversationCandidates(rawId: string): string
     case "group_topic":
     case "group_sender":
       return [parsed.chatId];
-    case "group":
     default:
       return [];
   }

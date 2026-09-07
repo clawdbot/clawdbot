@@ -1,8 +1,34 @@
 {
   "id": "discord",
-  "channels": ["discord"],
-  "channelEnvVars": {
-    "discord": ["DISCORD_BOT_TOKEN"]
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [{ "id": "discord-legacy-state" }]
+  },
+  "name": "Discord",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
+  "skills": [
+    "./skills"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "discord"
+  ],
+  "contracts": {
+    "transcriptSourceProviders": [
+      "discord-voice"
+    ]
+  },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
   },
   "configSchema": {
     "type": "object",

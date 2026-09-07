@@ -1,141 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+/** Covers plugin runtime registration API behavior and registry mutation guards. */
+import { beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
-  getActivePluginHttpRouteRegistryVersion,
-  getActivePluginRegistryVersion,
+  clearActivePluginRegistry,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
-  pinActivePluginHttpRouteRegistry,
   recordImportedPluginId,
-  releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
-  resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRegistryWithRoute(path: string) {
-  const registry = createEmptyPluginRegistry();
-  registry.httpRoutes.push({
-    path,
-    auth: "plugin",
-    match: path === "/plugins/diffs" ? "prefix" : "exact",
-    handler: () => true,
-    pluginId: path === "/plugins/diffs" ? "diffs" : "demo",
-    source: "test",
-  });
-  return registry;
+async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
-
-function createRuntimeRegistryPair() {
-  return {
-    startupRegistry: createEmptyPluginRegistry(),
-    laterRegistry: createEmptyPluginRegistry(),
-  };
-}
-
-function expectRegistryVersions(params: { active: number; routes: number }) {
-  expect(getActivePluginRegistryVersion()).toBe(params.active);
-  expect(getActivePluginHttpRouteRegistryVersion()).toBe(params.routes);
-}
-
-function expectActiveRouteRegistryResolution(params: {
-  pinnedRegistry: ReturnType<typeof createEmptyPluginRegistry>;
-  explicitRegistry: ReturnType<typeof createEmptyPluginRegistry>;
-  expectedRegistry: "pinned" | "explicit";
-}) {
-  setActivePluginRegistry(params.pinnedRegistry);
-  pinActivePluginHttpRouteRegistry(params.pinnedRegistry);
-
-  expect(resolveActivePluginHttpRouteRegistry(params.explicitRegistry)).toBe(
-    params.expectedRegistry === "pinned" ? params.pinnedRegistry : params.explicitRegistry,
-  );
-}
-
-function expectPinnedRouteRegistry(
-  startupRegistry: ReturnType<typeof createEmptyPluginRegistry>,
-  laterRegistry: ReturnType<typeof createEmptyPluginRegistry>,
-) {
-  setActivePluginRegistry(startupRegistry);
-  pinActivePluginHttpRouteRegistry(startupRegistry);
-  setActivePluginRegistry(laterRegistry);
-  expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
-}
-
-function expectRouteRegistryState(params: { setup: () => void; assert: () => void }) {
-  params.setup();
-  params.assert();
-}
-
-describe("plugin runtime route registry", () => {
-  afterEach(() => {
-    releasePinnedPluginHttpRouteRegistry();
-    resetPluginRuntimeStateForTest();
-  });
-
-  it("stays empty until a caller explicitly installs or requires a registry", () => {
-    resetPluginRuntimeStateForTest();
-
-    expect(getActivePluginRegistry()).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "keeps the pinned route registry when the active plugin registry changes",
-      run: () => {
-        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
-        expectPinnedRouteRegistry(startupRegistry, laterRegistry);
-      },
-    },
-    {
-      name: "tracks route registry repins separately from the active registry version",
-      run: () => {
-        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
-        const repinnedRegistry = createEmptyPluginRegistry();
-
-        setActivePluginRegistry(startupRegistry);
-        pinActivePluginHttpRouteRegistry(laterRegistry);
-
-        const activeVersionBeforeRepin = getActivePluginRegistryVersion();
-        const routeVersionBeforeRepin = getActivePluginHttpRouteRegistryVersion();
-
-        pinActivePluginHttpRouteRegistry(repinnedRegistry);
-
-        expectRegistryVersions({
-          active: activeVersionBeforeRepin,
-          routes: routeVersionBeforeRepin + 1,
-        });
-      },
-    },
-  ] as const)("$name", ({ run }) => {
-    expectRouteRegistryState({
-      setup: () => {},
-      assert: run,
-    });
-  });
-
-  it.each([
-    {
-      name: "falls back to the provided registry when the pinned route registry has no routes",
-      pinnedRegistry: createEmptyPluginRegistry(),
-      explicitRegistry: createRegistryWithRoute("/demo"),
-      expected: "explicit",
-    },
-    {
-      name: "prefers the pinned route registry when it already owns routes",
-      pinnedRegistry: createRegistryWithRoute("/bluebubbles-webhook"),
-      explicitRegistry: createRegistryWithRoute("/plugins/diffs"),
-      expected: "pinned",
-    },
-  ] as const)("$name", ({ pinnedRegistry, explicitRegistry, expected }) => {
-    expectActiveRouteRegistryResolution({
-      pinnedRegistry,
-      explicitRegistry,
-      expectedRegistry: expected,
-    });
-  });
-});
 
 const makeRoute = (path: string): PluginHttpRouteRegistration => ({
   path,
@@ -209,9 +102,119 @@ describe("setActivePluginRegistry", () => {
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
   });
 
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
+        setActivePluginRegistry(nextRegistry);
+      },
+    },
+    {
+      name: "active registry advances again",
+      refresh: () => {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
+    const firstCleanupStarted = createDeferredCore();
+    const firstCleanupReleased = createDeferredCore();
+    const secondCleanupCalled = createDeferredCore();
+    onTestFinished(() => firstCleanupReleased.resolve());
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "cleanup-refresh-race",
+        name: "Cleanup Refresh Race",
+        status: "loaded",
+      }),
+    );
+    previous.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "first-cleanup",
+          async cleanup() {
+            firstCleanupStarted.resolve();
+            await firstCleanupReleased.promise;
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "second-cleanup",
+          cleanup() {
+            secondCleanupCalled.resolve();
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+    ];
+    const next = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(previous);
+    setActivePluginRegistry(next);
+    // The race starts inside cleanup; cold lazy imports are not a cleanup deadline.
+    await firstCleanupStarted.promise;
+
+    refresh(next);
+    firstCleanupReleased.resolve();
+
+    await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
+  });
+
   it("includes plugin ids imported before registration failed", () => {
     recordImportedPluginId("broken-plugin");
 
     expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
+  });
+
+  it("clears the root only after its host cleanup completes", async () => {
+    let cleanupCount = 0;
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({ id: "cleanup-on-close", name: "Cleanup on close", status: "loaded" }),
+    );
+    registry.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-on-close",
+        pluginName: "Cleanup on close",
+        lifecycle: {
+          id: "cleanup-on-close",
+          cleanup() {
+            cleanupCount += 1;
+          },
+        },
+        source: "/virtual/cleanup-on-close/index.ts",
+        rootDir: "/virtual/cleanup-on-close",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBeNull();
+    expect(cleanupCount).toBe(1);
+  });
+
+  it("clears plugin host run contexts with the active registry", async () => {
+    setPluginRunContext({
+      pluginId: "runtime-test",
+      patch: { runId: "run-1", namespace: "state", value: { ready: true } },
+    });
+
+    await clearActivePluginRegistry();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "runtime-test",
+        get: { runId: "run-1", namespace: "state" },
+      }),
+    ).toBeUndefined();
   });
 });

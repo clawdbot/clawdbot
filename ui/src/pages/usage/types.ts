@@ -1,0 +1,197 @@
+import type { CostUsageSummary } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
+// Control UI view renders usageTypes screen content.
+import type {
+  CostUsageDailyEntry,
+  ProviderUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+} from "./data-types.ts";
+import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
+
+export type UsageSessionEntry = SessionsUsageEntry;
+export type UsageTotals = SessionsUsageTotals;
+export type CostDailyEntry = CostUsageDailyEntry;
+export type UsageAggregates = SessionsUsageResult["aggregates"];
+
+export type UsageContextDetail = {
+  weight: UsageSessionEntry["contextWeight"];
+  loading: boolean;
+  status: PanelRefreshStatus;
+};
+
+export type UsageJsonExport = {
+  totals: UsageTotals | null;
+  sessions: UsageSessionEntry[];
+  daily: CostDailyEntry[];
+  aggregates: UsageAggregates;
+};
+
+export type UsageRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  query: {
+    startDate: string;
+    endDate: string;
+    scope: "instance" | "family";
+    timeZone: "local" | "utc";
+    agentId: string | null;
+  };
+  result: SessionsUsageResult | null;
+  costSummary: CostUsageSummary | null;
+  providerUsage: ProviderUsageSnapshot;
+  loadedAtMs: number | null;
+  error: string | null;
+};
+
+export type UsageColumnId =
+  | "channel"
+  | "agent"
+  | "provider"
+  | "model"
+  | "messages"
+  | "tools"
+  | "errors"
+  | "duration";
+
+export const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
+  "channel",
+  "agent",
+  "provider",
+  "model",
+  "messages",
+  "tools",
+  "errors",
+  "duration",
+];
+
+export type TimeSeriesPoint = SessionUsageTimePoint;
+
+type UsageDataState = {
+  loading: boolean;
+  exporting: boolean;
+  error: string | null;
+  sessions: UsageSessionEntry[];
+  agents: string[];
+  sessionsLimitReached: boolean; // True if 1000 session cap was hit
+  totals: UsageTotals | null;
+  aggregates: UsageAggregates | null;
+  costDaily: CostDailyEntry[];
+  cacheRefresh: UsageRetryState;
+  providerUsage: ProviderUsageSummary["providers"];
+  /** The gateway never converged the refresh; the empty list is not an answer. */
+  providerUsageStalled: boolean;
+  providerUsageUnavailable: boolean;
+};
+
+export type UsageFilterState = {
+  startDate: string;
+  endDate: string;
+  scope: "instance" | "family";
+  selectedSessions: string[]; // Support multiple session selection
+  selectedDays: string[]; // Support multiple day selection
+  selectedHours: number[]; // Support multiple hour selection
+  agentId: string | null;
+  query: string;
+  queryDraft: string;
+  timeZone: "local" | "utc";
+};
+
+type UsageDisplayState = {
+  chartMode: "tokens" | "cost";
+  dailyChartMode: "total" | "by-type";
+  sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
+  sessionSortDir: "asc" | "desc";
+  recentSessions: string[];
+  sessionsTab: "all" | "recent";
+  visibleColumns: UsageColumnId[];
+  contextExpanded: boolean;
+  headerPinned: boolean;
+};
+
+type UsageDetailState = {
+  context: UsageContextDetail;
+  timeSeriesMode: "cumulative" | "per-turn";
+  timeSeriesBreakdownMode: "total" | "by-type";
+  timeSeries: { points: TimeSeriesPoint[] } | null;
+  timeSeriesLoading: boolean;
+  timeSeriesStatus: PanelRefreshStatus;
+  timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
+  timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
+  sessionLogs: SessionLogEntry[] | null;
+  sessionLogsLoading: boolean;
+  sessionLogsStatus: PanelRefreshStatus;
+  sessionLogsExpanded: boolean;
+  logFilters: {
+    roles: SessionLogRole[];
+    tools: string[];
+    hasTools: boolean;
+    query: string;
+  };
+};
+
+type UsageCallbacks = {
+  filters: {
+    onStartDateChange: (date: string) => void;
+    onEndDateChange: (date: string) => void;
+    onScopeChange: (scope: "instance" | "family") => void;
+    onAgentChange: (agentId: string | null) => void;
+    onRefresh: () => void;
+    onTimeZoneChange: (zone: "local" | "utc") => void;
+    onToggleHeaderPinned: () => void;
+    onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
+    onSelectHour: (hour: number, shiftKey: boolean) => void;
+    onClearDays: () => void;
+    onClearHours: () => void;
+    onClearSessions: () => void;
+    onClearFilters: () => void;
+    onQueryDraftChange: (query: string) => void;
+    onApplyQuery: () => void;
+    onClearQuery: () => void;
+  };
+  display: {
+    onExportJson: (data: UsageJsonExport) => void;
+    onChartModeChange: (mode: "tokens" | "cost") => void;
+    onDailyChartModeChange: (mode: "total" | "by-type") => void;
+    onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
+    onSessionSortDirChange: (dir: "asc" | "desc") => void;
+    onSessionsTabChange: (tab: "all" | "recent") => void;
+    onToggleColumn: (column: UsageColumnId) => void;
+  };
+  details: {
+    onToggleContextExpanded: () => void;
+    onToggleSessionLogsExpanded: () => void;
+    onLogFilterRolesChange: (next: SessionLogRole[]) => void;
+    onLogFilterToolsChange: (next: string[]) => void;
+    onLogFilterHasToolsChange: (next: boolean) => void;
+    onLogFilterQueryChange: (next: string) => void;
+    onLogFilterClear: () => void;
+    onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void;
+    onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
+    onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
+    onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
+  };
+};
+
+export type UsageProps = {
+  data: UsageDataState;
+  filters: UsageFilterState;
+  display: UsageDisplayState;
+  detail: UsageDetailState;
+  callbacks: UsageCallbacks;
+};
+
+export type SessionLogEntry = {
+  timestamp: number;
+  role: "user" | "assistant" | "tool" | "toolResult";
+  content: string;
+  tokens?: number;
+  cost?: number;
+};
+
+export type SessionLogRole = SessionLogEntry["role"];

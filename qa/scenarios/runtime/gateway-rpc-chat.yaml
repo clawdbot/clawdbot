@@ -1,0 +1,29 @@
+title: Gateway chat RPC lifecycle
+
+scenario:
+  id: gateway-rpc-chat
+  surface: gateway
+  category: gateway.gateway-rpc-apis-and-events
+  coverage:
+    primary:
+      - gateway.chat-apis
+  objective: Verify the Gateway chat RPC lifecycle and session-settings authority through a real WebSocket while only the downstream model provider is mocked.
+  successCriteria:
+    - "chat.send accepts a user turn and returns its run identifier."
+    - "agent.wait observes the same run reaching terminal success."
+    - "chat.history returns the persisted user turn and downstream assistant reply."
+    - "A read-only admitted turn reaches the embedded runtime but its attempted filesystem write is denied before final I/O."
+    - "A stale settings-bound send is rejected before provider dispatch or transcript insertion."
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/server-methods/chat.ts
+    - src/gateway/server-methods/chat-send-admission.ts
+    - src/auto-reply/reply/get-reply-run-execute.ts
+    - src/gateway/server-methods/agent.ts
+    - test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts
+    summary: Run chat.send, agent.wait, chat.history, and the admitted session-settings fence across a real Gateway WebSocket with deterministic downstream model output.

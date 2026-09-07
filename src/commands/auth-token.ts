@@ -1,4 +1,2 @@
-export {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
-  validateAnthropicSetupToken,
-} from "../plugins/provider-auth-token.js";
+// Public command-level barrel for provider setup-token validation helpers.
+export { validateAnthropicSetupToken } from "../plugins/provider-auth-token.js";

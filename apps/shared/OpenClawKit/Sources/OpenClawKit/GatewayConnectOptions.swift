@@ -1,0 +1,124 @@
+import OpenClawProtocol
+
+public enum OpenClawGatewayClientCapability {
+    public static let agentKind = "agent-kind"
+    public static let inlineWidgets = "inline-widgets"
+    public static let usageRefreshing = "usage-refreshing"
+}
+
+public struct GatewayConnectOptions: Sendable {
+    public var role: String
+    public var scopes: [String]
+    public var scopesAreExplicit: Bool
+    public var caps: [String]
+    public var commands: [String]
+    public var computerUse: AnyCodable?
+    public var pathEnv: String?
+    public var permissions: [String: Bool]
+    public var clientId: String
+    public var clientMode: String
+    public var clientDisplayName: String?
+    public var deviceIdentityProfile: GatewayDeviceIdentityProfile
+    /// When false, the connection omits the signed device identity payload and cannot use
+    /// device-scoped auth (role/scope upgrades will require pairing). Keep this true for
+    /// role/scoped sessions such as operator UI clients.
+    public var includeDeviceIdentity: Bool
+    /// Set false for an endpoint handoff whose explicit credentials (including none) must be
+    /// tried without loading a previously stored device token.
+    public var allowStoredDeviceAuth: Bool
+    /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
+    /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
+    public var deviceAuthGatewayID: String?
+
+    public init(
+        role: String,
+        scopes: [String],
+        scopesAreExplicit: Bool = false,
+        caps: [String],
+        commands: [String],
+        computerUse: AnyCodable? = nil,
+        pathEnv: String? = nil,
+        permissions: [String: Bool],
+        clientId: String,
+        clientMode: String,
+        clientDisplayName: String?,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
+        includeDeviceIdentity: Bool = true,
+        allowStoredDeviceAuth: Bool = true,
+        deviceAuthGatewayID: String? = nil)
+    {
+        self.role = role
+        self.scopes = scopes
+        self.scopesAreExplicit = scopesAreExplicit
+        self.caps = caps
+        self.commands = commands
+        self.computerUse = computerUse
+        self.pathEnv = pathEnv
+        self.permissions = permissions
+        self.clientId = clientId
+        self.clientMode = clientMode
+        self.clientDisplayName = clientDisplayName
+        self.deviceIdentityProfile = deviceIdentityProfile
+        self.includeDeviceIdentity = includeDeviceIdentity
+        self.allowStoredDeviceAuth = allowStoredDeviceAuth
+        self.deviceAuthGatewayID = deviceAuthGatewayID
+    }
+}
+
+public struct GatewayNodeSessionCredentials: Sendable, Equatable {
+    public let token: String?
+    public let bootstrapToken: String?
+    public let password: String?
+
+    public init(
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.token = token
+        self.bootstrapToken = bootstrapToken
+        self.password = password
+    }
+}
+
+public enum GatewayAuthSource: String, Sendable {
+    case deviceToken = "device-token"
+    case sharedToken = "shared-token"
+    case bootstrapToken = "bootstrap-token"
+    case password
+    case none
+}
+
+/// Opaque binding for the exact credentials selected by one live Gateway socket.
+/// The credential itself never leaves `GatewayChannelActor`.
+public struct GatewayAuthBinding: Equatable, Sendable {
+    public let source: GatewayAuthSource
+    public let credentialFingerprint: String?
+}
+
+extension GatewayConnectOptions {
+    var allowsDeviceAuthPersistence: Bool {
+        // Legacy callers must rotate credentials in the same unscoped namespace they read.
+        // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.
+        self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil
+    }
+
+    /// Additive connect-frame fields, sent only when this node declares them.
+    /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
+    func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
+        if !self.commands.isEmpty {
+            params["commands"] = OpenClawProtocol.AnyCodable(self.commands)
+        }
+        if let computerUse = self.computerUse {
+            params["computerUse"] = computerUse
+        }
+        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pathEnv.isEmpty
+        {
+            params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
+        }
+        if !self.permissions.isEmpty {
+            params["permissions"] = OpenClawProtocol.AnyCodable(self.permissions)
+        }
+    }
+}

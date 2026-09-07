@@ -1,29 +1,8 @@
-import {
-  defineBundledChannelEntry,
-  type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/channel-entry-contract";
+// Line plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
-
-let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
-
-async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLineCardCommand> {
-  lineCardCommandPromise ??= (async () => {
-    let registered: RegisteredLineCardCommand | null = null;
-    const { registerLineCardCommand } = await import("./src/card-command.js");
-    registerLineCardCommand({
-      ...api,
-      registerCommand(command: RegisteredLineCardCommand) {
-        registered = command;
-      },
-    });
-    if (!registered) {
-      throw new Error("LINE card command registration unavailable");
-    }
-    return registered;
-  })();
-  return await lineCardCommandPromise;
-}
+const loadLineCardCommand = createLazyRuntimeModule(() => import("./src/card-command.js"));
 
 export default defineBundledChannelEntry({
   id: "line",
@@ -31,7 +10,7 @@ export default defineBundledChannelEntry({
   description: "LINE Messaging API channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "linePlugin",
   },
   runtime: {
@@ -41,12 +20,13 @@ export default defineBundledChannelEntry({
   registerFull(api) {
     api.registerCommand({
       name: "card",
-      description: "Send a rich card message (LINE).",
+      description: "Send a rich card message.",
+      channels: ["line"],
       acceptsArgs: true,
       requireAuth: false,
       async handler(ctx) {
-        const command = await loadLineCardCommand(api);
-        return await command.handler(ctx);
+        const { handleLineCardCommand } = await loadLineCardCommand();
+        return await handleLineCardCommand(ctx.args);
       },
     });
   },

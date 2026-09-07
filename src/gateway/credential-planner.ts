@@ -1,15 +1,22 @@
+// Gateway credential planning helpers.
+// Classifies local/remote auth inputs before SecretRef resolution.
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
+import {
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type GatewayCredentialInputPath =
+type GatewayCredentialInputPath =
   | "gateway.auth.token"
   | "gateway.auth.password"
   | "gateway.remote.token"
   | "gateway.remote.password";
 
-export type GatewayConfiguredCredentialInput = {
+type GatewayConfiguredCredentialInput = {
   path: GatewayCredentialInputPath;
   configured: boolean;
   value?: string;
@@ -17,6 +24,7 @@ export type GatewayConfiguredCredentialInput = {
   hasSecretRef: boolean;
 };
 
+/** Precomputed Gateway credential surfaces used by startup, secret resolution, and clients. */
 export type GatewayCredentialPlan = {
   configuredMode: "local" | "remote";
   authMode?: string;
@@ -43,6 +51,7 @@ export type GatewayCredentialPlan = {
 
 type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+/** Normalize optional Gateway credential strings to nonempty values. */
 export const trimToUndefined = normalizeOptionalString;
 
 /**
@@ -60,19 +69,33 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN));
-}
-
-export function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD));
-}
-
+/** Classify one configured credential input without resolving secret refs. */
 function resolveConfiguredGatewayCredentialInput(params: {
+  config: OpenClawConfig;
   value: unknown;
   defaults?: GatewaySecretDefaults;
   path: GatewayCredentialInputPath;
 }): GatewayConfiguredCredentialInput {
+  const resolutionFacts = getConfigResolutionFacts(params.config);
+  if (
+    hasUnresolvedConfigPath(params.config, params.path) ||
+    getAuthoredConfigSecretRef(params.config, params.path)
+  ) {
+    return {
+      path: params.path,
+      configured: true,
+      refPath: params.path,
+      hasSecretRef: false,
+    };
+  }
+  if (resolutionFacts !== null && typeof params.value === "string") {
+    return {
+      path: params.path,
+      configured: Boolean(trimToUndefined(params.value)),
+      value: trimToUndefined(params.value),
+      hasSecretRef: false,
+    };
+  }
   const ref = resolveSecretInputRef({
     value: params.value,
     defaults: params.defaults,
@@ -86,6 +109,7 @@ function resolveConfiguredGatewayCredentialInput(params: {
   };
 }
 
+/** Build the shared credential plan for Gateway startup, local auth, and remote client auth. */
 export function createGatewayCredentialPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -100,35 +124,41 @@ export function createGatewayCredentialPlan(params: {
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   const localToken = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: gateway?.auth?.token,
     defaults,
     path: "gateway.auth.token",
   });
   const localPassword = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: gateway?.auth?.password,
     defaults,
     path: "gateway.auth.password",
   });
   const remoteToken = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: remote?.token,
     defaults,
     path: "gateway.remote.token",
   });
   const remotePassword = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: remote?.password,
     defaults,
     path: "gateway.remote.password",
   });
 
+  // The local token surface is disabled by password/none/trusted-proxy modes so
+  // token refs do not get resolved for auth modes that cannot consume them.
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
+    authMode === "trusted-proxy" ||
+    (authMode !== "token" && authMode !== "none" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
-    !envToken &&
     (authMode === "token" ||
       (authMode === undefined && !(envPassword || localPassword.configured)));
 
@@ -136,9 +166,14 @@ export function createGatewayCredentialPlan(params: {
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
+  // Remote credential surfaces are considered active when the gateway is used
+  // remotely or when local auth may be borrowed for a published Tailscale URL.
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
+  // Remote credentials may borrow local auth credentials only when the remote
+  // surface exists but no explicit remote/env candidate can satisfy the mode.
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
+  const remotePasswordFallbackActive =
+    authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",

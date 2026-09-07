@@ -1,0 +1,121 @@
+import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { isDefinitiveRunLifecycle } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  capLiveExecResult,
+  sanitizeToolArgs,
+  sanitizeToolResult,
+} from "../../agents/embedded-agent-tool-results.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
+
+export type WorkerLiveTrajectoryTarget = {
+  agentId?: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
+
+export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+
+export function prepareWorkerLiveEventData(
+  event: WorkerLiveEventParams["event"],
+): Record<string, unknown> {
+  const payload = structuredClone(event.payload) as Record<string, unknown>;
+  if (event.kind !== "tool") {
+    return payload;
+  }
+  const toolName = normalizeToolPolicyName(event.payload.name);
+  payload.name = toolName;
+  if (event.payload.phase === "start") {
+    payload.args = sanitizeToolArgs(event.payload.args);
+  } else if (event.payload.phase === "update") {
+    const partialResult = sanitizeToolResult(event.payload.partialResult);
+    payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
+  } else {
+    const result = sanitizeToolResult(event.payload.result);
+    payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
+  }
+  return payload;
+}
+
+export function isDefinitiveWorkerTerminalEvent(event: WorkerLiveEventParams["event"]): boolean {
+  return (
+    event.kind === "lifecycle" &&
+    isDefinitiveRunLifecycle({ phase: event.payload.phase, data: event.payload })
+  );
+}
+
+export function createWorkerLiveTrajectoryRecorder(params: {
+  runId: string;
+  target: WorkerLiveTrajectoryTarget;
+}): WorkerLiveTrajectoryRecorder {
+  return createTrajectoryRuntimeRecorder({
+    runId: params.runId,
+    sessionId: params.target.sessionId,
+    sessionKey: params.target.sessionKey,
+    sessionTarget: {
+      agentId: params.target.agentId ?? "main",
+      sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
+      storePath: params.target.storePath,
+    },
+  });
+}
+
+export function recordWorkerLiveTrajectoryEvent(
+  recorder: WorkerLiveTrajectoryRecorder,
+  event: WorkerLiveEventParams["event"],
+): void {
+  if (!recorder) {
+    return;
+  }
+  // Live listeners can mutate their copy; prepare independent diagnostics only
+  // for phases that the trajectory records.
+  if (event.kind === "tool") {
+    if (event.payload.phase === "start") {
+      recorder.recordEvent("tool.call", prepareWorkerLiveEventData(event));
+    } else if (event.payload.phase === "result") {
+      recorder.recordEvent("tool.result", {
+        ...prepareWorkerLiveEventData(event),
+        success: !event.payload.isError,
+      });
+    } else {
+      return;
+    }
+  } else if (event.kind === "approval") {
+    recorder.recordEvent(`approval.${event.payload.phase}`, prepareWorkerLiveEventData(event));
+  } else if (event.kind === "lifecycle") {
+    if (event.payload.phase === "start") {
+      recorder.recordEvent("session.started", {
+        ...prepareWorkerLiveEventData(event),
+        backend: "cloud-worker",
+      });
+    } else if (event.payload.phase === "fallback_step") {
+      recorder.recordEvent("model.fallback_step", prepareWorkerLiveEventData(event));
+    } else if (event.payload.phase === "finishing") {
+      recorder.recordEvent("model.finishing", prepareWorkerLiveEventData(event));
+    } else if (
+      (event.payload.phase === "end" || event.payload.phase === "error") &&
+      isDefinitiveWorkerTerminalEvent(event)
+    ) {
+      const data = prepareWorkerLiveEventData(event);
+      const failed = event.payload.phase === "error";
+      const interrupted = event.payload.aborted === true;
+      recorder.recordEvent("model.completed", {
+        ...data,
+        ...(failed ? { promptError: event.payload.error } : {}),
+      });
+      recorder.recordEvent("session.ended", {
+        ...data,
+        status: interrupted ? "interrupted" : failed ? "error" : "success",
+      });
+    } else {
+      return;
+    }
+  } else {
+    return;
+  }
+  // Live delivery is authoritative; trajectory diagnostics must never reject a
+  // worker event. SQLite flushing begins synchronously and failures stay isolated.
+  void recorder.flush().catch(() => undefined);
+}

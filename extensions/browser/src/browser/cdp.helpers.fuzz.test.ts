@@ -1,3 +1,6 @@
+// Browser tests cover cdp.helpers.fuzz plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
@@ -5,8 +8,9 @@ import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
-  parseBrowserHttpUrl,
+  redactCdpErrorText,
   redactCdpUrl,
+  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 
 /**
@@ -41,7 +45,8 @@ function randInt(rng: () => number, loInclusive: number, hiInclusive: number): n
 }
 
 function pick<T>(rng: () => number, arr: readonly T[]): T {
-  return arr[randInt(rng, 0, arr.length - 1)];
+  const index = randInt(rng, 0, arr.length - 1);
+  return expectDefined(arr[index], `fuzz choice at index ${index}`);
 }
 
 function randHost(rng: () => number): string {
@@ -133,8 +138,8 @@ describe("fuzz: isWebSocketUrl", () => {
       try {
         // Only assert the property when the URL itself parses; assign
         // the result to satisfy eslint's no-new rule.
-        const _parsed = new URL(url);
-        void _parsed;
+        const parsedValue = new URL(url);
+        void parsedValue;
       } catch {
         continue;
       }
@@ -200,7 +205,7 @@ describe("fuzz: isDirectCdpWebSocketEndpoint", () => {
     }
   });
 
-  it("never throws on random input (including invalid URLs)", () => {
+  it("returns booleans for random input including invalid URLs", () => {
     const rng = makeRng(0x2004);
     const junkPool = [
       "",
@@ -215,7 +220,6 @@ describe("fuzz: isDirectCdpWebSocketEndpoint", () => {
     ];
     for (let i = 0; i < ITERATIONS; i += 1) {
       const input = rng() < 0.5 ? pick(rng, junkPool) : String.fromCharCode(randInt(rng, 0, 0x7f));
-      expect(() => isDirectCdpWebSocketEndpoint(input)).not.toThrow();
       expect(typeof isDirectCdpWebSocketEndpoint(input)).toBe("boolean");
     }
   });
@@ -271,12 +275,12 @@ describe("fuzz: normalizeCdpHttpBaseForJsonEndpoints", () => {
     }
   });
 
-  it("falls back safely for non-URL-ish inputs (never throws)", () => {
+  it("returns normalized strings for non-URL-ish inputs", () => {
     const rng = makeRng(0x3003);
     // These inputs either trigger the catch branch (empty / "garbage" /
     // bare "ws://" / "wss://") or are accepted by WHATWG URL as
     // special-scheme absolute URLs (e.g. "ws:host/path" becomes
-    // "ws://host/path"). Either way the helper must never throw.
+    // "ws://host/path"). Both paths must return strings.
     const junk = [
       "ws:/devtools/browser/abc",
       "wss:/devtools/browser/abc",
@@ -289,7 +293,6 @@ describe("fuzz: normalizeCdpHttpBaseForJsonEndpoints", () => {
     ];
     for (let i = 0; i < ITERATIONS; i += 1) {
       const input = pick(rng, junk);
-      expect(() => normalizeCdpHttpBaseForJsonEndpoints(input)).not.toThrow();
       const out = normalizeCdpHttpBaseForJsonEndpoints(input);
       expect(typeof out).toBe("string");
       // Scheme swap invariant: whatever branch ran, ws:/wss: never
@@ -351,6 +354,12 @@ describe("fuzz: parseBrowserHttpUrl", () => {
       expect(() => parseBrowserHttpUrl(url, "test")).toThrow(/must be http\(s\) or ws\(s\)/);
     }
   });
+
+  it("rejects explicitly configured port zero", () => {
+    for (const scheme of ["http", "https", "ws", "wss"]) {
+      expect(() => parseBrowserHttpUrl(`${scheme}://127.0.0.1:0`, "test")).toThrow(/invalid port/);
+    }
+  });
 });
 
 describe("fuzz: redactCdpUrl", () => {
@@ -377,14 +386,34 @@ describe("fuzz: redactCdpUrl", () => {
     expect(redactCdpUrl("   ")).toBe("");
   });
 
-  it("falls back to redactSensitiveText for non-URL-ish inputs (never throws)", () => {
+  it("falls back to redactSensitiveText for non-URL-ish inputs", () => {
     const rng = makeRng(0x5002);
     for (let i = 0; i < ITERATIONS; i += 1) {
       const junk = pick(rng, ["not-a-url", "http://", "ws://", "::::", "Bearer ey.SECRET.xyz"]);
-      expect(() => redactCdpUrl(junk)).not.toThrow();
       const out = redactCdpUrl(junk);
       expect(typeof out).toBe("string");
     }
+  });
+});
+
+describe("CDP credential boundaries", () => {
+  it("moves URL userinfo out of dependency-facing connection URLs", () => {
+    expect(
+      stripCdpUrlCredentials(
+        "wss://alice:p%40ss@browserless.example/devtools/browser/id?token=keep-query",
+      ),
+    ).toBe("wss://browserless.example/devtools/browser/id?token=keep-query");
+  });
+
+  it("redacts embedded CDP URL credentials from dependency error prose", () => {
+    const message = redactCdpErrorText(
+      "connect failed for wss://alice:browser-password@browserless.example/devtools/browser/id?token=browser-token",
+    );
+
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain("alice");
+    expect(message).not.toContain("browser-password");
+    expect(message).not.toContain("browser-token");
   });
 });
 
@@ -405,7 +434,7 @@ describe("fuzz: appendCdpPath", () => {
 });
 
 describe("fuzz: getHeadersWithAuth", () => {
-  it("never throws and always returns a mergedHeaders object", () => {
+  it("always returns a mergedHeaders object", () => {
     const rng = makeRng(0x7001);
     for (let i = 0; i < ITERATIONS; i += 1) {
       const withAuth = rng() < 0.3;

@@ -1,26 +1,40 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Tavily tests cover tavily tools plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TAVILY_BASE_URL,
-  DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
-  DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
-  resolveTavilySearchConfig,
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
 
 const { runTavilySearch, runTavilyExtract } = vi.hoisted(() => ({
   runTavilySearch: vi.fn(async (params: Record<string, unknown>) => params),
-  runTavilyExtract: vi.fn(async (params: unknown) => ({ ok: true, params })),
+  runTavilyExtract: vi.fn(async (params: Record<string, unknown>) => ({ ok: true, params })),
 }));
+
+type TavilyExtractParams = {
+  cfg?: unknown;
+  urls?: string[];
+  query?: string;
+  chunksPerSource?: number;
+};
 
 vi.mock("./tavily-client.js", () => ({
   runTavilySearch,
   runTavilyExtract,
 }));
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
 
 function fakeApi(): OpenClawPluginApi {
   return {
@@ -30,23 +44,28 @@ function fakeApi(): OpenClawPluginApi {
 
 describe("tavily tools", () => {
   let createTavilyWebSearchProvider: typeof import("./tavily-search-provider.js").createTavilyWebSearchProvider;
+  let createTavilyContractWebSearchProvider: typeof import("../web-search-contract-api.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
-  let tavilyClientTesting: typeof import("./tavily-client.js").__testing;
+  let tavilyPlugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
     ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
+    ({ createTavilyWebSearchProvider: createTavilyContractWebSearchProvider } =
+      await import("../web-search-contract-api.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
-    ({ __testing: tavilyClientTesting } =
-      await vi.importActual<typeof import("./tavily-client.js")>("./tavily-client.js"));
+    ({ default: tavilyPlugin } = await import("../index.js"));
   });
 
   beforeEach(() => {
     runTavilySearch.mockReset();
     runTavilySearch.mockImplementation(async (params: Record<string, unknown>) => params);
     runTavilyExtract.mockReset();
-    runTavilyExtract.mockImplementation(async (params: unknown) => ({ ok: true, params }));
+    runTavilyExtract.mockImplementation(async (params: Record<string, unknown>) => ({
+      ok: true,
+      params,
+    }));
     vi.unstubAllEnvs();
   });
 
@@ -88,6 +107,86 @@ describe("tavily tools", () => {
     });
   });
 
+  it("keeps the contract web search provider executable", async () => {
+    const provider = createTavilyContractWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: "contract" },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected contract provider tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "runtime registration",
+      count: 3,
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: "contract" },
+      query: "runtime registration",
+      maxResults: 3,
+    });
+    expect(result).toEqual({
+      cfg: { test: "contract" },
+      query: "runtime registration",
+      maxResults: 3,
+    });
+  });
+
+  it.each(["runtime", "public contract"] as const)(
+    "forwards cancellation through the %s provider registration",
+    async (registration) => {
+      const provider =
+        registration === "runtime"
+          ? createTavilyWebSearchProvider()
+          : createTavilyContractWebSearchProvider();
+      const tool = provider.createTool({ config: { test: true } } as never);
+      expect(tool).not.toBeNull();
+      const controller = new AbortController();
+
+      await tool!.execute({ query: registration }, { signal: controller.signal });
+
+      expect(runTavilySearch).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      const reason = new Error(`${registration} cancelled`);
+      controller.abort(reason);
+      runTavilySearch.mockClear();
+      await expect(
+        tool!.execute({ query: registration }, { signal: controller.signal }),
+      ).rejects.toBe(reason);
+      expect(runTavilySearch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("normalizes generic Tavily search count before dispatch", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "weather sf",
+      count: "7",
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: 7,
+    });
+    await expect(
+      tool.execute({
+        query: "weather sf",
+        count: "7.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 20");
+  });
+
   it("normalizes optional parameters before invoking Tavily", async () => {
     runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,
@@ -104,8 +203,8 @@ describe("tavily tools", () => {
       max_results: 5,
       include_answer: true,
       time_range: "week",
-      include_domains: ["docs.openclaw.ai", "", "openclaw.ai"],
-      exclude_domains: ["bad.example", ""],
+      include_domains: [" docs.openclaw.ai ", "   ", "openclaw.ai"],
+      exclude_domains: [" bad.example ", ""],
     });
 
     expect(runTavilySearch).toHaveBeenCalledWith({
@@ -119,25 +218,133 @@ describe("tavily tools", () => {
       includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
       excludeDomains: ["bad.example"],
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "best docs",
-          searchDepth: "advanced",
-          topic: "news",
-          maxResults: 5,
-          includeAnswer: true,
-          timeRange: "week",
-          includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
-          excludeDomains: ["bad.example"],
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "best docs",
+        searchDepth: "advanced",
+        topic: "news",
+        maxResults: 5,
+        includeAnswer: true,
+        timeRange: "week",
+        includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
+        excludeDomains: ["bad.example"],
+      },
+    };
+    expect(result).toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
+    });
+  });
+
+  it.each(["search", "extract"] as const)(
+    "forwards exact standalone Tavily %s cancellation into its network owner",
+    async (operation) => {
+      const tool =
+        operation === "search"
+          ? createTavilySearchTool(fakeApi())
+          : createTavilyExtractTool(fakeApi());
+      const args =
+        operation === "search"
+          ? { query: "standalone cancellation" }
+          : { urls: ["https://example.com"] };
+      const controller = new AbortController();
+
+      await tool.execute("call-cancel", args, controller.signal);
+
+      const networkOwner = operation === "search" ? runTavilySearch : runTavilyExtract;
+      expect(networkOwner).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      controller.abort(new Error(`${operation} preflight aborted`));
+      await expect(tool.execute("call-preflight", args, controller.signal)).rejects.toBe(
+        controller.signal.reason,
+      );
+      expect(networkOwner).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("late-binds dedicated tools to the resolved runtime config snapshot", async () => {
+    const rawConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "exec", provider: "default", id: "printf resolved-key" },
+              },
+            },
+          },
         },
       },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-key",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const registeredTools: Array<Parameters<OpenClawPluginApi["registerTool"]>[0]> = [];
+    const registeredOptions: Array<Parameters<OpenClawPluginApi["registerTool"]>[1]> = [];
+    const api = createTestPluginApi({
+      config: rawConfig,
+      registerTool(tool, opts) {
+        registeredTools.push(tool);
+        registeredOptions.push(opts);
+      },
     });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
+
+    tavilyPlugin.register(api);
+    const searchFactory = registeredTools.find(
+      (tool, index) =>
+        registeredOptions[index]?.name === "tavily_search" && typeof tool === "function",
+    );
+    const extractFactory = registeredTools.find(
+      (tool, index) =>
+        registeredOptions[index]?.name === "tavily_extract" && typeof tool === "function",
+    );
+    if (typeof searchFactory !== "function" || typeof extractFactory !== "function") {
+      throw new Error("Expected Tavily tools to register as runtime-context factories");
+    }
+
+    const searchTool = searchFactory({
+      config: rawConfig,
+      runtimeConfig,
     });
+    const extractTool = extractFactory({
+      config: rawConfig,
+      getRuntimeConfig: () => runtimeConfig,
+    });
+    if (Array.isArray(searchTool) || !searchTool || Array.isArray(extractTool) || !extractTool) {
+      throw new Error("Expected single Tavily tool definitions");
+    }
+    expect(searchTool.resultContentSource).toBe("network");
+    expect(extractTool.resultContentSource).toBe("network");
+
+    await searchTool.execute("search-call", { query: "openclaw" });
+    await extractTool.execute("extract-call", { urls: ["https://example.com"] });
+
+    const searchParams = requireFirstMockArg(runTavilySearch, "Tavily search params") as Record<
+      string,
+      unknown
+    >;
+    expect(searchParams.cfg).toBe(runtimeConfig);
+    expect(searchParams.query).toBe("openclaw");
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toBe(runtimeConfig);
+    expect(extractParams.urls).toEqual(["https://example.com"]);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {
@@ -149,21 +356,23 @@ describe("tavily tools", () => {
       config: { env: "test" },
     } as never);
 
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "simple",
+        includeAnswer: false,
+      },
+    };
     await expect(
       searchTool.execute("call-2", {
         query: "simple",
-        include_domains: [""],
+        include_domains: ["   "],
         exclude_domains: [],
       }),
-    ).resolves.toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "simple",
-          includeAnswer: false,
-        },
-      },
+    ).resolves.toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
     });
 
     const extractTool = createTavilyExtractTool(fakeApi());
@@ -173,14 +382,14 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    expect(runTavilyExtract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-        urls: ["https://example.com"],
-        query: "pricing",
-        chunksPerSource: 2,
-      }),
-    );
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toEqual({});
+    expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(extractParams.query).toBe("pricing");
+    expect(extractParams.chunksPerSource).toBe(2);
   });
 
   it("rejects chunks_per_source without query", async () => {
@@ -193,6 +402,63 @@ describe("tavily tools", () => {
       }),
     ).rejects.toThrow("tavily_extract requires query when chunks_per_source is set.");
 
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
+  it("rejects blank extract URLs before Tavily calls and trims valid URLs", async () => {
+    const tool = createTavilyExtractTool(fakeApi());
+
+    await expect(
+      tool.execute("extract-call", {
+        urls: ["   "],
+      }),
+    ).rejects.toThrow("tavily_extract requires at least one URL.");
+
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+
+    await tool.execute("extract-call", {
+      urls: [" https://example.com/article "],
+    });
+
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.urls).toEqual(["https://example.com/article"]);
+  });
+
+  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
+    const searchTool = createTavilySearchTool(fakeApi());
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 5.5,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 21,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+
+    const extractTool = createTavilyExtractTool(fakeApi());
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 2.5,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 6,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+
+    expect(runTavilySearch).not.toHaveBeenCalled();
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
@@ -215,10 +481,6 @@ describe("tavily tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveTavilySearchConfig(cfg)).toEqual({
-      apiKey: "plugin-key",
-      baseUrl: "https://plugin.tavily.test",
-    });
     expect(resolveTavilyApiKey(cfg)).toBe("plugin-key");
     expect(resolveTavilyBaseUrl(cfg)).toBe("https://plugin.tavily.test");
   });
@@ -230,34 +492,16 @@ describe("tavily tools", () => {
     expect(resolveTavilyApiKey()).toBe("env-key");
     expect(resolveTavilyBaseUrl()).toBe("https://env.tavily.test");
     expect(resolveTavilyBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_TAVILY_BASE_URL);
-    expect(resolveTavilySearchTimeoutSeconds()).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
-    expect(resolveTavilyExtractTimeoutSeconds()).toBe(DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS);
+    expect(resolveTavilySearchTimeoutSeconds()).toBe(30);
+    expect(resolveTavilyExtractTimeoutSeconds()).toBe(60);
   });
 
   it("accepts positive numeric timeout overrides and floors them", () => {
     expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
-    expect(resolveTavilySearchTimeoutSeconds(0)).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
-    expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(
-      DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
-    );
-  });
-
-  it("appends endpoints to reverse-proxy base urls", () => {
-    expect(tavilyClientTesting.resolveEndpoint("https://proxy.example/api/tavily", "/search")).toBe(
-      "https://proxy.example/api/tavily/search",
-    );
-    expect(
-      tavilyClientTesting.resolveEndpoint("https://proxy.example/api/tavily/", "/extract"),
-    ).toBe("https://proxy.example/api/tavily/extract");
-  });
-
-  it("falls back to the default host for invalid base urls", () => {
-    expect(tavilyClientTesting.resolveEndpoint("not a url", "/search")).toBe(
-      "https://api.tavily.com/search",
-    );
-    expect(tavilyClientTesting.resolveEndpoint("", "/extract")).toBe(
-      "https://api.tavily.com/extract",
-    );
+    expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
+    expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
+    expect(resolveTavilySearchTimeoutSeconds(0)).toBe(30);
+    expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(60);
   });
 });

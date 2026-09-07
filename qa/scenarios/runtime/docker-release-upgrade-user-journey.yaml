@@ -1,0 +1,35 @@
+title: Docker release upgrade user journey
+
+scenario:
+  id: docker-release-upgrade-user-journey
+  surface: containers
+  category: containers.image-release-and-validation
+  coverage:
+    primary:
+      - containers.docker-release-workflow
+      - containers.release-path-install
+  objective: Verify the documented external package-manager installation and fresh Doctor transition preserves a published baseline and completes the core release journey.
+  successCriteria:
+    - A published baseline installs and is configured with mock provider and local plugin state.
+    - The baseline Gateway stops through its test owner and a verified backup exists before candidate installation.
+    - The receipt names external package-manager installation and records that no internal self-update was attempted.
+    - The exact candidate package replaces the baseline through its package manager and fresh Doctor completes migration.
+    - The candidate Gateway reads retained baseline and new candidate user and assistant messages from durable history.
+    - The upgraded install still passes agent, plugin CLI, channel status, outbound message, Gateway, and inbound reply checks.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/help/testing-updates-plugins.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/release-upgrade-user-journey-docker.sh
+    - scripts/e2e/lib/release-upgrade-user-journey/scenario.sh
+    - scripts/e2e/lib/external-package-transition.sh
+    - scripts/e2e/lib/external-package-transition.mjs
+    - scripts/e2e/lib/release-user-journey/assertions.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing release-upgrade-user-journey Docker E2E lane and records QA Lab evidence for release-path upgrade coverage.
+    args:
+      - --lane
+      - release-upgrade-user-journey

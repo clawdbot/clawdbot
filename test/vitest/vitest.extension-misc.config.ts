@@ -1,35 +1,11 @@
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
+// Vitest extension misc config wires the extension misc test shard.
+import { miscExtensionTestRoots } from "./vitest.extension-misc-paths.mjs";
 
-export default createScopedVitestConfig(
-  [
-    "arcee/**/*.test.ts",
-    "brave/**/*.test.ts",
-    "device-pair/**/*.test.ts",
-    "diagnostics-otel/**/*.test.ts",
-    "duckduckgo/**/*.test.ts",
-    "exa/**/*.test.ts",
-    "firecrawl/**/*.test.ts",
-    "fireworks/**/*.test.ts",
-    "kilocode/**/*.test.ts",
-    "litellm/**/*.test.ts",
-    "llm-task/**/*.test.ts",
-    "lobster/**/*.test.ts",
-    "opencode/**/*.test.ts",
-    "opencode-go/**/*.test.ts",
-    "openshell/**/*.test.ts",
-    "perplexity/**/*.test.ts",
-    "phone-control/**/*.test.ts",
-    "searxng/**/*.test.ts",
-    "synthetic/**/*.test.ts",
-    "tavily/**/*.test.ts",
-    "thread-ownership/**/*.test.ts",
-    "vercel-ai-gateway/**/*.test.ts",
-    "webhooks/**/*.test.ts",
-  ],
-  {
-    dir: "extensions",
-    name: "extension-misc",
-    passWithNoTests: true,
-    setupFiles: ["test/setup.extensions.ts"],
-  },
-);
+export function createExtensionMiscVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return createExtensionVitestConfig("misc", miscExtensionTestRoots, env);
+}
+
+export default createExtensionMiscVitestConfig();

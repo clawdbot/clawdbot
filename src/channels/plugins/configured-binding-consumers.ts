@@ -1,4 +1,10 @@
+/**
+ * Configured binding consumer registry.
+ *
+ * Stores target-family consumers that compile and materialize configured binding rules.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingRecordResolution,
@@ -7,11 +13,17 @@ import type {
 } from "./binding-types.js";
 import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 
-export type ParsedConfiguredBindingSessionKey = {
+/**
+ * Parsed session-key facts used by configured binding consumers.
+ */
+type ParsedConfiguredBindingSessionKey = {
   channel: string;
   accountId: string;
 };
 
+/**
+ * Consumer that knows how to compile and materialize one configured binding target family.
+ */
 export type ConfiguredBindingConsumer = {
   id: string;
   supports: (binding: ConfiguredBindingRuleConfig) => boolean;
@@ -32,12 +44,21 @@ export type ConfiguredBindingConsumer = {
   }) => boolean;
 };
 
-const registeredConfiguredBindingConsumers = new Map<string, ConfiguredBindingConsumer>();
+const registeredConfiguredBindingConsumers = resolveGlobalMap<string, ConfiguredBindingConsumer>(
+  Symbol.for("openclaw.configuredBindingConsumers"),
+  "plugin-registry",
+);
 
+/**
+ * Lists registered configured binding consumers in registration order.
+ */
 export function listConfiguredBindingConsumers(): ConfiguredBindingConsumer[] {
   return [...registeredConfiguredBindingConsumers.values()];
 }
 
+/**
+ * Finds the first configured binding consumer that supports a raw binding rule.
+ */
 export function resolveConfiguredBindingConsumer(
   binding: ConfiguredBindingRuleConfig,
 ): ConfiguredBindingConsumer | null {
@@ -49,6 +70,9 @@ export function resolveConfiguredBindingConsumer(
   return null;
 }
 
+/**
+ * Registers a configured binding consumer idempotently by trimmed id.
+ */
 export function registerConfiguredBindingConsumer(consumer: ConfiguredBindingConsumer): void {
   const id = consumer.id.trim();
   if (!id) {
@@ -62,8 +86,4 @@ export function registerConfiguredBindingConsumer(consumer: ConfiguredBindingCon
     ...consumer,
     id,
   });
-}
-
-export function unregisterConfiguredBindingConsumer(id: string): void {
-  registeredConfiguredBindingConsumers.delete(id.trim());
 }

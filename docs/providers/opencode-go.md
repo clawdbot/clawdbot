@@ -6,27 +6,24 @@ read_when:
 title: "OpenCode Go"
 ---
 
-# OpenCode Go
+OpenCode Go is a separate paid subscription inside [OpenCode](/providers/opencode).
+It uses the same `OPENCODE_API_KEY` credential infrastructure as Zen, but a Zen
+key does not automatically include Go entitlement. Go keeps its own runtime
+provider id (`opencode-go`) so upstream per-model routing stays correct.
+OpenCode Go is bundled in the OpenClaw package for this release, so onboarding
+and configuration are sufficient; no separate plugin install is required.
 
-OpenCode Go is the Go catalog within [OpenCode](/providers/opencode).
-It uses the same `OPENCODE_API_KEY` as the Zen catalog, but keeps the runtime
-provider id `opencode-go` so upstream per-model routing stays correct.
-
-| Property         | Value                           |
-| ---------------- | ------------------------------- |
-| Runtime provider | `opencode-go`                   |
-| Auth             | `OPENCODE_API_KEY`              |
-| Parent setup     | [OpenCode](/providers/opencode) |
-
-## Supported models
-
-| Model ref                  | Name         |
-| -------------------------- | ------------ |
-| `opencode-go/kimi-k2.5`    | Kimi K2.5    |
-| `opencode-go/glm-5`        | GLM 5        |
-| `opencode-go/minimax-m2.5` | MiniMax M2.5 |
+| Property         | Value                                              |
+| ---------------- | -------------------------------------------------- |
+| Runtime provider | `opencode-go`                                      |
+| Plugin           | Bundled (`opencode-go`)                            |
+| Auth             | `OPENCODE_API_KEY` (alias: `OPENCODE_ZEN_API_KEY`) |
+| Parent setup     | [OpenCode](/providers/opencode)                    |
 
 ## Getting started
+
+OpenCode Go is already included with OpenClaw for this release. Continue with
+interactive onboarding or pass the shared OpenCode API key directly.
 
 <Tabs>
   <Tab title="Interactive">
@@ -38,7 +35,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
       </Step>
       <Step title="Set a Go model as default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.5"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k3"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -69,27 +66,56 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
-  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
+  env: { vars: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" } }, // pragma: allowlist secret
+  agents: { defaults: { model: { primary: "opencode-go/kimi-k3" } } },
 }
 ```
 
-## Advanced notes
+## Catalog
+
+Run `openclaw models list --provider opencode-go` for the current model list.
+OpenClaw combines Go's advertised model IDs with authoritative metadata from
+`https://models.opencode.ai/api.json`, so new upstream models appear without an
+OpenClaw update when they use a supported transport on the trusted OpenCode
+endpoint. The upstream catalog is downloaded and
+cached only when OpenCode Zen or Go is configured or explicitly selected with
+OpenCode credentials; it is never fetched at startup or while using unrelated
+providers.
+
+Example refs include `opencode-go/deepseek-v4-flash`, `opencode-go/kimi-k3`, and
+`opencode-go/qwen3.8-max`. Use the CLI for the current lineup rather than treating
+these examples as an inventory. OpenClaw excludes deprecated rows from active
+discovery and applies refreshed lifecycle status to its offline fallback.
+Bundled preview rows stay hidden until accepted upstream metadata supplies them.
+Existing explicit refs in the bundled seed remain resolvable.
+
+The Go model-list endpoint is a general inventory, not an account-entitlement
+check. A successful listing does not grant access: inference still requires an
+active Go subscription, including for promotional models.
+
+## Privacy
+
+Retention and training policies vary by model. Review the current
+[OpenCode Go privacy table](https://opencode.ai/docs/go/#privacy) before using a
+model, because provider policy can change independently of OpenClaw.
+
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Routing behavior">
-    OpenClaw handles per-model routing automatically when the model ref uses
-    `opencode-go/...`. No additional provider config is required.
+    OpenClaw routes any `opencode-go/...` model ref automatically. No extra
+    provider config is required.
   </Accordion>
 
   <Accordion title="Runtime ref convention">
-    Runtime refs stay explicit: `opencode/...` for Zen, `opencode-go/...` for Go.
-    This keeps upstream per-model routing correct across both catalogs.
+    Runtime refs stay explicit: `opencode/...` for Zen, `opencode-go/...` for
+    Go. This keeps upstream per-model routing correct across both catalogs.
   </Accordion>
 
   <Accordion title="Shared credentials">
-    The same `OPENCODE_API_KEY` is used by both the Zen and Go catalogs. Entering
-    the key during setup stores credentials for both runtime providers.
+    The same `OPENCODE_API_KEY` can authenticate both runtime providers, so
+    setup may store both profiles. Go access still requires a separate paid
+    subscription in the OpenCode console.
   </Accordion>
 </AccordionGroup>
 

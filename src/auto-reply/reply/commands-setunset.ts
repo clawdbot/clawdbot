@@ -1,67 +1,8 @@
+/** Shared parsing helpers for commands with set/unset subcommands. */
 import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 import { parseConfigValue } from "./config-value.js";
 
-export type SetUnsetParseResult =
-  | { kind: "set"; path: string; value: unknown }
-  | { kind: "unset"; path: string }
-  | { kind: "error"; message: string };
-
-export function parseSetUnsetCommand(params: {
-  slash: string;
-  action: "set" | "unset";
-  args: string;
-}): SetUnsetParseResult {
-  const action = params.action;
-  const args = params.args.trim();
-  if (action === "unset") {
-    if (!args) {
-      return { kind: "error", message: `Usage: ${params.slash} unset path` };
-    }
-    return { kind: "unset", path: args };
-  }
-  if (!args) {
-    return { kind: "error", message: `Usage: ${params.slash} set path=value` };
-  }
-  const eqIndex = args.indexOf("=");
-  if (eqIndex <= 0) {
-    return { kind: "error", message: `Usage: ${params.slash} set path=value` };
-  }
-  const path = args.slice(0, eqIndex).trim();
-  const rawValue = args.slice(eqIndex + 1);
-  if (!path) {
-    return { kind: "error", message: `Usage: ${params.slash} set path=value` };
-  }
-  const parsed = parseConfigValue(rawValue);
-  if (parsed.error) {
-    return { kind: "error", message: parsed.error };
-  }
-  return { kind: "set", path, value: parsed.value };
-}
-
-export function parseSetUnsetCommandAction<T>(params: {
-  slash: string;
-  action: string;
-  args: string;
-  onSet: (path: string, value: unknown) => T;
-  onUnset: (path: string) => T;
-  onError: (message: string) => T;
-}): T | null {
-  if (params.action !== "set" && params.action !== "unset") {
-    return null;
-  }
-  const parsed = parseSetUnsetCommand({
-    slash: params.slash,
-    action: params.action,
-    args: params.args,
-  });
-  if (parsed.kind === "error") {
-    return params.onError(parsed.message);
-  }
-  return parsed.kind === "set"
-    ? params.onSet(parsed.path, parsed.value)
-    : params.onUnset(parsed.path);
-}
-
+/** Parses a slash command whose actions include set/unset plus custom actions. */
 export function parseSlashCommandWithSetUnset<T>(params: {
   raw: string;
   slash: string;
@@ -81,17 +22,19 @@ export function parseSlashCommandWithSetUnset<T>(params: {
   if (!parsed.ok) {
     return params.onError(parsed.message);
   }
-  const { action, args } = parsed;
-  const setUnset = parseSetUnsetCommandAction<T>({
-    slash: params.slash,
-    action,
-    args,
-    onSet: params.onSet,
-    onUnset: params.onUnset,
-    onError: params.onError,
-  });
-  if (setUnset) {
-    return setUnset;
+  const { action } = parsed;
+  const args = parsed.args.trim();
+  if (action === "unset") {
+    return args ? params.onUnset(args) : params.onError(`Usage: ${params.slash} unset path`);
+  }
+  if (action === "set") {
+    const equalsIndex = args.indexOf("=");
+    const path = equalsIndex > 0 ? args.slice(0, equalsIndex).trim() : "";
+    if (!path) {
+      return params.onError(`Usage: ${params.slash} set path=value`);
+    }
+    const value = parseConfigValue(args.slice(equalsIndex + 1));
+    return value.error ? params.onError(value.error) : params.onSet(path, value.value);
   }
   const knownAction = params.onKnownAction(action, args);
   if (knownAction) {

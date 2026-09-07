@@ -1,0 +1,28 @@
+title: Control UI cron
+
+scenario:
+  id: control-ui-cron
+  surface: control-ui
+  category: control-ui.cron
+  coverage:
+    primary:
+      - control-ui.cron
+  objective: Prove the browser Cron panel supports job discovery, filtering, schedule creation, and visible run outcomes.
+  successCriteria:
+    - The Cron table renders Gateway jobs and applies schedule filters through cron.list.
+    - Creating a cron-scheduled task sends the expected schedule and renders the refreshed job row.
+    - Run now sends the requested job ID and visibly explains when the scheduler does not start a duplicate run.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/automation/cron-jobs.md
+    - docs/help/testing.md
+  codeRefs:
+    - ui/src/e2e/cron-filters.e2e.test.ts
+    - ui/src/pages/cron/cron-page.ts
+    - ui/src/pages/cron/view.ts
+    - ui/src/lib/cron/index.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/cron-filters.e2e.test.ts
+    testNamePattern: "sends cron job table filters through the Gateway and renders the filtered page|creates a cron-scheduled task and renders the refreshed row|shows why a requested run was not started"
+    summary: Canonical real-Chromium Cron coverage for listing/filtering, scheduled creation, and visible run-now outcomes.

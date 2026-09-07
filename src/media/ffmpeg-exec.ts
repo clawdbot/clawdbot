@@ -1,27 +1,36 @@
-import { execFile, type ExecFileOptions } from "node:child_process";
-import { promisify } from "node:util";
+// FFmpeg exec helpers run ffmpeg and ffprobe with normalized errors.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { runExec, type RunExecOptions } from "../process/exec.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
   MEDIA_FFMPEG_TIMEOUT_MS,
   MEDIA_FFPROBE_TIMEOUT_MS,
 } from "./ffmpeg-limits.js";
 
-const execFileAsync = promisify(execFile);
-
-export type MediaExecOptions = {
+/** Process limits and optional stdin payload for ffmpeg/ffprobe helper calls. */
+type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
+  input?: Buffer | string;
+  stdinFileDescriptor?: number;
 };
 
 function resolveExecOptions(
   defaultTimeoutMs: number,
   options: MediaExecOptions | undefined,
-): ExecFileOptions {
+): RunExecOptions {
+  if (options?.input !== undefined && options.stdinFileDescriptor !== undefined) {
+    throw new Error("media exec accepts either input or stdinFileDescriptor, not both");
+  }
   return {
-    timeout: options?.timeoutMs ?? defaultTimeoutMs,
+    input: options?.input,
+    ...(options?.stdinFileDescriptor !== undefined
+      ? { stdinFileDescriptor: options.stdinFileDescriptor }
+      : {}),
+    logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
+    timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,
   };
 }
 
@@ -40,40 +49,56 @@ function requireSystemBin(name: string): string {
   return resolved;
 }
 
+/** Resolves ffmpeg from trusted system paths before command execution. */
+export function resolveFfmpegBin(): string {
+  return requireSystemBin("ffmpeg");
+}
+
+/** Runs ffprobe with optional stdin input. */
 export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
+  const { stdout } = await runExec(
     requireSystemBin("ffprobe"),
     args,
     resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
   );
-  return stdout.toString();
+  return stdout;
 }
 
+/** Runs ffmpeg with bounded timeout and buffer settings. */
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    requireSystemBin("ffmpeg"),
+  const { stdout } = await runExec(
+    resolveFfmpegBin(),
     args,
     resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
   );
-  return stdout.toString();
+  return stdout;
 }
 
-export function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
+/** Splits ffprobe CSV-ish output into normalized lowercase fields. */
+function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
   return stdout
     .trim()
     .split(/[,\r\n]+/, maxFields)
     .map((field) => normalizeLowercaseStringOrEmpty(field));
 }
 
+function parseFfprobeSampleRateHz(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const sampleRate = Number(value);
+  return Number.isSafeInteger(sampleRate) && sampleRate > 0 ? sampleRate : null;
+}
+
+/** Parses codec and positive sample rate from compact ffprobe stream output. */
 export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;
 } {
   const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
   const codec = codecRaw ? codecRaw : null;
-  const sampleRate = sampleRateRaw ? Number.parseInt(sampleRateRaw, 10) : Number.NaN;
   return {
     codec,
-    sampleRateHz: Number.isFinite(sampleRate) ? sampleRate : null,
+    sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
   };
 }

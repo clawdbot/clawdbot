@@ -1,6 +1,9 @@
+// Verifies startup environment merge behavior for Node subprocesses.
 import { describe, expect, it } from "vitest";
-import { LINUX_CA_BUNDLE_PATHS } from "./node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "./node-startup-env.js";
+
+const FEDORA_CA_BUNDLE_PATH = "/etc/pki/tls/certs/ca-bundle.crt";
+const GENERIC_CA_BUNDLE_PATH = "/etc/ssl/ca-bundle.pem";
 
 function allowOnly(path: string) {
   return (candidate: string) => {
@@ -38,16 +41,39 @@ describe("resolveNodeStartupTlsEnvironment", () => {
     });
   });
 
+  it.each([
+    ["empty Linux value", "", "linux", FEDORA_CA_BUNDLE_PATH],
+    ["whitespace macOS value", " \t ", "darwin", "/etc/ssl/cert.pem"],
+  ] as const)("treats %s as unset", (_label, value, platform, expected) => {
+    const startupEnv = resolveNodeStartupTlsEnvironment({
+      env: { NODE_EXTRA_CA_CERTS: value, NVM_DIR: "/home/test/.nvm" },
+      platform,
+      execPath: "/usr/bin/node",
+      accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
+    });
+
+    expect(startupEnv.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("preserves a nonblank CA path byte-for-byte", () => {
+    expect(
+      resolveNodeStartupTlsEnvironment({
+        env: { NODE_EXTRA_CA_CERTS: " /custom/ca.pem " },
+        platform: "darwin",
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe(" /custom/ca.pem ");
+  });
+
   it("resolves Linux CA env for version-manager Node runtimes", () => {
     expect(
       resolveNodeStartupTlsEnvironment({
         env: { NVM_DIR: "/home/test/.nvm" },
         platform: "linux",
         execPath: "/usr/bin/node",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[1]),
+        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
       }),
     ).toEqual({
-      NODE_EXTRA_CA_CERTS: LINUX_CA_BUNDLE_PATHS[1],
+      NODE_EXTRA_CA_CERTS: FEDORA_CA_BUNDLE_PATH,
       NODE_USE_SYSTEM_CA: undefined,
     });
   });
@@ -70,10 +96,8 @@ describe("resolveNodeStartupTlsEnvironment", () => {
       env: { NVM_DIR: "/home/test/.nvm" },
       platform: "linux",
       execPath: "/usr/bin/node",
-      accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[2]),
+      accessSync: allowOnly(GENERIC_CA_BUNDLE_PATH),
     }).NODE_EXTRA_CA_CERTS;
-    if (value !== undefined) {
-      expect(LINUX_CA_BUNDLE_PATHS).toContain(value);
-    }
+    expect(value).toBe(GENERIC_CA_BUNDLE_PATH);
   });
 });

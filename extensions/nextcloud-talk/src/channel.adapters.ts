@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements channel.adapters behavior.
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -5,17 +6,15 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  inspectNextcloudTalkAccount,
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedNextcloudTalkAccount,
@@ -25,6 +24,11 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
+  inspectAccount: (cfg, accountId) => {
+    const account = inspectNextcloudTalkAccount({ cfg, accountId });
+    // Diagnostics expose presence only; operational callers retain the actual server URL.
+    return { ...account, baseUrl: account.baseUrl ? "[set]" : "[missing]" };
+  },
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

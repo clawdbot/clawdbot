@@ -1,78 +1,55 @@
+// Slack helper module supports channel config behavior.
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
-  resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { SlackReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { SlackMessageEvent } from "../types.js";
-import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
+import type {
+  ChannelBotLoopProtectionConfig,
+  ReplyToMode,
+  SlackChannelConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { buildSlackChannelIdCandidates, buildSlackChannelPolicyScope } from "../group-policy.js";
+import { normalizeSlackSlug, resolveSlackUserAllowListForTeam } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
-  allowBots?: boolean;
+  ignoreOtherMentions?: boolean;
+  replyToMode?: ReplyToMode;
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
 
-export type SlackChannelConfigEntry = {
+type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
-  allowBots?: boolean;
+  ignoreOtherMentions?: boolean;
+  replyToMode?: ReplyToMode;
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") {
+    if (value !== undefined) {
       return value;
     }
   }
   return undefined;
-}
-
-export function shouldEmitSlackReactionNotification(params: {
-  mode: SlackReactionNotificationMode | undefined;
-  botId?: string | null;
-  messageAuthorId?: string | null;
-  userId: string;
-  userName?: string | null;
-  allowlist?: Array<string | number> | null;
-  allowNameMatching?: boolean;
-}) {
-  const { mode, botId, messageAuthorId, userId, userName, allowlist } = params;
-  const effectiveMode = mode ?? "own";
-  if (effectiveMode === "off") {
-    return false;
-  }
-  if (effectiveMode === "own") {
-    if (!botId || !messageAuthorId) {
-      return false;
-    }
-    return messageAuthorId === botId;
-  }
-  if (effectiveMode === "allowlist") {
-    if (!Array.isArray(allowlist) || allowlist.length === 0) {
-      return false;
-    }
-    const users = normalizeAllowListLower(allowlist);
-    return allowListMatches({
-      allowList: users,
-      id: userId,
-      name: userName ?? undefined,
-      allowNameMatching: params.allowNameMatching,
-    });
-  }
-  return true;
 }
 
 export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {
@@ -86,6 +63,8 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 }
 
 export function resolveSlackChannelConfig(params: {
+  teamId?: string;
+  allowUnscoped?: boolean;
   channelId: string;
   channelName?: string;
   channels?: SlackChannelConfigEntries;
@@ -105,27 +84,18 @@ export function resolveSlackChannelConfig(params: {
   const keys = channelKeys ?? Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
-  // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345) but
-  // operators commonly write them in lowercase in their config. Add both
-  // case variants so the lookup is case-insensitive without requiring a full
-  // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
-  const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
-  const channelIdUpper = channelId.toUpperCase();
   const candidates = buildChannelKeyCandidates(
-    channelId,
-    channelIdLower !== channelId ? channelIdLower : undefined,
-    channelIdUpper !== channelId ? channelIdUpper : undefined,
+    ...buildSlackChannelIdCandidates(channelId, params.teamId, {
+      allowUnscoped: params.allowUnscoped,
+    }),
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
   );
-  const match = resolveChannelEntryMatchWithFallback({
-    entries,
-    keys: candidates,
-    wildcardKey: "*",
-  });
+  const match = buildSlackChannelPolicyScope({ channels: entries, candidates });
   const { entry: matched, wildcardEntry: fallback } = match;
 
+  // The monitor honors root channels.slack.requireMention; the adapter deliberately ignores it.
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
     return { allowed: true, requireMention: requireMentionDefault };
@@ -139,19 +109,37 @@ export function resolveSlackChannelConfig(params: {
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;
+  const ignoreOtherMentions = firstDefined(
+    resolved.ignoreOtherMentions,
+    fallback?.ignoreOtherMentions,
+  );
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
-  const users = firstDefined(resolved.users, fallback?.users);
+  const replyToMode = firstDefined(resolved.replyToMode, fallback?.replyToMode);
+  const botLoopProtection = mergePairLoopGuardConfig(
+    fallback?.botLoopProtection,
+    matched?.botLoopProtection,
+  );
+  const users = resolveSlackUserAllowListForTeam({
+    allowList: firstDefined(resolved.users, fallback?.users),
+    teamId: params.teamId,
+    // Keeping unmatched entries preserves the configured allowlist gate;
+    // ingress treats differently scoped values as non-matching.
+    preserveUnmatchedScopedEntries: true,
+  });
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const presenceEvents = firstDefined(resolved.presenceEvents, fallback?.presenceEvents);
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
+    ignoreOtherMentions,
+    replyToMode,
     allowBots,
-    users,
+    botLoopProtection,
+    users: users.length > 0 ? users : undefined,
     skills,
     systemPrompt,
+    presenceEvents,
   };
   return applyChannelMatchMeta(result, match);
 }
-
-export type { SlackMessageEvent };

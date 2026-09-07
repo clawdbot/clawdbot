@@ -1,3 +1,4 @@
+/** Guardrail tests that keep ACP/session binding flows off legacy thread-binding APIs. */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +13,7 @@ type GuardedSource = {
 
 const GUARDED_SOURCES: GuardedSource[] = [
   {
-    path: "agents/acp-spawn.ts",
+    path: "agents/subagents/spawn/acp-spawn.ts",
     forbiddenPatterns: [/\bgetThreadBindingManager\b/, /\bparseDiscordTarget\b/],
   },
   {
@@ -24,13 +25,13 @@ const GUARDED_SOURCES: GuardedSource[] = [
     forbiddenPatterns: [/\bgetThreadBindingManager\b/],
   },
   {
-    path: "auto-reply/reply/commands-subagents/action-focus.ts",
+    path: "auto-reply/reply/commands-session.ts",
     forbiddenPatterns: [/\bgetThreadBindingManager\b/],
   },
 ];
 
 describe("ACP/session binding architecture guardrails", () => {
-  it("keeps ACP/focus flows off Discord thread-binding manager APIs", () => {
+  it("keeps ACP/session controls off Discord thread-binding manager APIs", () => {
     for (const source of GUARDED_SOURCES) {
       const absolutePath = resolve(ROOT_DIR, source.path);
       const text = readFileSync(absolutePath, "utf8");

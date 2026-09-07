@@ -1,7 +1,12 @@
+// Stores and broadcasts heartbeat status events for UI surfaces.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
+
+const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
+const NO_ROUTE_MESSAGE =
+  "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.";
 
 export type HeartbeatEventPayload = {
   ts: number;
@@ -12,6 +17,8 @@ export type HeartbeatEventPayload = {
   durationMs?: number;
   hasMedia?: boolean;
   reason?: string;
+  /** Operator-facing companion to the machine-stable reason code. */
+  message?: string;
   /** The channel this heartbeat was sent to. */
   channel?: string;
   /** Whether the message was silently suppressed (showOk: false). */
@@ -50,7 +57,15 @@ const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_
 }));
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
-  const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
+  const enriched: HeartbeatEventPayload = {
+    ts: Date.now(),
+    ...evt,
+    ...(evt.message === undefined && evt.reason === "target-none"
+      ? { message: TARGET_NONE_MESSAGE }
+      : evt.message === undefined && evt.reason === "no-route"
+        ? { message: NO_ROUTE_MESSAGE }
+        : {}),
+  };
   state.lastHeartbeat = enriched;
   notifyListeners(state.listeners, enriched);
 }

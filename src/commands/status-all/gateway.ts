@@ -1,22 +1,20 @@
-import fs from "node:fs/promises";
-import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Gateway log-tail helpers for status diagnostics.
+// Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
+import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
+
+/** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
-  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
-  if (!raw.trim()) {
+  const lines = await readGatewayLogTailLines(filePath).catch(() => []);
+  if (lines.length === 0) {
     return [];
   }
-  const lines = raw.replace(/\r/g, "").split("\n");
   const out = lines.slice(Math.max(0, lines.length - maxLines));
   return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
-}
-
-function countMatches(haystack: string, needle: string): number {
-  if (!haystack || !needle) {
-    return 0;
-  }
-  return haystack.split(needle).length - 1;
 }
 
 function shorten(message: string, maxLen: number): string {
@@ -24,14 +22,13 @@ function shorten(message: string, maxLen: number): string {
   if (cleaned.length <= maxLen) {
     return cleaned;
   }
-  return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
+  return `${truncateUtf16Safe(cleaned, Math.max(0, maxLen - 1))}…`;
 }
 
 function normalizeGwsLine(line: string): string {
+  // Remove per-request ids so repeated gateway websocket errors group into one summary.
   return line
-    .replace(/\s+runId=[^\s]+/g, "")
-    .replace(/\s+conn=[^\s]+/g, "")
-    .replace(/\s+id=[^\s]+/g, "")
+    .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
     .replace(/\s+error=Error:.*$/g, "")
     .trim();
 }
@@ -46,18 +43,18 @@ function consumeJsonBlock(
     return null;
   }
 
-  const parts: string[] = [startLine.slice(braceAt)];
-  let depth = countMatches(parts[0] ?? "", "{") - countMatches(parts[0] ?? "", "}");
-  let i = startIndex;
-  while (depth > 0 && i + 1 < lines.length) {
-    i += 1;
-    const next = lines[i] ?? "";
-    parts.push(next);
-    depth += countMatches(next, "{") - countMatches(next, "}");
+  const raw = [startLine.slice(braceAt), ...lines.slice(startIndex + 1)].join("\n");
+  const fragment = extractBalancedJsonPrefix(raw);
+  if (!fragment) {
+    // A bounded tail can end mid-object. Consume the rest so orphaned JSON
+    // fields do not escape into the user-facing diagnosis as ordinary lines.
+    return { json: raw, endIndex: lines.length - 1 };
   }
-  return { json: parts.join("\n"), endIndex: i };
+  const consumedLineOffset = fragment.json.split("\n").length - 1;
+  return { json: fragment.json, endIndex: startIndex + consumedLineOffset };
 }
 
+/** Summarizes gateway log tail lines, grouping repeated failures and trimming long output. */
 export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number }): string[] {
   const maxLines = Math.max(6, opts?.maxLines ?? 26);
 
@@ -74,51 +71,36 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     out.push(base);
   };
 
-  const addLine = (line: string) => {
-    const trimmed = line.trimEnd();
-    if (!trimmed) {
-      return;
-    }
-    out.push(trimmed);
-  };
-
   const lines = rawLines.map((line) => line.trimEnd()).filter(Boolean);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const trimmedStart = line.trimStart();
     if (
-      (trimmedStart.startsWith('"') ||
-        trimmedStart === "}" ||
-        trimmedStart === "{" ||
-        trimmedStart.startsWith("}") ||
-        trimmedStart.startsWith("{")) &&
-      !trimmedStart.startsWith("[") &&
-      !trimmedStart.startsWith("#")
+      trimmedStart.startsWith('"') ||
+      trimmedStart.startsWith("}") ||
+      trimmedStart.startsWith("{")
     ) {
       // Tail can cut in the middle of a JSON blob; drop orphaned JSON fragments.
       continue;
     }
 
-    // "[openai-codex] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
+    // "[openai] Token refresh failed: 401 { ...json... }"
+    const tokenRefresh = line.match(
+      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)(?:\s+(\{.*))?\s*$/,
+    );
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";
       const block = consumeJsonBlock(lines, i);
       if (block) {
         i = block.endIndex;
-        const parsed = (() => {
-          try {
-            return JSON.parse(block.json) as {
-              error?: { code?: string; message?: string };
-            };
-          } catch {
-            return null;
-          }
-        })();
+        const parsed = (safeParseJson(block.json) ?? null) as {
+          error?: { code?: string; message?: string };
+        } | null;
         const code = normalizeOptionalString(parsed?.error?.code) ?? null;
         const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
         const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");
+        // OAuth providers often return verbose JSON; classify re-auth failures into one readable hint.
         const msgShort = msg ? (refreshReason ? "re-auth required" : shorten(msg, 52)) : null;
         const base = `[${tag}] token refresh ${status}${code ? ` ${code}` : ""}${msgShort ? ` · ${msgShort}` : ""}`;
         addGroup(`token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`, base);
@@ -126,7 +108,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       }
     }
 
-    // "Embedded agent failed before reply: OAuth token refresh failed for openai-codex: ..."
+    // "Embedded agent failed before reply: OAuth token refresh failed for openai: ..."
     const embedded = line.match(
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );
@@ -147,7 +129,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    addLine(line);
+    out.push(line);
   }
 
   for (const g of groups.values()) {
@@ -178,5 +160,3 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
   ];
   return kept;
 }
-
-export { pickGatewaySelfPresence } from "../gateway-presence.js";

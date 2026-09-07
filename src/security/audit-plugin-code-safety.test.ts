@@ -1,3 +1,4 @@
+// Covers plugin code safety audit findings.
 import { describe, expect, it } from "vitest";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 
@@ -9,6 +10,6 @@ describe("security audit plugin code safety gating", () => {
       deep: false,
     });
 
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 });

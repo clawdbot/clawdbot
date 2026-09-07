@@ -1,19 +1,29 @@
+// Browser tests cover server.evaluate disabled does not block storage plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
+import "../test-support/browser-security.mock.js";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;
 let prevGatewayToken: string | undefined;
 let prevGatewayPassword: string | undefined;
 
-const pwMocks = vi.hoisted(() => ({
-  cookiesGetViaPlaywright: vi.fn(async () => ({
-    cookies: [{ name: "session", value: "abc123" }],
-  })),
-  storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
-  evaluateViaPlaywright: vi.fn(async () => "ok"),
-}));
+const pwMocks = vi.hoisted(() => {
+  const closePlaywrightBrowserConnection = vi.fn(async (_opts?: { cdpUrl?: string }) => {});
+  return {
+    closePlaywrightBrowserConnection,
+    cookiesGetViaPlaywright: vi.fn(async () => ({
+      cookies: [{ name: "session", value: "abc123" }],
+    })),
+    storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
+    evaluateViaPlaywright: vi.fn(async () => "ok"),
+    retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
+      retired: true,
+      close: async () => await closePlaywrightBrowserConnection(opts),
+    })),
+  };
+});
 
 const routeCtxMocks = vi.hoisted(() => {
   const profileCtx = {
@@ -37,23 +47,26 @@ const routeCtxMocks = vi.hoisted(() => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const loadConfig = () => ({
+    browser: {
+      enabled: true,
+      evaluateEnabled: false,
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
+      },
+    },
+  });
   return {
     ...actual,
-    loadConfig: () => ({
-      browser: {
-        enabled: true,
-        evaluateEnabled: false,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
-        },
-      },
-    }),
+    getRuntimeConfig: loadConfig,
+    loadConfig,
     writeConfigFile: vi.fn(async () => {}),
   };
 });
 
 vi.mock("./pw-ai-module.js", () => ({
+  getLoadedPwAiModule: () => pwMocks,
   getPwAiModule: vi.fn(async () => pwMocks),
 }));
 

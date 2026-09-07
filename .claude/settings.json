@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'r=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; [ -n \"$r\" ] && cd \"$r\" || exit 0; command -v pnpm >/dev/null 2>&1 && [ -f pnpm-lock.yaml ] || exit 0; CI=true pnpm install --frozen-lockfile --ignore-scripts || echo \"[worktree-setup] pnpm install failed; run pnpm install manually in this worktree\"'",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

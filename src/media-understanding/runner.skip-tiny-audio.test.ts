@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+// Tiny-audio runner tests cover minimum-size skip behavior before provider
+// transcription runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
@@ -78,6 +82,10 @@ async function runAudioCapabilityWithTranscriber(params: {
 }
 
 describe("runCapability skips tiny audio files", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("skips audio transcription when file is smaller than MIN_AUDIO_FILE_BYTES", async () => {
     await withAudioFixture({
       filePrefix: "openclaw-tiny-audio",
@@ -103,9 +111,30 @@ describe("runCapability skips tiny audio files", () => {
         expect(result.outputs).toHaveLength(0);
         expect(result.decision.outcome).toBe("skipped");
         expect(result.decision.attachments).toHaveLength(1);
-        expect(result.decision.attachments[0].attempts).toHaveLength(1);
-        expect(result.decision.attachments[0].attempts[0].outcome).toBe("skipped");
-        expect(result.decision.attachments[0].attempts[0].reason).toContain("tooSmall");
+        expect(
+          expectDefined(
+            result.decision.attachments[0],
+            "result.decision.attachments[0] test invariant",
+          ).attempts,
+        ).toHaveLength(1);
+        expect(
+          expectDefined(
+            expectDefined(
+              result.decision.attachments[0],
+              "result.decision.attachments[0] test invariant",
+            ).attempts[0],
+            'expectDefined( result.decision.attachments[0], "result.decision.attac... test invariant',
+          ).outcome,
+        ).toBe("skipped");
+        expect(
+          expectDefined(
+            expectDefined(
+              result.decision.attachments[0],
+              "result.decision.attachments[0] test invariant",
+            ).attempts[0],
+            'expectDefined( result.decision.attachments[0], "result.decision.attac... test invariant',
+          ).reason,
+        ).toContain("tooSmall");
       },
     });
   });
@@ -154,7 +183,9 @@ describe("runCapability skips tiny audio files", () => {
 
         expect(transcribeCalled).toBe(true);
         expect(result.outputs).toHaveLength(1);
-        expect(result.outputs[0].text).toBe("hello world");
+        expect(expectDefined(result.outputs[0], "result.outputs[0] test invariant").text).toBe(
+          "hello world",
+        );
         expect(result.decision.outcome).toBe("success");
       },
     });
@@ -172,16 +203,24 @@ describe("runCapability skips tiny audio files", () => {
           media,
           cache,
           transcribeAudio: async () => {
-            throw new Error("upstream 500");
+            throw Object.assign(new Error("HTTP 400 validation failed"), { status: 400 });
           },
         });
 
         expect(result.outputs).toHaveLength(0);
         expect(result.decision.outcome).toBe("failed");
         expect(result.decision.attachments).toHaveLength(1);
-        expect(result.decision.attachments[0]?.attempts).toHaveLength(1);
-        expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("failed");
-        expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("upstream 500");
+        const attachment = result.decision.attachments[0];
+        if (!attachment) {
+          throw new Error("expected failed audio decision attachment");
+        }
+        expect(attachment.attempts).toHaveLength(1);
+        const attempt = attachment.attempts[0];
+        if (!attempt) {
+          throw new Error("expected failed audio decision attempt");
+        }
+        expect(attempt.outcome).toBe("failed");
+        expect(attempt.reason).toContain("HTTP 400 validation failed");
       },
     });
   });

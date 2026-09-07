@@ -1,6 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord tests cover directory live plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
+import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
@@ -28,13 +32,32 @@ function resolveFetchUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+function hangingBodyResponse(signal?: AbortSignal): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("["));
+      if (signal?.aborted) {
+        controller.error(signal.reason);
+        return;
+      }
+      signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    clearDiscordDirectoryCacheForTest();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -45,7 +68,7 @@ describe("discord directory live lookups", () => {
       query: "general",
     });
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("returns empty peer directory without query and skips guild listing", async () => {
@@ -53,8 +76,22 @@ describe("discord directory live lookups", () => {
 
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "  " }));
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("aborts hanging group directory response bodies after the lookup timeout", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      return hangingBodyResponse(init?.signal ?? undefined);
+    });
+
+    const rows = listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
+    const rejection = expect(rows).rejects.toThrow(/abort/i);
+
+    await vi.advanceTimersByTimeAsync(DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS);
+    await rejection;
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("filters group channels by query and respects limit", async () => {
@@ -81,8 +118,20 @@ describe("discord directory live lookups", () => {
     const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
 
     expect(rows).toEqual([
-      expect.objectContaining({ kind: "group", id: "channel:c2", name: "random" }),
-      expect.objectContaining({ kind: "group", id: "channel:c3", name: "announcements" }),
+      {
+        kind: "group",
+        id: "channel:c2",
+        name: "random",
+        handle: "#random",
+        raw: { id: "c2", name: "random" },
+      },
+      {
+        kind: "group",
+        id: "channel:c3",
+        name: "announcements",
+        handle: "#announcements",
+        raw: { id: "c3", name: "announcements" },
+      },
     ]);
   });
 
@@ -108,19 +157,69 @@ describe("discord directory live lookups", () => {
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit: 2 }));
 
     expect(rows).toEqual([
-      expect.objectContaining({
+      {
         kind: "user",
         id: "user:u1",
         name: "Ali",
         handle: "@alice",
         rank: 1,
-      }),
-      expect.objectContaining({
+        raw: { user: { id: "u1", username: "alice", bot: false }, nick: "Ali" },
+      },
+      {
         kind: "user",
         id: "user:u2",
+        name: "alice-bot",
         handle: "@alice-bot",
         rank: 0,
-      }),
+        raw: { user: { id: "u2", username: "alice-bot", bot: true }, nick: null },
+      },
     ]);
+  });
+
+  it.each([
+    {
+      name: "counts each shared-guild user once before applying the peer limit",
+      secondGuildMembers: [
+        { user: { id: "101", username: "alice" }, nick: "second-alice" },
+        { user: { id: "202", username: "alice-two" }, nick: "second-user" },
+      ],
+      limit: 2,
+      expectedIds: ["user:101", "user:202"],
+    },
+    {
+      name: "does not turn one shared-guild user into ambiguous outbound matches",
+      secondGuildMembers: [{ user: { id: "101", username: "alice" }, nick: "second-alice" }],
+      limit: undefined,
+      expectedIds: ["user:101"],
+    },
+  ])("$name", async ({ secondGuildMembers, limit, expectedIds }) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = resolveFetchUrl(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([
+          { id: "g1", name: "Guild 1" },
+          { id: "g2", name: "Guild 2" },
+        ]);
+      }
+      if (url.includes("/guilds/g1/members/search?")) {
+        return jsonResponse([{ user: { id: "101", username: "alice" }, nick: "first-alice" }]);
+      }
+      if (url.includes("/guilds/g2/members/search?")) {
+        return jsonResponse(secondGuildMembers);
+      }
+      return jsonResponse([]);
+    });
+
+    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit }));
+
+    expect(rows.map((entry) => entry.id)).toEqual(expectedIds);
+    expect(rows.filter((entry) => entry.handle === "@alice")).toHaveLength(1);
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "first-alice" })).toBe(
+      "101",
+    );
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "second-alice" })).toBe(
+      "101",
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 });

@@ -13,14 +13,14 @@ import { z } from "zod";
 // Content Parts
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const InputTextContentPartSchema = z
+const InputTextContentPartSchema = z
   .object({
     type: z.literal("input_text"),
     text: z.string(),
   })
   .strict();
 
-export const OutputTextContentPartSchema = z
+const OutputTextContentPartSchema = z
   .object({
     type: z.literal("output_text"),
     text: z.string(),
@@ -28,7 +28,7 @@ export const OutputTextContentPartSchema = z
   .strict();
 
 // OpenResponses Image Content: Supports URL or base64 sources
-export const InputImageSourceSchema = z.discriminatedUnion("type", [
+const InputImageSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
     url: z.string().url(),
@@ -47,7 +47,7 @@ export const InputImageSourceSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const InputImageContentPartSchema = z
+const InputImageContentPartSchema = z
   .object({
     type: z.literal("input_image"),
     source: InputImageSourceSchema,
@@ -55,7 +55,7 @@ export const InputImageContentPartSchema = z
   .strict();
 
 // OpenResponses File Content: Supports URL or base64 sources
-export const InputFileSourceSchema = z.discriminatedUnion("type", [
+const InputFileSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
     url: z.string().url(),
@@ -68,14 +68,14 @@ export const InputFileSourceSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const InputFileContentPartSchema = z
+const InputFileContentPartSchema = z
   .object({
     type: z.literal("input_file"),
     source: InputFileSourceSchema,
   })
   .strict();
 
-export const ContentPartSchema = z.discriminatedUnion("type", [
+const ContentPartSchema = z.discriminatedUnion("type", [
   InputTextContentPartSchema,
   OutputTextContentPartSchema,
   InputImageContentPartSchema,
@@ -88,41 +88,38 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 // Item Types (ItemParam)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
+const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
-export type MessageItemRole = z.infer<typeof MessageItemRoleSchema>;
-export const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
-export type AssistantPhase = z.infer<typeof AssistantPhaseSchema>;
+const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+const ItemStatusSchema = z.enum(["in_progress", "completed", "incomplete"]);
 
-export const MessageItemSchema = z
+const MessageItemSchema = z
   .object({
     type: z.literal("message"),
+    id: z.string().optional(),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
     phase: AssistantPhaseSchema.optional(),
+    status: ItemStatusSchema.optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (value.phase !== undefined && value.role !== "assistant") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["phase"],
-        message: "`phase` is only valid on assistant messages.",
-      });
-    }
+  .refine((value) => value.phase === undefined || value.role === "assistant", {
+    path: ["phase"],
+    message: "`phase` is only valid on assistant messages.",
   });
 
-export const FunctionCallItemSchema = z
+const FunctionCallItemSchema = z
   .object({
     type: z.literal("function_call"),
     id: z.string().optional(),
     call_id: z.string().optional(),
     name: z.string(),
     arguments: z.string(),
+    status: ItemStatusSchema.optional(),
   })
   .strict();
 
-export const FunctionCallOutputItemSchema = z
+const FunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
     call_id: z.string(),
@@ -130,7 +127,7 @@ export const FunctionCallOutputItemSchema = z
   })
   .strict();
 
-export const ReasoningItemSchema = z
+const ReasoningItemSchema = z
   .object({
     type: z.literal("reasoning"),
     content: z.string().optional(),
@@ -139,14 +136,14 @@ export const ReasoningItemSchema = z
   })
   .strict();
 
-export const ItemReferenceItemSchema = z
+const ItemReferenceItemSchema = z
   .object({
     type: z.literal("item_reference"),
     id: z.string(),
   })
   .strict();
 
-export const ItemParamSchema = z.discriminatedUnion("type", [
+const ItemParamSchema = z.discriminatedUnion("type", [
   MessageItemSchema,
   FunctionCallItemSchema,
   FunctionCallOutputItemSchema,
@@ -162,7 +159,7 @@ export type ItemParam = z.infer<typeof ItemParamSchema>;
 
 // Responses API tool definition uses a flat format (not the Chat Completions
 // wrapped-function format). Fields are at the top level alongside `type`.
-export const FunctionToolDefinitionSchema = z
+const FunctionToolDefinitionSchema = z
   .object({
     type: z.literal("function"),
     name: z.string().min(1, "Tool name cannot be empty"),
@@ -172,22 +169,28 @@ export const FunctionToolDefinitionSchema = z
   })
   .strict();
 
-export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
-
-export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
+const ToolDefinitionSchema = FunctionToolDefinitionSchema;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Request Body
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ToolChoiceSchema = z.union([
+const ToolChoiceSchema = z.union([
   z.literal("auto"),
   z.literal("none"),
   z.literal("required"),
-  z.object({
-    type: z.literal("function"),
-    function: z.object({ name: z.string() }),
-  }),
+  z
+    .object({
+      type: z.literal("function"),
+      name: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("function"),
+      function: z.object({ name: z.string().min(1) }),
+    })
+    .strict(),
 ]);
 
 export const CreateResponseBodySchema = z
@@ -197,13 +200,22 @@ export const CreateResponseBodySchema = z
     instructions: z.string().optional(),
     tools: z.array(ToolDefinitionSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
+    // The SDK sends its plain-text default explicitly; structured formats must
+    // stay rejected until the runtime actually enforces their contracts.
+    text: z
+      .object({
+        format: z.object({ type: z.literal("text") }).strict(),
+      })
+      .strict()
+      .optional(),
     stream: z.boolean().optional(),
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
-    // Phase 1: ignore but accept these fields
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
+    // Sampling overrides forwarded to provider (best-effort; some backends like
+    // ChatGPT Codex Responses strip these — see openai-transport-stream.ts).
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),
@@ -223,152 +235,60 @@ export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 // Response Resource
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ResponseStatusSchema = z.enum([
-  "in_progress",
-  "completed",
-  "failed",
-  "cancelled",
-  "incomplete",
-]);
+type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
+type OutputStatus = "in_progress" | "completed";
 
-export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
-
-export const OutputItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("message"),
-      id: z.string(),
-      role: z.literal("assistant"),
-      content: z.array(OutputTextContentPartSchema),
-      phase: AssistantPhaseSchema.optional(),
-      status: z.enum(["in_progress", "completed"]).optional(),
+export type OutputItem =
+  | (Omit<Extract<ItemParam, { type: "message" }>, "id" | "role" | "content" | "status"> & {
+      id: string;
+      role: "assistant";
+      content: OutputTextContentPart[];
+      status?: OutputStatus | undefined;
     })
-    .strict(),
-  z
-    .object({
-      type: z.literal("function_call"),
-      id: z.string(),
-      call_id: z.string(),
-      name: z.string(),
-      arguments: z.string(),
-      status: z.enum(["in_progress", "completed"]).optional(),
+  | (Omit<Extract<ItemParam, { type: "function_call" }>, "id" | "call_id" | "status"> & {
+      id: string;
+      call_id: string;
+      status?: OutputStatus | undefined;
     })
-    .strict(),
-  z
-    .object({
-      type: z.literal("reasoning"),
-      id: z.string(),
-      content: z.string().optional(),
-      summary: z.string().optional(),
-    })
-    .strict(),
-]);
+  | { type: "reasoning"; id: string; content?: string | undefined; summary?: string | undefined };
 
-export type OutputItem = z.infer<typeof OutputItemSchema>;
+export type Usage = {
+  input_tokens: number;
+  input_tokens_details: { cached_tokens: number; cache_write_tokens: number };
+  output_tokens: number;
+  output_tokens_details: { reasoning_tokens: number };
+  total_tokens: number;
+};
 
-export const UsageSchema = z.object({
-  input_tokens: z.number().int().nonnegative(),
-  output_tokens: z.number().int().nonnegative(),
-  total_tokens: z.number().int().nonnegative(),
-});
-
-export type Usage = z.infer<typeof UsageSchema>;
-
-export const ResponseResourceSchema = z.object({
-  id: z.string(),
-  object: z.literal("response"),
-  created_at: z.number().int(),
-  status: ResponseStatusSchema,
-  model: z.string(),
-  output: z.array(OutputItemSchema),
-  usage: UsageSchema,
-  // Optional fields for future phases
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-    })
-    .optional(),
-});
-
-export type ResponseResource = z.infer<typeof ResponseResourceSchema>;
+export type ResponseResource = {
+  id: string;
+  object: "response";
+  created_at: number;
+  status: "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
+  model: string;
+  output: OutputItem[];
+  usage: Usage;
+  error?: { code: string; message: string } | undefined;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming Event Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ResponseCreatedEventSchema = z.object({
-  type: z.literal("response.created"),
-  response: ResponseResourceSchema,
-});
-
-export const ResponseInProgressEventSchema = z.object({
-  type: z.literal("response.in_progress"),
-  response: ResponseResourceSchema,
-});
-
-export const ResponseCompletedEventSchema = z.object({
-  type: z.literal("response.completed"),
-  response: ResponseResourceSchema,
-});
-
-export const ResponseFailedEventSchema = z.object({
-  type: z.literal("response.failed"),
-  response: ResponseResourceSchema,
-});
-
-export const OutputItemAddedEventSchema = z.object({
-  type: z.literal("response.output_item.added"),
-  output_index: z.number().int().nonnegative(),
-  item: OutputItemSchema,
-});
-
-export const OutputItemDoneEventSchema = z.object({
-  type: z.literal("response.output_item.done"),
-  output_index: z.number().int().nonnegative(),
-  item: OutputItemSchema,
-});
-
-export const ContentPartAddedEventSchema = z.object({
-  type: z.literal("response.content_part.added"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  part: OutputTextContentPartSchema,
-});
-
-export const ContentPartDoneEventSchema = z.object({
-  type: z.literal("response.content_part.done"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  part: OutputTextContentPartSchema,
-});
-
-export const OutputTextDeltaEventSchema = z.object({
-  type: z.literal("response.output_text.delta"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  delta: z.string(),
-});
-
-export const OutputTextDoneEventSchema = z.object({
-  type: z.literal("response.output_text.done"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  text: z.string(),
-});
+type ContentEventPosition = {
+  item_id: string;
+  output_index: number;
+  content_index: number;
+};
 
 export type StreamingEvent =
-  | z.infer<typeof ResponseCreatedEventSchema>
-  | z.infer<typeof ResponseInProgressEventSchema>
-  | z.infer<typeof ResponseCompletedEventSchema>
-  | z.infer<typeof ResponseFailedEventSchema>
-  | z.infer<typeof OutputItemAddedEventSchema>
-  | z.infer<typeof OutputItemDoneEventSchema>
-  | z.infer<typeof ContentPartAddedEventSchema>
-  | z.infer<typeof ContentPartDoneEventSchema>
-  | z.infer<typeof OutputTextDeltaEventSchema>
-  | z.infer<typeof OutputTextDoneEventSchema>;
+  | { type: "response.created"; response: ResponseResource }
+  | { type: "response.in_progress"; response: ResponseResource }
+  | { type: "response.completed"; response: ResponseResource }
+  | { type: "response.failed"; response: ResponseResource }
+  | { type: "response.output_item.added"; output_index: number; item: OutputItem }
+  | { type: "response.output_item.done"; output_index: number; item: OutputItem }
+  | (ContentEventPosition & { type: "response.content_part.added"; part: OutputTextContentPart })
+  | (ContentEventPosition & { type: "response.content_part.done"; part: OutputTextContentPart })
+  | (ContentEventPosition & { type: "response.output_text.delta"; delta: string })
+  | (ContentEventPosition & { type: "response.output_text.done"; text: string });

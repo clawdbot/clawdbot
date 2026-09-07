@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearProbeCache, FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu } from "./probe.js";
+// Feishu tests cover probe plugin behavior.
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeFeishu, registerFeishuAiAgent } from "./probe.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -7,10 +8,12 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const DEFAULT_CREDS = { appId: "cli_123", appSecret: "secret" } as const; // pragma: allowlist secret
+const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_CREDS = { accountId: "probe-0", appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
+let defaultAccountSequence = 0;
 const DEFAULT_SUCCESS_RESPONSE = {
   code: 0,
-  data: { pingBotInfo: { botName: "TestBot", botID: "ou_abc123" } },
+  bot: { app_name: "TestBot", open_id: "ou_abc123" },
 } as const;
 const DEFAULT_SUCCESS_RESULT = {
   ok: true,
@@ -20,8 +23,13 @@ const DEFAULT_SUCCESS_RESULT = {
 } as const;
 const BOT1_RESPONSE = {
   code: 0,
-  data: { pingBotInfo: { botName: "Bot1", botID: "ou_1" } },
+  bot: { app_name: "Bot1", open_id: "ou_1" },
 } as const;
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.resetModules();
+});
 
 function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
@@ -68,8 +76,9 @@ async function expectErrorResultCached(params: {
 
   const first = await probeFeishu(DEFAULT_CREDS);
   const second = await probeFeishu(DEFAULT_CREDS);
-  expect(first).toMatchObject({ ok: false, error: params.expectedError });
-  expect(second).toMatchObject({ ok: false, error: params.expectedError });
+  const expected = { ok: false, appId: DEFAULT_CREDS.appId, error: params.expectedError };
+  expect(first).toEqual(expected);
+  expect(second).toEqual(expected);
   expect(params.requestFn).toHaveBeenCalledTimes(1);
 
   vi.advanceTimersByTime(params.ttlMs + 1);
@@ -98,12 +107,9 @@ async function readSequentialDefaultProbePair() {
 
 describe("probeFeishu", () => {
   beforeEach(() => {
-    clearProbeCache();
+    defaultAccountSequence += 1;
+    DEFAULT_CREDS.accountId = `probe-${defaultAccountSequence}`;
     vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    clearProbeCache();
   });
 
   it("returns error when credentials are missing", async () => {
@@ -133,14 +139,11 @@ describe("probeFeishu", () => {
 
     await probeFeishu(DEFAULT_CREDS);
 
-    expect(requestFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        url: "/open-apis/bot/v1/openclaw_bot/ping",
-        data: { needBotInfo: true },
-        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
-      }),
-    );
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "GET",
+      url: "/open-apis/bot/v3/info",
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("returns timeout error when request exceeds timeout", async () => {
@@ -152,7 +155,11 @@ describe("probeFeishu", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const result = await promise;
 
-      expect(result).toMatchObject({ ok: false, error: "probe timed out after 1000ms" });
+      expect(result).toEqual({
+        ok: false,
+        appId: DEFAULT_CREDS.appId,
+        error: "probe timed out after 1000ms",
+      });
     });
   });
 
@@ -166,7 +173,7 @@ describe("probeFeishu", () => {
       { abortSignal: abortController.signal },
     );
 
-    expect(result).toMatchObject({ ok: false, error: "probe aborted" });
+    expect(result).toEqual({ ok: false, appId: "cli_123", error: "probe aborted" });
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
   it("returns cached result on subsequent calls within TTL", async () => {
@@ -177,6 +184,32 @@ describe("probeFeishu", () => {
     expect(first).toEqual(second);
     // Only one API call should have been made
     expect(requestFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache probe results when the expiry would exceed a valid Date", async () => {
+    await withFakeTimers(async () => {
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+      const requestFn = setupSuccessClient();
+
+      const { first, second } = await readSequentialDefaultProbePair();
+
+      expect(first).toEqual(second);
+      expect(requestFn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("evicts cached probe results when the current clock is invalid", async () => {
+    const requestFn = setupSuccessClient();
+
+    await probeFeishu(DEFAULT_CREDS);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await probeFeishu(DEFAULT_CREDS);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
   it("makes a fresh API call after cache expires", async () => {
@@ -196,6 +229,16 @@ describe("probeFeishu", () => {
         expectedError: "API error: token expired",
         ttlMs: 60 * 1000,
       });
+    });
+  });
+
+  it("rejects a successful standard response without bot identity", async () => {
+    setupClient({ code: 0, bot: { app_name: "MissingId" } });
+
+    await expect(probeFeishu(DEFAULT_CREDS)).resolves.toEqual({
+      ok: false,
+      appId: DEFAULT_CREDS.appId,
+      error: "API response missing bot open_id",
     });
   });
 
@@ -252,18 +295,32 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
-  it("clearProbeCache forces fresh API call", async () => {
-    const requestFn = setupSuccessClient();
+  it("does not reuse cached identity when an account is reassigned to another app", async () => {
+    const requestFn = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        bot: { app_name: "OldBot", open_id: "ou_old" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        bot: { app_name: "NewBot", open_id: "ou_new" },
+      });
+    createFeishuClientMock.mockReturnValue({ request: requestFn });
 
-    await expectFreshDefaultProbeAfter(requestFn, () => {
-      clearProbeCache();
-    });
+    await expect(
+      probeFeishu({ accountId: "acct-switch", appId: "cli_old", appSecret: "secret_old" }), // pragma: allowlist secret
+    ).resolves.toMatchObject({ ok: true, appId: "cli_old", botOpenId: "ou_old" });
+    await expect(
+      probeFeishu({ accountId: "acct-switch", appId: "cli_new", appSecret: "secret_new" }), // pragma: allowlist secret
+    ).resolves.toMatchObject({ ok: true, appId: "cli_new", botOpenId: "ou_new" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
-  it("handles response with pingBotInfo in data", async () => {
+  it("handles standard bot info nested under data", async () => {
     setupClient({
       code: 0,
-      data: { pingBotInfo: { botName: "DataBot", botID: "ou_data" } },
+      data: { bot: { app_name: "DataBot", open_id: "ou_data" } },
     });
 
     await expectDefaultSuccessResult(DEFAULT_CREDS, {
@@ -271,5 +328,61 @@ describe("probeFeishu", () => {
       botName: "DataBot",
       botOpenId: "ou_data",
     });
+  });
+
+  it("registers the app as an AI agent through a separate best-effort request", async () => {
+    const requestFn = setupClient({ code: 0 });
+
+    await expect(registerFeishuAiAgent(DEFAULT_CREDS)).resolves.toEqual({ ok: true });
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/bot/v1/openclaw_bot/ping",
+      data: { needBotInfo: true },
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    });
+  });
+
+  it("contains AI-agent registration API failures", async () => {
+    setupClient({ code: 99991403, msg: "quota exhausted" });
+
+    await expect(registerFeishuAiAgent(DEFAULT_CREDS)).resolves.toEqual({
+      ok: false,
+      reason: "api-error",
+    });
+  });
+
+  it("contains AI-agent registration request failures", async () => {
+    createFeishuClientMock.mockReturnValue({
+      request: vi.fn().mockRejectedValue(new Error("network error")),
+    });
+
+    await expect(registerFeishuAiAgent(DEFAULT_CREDS)).resolves.toEqual({
+      ok: false,
+      reason: "request-error",
+    });
+  });
+
+  it("bounds AI-agent registration timeouts", async () => {
+    await withFakeTimers(async () => {
+      createFeishuClientMock.mockReturnValue({
+        request: vi.fn().mockImplementation(() => new Promise(() => {})),
+      });
+
+      const promise = registerFeishuAiAgent(DEFAULT_CREDS, { timeoutMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(promise).resolves.toEqual({ ok: false, reason: "timeout" });
+    });
+  });
+
+  it("does not start AI-agent registration after abort", async () => {
+    createFeishuClientMock.mockClear();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(
+      registerFeishuAiAgent(DEFAULT_CREDS, { abortSignal: abortController.signal }),
+    ).resolves.toEqual({ ok: false, reason: "aborted" });
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 });

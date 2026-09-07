@@ -1,3 +1,5 @@
+// OpenAI-compatible audio pin-DNS tests keep multipart transcription requests
+// on the explicit non-pinned path.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { postTranscriptionRequestMock } = vi.hoisted(() => ({
@@ -11,6 +13,18 @@ vi.mock("./shared.js", async () => {
     postTranscriptionRequest: postTranscriptionRequestMock,
   };
 });
+
+function requirePostTranscriptionRequest(): { pinDns?: unknown; body?: unknown } {
+  const [call] = postTranscriptionRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected postTranscriptionRequest call");
+  }
+  const [request] = call;
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    throw new Error("expected postTranscriptionRequest params to be an object");
+  }
+  return request;
+}
 
 import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
 
@@ -37,11 +51,8 @@ describe("transcribeOpenAiCompatibleAudio pinDns", () => {
     });
 
     expect(result.text).toBe("ok");
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-        body: expect.any(FormData),
-      }),
-    );
+    const request = requirePostTranscriptionRequest();
+    expect(request.pinDns).toBe(false);
+    expect(request.body).toBeInstanceOf(FormData);
   });
 });

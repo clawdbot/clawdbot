@@ -1,3 +1,4 @@
+// Diffs plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { diffsPluginConfigSchema } from "./src/config.js";
 import { registerDiffsPlugin } from "./src/plugin.js";

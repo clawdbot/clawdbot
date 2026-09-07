@@ -1,3 +1,4 @@
+// Zalouser plugin module implements zca constants behavior.
 export const ThreadType = {
   User: 0,
   Group: 1,

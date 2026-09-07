@@ -1,5 +1,11 @@
+// Whatsapp type declarations define plugin contracts.
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
+import type { WhatsAppSocketTimingOptions } from "../socket-timing.js";
 
 export type WebChannelHealthState =
   | "starting"
@@ -10,6 +16,7 @@ export type WebChannelHealthState =
   | "logged-out"
   | "stopped";
 
+/** @deprecated Use `WebInboundMessage`. */
 export type WebInboundMsg = WebInboundMessage;
 
 export type WebChannelStatus = {
@@ -26,17 +33,25 @@ export type WebChannelStatus = {
   lastInboundAt?: number | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
+  busy?: boolean;
+  lastRunActivityAt?: number | null;
   lastError?: string | null;
   healthState?: WebChannelHealthState;
+  lifecycle?: ChannelAccountSnapshot["lifecycle"];
+  terminalDisconnect?: boolean;
 };
 
 export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
+  socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   statusSink?: (status: WebChannelStatus) => void;
+  channelRuntime?: ChannelRuntimeSurface;
   /** WhatsApp account id. Default: "default". */
   accountId?: string;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender. */

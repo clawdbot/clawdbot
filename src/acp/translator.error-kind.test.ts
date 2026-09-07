@@ -1,3 +1,4 @@
+/** Tests Gateway errorKind to ACP stopReason mapping. */
 import { describe, expect, it } from "vitest";
 import {
   createChatEvent,

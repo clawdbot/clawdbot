@@ -3,14 +3,12 @@ summary: "CLI reference for `openclaw daemon` (legacy alias for gateway service 
 read_when:
   - You still use `openclaw daemon ...` in scripts
   - You need service lifecycle commands (install/start/stop/restart/status)
-title: "daemon"
+title: "Daemon"
 ---
 
 # `openclaw daemon`
 
-Legacy alias for Gateway service management commands.
-
-`openclaw daemon ...` maps to the same service control surface as `openclaw gateway ...` service commands.
+Legacy alias for Gateway service management. `openclaw daemon ...` maps to the same service-control commands as `openclaw gateway ...`. Prefer [`openclaw gateway`](/cli/gateway) for current docs and examples.
 
 ## Usage
 
@@ -23,35 +21,38 @@ openclaw daemon restart
 openclaw daemon uninstall
 ```
 
-## Subcommands
+## Subcommands and options
 
-- `status`: show service install state and probe Gateway health
-- `install`: install service (`launchd`/`systemd`/`schtasks`)
-- `uninstall`: remove service
-- `start`: start service
-- `stop`: stop service
-- `restart`: restart service
+| Subcommand  | Options                                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `status`    | `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
+| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`                      |
+| `uninstall` | `--json`                                                                                                   |
+| `start`     | `--json`                                                                                                   |
+| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)             |
+| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                                      |
 
-## Common options
+`--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
-- `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-- `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
-- lifecycle (`uninstall|start|stop|restart`): `--json`
+- `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
+- `status --port <port>`: selects a local Gateway using the invoking CLI config for auth and TLS. Cannot combine with `--url`; native service details remain diagnostic-only.
+- `install`: installs the service; `--force` reinstalls/overwrites an existing install.
+- Node is the primary, default, and recommended service runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
+- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` normally uses the service manager directly; on Windows, commands launched from a Gateway service automatically use the [safe restart path](/cli/gateway#restart-the-gateway). Explicit lifecycle controls retain their behavior; `--force` is the immediate override.
+- `restart --safe --skip-deferral`: bypasses only the active-work deferral gate. Shutdown may still wait for pending replies to drain before the Gateway process exits. Requires `--safe`.
 
-Notes:
+## Notes
 
-- `status` resolves configured auth SecretRefs for probe auth when possible.
-- If a required auth SecretRef is unresolved in this command path, `daemon status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
-- If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
-- `status --deep` adds a best-effort system-level service scan. When it finds other gateway-like services, human output prints cleanup hints and warns that one gateway per machine is still the normal recommendation.
-- On Linux systemd installs, `status` token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
-- Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
-- If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
-- When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
-- If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
-- If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
-- If you intentionally run multiple gateways on one host, isolate ports, config/state, and workspaces; see [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
+- `status` resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `status --json` reports `rpc.authWarning`; pass `--token`/`--password` explicitly or resolve the secret source first. Unresolved-auth warnings are suppressed once the probe otherwise succeeds.
+- `status --deep` adds a best-effort system-level scan for other gateway-like services (prints cleanup hints; one Gateway per machine is still the recommendation) and runs config validation in plugin-aware mode, surfacing plugin manifest warnings that the fast default path skips.
+- On Linux systemd installs, token-drift checks inspect both `Environment=` and `EnvironmentFile=` unit sources.
+- Token-drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env). If token auth is not effectively active (`gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or unset with password able to win), config token resolution is skipped.
+- `install` validates a SecretRef-managed `gateway.auth.token` is resolvable but never persists the resolved value into service environment metadata; if it can't resolve, install fails closed.
+- If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, `install` blocks until you set the mode explicitly.
+- On macOS, `install` writes LaunchAgent plists with mode `0644`; secrets stay in the generated owner-only environment file (`0600`), loaded through an owner-only wrapper (`0700`).
+- Running multiple Gateways on one host: isolate ports, config/state, and workspaces. See [Multiple gateways](/gateway#multiple-gateways-same-host).
 
-## Prefer
+## Related
 
-Use [`openclaw gateway`](/cli/gateway) for current docs and examples.
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

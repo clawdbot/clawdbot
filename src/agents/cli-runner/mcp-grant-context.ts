@@ -1,0 +1,213 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import type { DelegationCapability } from "../delegation-capability.js";
+import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import type { RunCliAgentParams } from "./types.js";
+
+const cliMcpDelegationCapability = Symbol("cliMcpDelegationCapability");
+
+export function buildCliMcpDelegationCapabilityBinding(capability: DelegationCapability): object {
+  return capability === "report_only" ? { [cliMcpDelegationCapability]: capability } : {};
+}
+
+function readCliMcpDelegationCapability(run: object): DelegationCapability | undefined {
+  if (!(cliMcpDelegationCapability in run)) {
+    return undefined;
+  }
+  const capability = run[cliMcpDelegationCapability];
+  return capability === "full" || capability === "report_only" ? capability : undefined;
+}
+
+export function normalizeOptionalMcpContextValue(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function buildCliMcpExecSession(
+  sessionEntry: RunCliAgentParams["sessionEntry"],
+  execOverrides: RunCliAgentParams["execOverrides"],
+): McpLoopbackRequestContext["execSession"] {
+  const permissionMode = sessionEntry?.permissionMode;
+  const effectivePermissionMode =
+    permissionMode && execOverrides?.mode
+      ? SESSION_PERMISSION_BY_EXEC_MODE[execOverrides.mode]
+      : permissionMode;
+  const execSession = {
+    execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
+    execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
+    ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
+  };
+  return Object.values(execSession).some(Boolean) ? execSession : undefined;
+}
+
+function buildCliMcpExecOverrides(
+  execOverrides: RunCliAgentParams["execOverrides"],
+): McpLoopbackRequestContext["execOverrides"] {
+  if (!execOverrides) {
+    return undefined;
+  }
+  const scopedOverrides = {
+    ...(execOverrides.mode !== undefined ? { mode: execOverrides.mode } : {}),
+    ...(execOverrides.host !== undefined ? { host: execOverrides.host } : {}),
+    ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
+    ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
+    ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),
+  };
+  return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
+}
+
+function buildCliMcpBashElevated(
+  bashElevated: RunCliAgentParams["bashElevated"],
+): McpLoopbackRequestContext["bashElevated"] {
+  if (!bashElevated) {
+    return undefined;
+  }
+  return {
+    enabled: bashElevated.enabled,
+    allowed: bashElevated.allowed,
+    defaultLevel: bashElevated.defaultLevel,
+    ...(bashElevated.fullAccessAvailable !== undefined
+      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
+      : {}),
+    ...(bashElevated.fullAccessBlockedReason !== undefined
+      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
+      : {}),
+  };
+}
+
+function buildCliMcpChannelContext(
+  channelContext: RunCliAgentParams["channelContext"],
+  senderId?: string | null,
+): McpLoopbackRequestContext["channelContext"] {
+  const resolvedSenderId =
+    normalizeOptionalMcpContextValue(senderId ?? undefined) ??
+    normalizeOptionalMcpContextValue(channelContext?.sender?.id);
+  const chatId = normalizeOptionalMcpContextValue(channelContext?.chat?.id);
+  if (!resolvedSenderId && !chatId) {
+    return undefined;
+  }
+  return {
+    ...(resolvedSenderId ? { sender: { id: resolvedSenderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+}
+
+function resolveCliMcpSessionKey(
+  run: Pick<RunCliAgentParams, "sessionKey">,
+  config: OpenClawConfig,
+  agentId: string,
+): string {
+  return canonicalizeMainSessionAlias({
+    cfg: config,
+    agentId,
+    sessionKey: run.sessionKey?.trim() || "main",
+  });
+}
+
+export function buildCliMcpGrantContext(params: {
+  run: RunCliAgentParams;
+  config: OpenClawConfig;
+  requireExplicitMessageTarget: boolean;
+  agentId: string;
+  runtimePolicyAgentId?: string;
+  modelProvider: string;
+  modelId: string;
+  toolsAllow?: string[];
+}): McpLoopbackRequestContext {
+  const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
+  const runtimePolicySessionKey = normalizeOptionalMcpContextValue(
+    params.run.runtimePolicySessionKey,
+  );
+  const clientCaps = uniqueStrings(
+    (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
+  );
+  const execSession = buildCliMcpExecSession(params.run.sessionEntry, params.run.execOverrides);
+  const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
+  const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
+  const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
+  const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
+  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
+  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164 ?? undefined);
+  const groupId = normalizeOptionalMcpContextValue(params.run.groupId ?? undefined);
+  const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
+  const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
+  const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
+  const messageProvider = resolveGatewayMessageChannel(
+    params.run.messageChannel ?? params.run.messageProvider,
+  );
+  const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
+  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
+  const delegationCapability = readCliMcpDelegationCapability(params.run);
+  // Trusted message-only completions stay restricted even when source routing
+  // is missing; the message tool must fail closed instead of widening authority.
+  const sourceReplyOnly =
+    params.run.inputProvenance?.kind === "inter_session" &&
+    params.run.inputProvenance.sourceTool === "subagent_announce" &&
+    params.run.sourceReplyDeliveryMode === "message_tool_only" &&
+    grantedToolsAllow?.length === 1 &&
+    grantedToolsAllow[0] === "message";
+  return {
+    sessionKey,
+    runtimePolicySessionKey,
+    ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
+    agentId: params.agentId,
+    sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
+    runId: normalizeOptionalMcpContextValue(params.run.runId),
+    workspaceDir: params.run.workspaceDir,
+    ...(normalizeOptionalMcpContextValue(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
+    // Restricted runs get their allowlist stamped into the grant; the
+    // loopback server enforces it on tools/list and tools/call.
+    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    ...(params.run.skillWorkshopProposalRevision
+      ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
+      : {}),
+    // Same enforcement point for the fallback delegation gate, so an
+    // unrestricted run keeps its exact prior grant shape.
+    ...(delegationCapability ? { delegationCapability } : {}),
+    ...(params.run.scheduledToolPolicy
+      ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
+      : {}),
+    ...(params.run.cronCreatorCallerOrigin
+      ? { cronCreatorCallerOrigin: { ...params.run.cronCreatorCallerOrigin } }
+      : {}),
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    modelHasVision: params.run.modelHasVision,
+    messageProvider,
+    clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
+    ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
+    currentChannelId,
+    currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
+    currentMessageId:
+      params.run.currentMessageId == null
+        ? undefined
+        : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+    replyToMode: params.run.replyToMode,
+    currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
+    accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
+    inboundEventKind: params.run.currentInboundEventKind,
+    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
+    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
+    senderIsOwner: params.run.senderIsOwner === true,
+    nodeExecAllowed: true,
+    ...(execSession ? { execSession } : {}),
+    ...(execOverrides ? { execOverrides } : {}),
+    ...(bashElevated ? { bashElevated } : {}),
+    ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
+      ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
+      : {}),
+    ...(channelContext ? { channelContext } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderE164 ? { senderE164 } : {}),
+    ...(groupId ? { groupId } : {}),
+    ...(groupChannel ? { groupChannel } : {}),
+    ...(groupSpace ? { groupSpace } : {}),
+    ...(spawnedBy ? { spawnedBy } : {}),
+  };
+}

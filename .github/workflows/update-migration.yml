@@ -1,0 +1,54 @@
+name: Update Migration
+
+on:
+  schedule:
+    # Sunday 03:17 UTC avoids the daily cache warmers and top-of-hour bursts.
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      workflow_ref:
+        description: Trusted workflow/harness ref
+        default: main
+        required: true
+        type: string
+      package_ref:
+        description: Branch, tag, or SHA to package as the update target
+        default: main
+        required: true
+        type: string
+      baselines:
+        description: supported-lines expands native operator state and keeps synthetic fixtures on the candidate predecessor; explicit lists retain the full matrix
+        default: supported-lines
+        required: false
+        type: string
+      scenarios:
+        description: Update survivor scenarios
+        default: plugin-deps-cleanup legacy-operator-state
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  pull-requests: read
+
+concurrency:
+  group: update-migration-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  update_migration:
+    name: Update migration matrix
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      workflow_ref: ${{ inputs.workflow_ref || 'main' }}
+      source: ref
+      package_ref: ${{ inputs.package_ref || 'main' }}
+      suite_profile: custom
+      docker_lanes: update-migration
+      published_upgrade_survivor_baselines: ${{ inputs.baselines || 'supported-lines' }}
+      published_upgrade_survivor_scenarios: ${{ inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}
+      shared_image_artifact_namespace: update-migration
+      shared_image_policy: no-push-artifact
+      telegram_mode: none

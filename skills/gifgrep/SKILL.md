@@ -1,6 +1,6 @@
 ---
 name: gifgrep
-description: Search GIF providers with CLI/TUI, download results, and extract stills/sheets.
+description: "Search GIF providers with CLI/TUI, download results, and extract stills/sheets."
 homepage: https://gifgrep.com
 metadata:
   {
@@ -35,7 +35,7 @@ Use `gifgrep` to search GIF providers (Tenor/Giphy), browse in a TUI, download r
 
 GIF-Grab (gifgrep workflow)
 
-- Search → preview → download → extract (still/sheet) for fast review and sharing.
+- Search -> preview -> download -> extract (still/sheet) for fast review and sharing.
 
 Quick start
 
@@ -72,6 +72,12 @@ Output
 
 - `--json` prints an array of results (`id`, `title`, `url`, `preview_url`, `tags`, `width`, `height`)
 - `--format` for pipe-friendly fields (e.g., `url`)
+
+GIF asset hygiene
+
+- Before recommending or using an animated GIF URL, verify it resolves successfully, has `Content-Type: image/gif`, and is actually animated (multiple frames or loop metadata; e.g. inspect with `file`, `identify`, or a small script).
+- Record attribution/license/source URL alongside the asset.
+- Do not hotlink when a local asset is needed: download/copy it into the project and reference the local file.
 
 Environment tweaks
 

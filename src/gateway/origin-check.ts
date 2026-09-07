@@ -1,27 +1,75 @@
+// Browser Origin validator for gateway HTTP and websocket requests.
+import type { IncomingMessage } from "node:http";
+import net from "node:net";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isLocalDirectRequest,
+  isLoopbackHost,
+  isPrivateOrLoopbackAddress,
+  normalizeHostHeader,
+  resolveHostName,
+} from "./net.js";
 
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
+      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
     }
   | { ok: false; reason: string };
 
+type BrowserOriginPolicy = {
+  requestHost?: string;
+  origin?: string;
+  fetchSite?: string;
+  allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
+};
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Gather the canonical Gateway browser-origin policy inputs for one HTTP request. */
+export function resolveBrowserOriginPolicy(params: {
+  req: IncomingMessage;
+  cfg?: OpenClawConfig;
+}): BrowserOriginPolicy {
+  return {
+    requestHost: headerValue(params.req.headers.host),
+    origin: headerValue(params.req.headers.origin),
+    fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
+    allowedOrigins: params.cfg?.gateway?.controlUi?.allowedOrigins,
+    allowHostHeaderOriginFallback:
+      params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  };
+}
+
 function parseOrigin(
   originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+): { origin: string; protocol: string; host: string; hostname: string } | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
   }
+  // URL parsing collapses dot segments. Reject non-origin suffixes before
+  // canonicalization so a path cannot inherit its authority's grant.
+  if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#\\]+\/?$/i.test(trimmed)) {
+    return null;
+  }
   try {
     const url = new URL(trimmed);
+    if (url.username || url.password || !url.protocol || !url.host) {
+      return null;
+    }
+    // Hosted app schemes have an opaque URL.origin but a stable authority.
+    const origin = url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
     return {
-      origin: normalizeLowercaseStringOrEmpty(url.origin),
+      origin: normalizeLowercaseStringOrEmpty(origin),
+      protocol: normalizeLowercaseStringOrEmpty(url.protocol),
       host: normalizeLowercaseStringOrEmpty(url.host),
       hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
@@ -30,6 +78,25 @@ function parseOrigin(
   }
 }
 
+/** Whether a browser document was loaded from the Gateway's advertised HTTP host. */
+export function isGatewayHostBrowserOrigin(params: {
+  requestHost?: string;
+  origin?: string;
+}): boolean {
+  const parsedOrigin = parseOrigin(params.origin);
+  const requestHost = normalizeHostHeader(params.requestHost);
+  return Boolean(parsedOrigin && requestHost && parsedOrigin.host === requestHost);
+}
+
+/** Return a canonical Chrome extension origin for pairing-bound authorization. */
+export function normalizeChromeExtensionOrigin(originRaw?: string): string | undefined {
+  const parsed = parseOrigin(originRaw);
+  return parsed?.protocol === "chrome-extension:" && /^[a-p]{32}$/u.test(parsed.hostname)
+    ? parsed.origin
+    : undefined;
+}
+
+/** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
@@ -59,6 +126,13 @@ export function checkBrowserOrigin(params: {
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }
+  if (
+    requestHost &&
+    parsedOrigin.host === requestHost &&
+    isTrustedSameOriginHost(requestHost, params.isLocalClient)
+  ) {
+    return { ok: true, matchedBy: "private-same-origin" };
+  }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
   if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
@@ -66,4 +140,37 @@ export function checkBrowserOrigin(params: {
   }
 
   return { ok: false, reason: "origin not allowed" };
+}
+
+/** Return the request Origin only when the Gateway's canonical browser policy accepts it. */
+export function resolveAcceptedBrowserOrigin(params: {
+  req: IncomingMessage;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const policy = resolveBrowserOriginPolicy(params);
+  const origin = policy.origin?.trim();
+  if (!origin) {
+    return undefined;
+  }
+  return checkBrowserOrigin({
+    ...policy,
+    origin,
+    isLocalClient: isLocalDirectRequest(params.req),
+  }).ok
+    ? origin
+    : undefined;
+}
+
+function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): boolean {
+  const hostname = resolveHostName(hostHeader);
+  if (!hostname) {
+    return false;
+  }
+  if (isLoopbackHost(hostname)) {
+    return isLocalClient !== false;
+  }
+  if (net.isIP(hostname) !== 0) {
+    return isPrivateOrLoopbackAddress(hostname);
+  }
+  return hostname.endsWith(".local") || hostname.endsWith(".ts.net");
 }

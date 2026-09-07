@@ -1,13 +1,23 @@
+// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
+import { isWildcardBindHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
-import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
+import {
+  isRequestBodyLimitError,
+  isTrustedProxyAddress,
+  readRequestBodyWithLimit,
+  resolveClientIp,
+  sendHttpRequestRejection,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
@@ -18,7 +28,7 @@ const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
  * Sent by Mattermost when a user clicks an action button.
  * See: https://developers.mattermost.com/integrate/plugins/interactive-messages/
  */
-export type MattermostInteractionPayload = {
+type MattermostInteractionPayload = {
   user_id: string;
   user_name?: string;
   channel_id: string;
@@ -38,7 +48,7 @@ export type MattermostInteractionResponse = {
   ephemeral_text?: string;
 };
 
-export type MattermostInteractionAuthorizationResult =
+type MattermostInteractionAuthorizationResult =
   | { ok: true }
   | { ok: false; statusCode?: number; response?: MattermostInteractionResponse };
 
@@ -60,10 +70,6 @@ export function setInteractionCallbackUrl(accountId: string, url: string): void 
   callbackUrls.set(accountId, url);
 }
 
-export function getInteractionCallbackUrl(accountId: string): string | undefined {
-  return callbackUrls.get(accountId);
-}
-
 type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
   interactions?: {
     callbackBaseUrl?: string;
@@ -72,15 +78,6 @@ type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & 
 
 export function resolveInteractionCallbackPath(accountId: string): string {
   return `/mattermost/interactions/${accountId}`;
-}
-
-function isWildcardBindHost(rawHost: string): boolean {
-  const trimmed = rawHost.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-  return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
 }
 
 function normalizeCallbackBaseUrl(baseUrl: string): string {
@@ -132,7 +129,7 @@ export function computeInteractionCallbackUrl(
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }
-  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  const port = resolveGatewayPort(cfg);
   let host =
     cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
       ? cfg.gateway.customBindHost.trim()
@@ -181,7 +178,7 @@ export function setInteractionSecret(accountIdOrBotToken: string, botToken?: str
   defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
 }
 
-export function getInteractionSecret(accountId?: string): string {
+function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
@@ -215,16 +212,13 @@ function canonicalizeInteractionContext(value: unknown): unknown {
   return value;
 }
 
-export function generateInteractionToken(
-  context: Record<string, unknown>,
-  accountId?: string,
-): string {
+function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
   const secret = getInteractionSecret(accountId);
   const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-export function verifyInteractionToken(
+function verifyInteractionToken(
   context: Record<string, unknown>,
   token: string,
   accountId?: string,
@@ -235,7 +229,7 @@ export function verifyInteractionToken(
 
 // ── Button builder helpers ─────────────────────────────────────────────
 
-export type MattermostButton = {
+type MattermostButton = {
   id: string;
   type: "button" | "select";
   name: string;
@@ -246,7 +240,7 @@ export type MattermostButton = {
   };
 };
 
-export type MattermostAttachment = {
+type MattermostAttachment = {
   text?: string;
   actions?: MattermostButton[];
   [key: string]: unknown;
@@ -353,35 +347,11 @@ export function buildButtonProps(params: {
 // ── Request body reader ────────────────────────────────────────────────
 
 function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    const timer = setTimeout(() => {
-      req.destroy();
-      reject(new Error("Request body read timeout"));
-    }, INTERACTION_BODY_TIMEOUT_MS);
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > INTERACTION_MAX_BODY_BYTES) {
-        req.destroy();
-        clearTimeout(timer);
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on("end", () => {
-      clearTimeout(timer);
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-
-    req.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+  return readRequestBodyWithLimit(req, {
+    maxBytes: INTERACTION_MAX_BODY_BYTES,
+    timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
+    // Defer destruction so the rejection below reaches Mattermost before the close.
+    destroyOnLimit: false,
   });
 }
 
@@ -426,6 +396,14 @@ export function createMattermostInteractionHandler(params: {
   const { client, accountId, log } = params;
   const core = getMattermostRuntime();
 
+  function parseInteractionPayload(raw: string): MattermostInteractionPayload {
+    try {
+      return JSON.parse(raw) as MattermostInteractionPayload;
+    } catch {
+      throw new Error("Mattermost interaction body was malformed JSON");
+    }
+  }
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Only accept POST
     if (req.method !== "POST") {
@@ -456,9 +434,29 @@ export function createMattermostInteractionHandler(params: {
     let payload: MattermostInteractionPayload;
     try {
       const raw = await readInteractionBody(req);
-      payload = JSON.parse(raw) as MattermostInteractionPayload;
+      payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          413,
+          JSON.stringify({ error: "Payload too large" }),
+          "application/json",
+        );
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          408,
+          JSON.stringify({ error: "Request body timeout" }),
+          "application/json",
+        );
+        return;
+      }
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid request body" }));
@@ -474,7 +472,7 @@ export function createMattermostInteractionHandler(params: {
     }
 
     // Verify HMAC token
-    const token = context._token;
+    const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
       res.statusCode = 403;
@@ -516,8 +514,8 @@ export function createMattermostInteractionHandler(params: {
     }
 
     const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let originalPost: MattermostPost | null = null;
+    let originalMessage;
+    let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);

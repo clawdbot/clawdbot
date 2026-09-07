@@ -1,0 +1,287 @@
+{
+  "provider": {
+    "payload": {
+      "model": "claude-sonnet-4-6",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Find the answer.",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        }
+      ],
+      "max_tokens": 4096,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "Be exact.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "tools": [
+        {
+          "name": "lookup",
+          "description": "Look up a value.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ]
+          },
+          "eager_input_streaming": true,
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized"
+      },
+      "output_config": {
+        "effort": "low"
+      }
+    },
+    "eventTrace": [
+      {
+        "type": "start"
+      },
+      {
+        "type": "thinking_start",
+        "contentIndex": 0
+      },
+      {
+        "type": "thinking_delta",
+        "contentIndex": 0,
+        "delta": "seed"
+      },
+      {
+        "type": "thinking_delta",
+        "contentIndex": 0,
+        "delta": " + thought"
+      },
+      {
+        "type": "thinking_end",
+        "contentIndex": 0,
+        "content": "seed + thought"
+      },
+      {
+        "type": "text_start",
+        "contentIndex": 1
+      },
+      {
+        "type": "text_delta",
+        "contentIndex": 1,
+        "delta": "Hello"
+      },
+      {
+        "type": "text_delta",
+        "contentIndex": 1,
+        "delta": " world"
+      },
+      {
+        "type": "text_end",
+        "contentIndex": 1,
+        "content": "Hello world"
+      },
+      {
+        "type": "done",
+        "reason": "stop"
+      }
+    ],
+    "terminal": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "seed + thought",
+          "thinkingSignature": "final-signature"
+        },
+        {
+          "type": "text",
+          "text": "Hello world"
+        }
+      ],
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "responseId": "msg_parity",
+      "responseModel": "claude-sonnet-4-6-response",
+      "usage": {
+        "input": 7,
+        "output": 5,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 12,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        },
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 7,
+          "totalTokens": 12
+        }
+      },
+      "stopReason": "stop"
+    },
+    "errorFields": {}
+  },
+  "transport": {
+    "payload": {
+      "model": "claude-sonnet-4-6",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Find the answer.",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        }
+      ],
+      "max_tokens": 4096,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "Be exact.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "tools": [
+        {
+          "name": "lookup",
+          "description": "Look up a value.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ]
+          },
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "eventTrace": [
+      {
+        "type": "start"
+      },
+      {
+        "type": "thinking_start",
+        "contentIndex": 0
+      },
+      {
+        "type": "thinking_delta",
+        "contentIndex": 0,
+        "delta": "seed"
+      },
+      {
+        "type": "thinking_delta",
+        "contentIndex": 0,
+        "delta": " + thought"
+      },
+      {
+        "type": "thinking_end",
+        "contentIndex": 0,
+        "content": "seed + thought"
+      },
+      {
+        "type": "text_start",
+        "contentIndex": 1
+      },
+      {
+        "type": "text_delta",
+        "contentIndex": 1,
+        "delta": "Hello"
+      },
+      {
+        "type": "text_delta",
+        "contentIndex": 1,
+        "delta": " world"
+      },
+      {
+        "type": "text_end",
+        "contentIndex": 1,
+        "content": "Hello world"
+      },
+      {
+        "type": "done",
+        "reason": "stop"
+      }
+    ],
+    "terminal": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "seed + thought",
+          "thinkingSignature": "final-signature"
+        },
+        {
+          "type": "text",
+          "text": "Hello world"
+        }
+      ],
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "responseId": "msg_parity",
+      "responseModel": "claude-sonnet-4-6-response",
+      "usage": {
+        "input": 7,
+        "output": 5,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 12,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        },
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 7,
+          "totalTokens": 12
+        }
+      },
+      "stopReason": "stop"
+    },
+    "errorFields": {}
+  }
+}

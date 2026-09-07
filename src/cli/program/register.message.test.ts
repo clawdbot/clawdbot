@@ -1,3 +1,4 @@
+// Register message tests cover message command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
@@ -32,6 +33,14 @@ const registerMessageThreadCommandsMock = mocks.registerMessageThreadCommandsMoc
 const registerMessageEmojiCommandsMock = mocks.registerMessageEmojiCommandsMock;
 const registerMessageStickerCommandsMock = mocks.registerMessageStickerCommandsMock;
 const registerMessageDiscordAdminCommandsMock = mocks.registerMessageDiscordAdminCommandsMock;
+
+function requireProgramCommand(program: Command, name: string): Command {
+  const command = program.commands.find((entry) => entry.name() === name);
+  if (!command) {
+    throw new Error(`expected ${name} command`);
+  }
+  return command;
+}
 
 vi.mock("./message/helpers.js", () => ({
   createMessageCliHelpers: mocks.createMessageCliHelpersMock,
@@ -96,9 +105,8 @@ describe("registerMessageCommands", () => {
     const program = new Command();
     registerMessageCommands(program, ctx);
 
-    const message = program.commands.find((command) => command.name() === "message");
-    expect(message).toBeDefined();
-    expect(createMessageCliHelpersMock).toHaveBeenCalledWith(message, "telegram|discord");
+    const message = requireProgramCommand(program, "message");
+    expect(createMessageCliHelpersMock).toHaveBeenCalledWith("telegram|discord");
 
     const expectedRegistrars = [
       registerMessageSendCommandMock,
@@ -119,16 +127,56 @@ describe("registerMessageCommands", () => {
     }
   });
 
-  it("shows command help when root message command is invoked", async () => {
+  it("shows root message help without reporting a command failure", async () => {
     const program = new Command().exitOverride();
     registerMessageCommands(program, ctx);
-    const message = program.commands.find((command) => command.name() === "message");
-    expect(message).toBeDefined();
-    const helpSpy = vi.spyOn(message as Command, "help").mockImplementation(() => {
-      throw new Error("help-called");
-    });
+    const message = requireProgramCommand(program, "message");
+    const helpSpy = vi.spyOn(message, "outputHelp").mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
 
-    await expect(program.parseAsync(["message"], { from: "user" })).rejects.toThrow("help-called");
-    expect(helpSpy).toHaveBeenCalledWith({ error: true });
+    try {
+      process.exitCode = undefined;
+
+      await expect(program.parseAsync(["message"], { from: "user" })).resolves.toBe(program);
+
+      expect(helpSpy).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each([
+    ["thread", registerMessageThreadCommandsMock],
+    ["emoji", registerMessageEmojiCommandsMock],
+    ["sticker", registerMessageStickerCommandsMock],
+    ["role", registerMessageDiscordAdminCommandsMock],
+    ["channel", registerMessageDiscordAdminCommandsMock],
+    ["member", registerMessageDiscordAdminCommandsMock],
+    ["voice", registerMessageDiscordAdminCommandsMock],
+    ["event", registerMessageDiscordAdminCommandsMock],
+  ])("shows message %s help without reporting a command failure", async (name, registerCommand) => {
+    registerCommand.mockImplementationOnce((message: Command) => {
+      message
+        .command(name)
+        .command("action")
+        .action(() => {});
+    });
+    const program = new Command().exitOverride();
+    registerMessageCommands(program, ctx);
+    const parent = requireProgramCommand(requireProgramCommand(program, "message"), name);
+    const helpSpy = vi.spyOn(parent, "outputHelp").mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
+
+    try {
+      process.exitCode = undefined;
+
+      await expect(program.parseAsync(["message", name], { from: "user" })).resolves.toBe(program);
+
+      expect(helpSpy).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
   });
 });

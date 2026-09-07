@@ -1,3 +1,7 @@
+// Groups channel-scoped status issues for status report table rendering.
+// Kept tiny so both text and report builders share identical issue ordering.
+
+/** Groups issue-like rows by channel id while preserving the original issue order per channel. */
 export function groupChannelIssuesByChannel<T extends { channel: string }>(
   issues: readonly T[],
 ): Map<string, T[]> {

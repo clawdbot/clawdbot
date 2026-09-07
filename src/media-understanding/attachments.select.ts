@@ -1,3 +1,5 @@
+// Attachment selection applies per-capability filters, ordering preferences,
+// and max-count policy before provider execution.
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
 import {
   isAudioAttachment,
@@ -12,24 +14,17 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
-  const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
-  if (!prefer || prefer === "first") {
-    return list;
-  }
+  // Ordering is stable and non-mutating so downstream decisions can still cite
+  // original attachment indexes.
   if (prefer === "last") {
-    return [...list].toReversed();
+    return attachments.toReversed();
   }
-  if (prefer === "path") {
-    const withPath = list.filter((item) => item.path);
-    const withoutPath = list.filter((item) => !item.path);
-    return [...withPath, ...withoutPath];
+  if (prefer === "path" || prefer === "url") {
+    const preferred = attachments.filter((item) => item[prefer]);
+    const remaining = attachments.filter((item) => !item[prefer]);
+    return [...preferred, ...remaining];
   }
-  if (prefer === "url") {
-    const withUrl = list.filter((item) => item.url);
-    const withoutUrl = list.filter((item) => !item.url);
-    return [...withUrl, ...withoutUrl];
-  }
-  return list;
+  return attachments;
 }
 
 function isAttachmentRecord(value: unknown): value is MediaAttachment {
@@ -55,15 +50,16 @@ function isAttachmentRecord(value: unknown): value is MediaAttachment {
   return true;
 }
 
+/** Selects attachments for a media-understanding capability under configured ordering limits. */
 export function selectAttachments(params: {
   capability: MediaUnderstandingCapability;
   attachments: MediaAttachment[];
   policy?: MediaUnderstandingAttachmentsConfig;
-}): MediaAttachment[] {
+}): { selected: MediaAttachment[]; droppedAttachmentIndexes: number[] } {
   const { capability, attachments, policy } = params;
   const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
   const matches = input.filter((item) => {
-    // Skip already-transcribed audio attachments from preflight
+    // Preflight audio has already been consumed; rerunning STT would duplicate transcript output.
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;
     }
@@ -76,14 +72,15 @@ export function selectAttachments(params: {
     return isVideoAttachment(item);
   });
   if (matches.length === 0) {
-    return [];
+    return { selected: [], droppedAttachmentIndexes: [] };
   }
 
   const ordered = orderAttachments(matches, policy?.prefer);
   const mode = policy?.mode ?? "first";
   const maxAttachments = policy?.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
-  if (mode === "all") {
-    return ordered.slice(0, Math.max(1, maxAttachments));
-  }
-  return ordered.slice(0, 1);
+  const limit = mode === "all" ? Math.max(1, maxAttachments) : 1;
+  return {
+    selected: ordered.slice(0, limit),
+    droppedAttachmentIndexes: ordered.slice(limit).map((attachment) => attachment.index),
+  };
 }

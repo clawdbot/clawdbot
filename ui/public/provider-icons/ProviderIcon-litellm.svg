@@ -1,0 +1,16 @@
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8.1 12.4C12.5 8.8 17.7 6.3 22.4 5.7c0-.5.5-.7 1-.8 1.8-.4 4.1-.5 5.8-.5.6 0 1 .4 1 1v19c0 .6-.4 1-1 1H10c-.7 0-1.3 0-1.9-.1V12.4Z" stroke-width="1.35"/>
+    <path d="M8.1 12.4C5 14.8 3 17 2.8 19.2c-.2 1.9 1.8 3.5 5.3 4.5V12.4Z" fill="currentColor" stroke-width="1.35"/>
+    <path d="M10.6 19.5h3.7" stroke-width="1.35"/>
+    <path d="M20.6 25.5l-1.3 2.6c.5.3 1.1.4 1.7.2.9-.2 1.6-1.2 1.7-2.8" stroke-width="1.2"/>
+    <path d="M25.3 25.5c.1 1.8 1.2 3 2.6 3s2.5-1.2 2.6-3" stroke-width="1.2"/>
+    <path d="M25.3 15.5h2.9c.5 0 .9.4.9.9v6.9c0 .5-.4.9-.9.9h-2.9c-.5 0-.9-.4-.9-.9v-6.9c0-.5.4-.9.9-.9Z" stroke-width="1.2"/>
+    <path d="M17.3 22.6h7.1m4.7 0h1.1" stroke-width="1.05"/>
+  </g>
+  <path d="M12.9 13.1c4.2-2.3 8.3-3.5 12.7-3.6.8.2 1.8 1.5 2.4 3.1-5.3.2-10.3.8-15.2 2.6-1.2.4-1.5-1.2.1-2.1Z" fill="currentColor"/>
+  <path d="M20.4 16.5h4v5.4h-6.6l2.6-5.4Z" fill="currentColor"/>
+  <path d="M29.1 16.5h1.1v5.4h-1.1v-5.4Z" fill="currentColor"/>
+  <path d="M10.9 25.5h9.5l-1.6 2.3H10c-.8 0-1.1-.7-.7-1.3l1.6-1Z" fill="currentColor"/>
+  <path d="M25.8 25.5h4c-.1 1.2-.9 2.1-2 2.1s-1.9-.9-2-2.1Z" fill="currentColor"/>
+</svg>

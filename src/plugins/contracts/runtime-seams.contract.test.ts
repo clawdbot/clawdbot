@@ -1,3 +1,4 @@
+// Runtime seam contract tests cover allowed plugin runtime entrypoints and import boundaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,11 +8,18 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
-import { clearPluginDiscoveryCache } from "../discovery.js";
-import { clearPluginManifestRegistryCache } from "../manifest-registry.js";
+import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
+import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
+    config: config ?? {},
+    autoEnabledReasons: {},
+  }),
+}));
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
@@ -68,11 +76,8 @@ function createInstalledRuntimePluginDir(
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  facadeRuntime.resetFacadeRuntimeStateForTest();
   vi.restoreAllMocks();
-  vi.resetModules();
-  vi.doUnmock("../../config/plugin-auto-enable.js");
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -97,7 +102,10 @@ afterEach(() => {
 describe("shared runtime seam contracts", () => {
   it("allows activated runtime facades when the resolved plugin root matches an installed-style manifest record", async () => {
     const pluginId = "line-contract-fixture";
-    const { bundledDir, stateDir } = createInstalledRuntimePluginDir(pluginId, "line-ok");
+    const { bundledDir, stateDir, pluginRoot } = createInstalledRuntimePluginDir(
+      pluginId,
+      "line-ok",
+    );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     process.env.OPENCLAW_STATE_DIR = stateDir;
     setRuntimeConfigSnapshot({
@@ -109,29 +117,24 @@ describe("shared runtime seam contracts", () => {
         },
       },
     });
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-    vi.resetModules();
-    vi.doMock("../../config/plugin-auto-enable.js", () => ({
-      applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
-        config: config ?? {},
-        autoEnabledReasons: {},
-      }),
-    }));
-
-    const facadeRuntime = await import("../../plugin-sdk/facade-runtime.js");
     facadeRuntime.resetFacadeRuntimeStateForTest();
 
+    const location = {
+      modulePath: path.join(pluginRoot, "runtime-api.js"),
+      boundaryRoot: pluginRoot,
+    };
     expect(
-      facadeRuntime.canLoadActivatedBundledPluginPublicSurface({
+      activationCheck.resolveBundledPluginPublicSurfaceAccess({
         dirName: pluginId,
         artifactBasename: "runtime-api.js",
-      }),
+        location,
+        sourceExtensionsRoot: bundledDir,
+      }).allowed,
     ).toBe(true);
     expect(
-      facadeRuntime.loadActivatedBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
-        dirName: pluginId,
-        artifactBasename: "runtime-api.js",
+      facadeRuntime.testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+        location,
+        trackedPluginId: pluginId,
       }).marker,
     ).toBe("line-ok");
     expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual([pluginId]);
@@ -151,7 +154,7 @@ describe("shared runtime seam contracts", () => {
     const runtimeFetch = vi.fn(async () => new Response("runtime", { status: 200 }));
     const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expect(requestInit.dispatcher).toBeInstanceOf(MockAgent);
       return new Response("mock", { status: 200 });
     });
 

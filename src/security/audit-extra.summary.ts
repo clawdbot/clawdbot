@@ -1,19 +1,31 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope-config.js";
+// Summarizes extra security audit findings for user-facing output.
+import {
+  resolveConfiguredToolPolicies,
+  resolveProviderToolPolicy,
+} from "../agents/agent-tools.policy.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
-import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
+import {
+  createAgentToAgentPolicy,
+  resolveSandboxSessionToolsVisibility,
+  resolveSessionToolsVisibility,
+} from "../plugin-sdk/session-visibility.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
-import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 
-export type SecurityAuditFinding = {
+/** Lightweight audit finding shape used by summary-only audit helpers. */
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -22,8 +34,6 @@ export type SecurityAuditFinding = {
 };
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
-
-type ModelRef = { id: string; source: string };
 
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
@@ -54,61 +64,8 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
   return { open, allowlist, other };
 }
 
-function addModel(models: ModelRef[], raw: unknown, source: string) {
-  if (typeof raw !== "string") {
-    return;
-  }
-  const id = raw.trim();
-  if (!id) {
-    return;
-  }
-  models.push({ id, source });
-}
-
-function collectModels(cfg: OpenClawConfig): ModelRef[] {
-  const out: ModelRef[] = [];
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-    "agents.defaults.model.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    addModel(out, fallback, "agents.defaults.model.fallbacks");
-  }
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    addModel(out, fallback, "agents.defaults.imageModel.fallbacks");
-  }
-
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
-    const model = (agent as { model?: unknown }).model;
-    if (typeof model === "string") {
-      addModel(out, model, `agents.list.${id}.model`);
-    } else if (model && typeof model === "object") {
-      addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
-      const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const fallback of fallbacks) {
-          addModel(out, fallback, `agents.list.${id}.model.fallbacks`);
-        }
-      }
-    }
-  }
-  return out;
-}
-
 function extractAgentIdFromSource(source: string): string | null {
-  const match = source.match(/^agents\.list\.([^.]*)\./);
+  const match = source.match(/^agents\.entries\.([^.]*)\./);
   return match?.[1] ?? null;
 }
 
@@ -117,29 +74,26 @@ function resolveToolPolicies(params: {
   agentTools?: AgentToolsConfig;
   sandboxMode?: "off" | "non-main" | "all";
   agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
 }): SandboxToolPolicy[] {
-  const policies: SandboxToolPolicy[] = [];
-  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  if (profilePolicy) {
-    policies.push(profilePolicy);
-  }
-
-  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) {
-    policies.push(globalPolicy);
-  }
-
-  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
-  if (agentPolicy) {
-    policies.push(agentPolicy);
-  }
-
-  if (params.sandboxMode === "all") {
-    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
-  }
-
-  return policies;
+  const globalProviderPolicy = resolveProviderToolPolicy({
+    byProvider: params.cfg.tools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const agentProviderPolicy = resolveProviderToolPolicy({
+    byProvider: params.agentTools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  return resolveConfiguredToolPolicies({
+    cfg: params.cfg,
+    agentTools: params.agentTools,
+    sandboxMode: params.sandboxMode,
+    agentId: params.agentId,
+    extraPolicies: [globalProviderPolicy, agentProviderPolicy],
+  });
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -147,7 +101,6 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
     config: cfg,
     env,
     origin: "bundled",
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -171,15 +124,26 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
-  return cfg.browser?.enabled !== false;
+  if (cfg.browser?.enabled === false) {
+    return false;
+  }
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: "browser" },
+    normalizedConfig: normalizePluginsConfigWithResolverCore(
+      cfg.plugins,
+      (pluginId) => normalizeOptionalLowercaseString(pluginId) ?? "",
+    ),
+    // Browser config selects behavior; it must not weaken global plugin policy.
+  });
 }
 
+/** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = cfg.hooks?.internal?.enabled !== false;
-  const browserEnabled = cfg.browser?.enabled ?? true;
+  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
+  const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
@@ -192,7 +156,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway";
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
   return [
     {
@@ -204,25 +168,111 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   ];
 }
 
+/** Surface default cross-agent session access, escalating when trust boundaries may differ. */
+export function collectCrossAgentSessionAccessFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
+  const agentIds = listAgentIds(cfg);
+  if (agentIds.length < 2 || resolveSessionToolsVisibility(cfg) !== "all") {
+    return [];
+  }
+  // Even blank allow entries are a configured restriction: the runtime denies them.
+  if (!createAgentToAgentPolicy(cfg).enabled || cfg.tools?.agentToAgent?.allow?.length) {
+    return [];
+  }
+
+  const sandboxClamp = resolveSandboxSessionToolsVisibility(cfg);
+  const reachers: string[] = [];
+  const nonReachers: string[] = [];
+  const signals: string[] = [];
+  for (const agentId of agentIds) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
+    if (sandboxMode !== "off") {
+      signals.push(`${agentId}: sandbox.mode="${sandboxMode}"`);
+    }
+    const tools = resolveAgentConfig(cfg, agentId)?.tools;
+    const policies = resolveToolPolicies({ cfg, agentTools: tools, sandboxMode, agentId });
+    const allowedTools = [
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_send",
+      "session_status",
+    ].filter((name) => isToolAllowedByPolicies(name, policies));
+    const unclamped = sandboxMode !== "all" || sandboxClamp === "all";
+    if (unclamped && allowedTools.length > 0) {
+      const context =
+        sandboxMode === "off"
+          ? "unsandboxed sessions"
+          : sandboxMode === "non-main"
+            ? "unsandboxed main session"
+            : "sandboxed sessions (clamp disabled)";
+      reachers.push(`- ${agentId}: ${context}; allowed session tools: ${allowedTools.join(", ")}.`);
+    } else {
+      const reason = unclamped
+        ? "session tools removed by agent tool policy"
+        : "sandboxed sessions clamped to their spawn tree";
+      nonReachers.push(
+        `- ${agentId}: ${reason}; its transcripts remain readable by the agents above.`,
+      );
+    }
+    const restrictions = (["profile", "allow", "deny"] as const).filter(
+      (key) => tools?.[key] !== undefined,
+    );
+    if (restrictions.length > 0) {
+      signals.push(
+        `${agentId}: agent-level tool restrictions (${restrictions.map((key) => `tools.${key}`).join(", ")})`,
+      );
+    }
+  }
+  if (reachers.length === 0) {
+    return [];
+  }
+  signals.push(...listPotentialMultiUserSignals(cfg));
+  const trustDetail =
+    signals.length > 0
+      ? "\nTrust-boundary signals:\n" +
+        signals.map((signal) => `- ${signal}`).join("\n") +
+        "\nSandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels, but session access remains Gateway-wide."
+      : "";
+
+  return [
+    {
+      checkId: "security.trust_model.cross_agent_session_access_default",
+      severity: signals.length > 0 ? "warn" : "info",
+      title: "Agents share Gateway-wide session access (default)",
+      detail:
+        `Agents: ${agentIds.join(", ")}\n` +
+        'tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list.\n' +
+        "Agents that can reach other agents' sessions, including other users' transcripts:\n" +
+        [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
+        trustDetail,
+      remediation:
+        'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
+    },
+  ];
+}
+
+/** Flag small-parameter models when they retain web/browser tool exposure. */
 export function collectSmallModelRiskFindings(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(params.cfg).filter((entry) => !entry.source.includes("imageModel"));
+  const models = collectAuditModelRefs(params.cfg).filter(
+    (entry) => !entry.source.includes("imageModel"),
+  );
   if (models.length === 0) {
     return findings;
   }
 
-  const smallModels = models
-    .map((entry) => {
-      const paramB = inferParamBFromIdOrName(entry.id);
-      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) {
-        return null;
-      }
-      return { ...entry, paramB };
-    })
-    .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
+  const smallModels: Array<{ id: string; source: string; paramB: number }> = [];
+  for (const entry of models) {
+    const paramB = inferParamBFromIdOrName(entry.id);
+    if (paramB && paramB <= SMALL_MODEL_PARAM_B_MAX) {
+      smallModels.push({ id: entry.id, source: entry.source, paramB });
+    }
+  }
 
   if (smallModels.length === 0) {
     return findings;
@@ -233,16 +283,20 @@ export function collectSmallModelRiskFindings(params: {
   const exposureSet = new Set<string>();
   for (const entry of smallModels) {
     const agentId = extractAgentIdFromSource(entry.source);
+    // Evaluate each model in its agent context because sandbox/tool policy can
+    // differ per agent and provider override.
+    const modelRef = parseModelRef(entry.id, "openai", {
+      allowPluginNormalization: false,
+    });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
-    const agentTools =
-      agentId && params.cfg.agents?.list
-        ? params.cfg.agents.list.find((agent) => agent?.id === agentId)?.tools
-        : undefined;
+    const agentTools = agentId ? resolveAgentConfig(params.cfg, agentId)?.tools : undefined;
     const policies = resolveToolPolicies({
       cfg: params.cfg,
       agentTools,
       sandboxMode,
       agentId,
+      modelProvider: modelRef?.provider,
+      modelId: modelRef?.model,
     });
     const exposed: string[] = [];
     if (
@@ -262,7 +316,7 @@ export function collectSmallModelRiskFindings(params: {
     }
     const sandboxLabel = sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
     const exposureLabel = exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
-    const safe = sandboxMode === "all" && exposed.length === 0;
+    const safe = exposed.length === 0;
     if (!safe) {
       hasUnsafe = true;
     }
@@ -290,7 +344,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, disable web_search/web_fetch/browser globally or for each small model with tools.byProvider["provider/model"].deny=["group:web","browser"]; use agents.defaults.sandbox.mode="all" for defense in depth.',
   });
 
   return findings;

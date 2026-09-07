@@ -1,0 +1,42 @@
+title: Diagnostic events composed boundary
+
+scenario:
+  id: diagnostic-events-boundary
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.async-dispatch
+      - observability.diagnostic-event-types
+      - observability.model-call-diagnostic-events
+      - observability.plugin-sdk-diagnostic-runtime-exports
+      - observability.trusted-diagnostic-event-subscription
+      - observability.trusted-trace-context
+      - observability.w3c-trace-context-creation
+  objective: Compose the real model-call diagnostic producer with public Plugin SDK subscribers and the trusted private subscription boundary.
+  successCriteria:
+    - Model-call lifecycle events remain queued until the async dispatcher drains.
+    - Shared and trusted subscribers receive immutable typed events, while private model content stays trusted-only.
+    - Public subscribers receive the untrusted control event but no trusted model-call events.
+    - The model-call child trace replaces caller-supplied trace headers with a parseable W3C traceparent.
+    - The script emits a bounded summary and standard QA evidence package.
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/logging.md
+    - docs/plugins/sdk-subpaths.md
+  codeRefs:
+    - src/infra/diagnostic-events.ts
+    - src/infra/diagnostic-trace-context.ts
+    - src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
+    - src/plugin-sdk/diagnostic-runtime.ts
+    - test/e2e/qa-lab/runtime/diagnostic-events-boundary-runtime.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/diagnostic-events-boundary-runtime.ts
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --output-dir
+      - ${outputDir}
+    timeoutMs: 120000
+    summary: Composed diagnostic dispatcher, trusted subscription, model-call, and W3C trace evidence.

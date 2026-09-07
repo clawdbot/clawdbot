@@ -1,27 +1,20 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+/**
+ * Send-keys support for process-controlled PTY sessions.
+ * Encodes symbolic keys, hex bytes, and literal input before writing to a
+ * live process stdin.
+ */
+import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
-
-export type WritableStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  destroyed?: boolean;
-};
+import type { AgentToolResult } from "./runtime/index.js";
+import { textResult } from "./tools/tool-results.js";
 
 function failText(text: string): AgentToolResult<unknown> {
-  return {
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-    details: { status: "failed" },
-  };
+  return textResult(text, { status: "failed", error: text });
 }
 
-async function writeToStdin(stdin: WritableStdin, data: string) {
+export async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {
   await new Promise<void>((resolve, reject) => {
     stdin.write(data, (err) => {
       if (err) {
@@ -33,10 +26,11 @@ async function writeToStdin(stdin: WritableStdin, data: string) {
   });
 }
 
+/** Encode and write requested key data into a running process session. */
 export async function handleProcessSendKeys(params: {
   sessionId: string;
   session: ProcessSession;
-  stdin: WritableStdin;
+  stdin: ManagedRunStdin;
   keys?: string[];
   hex?: string[];
   literal?: string;
@@ -47,6 +41,8 @@ export async function handleProcessSendKeys(params: {
     literal: params.literal,
   };
   if (params.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+    // Arrow/keypad encodings depend on cursor key mode. Wait for startup output
+    // to identify the mode before sending potentially wrong bytes.
     return failText(
       `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
     );
@@ -54,23 +50,16 @@ export async function handleProcessSendKeys(params: {
   const cursorKeyMode =
     params.session.cursorKeyMode === "unknown" ? undefined : params.session.cursorKeyMode;
   const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
-  if (!data) {
+  if (data.length === 0) {
     return failText("No key data provided.");
   }
-  await writeToStdin(params.stdin, data);
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          `Sent ${data.length} bytes to session ${params.sessionId}.` +
-          (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
-      },
-    ],
-    details: {
-      status: "running",
-      sessionId: params.sessionId,
-      name: deriveSessionName(params.session.command),
-    },
-  };
+  await writeProcessStdin(params.stdin, data);
+  const text =
+    `Sent ${data.length} bytes to session ${params.sessionId}.` +
+    (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : "");
+  return textResult(text, {
+    status: "running",
+    sessionId: params.sessionId,
+    name: deriveSessionName(params.session.command),
+  });
 }

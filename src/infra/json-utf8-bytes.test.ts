@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { jsonUtf8Bytes } from "./json-utf8-bytes.js";
+// Tests JSON UTF-8 byte counting helpers.
+import { describe, expect, it, vi } from "vitest";
+import {
+  boundedJsonUtf8Bytes,
+  firstEnumerableOwnKeys,
+  jsonUtf8Bytes,
+  jsonUtf8BytesOrInfinity,
+} from "./json-utf8-bytes.js";
 
 function createCircularValue() {
   const circular: { self?: unknown } = {};
@@ -43,5 +49,106 @@ describe("jsonUtf8Bytes", () => {
     { name: "symbol serialization failures", value: Symbol("token"), expected: "Symbol(token)" },
   ])("uses string conversion for $name", ({ value, expected }) => {
     expect(jsonUtf8Bytes(value)).toBe(Buffer.byteLength(expected, "utf8"));
+  });
+});
+
+describe("jsonUtf8BytesOrInfinity", () => {
+  it("returns exact JSON byte length for serializable values", () => {
+    const value = { a: "x", b: [1, 2, null] };
+    expect(jsonUtf8BytesOrInfinity(value)).toBe(Buffer.byteLength(JSON.stringify(value), "utf8"));
+  });
+
+  it.each([createCircularValue(), 12n, undefined])(
+    "returns infinity for values that cannot be serialized as JSON",
+    (value) => {
+      expect(jsonUtf8BytesOrInfinity(value)).toBe(Number.POSITIVE_INFINITY);
+    },
+  );
+});
+
+describe("boundedJsonUtf8Bytes", () => {
+  it.each([
+    { name: "plain object", value: { a: "x", b: [1, 2, null] } },
+    { name: "unicode string", value: { value: "🙂" } },
+    {
+      name: "array holes and undefined",
+      value: (() => {
+        const value = [undefined, () => undefined] as unknown[];
+        value.length = 3;
+        return value;
+      })(),
+    },
+    { name: "non-finite numbers", value: [Number.NaN, Number.POSITIVE_INFINITY] },
+    { name: "date", value: { at: new Date("2026-04-25T12:00:00.000Z") } },
+    {
+      name: "omitted properties and escaped keys",
+      value: { 'a"\n': "\\", omitted: undefined, fn: () => 1, symbol: Symbol("value") },
+    },
+    {
+      name: "own enumerable properties only",
+      value: Object.defineProperties(Object.create({ inherited: "ignored" }), {
+        visible: { value: "included", enumerable: true },
+        hidden: { value: "ignored", enumerable: false },
+      }),
+    },
+  ])("matches JSON.stringify byte length for $name", ({ value }) => {
+    expect(boundedJsonUtf8Bytes(value, 100_000)).toEqual({
+      bytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
+      complete: true,
+    });
+  });
+
+  it("stops once the byte limit is exceeded", () => {
+    expect(boundedJsonUtf8Bytes({ value: "x".repeat(50_000) }, 8_192)).toEqual({
+      bytes: 8_193,
+      complete: false,
+    });
+  });
+
+  it("rejects over-limit CJK strings before JSON serialization", () => {
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      expect(boundedJsonUtf8Bytes("中".repeat(3_000), 8_192)).toEqual({
+        bytes: 8_193,
+        complete: false,
+      });
+      expect(stringifySpy).not.toHaveBeenCalled();
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+
+  it("stops reading object fields once the byte limit is exceeded", () => {
+    const later = vi.fn(() => "not visited");
+    const value = Object.defineProperty({ first: "x".repeat(100) }, "later", {
+      enumerable: true,
+      get: later,
+    });
+
+    expect(boundedJsonUtf8Bytes(value, 16)).toEqual({ bytes: 17, complete: false });
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "circular objects", value: createCircularValue() },
+    { name: "BigInt", value: { value: 12n } },
+    { name: "custom toJSON", value: { toJSON: () => ({ ok: true }) } },
+  ])("marks $name incomplete instead of invoking unsafe JSON serialization", ({ value }) => {
+    const result = boundedJsonUtf8Bytes(value, 8_192);
+    expect(result.complete).toBe(false);
+    expect(result.bytes).toBeGreaterThan(8_192);
+  });
+});
+
+describe("firstEnumerableOwnKeys", () => {
+  it("returns only own enumerable keys up to the limit", () => {
+    const inherited = { inherited: true };
+    const value = Object.create(inherited) as Record<string, unknown>;
+    value.a = 1;
+    value.b = 2;
+    value.c = 3;
+    Object.defineProperty(value, "hidden", { enumerable: false, value: true });
+
+    expect(firstEnumerableOwnKeys(value, 2)).toEqual(["a", "b"]);
   });
 });

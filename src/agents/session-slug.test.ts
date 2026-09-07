@@ -1,4 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Regression coverage for human-readable session slug generation.
+ * Verifies deterministic choices, collision numbering, and fallback suffixes.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCrustaceanSlug, createSessionSlug } from "./session-slug.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(),
@@ -7,12 +12,6 @@ const randomMocks = vi.hoisted(() => ({
 vi.mock("../infra/secure-random.js", () => ({
   generateSecureInt: randomMocks.generateSecureInt,
 }));
-
-let createSessionSlug: typeof import("./session-slug.js").createSessionSlug;
-
-beforeAll(async () => {
-  ({ createSessionSlug } = await import("./session-slug.js"));
-});
 
 describe("session slug", () => {
   beforeEach(() => {
@@ -23,6 +22,11 @@ describe("session slug", () => {
     randomMocks.generateSecureInt.mockReturnValue(0);
     const slug = createSessionSlug();
     expect(slug).toBe("amber-atlas");
+  });
+
+  it("generates a crustacean-themed slug for worktrees", () => {
+    randomMocks.generateSecureInt.mockReturnValue(0);
+    expect(createCrustaceanSlug()).toBe("amber-barnacle");
   });
 
   it("adds a numeric suffix when the base slug is taken", () => {

@@ -1,3 +1,4 @@
+// Covers Claude bundle inspection for plugin packaging metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -74,6 +75,7 @@ describe("Claude bundle plugin inspect integration", () => {
             args: ["hello"],
           },
           "test-sse-server": {
+            type: "sse",
             url: "http://localhost:3000/sse",
           },
         },
@@ -101,15 +103,15 @@ describe("Claude bundle plugin inspect integration", () => {
 
   function expectClaudeManifestField(params: {
     field: "skills" | "hooks" | "settingsFiles" | "capabilities";
-    includes: readonly string[];
+    expected: readonly string[];
   }) {
     const manifest = expectLoadedClaudeManifest();
     const values = manifest[params.field];
-    expect(values).toEqual(expect.arrayContaining([...params.includes]));
+    expect(values).toEqual([...params.expected]);
   }
 
   function expectNoDiagnostics(diagnostics: unknown[]) {
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   }
 
   function expectBundleRuntimeSupport(params: {
@@ -123,9 +125,7 @@ describe("Claude bundle plugin inspect integration", () => {
     hasSupportedKey: "hasSupportedStdioServer" | "hasStdioServer";
   }) {
     expect(params.actual[params.hasSupportedKey]).toBe(true);
-    expect(params.actual.supportedServerNames).toEqual(
-      expect.arrayContaining([...params.supportedServerNames]),
-    );
+    expect(params.actual.supportedServerNames).toEqual([...params.supportedServerNames]);
     expect(params.actual.unsupportedServerNames).toEqual([...params.unsupportedServerNames]);
     expectNoDiagnostics(params.actual.diagnostics);
   }
@@ -162,11 +162,25 @@ describe("Claude bundle plugin inspect integration", () => {
 
   it("loads the full Claude bundle manifest with all capabilities", () => {
     const m = expectLoadedClaudeManifest();
-    expect(m).toMatchObject({
+    expect(m).toEqual({
+      id: "test-claude-plugin",
       name: "Test Claude Plugin",
       description: "Integration test fixture for Claude bundle inspection",
       version: "1.0.0",
+      skills: ["skill-packs", "extra-commands", "agents", "output-styles"],
+      settingsFiles: ["settings.json"],
+      hooks: ["hooks/hooks.json", "custom-hooks"],
       bundleFormat: "claude",
+      capabilities: [
+        "skills",
+        "commands",
+        "agents",
+        "hooks",
+        "mcpServers",
+        "lspServers",
+        "outputStyles",
+        "settings",
+      ],
     });
   });
 
@@ -174,22 +188,22 @@ describe("Claude bundle plugin inspect integration", () => {
     {
       name: "resolves skills from skills, commands, and agents paths",
       field: "skills" as const,
-      includes: ["skill-packs", "extra-commands", "agents", "output-styles"],
+      expected: ["skill-packs", "extra-commands", "agents", "output-styles"],
     },
     {
       name: "resolves hooks from default and declared paths",
       field: "hooks" as const,
-      includes: ["hooks/hooks.json", "custom-hooks"],
+      expected: ["hooks/hooks.json", "custom-hooks"],
     },
     {
       name: "detects settings files",
       field: "settingsFiles" as const,
-      includes: ["settings.json"],
+      expected: ["settings.json"],
     },
     {
       name: "detects all bundle capabilities",
       field: "capabilities" as const,
-      includes: [
+      expected: [
         "skills",
         "commands",
         "agents",
@@ -200,16 +214,16 @@ describe("Claude bundle plugin inspect integration", () => {
         "settings",
       ],
     },
-  ] as const)("$name", ({ field, includes }) => {
-    expectClaudeManifestField({ field, includes });
+  ] as const)("$name", ({ field, expected }) => {
+    expectClaudeManifestField({ field, expected });
   });
 
   it.each([
     {
-      name: "inspects MCP runtime support with supported and unsupported servers",
+      name: "inspects MCP runtime support across stdio and HTTP transports",
       kind: "mcp" as const,
-      supportedServerNames: ["test-stdio-server"],
-      unsupportedServerNames: ["test-sse-server"],
+      supportedServerNames: ["test-stdio-server", "test-sse-server"],
+      unsupportedServerNames: [],
       hasSupportedKey: "hasSupportedStdioServer" as const,
     },
     {

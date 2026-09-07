@@ -1,42 +1,101 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Handles TUI input submission and command dispatch.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type {
+  TuiChatSubmitAdmission,
+  TuiChatSubmitBlock,
+  TuiChatSubmitSnapshot,
+} from "./tui-submit-state.js";
+
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+function resolveEditorSubmitAction(text: string): TuiSubmitAction {
+  if (text.includes("\n")) {
+    return "message";
+  }
+  if (text.startsWith("!") && text.trimEnd() !== "!") {
+    return "local shell";
+  }
+  return text.trimStart().startsWith("/") ? "command" : "message";
+}
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
 
 export function createEditorSubmitHandler(params: {
   editor: {
+    getText?: () => string;
+    getExpandedText: () => string;
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
+  admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
+  onBlockedMessageSubmit?: (value: string, admission: TuiChatSubmitBlock) => void;
 }) {
-  return (text: string) => {
+  const clearSubmittedEditor = () => {
+    // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
+    if (!params.editor.getText?.()) {
+      params.editor.setText("");
+    }
+  };
+
+  const restoreBlockedEditor = (value: string) => {
+    // Expand newer pastes before setText clears their backing storage, then
+    // prepend the blocked submit to the newer editor-owned draft.
+    const newerDraft = params.editor.getExpandedText();
+    params.editor.setText(newerDraft ? `${value}\n${newerDraft}` : value);
+  };
+
+  return (text: string, snapshot?: TuiChatSubmitSnapshot) => {
     const raw = text;
     const value = raw.trim();
-    params.editor.setText("");
+    const action = resolveEditorSubmitAction(raw);
+    const trimChangesAction = resolveEditorSubmitAction(value) !== action;
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
+      clearSubmittedEditor();
       return;
     }
 
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
-      params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
+    if (action !== "message") {
+      clearSubmittedEditor();
+      const command = action === "local shell" ? raw : value;
+      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
+      params.editor.addToHistory(command);
+      runSubmitAction(action, () => handle(command), params.onSubmitError);
       return;
     }
 
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
-
-    if (value.startsWith("/")) {
-      void params.handleCommand(value);
+    const admission: TuiChatSubmitAdmission = (snapshot
+      ? params.admitMessage?.(value, snapshot)
+      : params.admitMessage?.(value)) ?? { status: "allowed" };
+    if (admission.status === "blocked") {
+      restoreBlockedEditor(trimChangesAction ? raw : value);
+      params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
 
-    void params.sendMessage(value);
+    clearSubmittedEditor();
+    // Keep editor dispatch stable on recall; shared chat commands still belong to sendMessage.
+    if (!trimChangesAction) {
+      params.editor.addToHistory(value);
+    }
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }
 
@@ -73,20 +132,23 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
 }
 
 export function createSubmitBurstCoalescer(params: {
-  submit: (value: string) => void;
+  submit: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
+  captureSnapshot?: () => TuiChatSubmitSnapshot;
   enabled: boolean;
   burstWindowMs?: number;
   now?: () => number;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
+  onCapture?: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
 }) {
   const windowMs = Math.max(1, params.burstWindowMs ?? 50);
   const now = params.now ?? (() => Date.now());
   const setTimer = params.setTimer ?? setTimeout;
   const clearTimer = params.clearTimer ?? clearTimeout;
-  let pending: string | null = null;
+  let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
   let pendingAt = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
 
   const clearFlushTimer = () => {
     if (!flushTimer) {
@@ -96,15 +158,23 @@ export function createSubmitBurstCoalescer(params: {
     flushTimer = null;
   };
 
+  const submit = (value: string, snapshot?: TuiChatSubmitSnapshot) => {
+    if (snapshot) {
+      params.submit(value, snapshot);
+    } else {
+      params.submit(value);
+    }
+  };
+
   const flushPending = () => {
-    if (pending === null) {
+    if (disposed || !pending) {
       return;
     }
-    const value = pending;
+    const { value, snapshot } = pending;
     pending = null;
     pendingAt = 0;
     clearFlushTimer();
-    params.submit(value);
+    submit(value, snapshot);
   };
 
   const scheduleFlush = () => {
@@ -114,32 +184,48 @@ export function createSubmitBurstCoalescer(params: {
     }, windowMs);
   };
 
-  return (value: string) => {
+  const submitBurst = (value: string) => {
+    if (disposed) {
+      return;
+    }
     if (!params.enabled) {
-      params.submit(value);
+      submit(value, params.captureSnapshot?.());
       return;
     }
     if (value.includes("\n")) {
       flushPending();
-      params.submit(value);
+      submit(value, params.captureSnapshot?.());
       return;
     }
     const ts = now();
-    if (pending === null) {
-      pending = value;
+    const snapshot = params.captureSnapshot?.();
+    params.onCapture?.(value, snapshot);
+    if (!pending) {
+      pending = { value, ...(snapshot ? { snapshot } : {}) };
       pendingAt = ts;
       scheduleFlush();
       return;
     }
     if (ts - pendingAt <= windowMs) {
-      pending = `${pending}\n${value}`;
+      pending = {
+        value: `${pending.value}\n${value}`,
+        ...(pending.snapshot || snapshot ? { snapshot: pending.snapshot ?? snapshot } : {}),
+      };
       pendingAt = ts;
       scheduleFlush();
       return;
     }
     flushPending();
-    pending = value;
+    pending = { value, ...(snapshot ? { snapshot } : {}) };
     pendingAt = ts;
     scheduleFlush();
   };
+
+  const dispose = () => {
+    disposed = true;
+    pending = null;
+    clearFlushTimer();
+  };
+
+  return Object.assign(submitBurst, { dispose });
 }

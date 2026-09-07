@@ -1,6 +1,10 @@
+/**
+ * Lightweight Amazon Bedrock setup entry. It exposes auth detection and config
+ * migration hooks without loading runtime streaming or AWS discovery code.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { migrateAmazonBedrockLegacyConfig } from "./config-api.js";
-import { resolveBedrockConfigApiKey } from "./discovery.js";
+import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 
 export default definePluginEntry({
   id: "amazon-bedrock",

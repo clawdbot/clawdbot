@@ -1,73 +1,88 @@
-import { describePackageManifestContract } from "../../../test/helpers/plugins/package-manifest-contract.js";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { describePackageManifestContract } from "../../plugin-sdk/test-helpers/package-manifest-contract.js";
+import { validatePackageExtensionEntriesForInstall } from "../package-entry-resolution.js";
+import {
+  getPackageManifestMetadata,
+  resolvePackageExtensionEntries,
+  type PackageManifest,
+} from "../package-manifest.js";
 
+// Package manifest contract tests cover plugin package manifest requirements.
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
+  {
+    pluginId: "buzz",
+    pluginLocalRuntimeDeps: ["nostr-tools"],
+    minHostVersionBaseline: "2026.7.2",
+  },
   {
     pluginId: "discord",
-    mirroredRootRuntimeDeps: [
-      "@buape/carbon",
-      "@discordjs/opus",
-      "discord-api-types",
-      "https-proxy-agent",
-      "opusscript",
-    ],
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
-    mirroredRootRuntimeDeps: ["@larksuiteoapi/node-sdk"],
+    pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google", mirroredRootRuntimeDeps: ["@google/genai"] },
   {
     pluginId: "googlechat",
-    mirroredRootRuntimeDeps: ["google-auth-library"],
+    pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
+  },
+  {
+    pluginId: "imap",
+    pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"],
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
   {
-    pluginId: "amazon-bedrock",
-    mirroredRootRuntimeDeps: [
-      "@aws-sdk/client-bedrock",
-      "@aws-sdk/client-bedrock-runtime",
-      "@aws-sdk/credential-provider-node",
-    ],
+    pluginId: "diffs",
+    pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
   {
-    pluginId: "amazon-bedrock-mantle",
-    mirroredRootRuntimeDeps: ["@aws/bedrock-token-generator"],
+    pluginId: "matrix",
+    pluginLocalRuntimeDeps: [
+      "@matrix-org/matrix-sdk-crypto-nodejs",
+      "@matrix-org/matrix-sdk-crypto-wasm",
+      "fake-indexeddb",
+      "matrix-js-sdk",
+      "music-metadata",
+    ],
+    minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "matrix", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
-    mirroredRootRuntimeDeps: ["@lancedb/lancedb", "openai"],
+    pluginLocalRuntimeDeps: ["apache-arrow"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "msteams", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
-    pluginId: "slack",
-    mirroredRootRuntimeDeps: ["@slack/bolt", "@slack/web-api", "https-proxy-agent"],
+    pluginId: "msteams",
+    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
+  {
+    pluginId: "nostr",
+    pluginLocalRuntimeDeps: ["nostr-tools"],
+    minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "telegram",
-    mirroredRootRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
-  },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    mirroredRootRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
     minHostVersionBaseline: "2026.3.22",
   },
+  { pluginId: "xiaomi", minHostVersionBaseline: "2026.7.2" },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "zalouser", minHostVersionBaseline: "2026.3.22" },
 ];
@@ -75,3 +90,122 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
 for (const params of packageManifestContractTests) {
   describePackageManifestContract(params);
 }
+
+it("bundles LanceDB JavaScript while installing matching native bindings per platform", () => {
+  const dependencyName = "@lancedb/lancedb";
+  const pluginPackagePath = path.resolve(process.cwd(), "extensions/memory-lancedb/package.json");
+  const pluginManifest = JSON.parse(
+    fs.readFileSync(pluginPackagePath, "utf8"),
+  ) as PackageManifest & {
+    devDependencies?: Record<string, string>;
+  };
+  const entry = createRequire(pluginPackagePath).resolve(dependencyName);
+  const lancedbManifest = JSON.parse(
+    fs.readFileSync(path.resolve(path.dirname(entry), "../package.json"), "utf8"),
+  ) as PackageManifest;
+  // LanceDB's loader and native ABI must stay at the same version on every supported platform.
+  const nativeBindings = Object.fromEntries(
+    Object.entries(lancedbManifest.optionalDependencies ?? {}).filter(([name]) =>
+      name.startsWith(`${dependencyName}-`),
+    ),
+  );
+
+  expect(Object.keys(nativeBindings).length).toBeGreaterThan(0);
+  expect(pluginManifest.dependencies?.[dependencyName]).toBeUndefined();
+  expect(pluginManifest.devDependencies?.[dependencyName]).toBe(lancedbManifest.version);
+  expect(pluginManifest.optionalDependencies).toEqual(nativeBindings);
+});
+
+describe("plugin package authoring metadata", () => {
+  it("exposes the declared discovery and release entrypoints", () => {
+    const manifest: PackageManifest = {
+      name: "@openclaw/example",
+      version: "1.2.3",
+      openclaw: {
+        extensions: ["./src/index.ts"],
+        runtimeExtensions: ["./dist/index.js"],
+        setupEntry: "./src/setup.ts",
+        runtimeSetupEntry: "./dist/setup.js",
+        plugin: {
+          id: "example",
+          label: "Example",
+        },
+        compat: {
+          pluginApi: ">=1",
+          minGatewayVersion: "2026.8.1",
+        },
+        install: {
+          npmSpec: "@openclaw/example",
+          minHostVersion: "2026.8.1",
+        },
+      },
+    };
+
+    expect(getPackageManifestMetadata(manifest)).toEqual(manifest.openclaw);
+    expect(resolvePackageExtensionEntries(manifest)).toEqual({
+      status: "ok",
+      entries: ["./src/index.ts"],
+    });
+  });
+
+  it.each([
+    {
+      name: "non-object openclaw metadata",
+      manifest: { openclaw: "invalid" } as unknown as PackageManifest,
+      error: "package.json openclaw must be an object",
+    },
+    {
+      name: "non-array extension metadata",
+      manifest: { openclaw: { extensions: "./index.js" } } as unknown as PackageManifest,
+      error: "package.json openclaw.extensions must be an array",
+    },
+    {
+      name: "blank extension metadata",
+      manifest: { openclaw: { extensions: [" "] } } as PackageManifest,
+      error: "package.json openclaw.extensions[0] must be a non-empty string",
+    },
+  ])("fails fast on $name", ({ manifest, error }) => {
+    expect(resolvePackageExtensionEntries(manifest)).toEqual({
+      status: "invalid",
+      entries: [],
+      error,
+    });
+  });
+
+  it("rejects inconsistent source and runtime extension metadata", async () => {
+    const result = await validatePackageExtensionEntriesForInstall({
+      packageDir: process.cwd(),
+      extensions: ["./src/one.ts", "./src/two.ts"],
+      manifest: {
+        openclaw: {
+          extensions: ["./src/one.ts", "./src/two.ts"],
+          runtimeExtensions: ["./dist/one.js"],
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
+    });
+  });
+
+  it("rejects a runtime setup entry without a source setup entry", async () => {
+    const result = await validatePackageExtensionEntriesForInstall({
+      packageDir: process.cwd(),
+      extensions: [],
+      manifest: {
+        openclaw: {
+          extensions: [],
+          runtimeSetupEntry: "./dist/setup.js",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
+    });
+  });
+});

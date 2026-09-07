@@ -1,7 +1,8 @@
+// Synology Chat helper module supports test http utils behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-export function makeBaseReq(
+function makeBaseReq(
   method: string,
   opts: { headers?: Record<string, string>; url?: string } = {},
 ): IncomingMessage & { destroyed: boolean } {
@@ -11,7 +12,7 @@ export function makeBaseReq(
   req.url = opts.url ?? "/webhook/synology";
   req.socket = { remoteAddress: "127.0.0.1" } as unknown as IncomingMessage["socket"];
   req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
+  req.destroy = ((_error: Error | undefined) => {
     if (req.destroyed) {
       return req;
     }
@@ -44,26 +45,58 @@ export function makeStalledReq(
   return makeBaseReq(method, opts);
 }
 
-export function makeRes(): ServerResponse & { _status: number; _body: string } {
-  const res = {
-    _status: 0,
-    _body: "",
-    writeHead(statusCode: number, _headers: Record<string, string>) {
-      res._status = statusCode;
+export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse & {
+  status: number;
+  body: string | Buffer;
+  headers: Record<string, string>;
+  destroyed: boolean;
+  emit: (eventName: string) => boolean;
+} {
+  let headersSent = false;
+  const res = Object.assign(new EventEmitter(), {
+    status: 0,
+    body: "" as string | Buffer,
+    headers: {} as Record<string, string>,
+    destroyed: false,
+    setHeader(name: string, value: string) {
+      res.headers[name.toLowerCase()] = value;
     },
-    end(body?: string) {
-      res._body = body ?? "";
+    writeHead(statusCode: number, _headers?: Record<string, string>) {
+      res.status = statusCode;
     },
-  } as unknown as ServerResponse & { _status: number; _body: string };
+    end(body?: string | Buffer) {
+      res.body = body ?? "";
+      headersSent = true;
+      if (options.finishOnEnd !== false) {
+        queueMicrotask(() => res.emit("finish"));
+      }
+    },
+    destroy() {
+      res.destroyed = true;
+      res.emit("close");
+      return res;
+    },
+  }) as unknown as ServerResponse & {
+    status: number;
+    body: string | Buffer;
+    headers: Record<string, string>;
+    destroyed: boolean;
+    emit: (eventName: string) => boolean;
+  };
   Object.defineProperty(res, "statusCode", {
     configurable: true,
     enumerable: true,
     get() {
-      return res._status;
+      return res.status;
     },
     set(value: number) {
-      res._status = value;
+      res.status = value;
     },
+  });
+  Object.defineProperty(res, "headersSent", {
+    configurable: true,
+    enumerable: true,
+    get: () => headersSent,
   });
   return res;
 }

@@ -42,7 +42,7 @@ enum DeviceModelCatalog {
         let modelIdentifier = modelIdentifierRaw.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return self.symbolFor(modelIdentifier: modelIdentifier, friendlyName: friendlyName)
-            ?? self.fallbackSymbol(for: family, modelIdentifier: modelIdentifier)
+            ?? self.fallbackSymbol(for: family)
     }
 
     private static func symbolFor(modelIdentifier rawModelIdentifier: String, friendlyName: String?) -> String? {
@@ -75,7 +75,7 @@ enum DeviceModelCatalog {
         return nil
     }
 
-    private static func fallbackSymbol(for familyRaw: String, modelIdentifier: String) -> String? {
+    private static func fallbackSymbol(for familyRaw: String) -> String? {
         let family = familyRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         if family.isEmpty { return nil }
         switch family.lowercased() {

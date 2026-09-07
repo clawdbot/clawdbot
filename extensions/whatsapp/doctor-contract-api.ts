@@ -1,8 +1,13 @@
-import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
+// Whatsapp API module exposes the plugin public contract.
+import { definePluginDoctorMigrationFromPlans } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { detectWhatsAppLegacyStateMigrations } from "./src/state-migrations.js";
 
-export { normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
-// WhatsApp currently exposes doctor compatibility fixes without extra legacy
-// rule scans. Keep that empty answer on a lightweight contract surface so
-// config validation stays off the broad contract-api import path.
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [];
+export const stateMigrations = [
+  definePluginDoctorMigrationFromPlans({
+    id: "whatsapp-legacy-state",
+    label: "WhatsApp legacy state",
+    resolvePlans: detectWhatsAppLegacyStateMigrations,
+  }),
+];

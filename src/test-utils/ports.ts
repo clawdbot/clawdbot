@@ -1,7 +1,8 @@
+// Allocates available local ports for tests that start servers.
 import { createServer } from "node:net";
 import { isMainThread, threadId } from "node:worker_threads";
 
-async function isPortFree(port: number): Promise<boolean> {
+export async function isPortFree(port: number): Promise<boolean> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return false;
   }
@@ -14,11 +15,11 @@ async function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-async function getOsFreePort(): Promise<number> {
+export async function getFreePort(host = "127.0.0.1"): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
         server.close();
@@ -79,7 +80,7 @@ export async function getDeterministicFreePortBlock(params?: {
 
   // Fallback: let the OS pick a port block (best effort).
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const port = await getOsFreePort();
+    const port = await getFreePort();
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
       Boolean,
     );

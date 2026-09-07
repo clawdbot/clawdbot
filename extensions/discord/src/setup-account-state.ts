@@ -1,16 +1,15 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord plugin module implements setup account state behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
 import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
-import { resolveDefaultDiscordAccountId } from "./accounts.js";
-import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
-import type { DiscordAccountConfig } from "./runtime-api.js";
+  resolveDefaultDiscordAccountId,
+  mergeDiscordAccountConfig,
+  resolveDiscordAccountConfig,
+} from "./accounts.js";
 import { resolveDiscordToken } from "./token.js";
 
-export type InspectedDiscordSetupAccount = {
+type InspectedDiscordSetupAccount = {
   accountId: string;
   enabled: boolean;
   token: string;
@@ -19,40 +18,6 @@ export type InspectedDiscordSetupAccount = {
   configured: boolean;
   config: DiscordAccountConfig;
 };
-
-function inspectConfiguredToken(value: unknown): {
-  token: string;
-  tokenSource: "config";
-  tokenStatus: "available" | "configured_unavailable";
-} | null {
-  const normalized = normalizeSecretInputString(value);
-  if (normalized) {
-    return {
-      token: normalized.replace(/^Bot\s+/i, ""),
-      tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    };
-  }
-  return null;
-}
-
-export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.discord?.accounts;
-  return listCombinedAccountIds({
-    configuredAccountIds:
-      accounts && typeof accounts === "object" && !Array.isArray(accounts)
-        ? Object.keys(accounts).map((accountId) => normalizeAccountId(accountId))
-        : [],
-    implicitAccountId: DEFAULT_ACCOUNT_ID,
-  });
-}
 
 export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
   return resolveDefaultDiscordAccountId(cfg);
@@ -79,66 +44,18 @@ export function inspectDiscordSetupAccount(params: {
   const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const hasAccountToken = Boolean(
-    accountConfig &&
-    Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
+    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
   );
-  const accountToken = inspectConfiguredToken(accountConfig?.token);
-  if (accountToken) {
-    return {
+  return inspectDiscordAccountTokenState({
+    base: {
       accountId,
       enabled,
-      token: accountToken.token,
-      tokenSource: accountToken.tokenSource,
-      tokenStatus: accountToken.tokenStatus,
-      configured: true,
-      config,
-    };
-  }
-  if (hasAccountToken) {
-    return {
-      accountId,
-      enabled,
-      token: "",
-      tokenSource: "none",
-      tokenStatus: "missing",
-      configured: false,
-      config,
-    };
-  }
-
-  const channelToken = inspectConfiguredToken(params.cfg.channels?.discord?.token);
-  if (channelToken) {
-    return {
-      accountId,
-      enabled,
-      token: channelToken.token,
-      tokenSource: channelToken.tokenSource,
-      tokenStatus: channelToken.tokenStatus,
-      configured: true,
-      config,
-    };
-  }
-
-  const tokenResolution = resolveDiscordToken(params.cfg, { accountId });
-  if (tokenResolution.token) {
-    return {
-      accountId,
-      enabled,
-      token: tokenResolution.token,
-      tokenSource: tokenResolution.source,
-      tokenStatus: "available",
-      configured: true,
-      config,
-    };
-  }
-
-  return {
-    accountId,
-    enabled,
-    token: "",
-    tokenSource: "none",
-    tokenStatus: "missing",
-    configured: false,
+    },
     config,
-  };
+    accountToken: accountConfig?.token,
+    hasAccountToken,
+    channelToken: params.cfg.channels?.discord?.token,
+    // Known divergence: setup keeps the runtime-aware resolver for its final branch.
+    resolveFallbackToken: () => resolveDiscordToken(params.cfg, { accountId }),
+  });
 }

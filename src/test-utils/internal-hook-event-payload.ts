@@ -1,3 +1,4 @@
+/** Builds a stable internal hook event payload for tests that do not need full messages. */
 export function createInternalHookEventPayload(
   type: string,
   action: string,

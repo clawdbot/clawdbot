@@ -1,3 +1,4 @@
+// Discord tests cover probe.parse token plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseApplicationIdFromToken } from "./probe.js";
 

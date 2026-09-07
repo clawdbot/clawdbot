@@ -1,3 +1,4 @@
+// Legacy web-search config migration from tools.web.search to plugin-owned config.
 import {
   defineLegacyConfigMigration,
   type LegacyConfigMigrationSpec,
@@ -6,7 +7,7 @@ import {
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
-} from "./legacy-web-search-migrate.js";
+} from "./legacy-web-tools-migrate.js";
 
 const LEGACY_WEB_SEARCH_RULES: LegacyConfigRule[] = [
   {
@@ -28,6 +29,7 @@ function replaceRootRecord(
   Object.assign(target, replacement);
 }
 
+/** Legacy config migration specs for web-search provider config. */
 export const LEGACY_CONFIG_MIGRATIONS_WEB_SEARCH: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tools.web.search-provider-config->plugins.entries",

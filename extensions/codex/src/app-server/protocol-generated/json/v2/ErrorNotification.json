@@ -1,0 +1,7 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {"error":{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/TurnError"},"threadId":{"type":"string"},"turnId":{"type":"string"},"willRetry":{"type":"boolean"}},
+  "required": ["error","threadId","turnId","willRetry"],
+  "title": "ErrorNotification",
+  "type": "object"
+}

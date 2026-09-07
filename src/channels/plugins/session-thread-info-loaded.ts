@@ -1,10 +1,15 @@
+/**
+ * Loaded-plugin session thread info resolver.
+ *
+ * Uses only already loaded channel hooks to resolve thread suffix metadata on hot paths.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
 type SessionConversationHookResult = {
   id: string;
@@ -30,6 +35,8 @@ function resolveLoadedSessionConversationThreadInfo(
   if (!resolved?.id?.trim()) {
     return null;
   }
+  // Loaded-plugin read paths avoid bundled fallback/materialization; if the
+  // channel hook has no thread id, preserve the original session key.
   const id = resolved.id.trim();
   const threadId = normalizeOptionalString(resolved.threadId);
   return {
@@ -38,6 +45,9 @@ function resolveLoadedSessionConversationThreadInfo(
   };
 }
 
+/**
+ * Resolves thread suffix metadata using loaded plugin hooks or generic parsing.
+ */
 export function resolveLoadedSessionThreadInfo(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {

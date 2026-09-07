@@ -1,3 +1,8 @@
+/**
+ * Citation redirect resolver for web search results.
+ *
+ * Follows provider citation redirect URLs through the strict web-tools network guard.
+ */
 import { withStrictWebToolsEndpoint } from "./web-guarded-fetch.js";
 
 const REDIRECT_TIMEOUT_MS = 5000;

@@ -1,0 +1,183 @@
+/** Shared Playwright download capture and output handling. */
+import crypto from "node:crypto";
+import path from "node:path";
+import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
+import { writeExternalFileWithinOutputRoot } from "./output-files.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
+
+type BrowserDownloadCaptureState = {
+  downloadWaiterDepth: number;
+};
+
+type BrowserDownloadPage = {
+  on(event: "download", handler: (download: unknown) => void): unknown;
+  off(event: "download", handler: (download: unknown) => void): unknown;
+};
+
+export type BrowserDownloadCaptureOptions = {
+  beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  mode?: "passive" | "explicit";
+  outputPath?: string;
+  outputRoot?: string;
+  signal?: AbortSignal;
+  timeoutMessage?: string;
+};
+
+export type PlaywrightDownload = {
+  cancel?: () => Promise<void>;
+  url?: () => string;
+  suggestedFilename?: () => string;
+  saveAs?: (outPath: string) => Promise<void>;
+};
+
+function buildManagedDownloadPath(rootDir: string, fileName: string): string {
+  const id = crypto.randomUUID();
+  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
+  return path.join(rootDir, `${id}-${safeName}`);
+}
+
+/** Validate metadata and atomically save one Playwright download. */
+export async function saveBrowserDownload(
+  download: PlaywrightDownload,
+  opts: BrowserDownloadCaptureOptions = {},
+  onReadyToPublish?: () => void,
+): Promise<BrowserDownloadResult> {
+  const suggestedFilename = download.suggestedFilename?.() || "download.bin";
+  const candidate: BrowserDownloadCandidate = {
+    url: download.url?.() || "",
+    suggestedFilename,
+  };
+  await opts.beforeSave?.(candidate);
+  opts.signal?.throwIfAborted();
+  const saveAs = download.saveAs?.bind(download);
+  if (!saveAs) {
+    throw new Error("Download cannot be saved");
+  }
+  const requestedPath = opts.outputPath?.trim();
+  const implicitRoot = opts.outputRoot ?? DEFAULT_DOWNLOAD_DIR;
+  const managedPath = requestedPath || buildManagedDownloadPath(implicitRoot, suggestedFilename);
+  const savedPath = await writeExternalFileWithinOutputRoot({
+    rootDir: requestedPath ? opts.outputRoot : implicitRoot,
+    path: managedPath,
+    write: async (tempPath) => {
+      await saveAs(tempPath);
+      opts.signal?.throwIfAborted();
+      onReadyToPublish?.();
+    },
+  }).catch((error: unknown) => {
+    // Admission failures can belong to a superseded waiter. Only failed saves
+    // cancel here; an aborted capture already owns its cancellation.
+    if (!opts.signal?.aborted) {
+      void download.cancel?.().catch(() => {});
+    }
+    throw error;
+  });
+  return { ...candidate, path: savedPath };
+}
+
+/** Arm one page download while maintaining explicit/passive ownership depth. */
+export function createDownloadCaptureForPage(
+  page: BrowserDownloadPage,
+  state: BrowserDownloadCaptureState,
+  timeoutMs: number,
+  opts: BrowserDownloadCaptureOptions = {},
+): {
+  armed: boolean;
+  promise: Promise<BrowserDownloadResult>;
+  cancel: () => void;
+} {
+  // Passive action capture yields to an explicit wait/download owner. Explicit
+  // waiters may overlap; their arm id decides which one is allowed to save.
+  if (opts.mode !== "explicit" && state.downloadWaiterDepth > 0) {
+    return {
+      armed: false,
+      promise: new Promise<BrowserDownloadResult>(() => {}),
+      cancel: () => {},
+    };
+  }
+
+  state.downloadWaiterDepth += 1;
+  const operation = new AbortController();
+  let done = false;
+  let timer: NodeJS.Timeout | undefined;
+  let handler: ((download: unknown) => void) | undefined;
+  let activeDownload: PlaywrightDownload | undefined;
+  let abort = () => {};
+
+  const releaseWaiter = () => {
+    if (handler) {
+      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
+      page.off("download", handler);
+      handler = undefined;
+    }
+  };
+
+  const retireDeadline = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+
+  const cleanup = () => {
+    done = true;
+    releaseWaiter();
+    retireDeadline();
+    opts.signal?.removeEventListener("abort", abort);
+  };
+
+  const promise = new Promise<BrowserDownloadResult>((resolve, reject) => {
+    const rejectCapture = (reason: Error) => {
+      if (done) {
+        return;
+      }
+      operation.abort(reason);
+      cleanup();
+      void activeDownload?.cancel?.().catch(() => {});
+      reject(reason);
+    };
+    handler = (download: unknown) => {
+      if (done) {
+        return;
+      }
+      activeDownload = download as PlaywrightDownload;
+      releaseWaiter();
+      void saveBrowserDownload(activeDownload, { ...opts, signal: operation.signal }, () => {
+        // Atomic publication cannot be revoked, so a later abort must not
+        // report cancellation while its completed file is being published.
+        opts.signal?.removeEventListener("abort", abort);
+        retireDeadline();
+      })
+        .finally(cleanup)
+        .then(resolve, reject);
+    };
+    page.on("download", handler);
+    timer = setTimeout(
+      () => {
+        rejectCapture(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
+      },
+      Math.max(1, timeoutMs),
+    );
+    timer.unref?.();
+    abort = () => {
+      const reason = opts.signal?.reason;
+      rejectCapture(reason instanceof Error ? reason : new Error("Download wait was cancelled"));
+    };
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) {
+      abort();
+    }
+  });
+
+  return {
+    armed: true,
+    promise,
+    cancel: () => {
+      if (done || activeDownload) {
+        return;
+      }
+      cleanup();
+    },
+  };
+}

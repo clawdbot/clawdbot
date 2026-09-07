@@ -1,3 +1,4 @@
+// Feishu plugin module implements channel entry behavior.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export default defineBundledChannelEntry({

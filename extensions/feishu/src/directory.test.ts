@@ -1,5 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Feishu tests cover directory plugin behavior.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import {
+  FEISHU_SELECTED_SECRET_ENV,
+  FEISHU_SIBLING_SECRET_ENV,
+  createFeishuSecretRefPolicyConfig,
+  feishuSecretRefPolicyCases,
+} from "./bot.test-support.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -7,13 +15,17 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const freshDirectoryModulePath = "./directory.js?directory-test";
-const {
-  listFeishuDirectoryGroups,
-  listFeishuDirectoryGroupsLive,
-  listFeishuDirectoryPeers,
-  listFeishuDirectoryPeersLive,
-} = await import(freshDirectoryModulePath);
+const { listFeishuDirectoryGroupsLive, listFeishuDirectoryPeersLive } = await importFreshModule<
+  typeof import("./directory.js")
+>(import.meta.url, "./directory.js?directory-test");
+const { listFeishuDirectoryGroups, listFeishuDirectoryPeers } = await importFreshModule<
+  typeof import("./directory.static.js")
+>(import.meta.url, "./directory.static.js?directory-test");
+const { listAuthorizedFeishuDirectoryGroups, listAuthorizedFeishuDirectoryPeers } =
+  await importFreshModule<typeof import("./directory.static.js")>(
+    import.meta.url,
+    "./directory.static.js?authorized-directory-test",
+  );
 
 function makeStaticCfg(): ClawdbotConfig {
   return {
@@ -45,9 +57,59 @@ function makeConfiguredCfg(): ClawdbotConfig {
 }
 
 describe("feishu directory (config-backed)", () => {
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     createFeishuClientMock.mockReset();
   });
+
+  it.each(feishuSecretRefPolicyCases)(
+    "permits live directory requests only under configured SecretRef policy: $name",
+    async (testCase) => {
+      vi.stubEnv(FEISHU_SELECTED_SECRET_ENV, "selected-secret");
+      vi.stubEnv(FEISHU_SIBLING_SECRET_ENV, "sibling-secret");
+      const listPeers = vi.fn(async () => ({ code: 0, data: { items: [] } }));
+      const listGroups = vi.fn(async () => ({ code: 0, data: { items: [] } }));
+      createFeishuClientMock.mockReturnValue({
+        contact: { user: { list: listPeers } },
+        im: { chat: { list: listGroups } },
+      });
+      const cfg = createFeishuSecretRefPolicyConfig(testCase);
+
+      try {
+        await expect(listFeishuDirectoryPeersLive({ cfg, accountId: "selected" })).resolves.toEqual(
+          [],
+        );
+        await expect(
+          listFeishuDirectoryGroupsLive({ cfg, accountId: "selected" }),
+        ).resolves.toEqual([]);
+
+        if (!testCase.configured) {
+          expect(createFeishuClientMock).not.toHaveBeenCalled();
+          expect(listPeers).not.toHaveBeenCalled();
+          expect(listGroups).not.toHaveBeenCalled();
+          return;
+        }
+
+        expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
+        expect(createFeishuClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accountId: "selected",
+            appId: "selected-app",
+            appSecret: "selected-secret", // pragma: allowlist secret
+            configured: true,
+          }),
+        );
+        expect(listPeers).toHaveBeenCalledOnce();
+        expect(listGroups).toHaveBeenCalledOnce();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("merges allowFrom + dms into peer entries", async () => {
     const peers = await listFeishuDirectoryPeers({ cfg: makeStaticCfg(), query: "a" });
@@ -86,6 +148,63 @@ describe("feishu directory (config-backed)", () => {
     ]);
   });
 
+  it("lists only read-authorized static peers and enabled groups", async () => {
+    const cfg = makeStaticCfg();
+    const feishu = cfg.channels?.feishu;
+    if (!feishu) {
+      throw new Error("Expected Feishu config");
+    }
+    feishu.groups = {
+      ...feishu.groups,
+      "chat-disabled": { enabled: false },
+    };
+
+    await expect(listAuthorizedFeishuDirectoryPeers({ cfg })).resolves.toEqual([
+      { kind: "user", id: "alice" },
+      { kind: "user", id: "bob" },
+    ]);
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual([
+      { kind: "group", id: "chat-1" },
+      { kind: "group", id: "chat-2" },
+    ]);
+  });
+
+  it("keeps explicitly disabled groups out even when groupAllowFrom includes them", async () => {
+    const cfg = makeStaticCfg();
+    const feishu = cfg.channels?.feishu;
+    if (!feishu) {
+      throw new Error("Expected Feishu config");
+    }
+    feishu.groups = {
+      ...feishu.groups,
+      "chat-disabled": { enabled: false },
+    };
+    feishu.groupAllowFrom = [...(feishu.groupAllowFrom ?? []), "chat-disabled"];
+
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual([
+      { kind: "group", id: "chat-1" },
+      { kind: "group", id: "chat-2" },
+    ]);
+  });
+
+  it("applies the static group limit after authorization filtering", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "chat-blocked": { enabled: false },
+            "chat-allowed": {},
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg, limit: 1 })).resolves.toEqual([
+      { kind: "group", id: "chat-allowed" },
+    ]);
+  });
+
   it("falls back to static peers on live lookup failure by default", async () => {
     createFeishuClientMock.mockReturnValueOnce({
       contact: {
@@ -102,6 +221,66 @@ describe("feishu directory (config-backed)", () => {
       { kind: "user", id: "alice" },
       { kind: "user", id: "carla" },
     ]);
+  });
+
+  it("paginates live groups until the filtered result limit is reached", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ chat_id: "chat-blocked", name: "Blocked" }],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ chat_id: "chat-allowed", name: "Allowed" }],
+          has_more: false,
+        },
+      });
+    createFeishuClientMock.mockReturnValueOnce({
+      im: { chat: { list } },
+    });
+
+    await expect(
+      listFeishuDirectoryGroupsLive({
+        cfg: makeConfiguredCfg(),
+        limit: 1,
+        filter: (group) => group.id !== "chat-blocked",
+      }),
+    ).resolves.toEqual([{ kind: "group", id: "chat-allowed", name: "Allowed" }]);
+    expect(list).toHaveBeenNthCalledWith(2, {
+      params: {
+        page_size: 1,
+        page_token: "page-2",
+      },
+    });
+  });
+
+  it("rejects repeated live group directory page tokens", async () => {
+    const list = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [{ chat_id: "chat-blocked", name: "Blocked" }],
+        has_more: true,
+        page_token: "repeat",
+      },
+    });
+    createFeishuClientMock.mockReturnValueOnce({
+      im: { chat: { list } },
+    });
+
+    await expect(
+      listFeishuDirectoryGroupsLive({
+        cfg: makeConfiguredCfg(),
+        filter: () => false,
+        fallbackToStatic: false,
+      }),
+    ).rejects.toThrow("Feishu live group directory returned a repeated page token");
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces live peer lookup failures when fallback is disabled", async () => {

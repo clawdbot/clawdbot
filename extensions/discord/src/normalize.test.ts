@@ -1,3 +1,4 @@
+// Discord tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   looksLikeDiscordTargetId,
@@ -27,11 +28,35 @@ describe("discord target normalization", () => {
     }
   });
 
+  it("treats bare outbound IDs listed in allowFrom as DM targets", () => {
+    expect(normalizeDiscordOutboundTarget("1234567890", ["1234567890"])).toEqual({
+      ok: true,
+      to: "user:1234567890",
+    });
+    expect(normalizeDiscordOutboundTarget("2345678901", ["user:2345678901"])).toEqual({
+      ok: true,
+      to: "user:2345678901",
+    });
+    expect(normalizeDiscordOutboundTarget("3456789012", ["<@3456789012>"])).toEqual({
+      ok: true,
+      to: "user:3456789012",
+    });
+    expect(normalizeDiscordOutboundTarget("4567890123", ["*"])).toEqual({
+      ok: true,
+      to: "channel:4567890123",
+    });
+  });
+
   it("detects Discord-style target identifiers", () => {
     expect(looksLikeDiscordTargetId("<@!123456>")).toBe(true);
     expect(looksLikeDiscordTargetId("user:123456")).toBe(true);
     expect(looksLikeDiscordTargetId("discord:123456")).toBe(true);
+    expect(looksLikeDiscordTargetId("discord:user:123456")).toBe(true);
+    expect(looksLikeDiscordTargetId("discord:channel:123456")).toBe(true);
     expect(looksLikeDiscordTargetId("123456")).toBe(true);
+    expect(looksLikeDiscordTargetId("channel:general")).toBe(false);
+    expect(looksLikeDiscordTargetId("user:jane")).toBe(false);
+    expect(looksLikeDiscordTargetId("discord:channel:general")).toBe(false);
     expect(looksLikeDiscordTargetId("hello world")).toBe(false);
   });
 });

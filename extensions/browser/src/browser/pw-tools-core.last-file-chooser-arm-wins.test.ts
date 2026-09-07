@@ -1,15 +1,19 @@
+// Browser tests cover pw tools core.last file chooser arm wins plugin behavior.
 import crypto from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
+  getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.downloads.js");
+const interactions = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("last file-chooser arm wins", async () => {
@@ -22,26 +26,17 @@ describe("pw-tools-core", () => {
     ]);
     const secondCanonicalPath = await fs.realpath(secondPath);
 
-    let resolve1: ((value: unknown) => void) | null = null;
-    let resolve2: ((value: unknown) => void) | null = null;
-
-    const fc1 = { setFiles: vi.fn(async () => {}) };
-    const fc2 = { setFiles: vi.fn(async () => {}) };
-
-    const waitForEvent = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolve1 = r;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolve2 = r;
-          }),
-      );
+    const chooserEvents = new EventEmitter();
+    const fileChooser = {
+      setFiles: vi.fn(
+        async (_paths: string[], _options: { timeout: number; signal: AbortSignal }) => {},
+      ),
+    };
+    // Native event waiters reject on abort and remove their old chooser listener.
+    const waitForEvent = vi.fn(async (_event: string, { signal }: { signal: AbortSignal }) => {
+      const [chooser] = await once(chooserEvents, "filechooser", { signal });
+      return chooser;
+    });
 
     setPwToolsCoreCurrentPage({
       waitForEvent,
@@ -58,63 +53,76 @@ describe("pw-tools-core", () => {
         paths: [secondPath],
       });
 
-      if (!resolve1 || !resolve2) {
-        throw new Error("file chooser handlers were not registered");
-      }
-      (resolve1 as (value: unknown) => void)(fc1);
-      (resolve2 as (value: unknown) => void)(fc2);
-      await Promise.resolve();
-
-      expect(fc1.setFiles).not.toHaveBeenCalled();
+      expect(waitForEvent).toHaveBeenCalledTimes(2);
+      expect(waitForEvent.mock.calls[0]![1].signal.aborted).toBe(true);
+      expect(chooserEvents.listenerCount("filechooser")).toBe(1);
+      chooserEvents.emit("filechooser", fileChooser);
       await vi.waitFor(() => {
-        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath]);
+        expect(fileChooser.setFiles).toHaveBeenCalledExactlyOnceWith([secondCanonicalPath], {
+          timeout: expect.any(Number),
+          signal: expect.any(AbortSignal),
+        });
       });
+      const { timeout, signal } = fileChooser.setFiles.mock.calls[0]![1];
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(120_000);
+      expect(signal.aborted).toBe(false);
+      expect(chooserEvents.listenerCount("filechooser")).toBe(0);
     } finally {
+      chooserEvents.emit("filechooser", fileChooser);
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
     }
   });
   it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
-    const accept = vi.fn(async () => {});
-    const dismiss = vi.fn(async () => {});
-    const dialog = { accept, dismiss };
-    const waitForEvent = vi.fn(async () => dialog);
-    setPwToolsCoreCurrentPage({
-      waitForEvent,
-    });
+    const sessionMocks = getPwToolsCoreSessionMocks();
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: true,
       promptText: "x",
     });
-    await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
-    expect(accept).toHaveBeenCalledWith("x");
-    expect(dismiss).not.toHaveBeenCalled();
+    expect(sessionMocks.respondToObservedDialogOnPage).toHaveBeenCalledWith({
+      page,
+      accept: true,
+      promptText: "x",
+      closedBy: "agent",
+    });
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+      page,
+      accept: true,
+      promptText: "x",
+      timeoutMs: 120_000,
+    });
 
-    accept.mockClear();
-    dismiss.mockClear();
-    waitForEvent.mockClear();
+    sessionMocks.respondToObservedDialogOnPage.mockClear();
+    sessionMocks.armObservedDialogResponseOnPage.mockClear();
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: false,
     });
-    await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
-    expect(dismiss).toHaveBeenCalled();
-    expect(accept).not.toHaveBeenCalled();
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+      page,
+      accept: false,
+      timeoutMs: 120_000,
+    });
   });
   it("waits for selector, url, load state, and function", async () => {
     const waitForSelector = vi.fn(async () => {});
     const waitForURL = vi.fn(async () => {});
     const waitForLoadState = vi.fn(async () => {});
-    const waitForFunction = vi.fn(async () => {});
+    const waitForFunction = vi.fn(
+      async (_predicate: unknown, _state: unknown, _options: unknown) => {},
+    );
     const waitForTimeout = vi.fn(async () => {});
+    const documentHandle = { dispose: vi.fn(async () => {}) };
 
     const page = {
+      evaluateHandle: vi.fn(async () => documentHandle),
       locator: vi.fn(() => ({
         first: () => ({ waitFor: waitForSelector }),
       })),
@@ -126,7 +134,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       url: "**/dash",
@@ -146,9 +154,13 @@ describe("pw-tools-core", () => {
     expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
       timeout: 1234,
     });
-    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
-      timeout: 1234,
-    });
+    expect(waitForFunction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { document: documentHandle },
+      { timeout: 1234 },
+    );
+    expect(String(waitForFunction.mock.calls[0]?.[0])).toContain("window.ready===true");
+    expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
   it("clamps wait timeoutMs to 120000 for wait steps", async () => {
@@ -165,7 +177,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,
@@ -185,16 +197,12 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
+    await interactions.clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,
     });
 
-    expect(click).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeout: 60_000,
-      }),
-    );
+    expect(click).toHaveBeenCalledWith({ timeout: 60_000, signal: expect.any(AbortSignal) });
   });
 });

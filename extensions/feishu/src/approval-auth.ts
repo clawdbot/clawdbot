@@ -1,8 +1,6 @@
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+// Feishu plugin module implements approval auth behavior.
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { normalizeFeishuTarget } from "./targets.js";
 
@@ -12,14 +10,11 @@ function normalizeFeishuApproverId(value: string | number): string | undefined {
   return trimmed?.startsWith("ou_") ? trimmed : undefined;
 }
 
-export const feishuApprovalAuth = createResolvedApproverActionAuthAdapter({
+export const feishuApprovalAuth = createChannelApprovalAuth({
   channelLabel: "Feishu",
-  resolveApprovers: ({ cfg, accountId }) => {
+  resolveInputs: ({ cfg, accountId }) => {
     const account = resolveFeishuAccount({ cfg, accountId }).config;
-    return resolveApprovalApprovers({
-      allowFrom: account.allowFrom,
-      normalizeApprover: normalizeFeishuApproverId,
-    });
+    return { allowFrom: account.allowFrom };
   },
-  normalizeSenderId: (value) => normalizeFeishuApproverId(value),
-});
+  normalizeApprover: normalizeFeishuApproverId,
+}).approvalAuth;

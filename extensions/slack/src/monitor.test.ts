@@ -1,3 +1,4 @@
+// Slack tests cover monitor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildSlackSlashCommandMatcher } from "./monitor/commands.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";

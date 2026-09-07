@@ -1,6 +1,7 @@
+// Tests execution override directives passed through get-reply.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 
 const AGENT_EXEC_DEFAULTS = {
@@ -22,62 +23,77 @@ describe("reply exec overrides", () => {
   it("uses per-agent exec defaults when session and message are unset", () => {
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineDirectives("run a command"),
+        directives: parseInlineSessionDirectives("run a command"),
         sessionEntry: createSessionEntry(),
         agentExecDefaults: AGENT_EXEC_DEFAULTS,
       }),
     ).toEqual(AGENT_EXEC_DEFAULTS);
   });
 
-  it("prefers inline exec directives, then persisted session overrides, then agent defaults", () => {
+  it("uses inline exec policy and persisted placement over agent defaults", () => {
     const sessionEntry = createSessionEntry({
       execHost: "gateway",
-      execSecurity: "deny",
     });
 
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineDirectives("/exec host=auto security=full"),
+        directives: parseInlineSessionDirectives("/exec host=auto security=deny ask=off"),
         sessionEntry,
         agentExecDefaults: AGENT_EXEC_DEFAULTS,
       }),
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "auto",
-      security: "full",
+      security: "deny",
+      ask: "off",
     });
 
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineDirectives("run a command"),
+        directives: parseInlineSessionDirectives("run a command"),
         sessionEntry,
         agentExecDefaults: AGENT_EXEC_DEFAULTS,
       }),
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "gateway",
-      security: "deny",
     });
   });
 
-  it("uses persisted session exec fields for later turns", () => {
-    const sessionEntry = createSessionEntry({
-      execHost: "gateway",
-      execSecurity: "full",
-      execAsk: "always",
-    });
-
+  it("carries the node cwd separately from the Gateway workspace", () => {
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineDirectives("run a command"),
-        sessionEntry,
-        agentExecDefaults: AGENT_EXEC_DEFAULTS,
+        directives: parseInlineSessionDirectives("run a command"),
+        sessionEntry: createSessionEntry({
+          execHost: "node",
+          execNode: "macbook",
+          execCwd: "/Users/peter/Projects/openclaw",
+        }),
       }),
     ).toEqual({
-      ...AGENT_EXEC_DEFAULTS,
-      host: "gateway",
-      security: "full",
-      ask: "always",
+      host: "node",
+      security: undefined,
+      ask: undefined,
+      node: "macbook",
+      nodeCwd: "/Users/peter/Projects/openclaw",
+    });
+  });
+
+  it("does not carry a stored cwd across an inline node override", () => {
+    expect(
+      resolveReplyExecOverrides({
+        directives: parseInlineSessionDirectives("/exec node=other-node"),
+        sessionEntry: createSessionEntry({
+          execHost: "node",
+          execNode: "macbook",
+          execCwd: "/Users/peter/Projects/openclaw",
+        }),
+      }),
+    ).toEqual({
+      host: "node",
+      security: undefined,
+      ask: undefined,
+      node: "other-node",
     });
   });
 });

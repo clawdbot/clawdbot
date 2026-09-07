@@ -1,43 +1,106 @@
 import fs from "node:fs";
 import os from "node:os";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const runExec = vi.hoisted(() => vi.fn());
+const browserUtilsMock = vi.hoisted(() => ({ configDir: "/tmp/openclaw-state" }));
+const realMkdirSync = fs.mkdirSync.bind(fs);
+const realMkdtempSync = fs.mkdtempSync.bind(fs);
+const realRmSync = fs.rmSync.bind(fs);
+const realWriteFileSync = fs.writeFileSync.bind(fs);
+const realRealpathSyncNative = fs.realpathSync.native.bind(fs.realpathSync);
 
-vi.mock("../process/exec.js", () => ({
-  runExec,
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
+  get CONFIG_DIR() {
+    return browserUtilsMock.configDir;
+  },
 }));
 
+let movePathToTrash: typeof import("./trash.js").movePathToTrash;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ movePathToTrash } = await import("./trash.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/text-utility-runtime");
+  vi.resetModules();
+});
+
 describe("browser trash", () => {
+  let testRoot = "";
+  let configDir = "";
+  let homeDir = "";
+
   beforeEach(() => {
     vi.restoreAllMocks();
-    runExec.mockReset();
+    testRoot = realRealpathSyncNative(realMkdtempSync(path.join(os.tmpdir(), "openclaw-browser-")));
+    configDir = path.join(testRoot, "state");
+    homeDir = path.join(testRoot, "home", "test");
+    browserUtilsMock.configDir = configDir;
+    realMkdirSync(configDir, { recursive: true, mode: 0o700 });
+    realMkdirSync(path.join(homeDir, ".Trash"), { recursive: true, mode: 0o700 });
     vi.spyOn(Date, "now").mockReturnValue(123);
-    vi.spyOn(os, "homedir").mockReturnValue("/home/test");
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) =>
+      realRealpathSyncNative(candidate),
+    );
   });
 
-  it("returns the target path when trash exits successfully", async () => {
-    const { movePathToTrash } = await import("./trash.js");
-    runExec.mockResolvedValue(undefined);
-    const mkdirSync = vi.spyOn(fs, "mkdirSync");
-    const renameSync = vi.spyOn(fs, "renameSync");
-
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/tmp/demo");
-    expect(runExec).toHaveBeenCalledWith("trash", ["/tmp/demo"], { timeoutMs: 10_000 });
-    expect(mkdirSync).not.toHaveBeenCalled();
-    expect(renameSync).not.toHaveBeenCalled();
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (testRoot) {
+      realRmSync(testRoot, { recursive: true, force: true });
+    }
   });
 
-  it("falls back to rename when trash exits non-zero", async () => {
-    const { movePathToTrash } = await import("./trash.js");
-    runExec.mockRejectedValue(new Error("permission denied"));
-    const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  it("allows managed browser data under a configured state directory outside home", async () => {
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => {
+      const container = `${prefix}secure`;
+      realMkdirSync(container, { recursive: true });
+      return container;
+    });
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
+    const target = path.join(configDir, "browser", "constructor");
+    realMkdirSync(target, { recursive: true });
+    const expected = path.join(homeDir, ".Trash", "constructor-123-secure", "constructor");
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
-    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
-    expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
-    expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
+    await expect(movePathToTrash(target)).resolves.toBe(expected);
+    expect(renameSync).toHaveBeenCalledWith(target, expected);
+  });
+
+  it("does not authorize other configured-state paths", async () => {
+    const target = path.join(configDir, "credentials", "token.json");
+    realMkdirSync(path.dirname(target), { recursive: true });
+    realWriteFileSync(target, "secret");
+
+    await expect(movePathToTrash(target)).rejects.toThrow(
+      "Refusing to trash path outside allowed roots",
+    );
+  });
+
+  it("does not grant arbitrary filesystem authority for a root config directory", async () => {
+    browserUtilsMock.configDir = path.parse(testRoot).root;
+    const target = path.join(testRoot, "outside-root-browser");
+    realWriteFileSync(target, "outside");
+
+    await expect(movePathToTrash(target)).rejects.toThrow(
+      "Refusing to trash path outside allowed roots",
+    );
+  });
+
+  it("rejects browser-subtree symlinks that escape the configured state directory", async () => {
+    const browserDir = path.join(configDir, "browser");
+    const outsideDir = path.join(testRoot, "outside-profile");
+    realMkdirSync(browserDir, { recursive: true });
+    realMkdirSync(outsideDir, { recursive: true });
+    const target = path.join(browserDir, "constructor");
+    fs.symlinkSync(outsideDir, target, "dir");
+
+    await expect(movePathToTrash(target)).rejects.toThrow(
+      "Refusing to trash path outside allowed roots",
+    );
   });
 });

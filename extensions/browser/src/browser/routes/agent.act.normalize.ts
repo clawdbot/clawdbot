@@ -1,28 +1,39 @@
+/**
+ * Browser action request normalization.
+ *
+ * Converts loosely typed route bodies into the closed BrowserActRequest union
+ * used by Playwright and Chrome MCP action executors.
+ */
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
+  ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
+  ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserFormFields } from "../form-fields.js";
+import { resolveTargetIdFromTabs } from "../target-id.js";
+import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
-import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+  readRouteFiniteNumber,
+  readRouteInteger,
+  readRouteNonNegativeInteger,
+  readRouteTimerTimeoutMs,
+} from "./route-numeric.js";
+import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
-function normalizeActKind(raw: unknown): ActKind {
-  const kind = toStringOrEmpty(raw);
-  if (!isActKind(kind)) {
-    throw new Error("kind is required");
-  }
-  return kind;
-}
+const KEY_ALIASES = new Map([
+  ["esc", "Escape"],
+  ["return", "Enter"],
+  ["del", "Delete"],
+  ["ctrl", "Control"],
+  ["cmd", "Meta"],
+]);
 
-export function countBatchActions(actions: BrowserActRequest[]): number {
+function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
   for (const action of actions) {
     count += 1;
@@ -33,49 +44,90 @@ export function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
-export function validateBatchTargetIds(
-  actions: BrowserActRequest[],
-  targetId: string,
+/** Keep nested action overrides inside the route-selected tab. */
+export function canonicalizeActTargetIds(
+  action: BrowserActRequest,
+  tab: { targetId: string; suggestedTargetId?: string; tabId?: string; label?: string },
+  tabs = [tab],
+  batched = false,
 ): string | null {
-  for (const action of actions) {
-    if (action.targetId && action.targetId !== targetId) {
-      return "batched action targetId must match request targetId";
+  if (action.targetId) {
+    const resolved = resolveTargetIdFromTabs(action.targetId, batched ? tabs : [tab]);
+    if (!resolved.ok || resolved.targetId !== tab.targetId) {
+      return batched
+        ? "batched action targetId must match request targetId"
+        : "action targetId must match request targetId";
     }
-    if (action.kind === "batch") {
-      const nestedError = validateBatchTargetIds(action.actions, targetId);
-      if (nestedError) {
-        return nestedError;
+    // The Playwright executor treats action.targetId as an exact override.
+    action.targetId = tab.targetId;
+  }
+  if (action.kind === "batch") {
+    for (const subAction of action.actions) {
+      const error = canonicalizeActTargetIds(subAction, tab, tabs, true);
+      if (error) {
+        return error;
       }
     }
   }
   return null;
 }
 
-function normalizeFields(rawFields: unknown): BrowserFormField[] {
-  const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries
-    .map((field) => {
-      if (!field || typeof field !== "object") {
-        return null;
-      }
-      return normalizeBrowserFormField(field as Record<string, unknown>);
-    })
-    .filter((field): field is BrowserFormField => field !== null);
+function normalizeFields(rawFields: unknown) {
+  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
 }
 
-function normalizeBatchAction(value: unknown): BrowserActRequest {
+function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
-  return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
+  return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
 }
 
+function readActionNonNegativeInteger(
+  body: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  return readRouteNonNegativeInteger(body[key], key);
+}
+
+function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
+  return readRouteTimerTimeoutMs(body.timeoutMs);
+}
+
+function readBoundedActionDurationMs(
+  body: Record<string, unknown>,
+  key: string,
+  fieldName: string,
+  maxMs: number,
+): number | undefined {
+  return normalizeActBoundedNonNegativeMs(
+    readActionNonNegativeInteger(body, key),
+    fieldName,
+    maxMs,
+  );
+}
+
+function readResizeDimension(body: Record<string, unknown>, key: "width" | "height") {
+  const value = readRouteInteger(body[key], key, {
+    invalidMessage: "resize requires positive width and height",
+  });
+  if (value === undefined && Object.hasOwn(body, key)) {
+    throw new Error("resize requires positive width and height");
+  }
+  return value;
+}
+
+/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
-  options?: { source?: "request" | "batch" },
+  options?: { source?: "request" | "batch"; depth?: number },
 ): BrowserActRequest {
   const source = options?.source ?? "request";
-  const kind = normalizeActKind(body.kind);
+  const depth = options?.depth ?? 0;
+  const kind = toStringOrEmpty(body.kind);
+  if (!isActKind(kind)) {
+    throw new Error("kind is required");
+  }
 
   switch (kind) {
     case "click": {
@@ -95,12 +147,13 @@ export function normalizeActRequest(
         throw new Error(parsedModifiers.error);
       }
       const doubleClick = toBoolean(body.doubleClick);
-      const delayMs = normalizeActBoundedNonNegativeMs(
-        toNumber(body.delayMs),
+      const delayMs = readBoundedActionDurationMs(
+        body,
+        "delayMs",
         "click delayMs",
         ACT_MAX_CLICK_DELAY_MS,
       );
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {
         kind,
@@ -110,6 +163,37 @@ export function normalizeActRequest(
         ...(doubleClick !== undefined ? { doubleClick } : {}),
         ...(button ? { button } : {}),
         ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
+        ...(delayMs !== undefined ? { delayMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
+    case "clickCoords": {
+      const x = readRouteFiniteNumber(body.x, "x");
+      const y = readRouteFiniteNumber(body.y, "y");
+      if (x === undefined || y === undefined || x < 0 || y < 0) {
+        throw new Error("clickCoords requires non-negative x and y");
+      }
+      const buttonRaw = toStringOrEmpty(body.button);
+      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
+      if (buttonRaw && !button) {
+        throw new Error("clickCoords button must be left|right|middle");
+      }
+      const doubleClick = toBoolean(body.doubleClick);
+      const delayMs = readBoundedActionDurationMs(
+        body,
+        "delayMs",
+        "clickCoords delayMs",
+        ACT_MAX_CLICK_DELAY_MS,
+      );
+      const timeoutMs = readActionTimeoutMs(body);
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      return {
+        kind,
+        x,
+        y,
+        ...(targetId ? { targetId } : {}),
+        ...(doubleClick !== undefined ? { doubleClick } : {}),
+        ...(button ? { button } : {}),
         ...(delayMs !== undefined ? { delayMs } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
@@ -127,7 +211,7 @@ export function normalizeActRequest(
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       const submit = toBoolean(body.submit);
       const slowly = toBoolean(body.slowly);
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -140,12 +224,16 @@ export function normalizeActRequest(
       };
     }
     case "press": {
-      const key = toStringOrEmpty(body.key);
+      // Empty chord segments represent a literal plus key and must survive normalization.
+      const key = toStringOrEmpty(body.key)
+        .split("+")
+        .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+        .join("+");
       if (!key) {
         throw new Error("press requires key");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const delayMs = toNumber(body.delayMs);
+      const delayMs = readActionNonNegativeInteger(body, "delayMs");
       return {
         kind,
         key,
@@ -161,7 +249,7 @@ export function normalizeActRequest(
         throw new Error(`${kind} requires ref or selector`);
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -182,7 +270,7 @@ export function normalizeActRequest(
         throw new Error("drag requires endRef or endSelector");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(startRef ? { startRef } : {}),
@@ -196,12 +284,13 @@ export function normalizeActRequest(
     case "select": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;
-      const values = toStringArray(body.values);
-      if ((!ref && !selector) || !values?.length) {
+      // Option values are content: empty strings and surrounding whitespace can identify a choice.
+      const values = filterStringEntries(body.values);
+      if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -217,7 +306,7 @@ export function normalizeActRequest(
         throw new Error("fill requires fields");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         fields,
@@ -226,10 +315,13 @@ export function normalizeActRequest(
       };
     }
     case "resize": {
-      const width = toNumber(body.width);
-      const height = toNumber(body.height);
+      const width = readResizeDimension(body, "width");
+      const height = readResizeDimension(body, "height");
       if (width === undefined || height === undefined || width <= 0 || height <= 0) {
         throw new Error("resize requires positive width and height");
+      }
+      if (width > ACT_MAX_VIEWPORT_DIMENSION || height > ACT_MAX_VIEWPORT_DIMENSION) {
+        throw new Error(`resize width and height must not exceed ${ACT_MAX_VIEWPORT_DIMENSION}`);
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {
@@ -247,8 +339,9 @@ export function normalizeActRequest(
         loadStateRaw === "networkidle"
           ? loadStateRaw
           : undefined;
-      const timeMs = normalizeActBoundedNonNegativeMs(
-        toNumber(body.timeMs),
+      const timeMs = readBoundedActionDurationMs(
+        body,
+        "timeMs",
         "wait timeMs",
         ACT_MAX_WAIT_TIME_MS,
       );
@@ -263,7 +356,7 @@ export function normalizeActRequest(
         );
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(timeMs !== undefined ? { timeMs } : {}),
@@ -284,7 +377,7 @@ export function normalizeActRequest(
       }
       const ref = toStringOrEmpty(body.ref) || undefined;
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         fn,
@@ -301,7 +394,15 @@ export function normalizeActRequest(
       };
     }
     case "batch": {
-      const actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
+      // Bound nesting before recursing: oversized bodies parse fine, but
+      // unbounded recursion overflows the stack before the count check runs.
+      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
+      if (depth > ACT_MAX_BATCH_DEPTH) {
+        throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
+      }
+      const actions = Array.isArray(body.actions)
+        ? body.actions.map((action) => normalizeBatchAction(action, depth + 1))
+        : [];
       if (!actions.length) {
         throw new Error(source === "batch" ? "batch requires actions" : "actions are required");
       }

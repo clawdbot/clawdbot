@@ -1,42 +1,38 @@
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalogPreset,
+  createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  CHUTES_BASE_URL,
-  CHUTES_DEFAULT_MODEL_REF,
-  CHUTES_MODEL_CATALOG,
-  buildChutesModelDefinition,
-} from "./models.js";
+import { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export { CHUTES_DEFAULT_MODEL_REF };
+export const CHUTES_DEFAULT_MODEL_ID = manifest.modelCatalog.providers.chutes.defaultModel;
+export const CHUTES_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "chutes")!;
 
-/**
- * Apply Chutes provider configuration without changing the default model.
- * Registers all catalog models and sets provider aliases (chutes-fast, etc.).
- */
-export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+const chutesPresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: CHUTES_DEFAULT_MODEL_REF,
+  resolveParams: (cfg: OpenClawConfig) => ({
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
+    catalogModels: cfg.models?.mode === "replace" ? structuredClone(CHUTES_MODEL_CATALOG) : [],
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
-      { modelRef: "chutes-fast", alias: "chutes/zai-org/GLM-4.7-FP8" },
       {
         modelRef: "chutes-vision",
-        alias: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+        alias: "chutes/moonshotai/Kimi-K2.6-TEE",
       },
       { modelRef: "chutes-pro", alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" },
     ],
-  });
+  }),
+});
+
+export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return chutesPresetAppliers.applyProviderConfig(cfg);
 }
 
-/**
- * Apply Chutes provider configuration AND set Chutes as the default model.
- */
 export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyChutesProviderConfig(cfg);
   return {
@@ -47,11 +43,11 @@ export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
         ...next.agents?.defaults,
         model: {
           primary: CHUTES_DEFAULT_MODEL_REF,
-          fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/Qwen/Qwen3-32B"],
+          fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
         },
         imageModel: {
-          primary: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506",
-          fallbacks: ["chutes/chutesai/Mistral-Small-3.1-24B-Instruct-2503"],
+          primary: "chutes/moonshotai/Kimi-K2.6-TEE",
+          fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
         },
       },
     },

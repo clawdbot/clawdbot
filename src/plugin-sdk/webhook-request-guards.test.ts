@@ -1,5 +1,9 @@
+/**
+ * Tests webhook request guard body parsing and rejection behavior.
+ */
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { describe, expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
@@ -10,11 +14,13 @@ import {
   isJsonContentType,
   readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  runDetachedWebhookWork,
 } from "./webhook-request-guards.js";
 
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
   destroy: () => MockIncomingMessage;
+  pause: () => MockIncomingMessage;
 };
 
 function createMockRequest(params: {
@@ -26,11 +32,13 @@ function createMockRequest(params: {
   const req = new EventEmitter() as MockIncomingMessage;
   req.method = params.method ?? "POST";
   req.headers = params.headers ?? {};
+  req.socket = new Socket();
   req.destroyed = false;
   req.destroy = (() => {
     req.destroyed = true;
     return req;
   }) as MockIncomingMessage["destroy"];
+  req.pause = (() => req) as MockIncomingMessage["pause"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {
@@ -200,20 +208,48 @@ describe("readWebhookBodyOrReject", () => {
     const { result } = await readRawBody({ chunks: ["plain text"] });
     expect(result).toEqual({ ok: true, value: "plain text" });
   });
-
-  it("enforces strict pre-auth default body limits", async () => {
-    const { result, res } = await readRawBody(
-      {
-        headers: { "content-length": String(70 * 1024) },
-      },
-      "pre-auth",
-    );
-    expect(result).toEqual({ ok: false });
-    expect(res.statusCode).toBe(413);
-  });
 });
 
 describe("beginWebhookRequestPipelineOrReject", () => {
+  it("falls back for non-finite in-flight limiter options", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: Number.NaN,
+      maxTrackedKeys: Number.NaN,
+    });
+    const releases: Array<() => void> = [];
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        const result = beginWebhookRequestPipelineOrReject({
+          req: createMockRequest({ method: "POST" }),
+          res: createMockServerResponse(),
+          allowMethods: ["POST"],
+          inFlightLimiter: limiter,
+          inFlightKey: "ip:127.0.0.1",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          releases.push(result.release);
+        }
+      }
+
+      const overflowRes = createMockServerResponse();
+      const overflow = beginWebhookRequestPipelineOrReject({
+        req: createMockRequest({ method: "POST" }),
+        res: overflowRes,
+        allowMethods: ["POST"],
+        inFlightLimiter: limiter,
+        inFlightKey: "ip:127.0.0.1",
+      });
+
+      expect(overflow.ok).toBe(false);
+      expect(overflowRes.statusCode).toBe(429);
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+    }
+  });
+
   it("enforces in-flight request limits and releases slots", () => {
     const limiter = createWebhookInFlightLimiter({
       maxInFlightPerKey: 1,
@@ -255,5 +291,78 @@ describe("beginWebhookRequestPipelineOrReject", () => {
     if (third.ok) {
       third.release();
     }
+  });
+});
+
+describe("runDetachedWebhookWork", () => {
+  it("defers the callback until the request handler can acknowledge", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const order: string[] = [];
+    const detached: Promise<void>[] = [];
+
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        detached.push(
+          runDetachedWebhookWork(async () => {
+            order.push("work");
+          }),
+        );
+        order.push("ack");
+        expect(order).toEqual(["ack"]);
+        return true;
+      },
+    );
+
+    await Promise.all(detached);
+    expect(order).toEqual(["ack", "work"]);
+  });
+
+  it("keeps post-ack processing admitted after the request admission is released", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let detached: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        // Ack-first shape: dispatch continues after the handler (and its
+        // admission) completes; the queue enqueue happens well past release.
+        detached = runDetachedWebhookWork(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 25);
+          });
+          return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
+        });
+        return true;
+      },
+    );
+
+    await expect(detached).resolves.toBe(42);
+  });
+
+  it("refuses the same post-ack processing when it merely inherits the request admission", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let inherited: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        inherited = (async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 25);
+          });
+          return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
+        })();
+        inherited.catch(() => {});
+        return true;
+      },
+    );
+
+    await expect(inherited).rejects.toThrow("Gateway is draining");
   });
 });

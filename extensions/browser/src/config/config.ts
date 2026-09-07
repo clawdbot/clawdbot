@@ -1,9 +1,10 @@
+/**
+ * Browser plugin config contract re-exports from the SDK config bridge.
+ */
 export {
-  createConfigIO,
-  getRuntimeConfigSnapshot,
-  loadConfig,
-  writeConfigFile,
-  type BrowserConfig,
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+  mutateConfigFile,
   type BrowserProfileConfig,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/browser-config-runtime";
+} from "../sdk-config.js";

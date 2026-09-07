@@ -1,15 +1,20 @@
+// Delivery awareness tests cover isolated agent knowledge of cron delivery targets.
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
-import { resetCompletedDirectCronDeliveriesForTests } from "./isolated-agent/delivery-dispatch.js";
 
 async function writeDefaultAgentSessionStoreEntries(
   entries: Record<string, Record<string, unknown>>,
@@ -48,9 +53,23 @@ async function runAnnounceTurn(params: {
 }
 
 describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
+  beforeAll(async () => {
+    setupIsolatedAgentTurnMocks();
+    resetSystemEventsForTest();
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      mockAgentPayloads([{ text: "warm runtime" }]);
+      await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:warm-runtime",
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+    });
+  });
+
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
-    resetCompletedDirectCronDeliveriesForTests();
     resetSystemEventsForTest();
   });
 
@@ -78,6 +97,62 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
     });
   });
 
+  it("appends the exact run-session inspection link only to the final visible delivery payload", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "first cron update" }, { text: "final cron summary" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        cfgOverrides: {
+          gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } },
+        },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBe(true);
+      expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        1,
+        "123",
+        "first cron update",
+        expect.any(Object),
+      );
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        2,
+        "123",
+        `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("does not turn a suppressed silent reply into an inspection-link announcement", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "NO_REPLY" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        cfgOverrides: { gateway: { publicOrigin: "https://control.example" } },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBeFalsy();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses the global main queue when session scope is global", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeDefaultAgentSessionStoreEntries({});
@@ -102,6 +177,48 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
       expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
+      const globalEvents = peekSystemEventEntries("global");
+      expect(selectAgentSystemEvents(globalEvents, "main")).toHaveLength(1);
+      expect(selectAgentSystemEvents(globalEvents, "other")).toEqual([]);
+    });
+  });
+
+  it("refuses keyless implicit last-target delivery inherited from the shared main bucket, queuing no awareness", async () => {
+    // #91613: a keyless implicit cron (sessionTarget "isolated", delivery.channel "last", no `to`)
+    // would inherit the SHARED agent-main bucket's lastTo. In a multi-conversation agent that room
+    // belongs to whichever conversation last wrote main — the wrong room — and the durable queue
+    // replays it after a restart. It is now refused at the delivery dispatch !ok gate (errorKind
+    // delivery-target) — the agent turn still runs, but delivery is refused, so nothing reaches the
+    // wrong room or the durable queue, and no main-session awareness event is queued. (This is the
+    // single-conversation behavior change called out for the maintainer: a keyless cron must now
+    // pin delivery.to / delivery.channel, or run from a session that carries its own context.)
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastProvider: "telegram",
+          lastChannel: "telegram",
+          lastTo: "123",
+        },
+      });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "implicit cron digest" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "last",
+        },
+      });
+
+      expect(result.status).toBe("error");
+      expect(result.delivered).toBeFalsy();
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 });

@@ -1,13 +1,21 @@
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
+// Loads provider usage snapshots from built-in and plugin providers.
+import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import {
+  listProviderUsagePluginDescriptors,
+  resolveProviderUsageSnapshotWithPlugin,
+  type ProviderUsagePluginDescriptor,
+} from "../plugins/provider-runtime.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
+import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  DEFAULT_TIMEOUT_MS,
+  PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
-  PROVIDER_LABELS,
-  usageProviders,
-  withTimeout,
+  providerUsageLabel,
+  raceUsageTimeout,
 } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -15,6 +23,7 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
   timeoutMs: number;
@@ -24,7 +33,7 @@ async function fetchProviderUsageSnapshotFallback(params: {
   void params.fetchFn;
   return {
     provider: params.auth.provider,
-    displayName: PROVIDER_LABELS[params.auth.provider] ?? params.auth.provider,
+    displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
     windows: [],
     error: "Unsupported provider",
   };
@@ -35,6 +44,7 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  authStore?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -52,7 +62,7 @@ async function fetchProviderUsageSnapshot(params: {
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
-    provider: params.auth.provider,
+    provider: params.auth.hookProvider ?? params.auth.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -64,6 +74,10 @@ async function fetchProviderUsageSnapshot(params: {
       provider: params.auth.provider,
       token: params.auth.token,
       accountId: params.auth.accountId,
+      authProfileId: params.auth.authProfileId,
+      subscriptionType: params.auth.subscriptionType,
+      rateLimitTier: params.auth.rateLimitTier,
+      email: params.auth.email,
       timeoutMs: params.timeoutMs,
       fetchFn: params.fetchFn,
     },
@@ -78,53 +92,112 @@ async function fetchProviderUsageSnapshot(params: {
   });
 }
 
+/** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const config = opts.config ?? loadConfig();
+  const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
+  const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const fetchFn = resolveFetch(opts.fetch);
+  const fetchFn = opts.fetch
+    ? resolveFetch(opts.fetch)
+    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
 
-  const auths = await resolveProviderAuths({
-    providers: opts.providers ?? usageProviders,
-    auth: opts.auth,
-    agentDir: opts.agentDir,
-    config,
-    env,
-  });
-  if (auths.length === 0) {
-    return { updatedAt: now, providers: [] };
-  }
-
-  const tasks = auths.map((auth) =>
-    withTimeout(
-      fetchProviderUsageSnapshot({
-        auth,
-        config,
-        env,
-        agentDir: opts.agentDir,
-        workspaceDir: opts.workspaceDir,
-        timeoutMs,
-        fetchFn,
-      }),
-      timeoutMs + 1000,
-      {
-        provider: auth.provider,
-        displayName: PROVIDER_LABELS[auth.provider],
-        windows: [],
-        error: "Timeout",
-      },
-    ),
+  const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
+    ? opts.providers.map((provider) => ({
+        provider,
+        displayName: providerUsageLabel(provider) ?? provider,
+      }))
+    : opts.auth
+      ? opts.auth.map((auth) => ({
+          provider: auth.provider,
+          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+        }))
+      : listProviderUsagePluginDescriptors({
+          config,
+          workspaceDir: opts.workspaceDir,
+          env,
+        });
+  const displayNames = new Map(
+    descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
+  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
+  const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
+    provider,
+    displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
+    windows: [],
+    error,
+  });
+  let authStore = opts.authStore;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+  const tasks = descriptors.map(({ provider }) => {
+    // The response deadline does not end the auth/fetch producer's lifetime.
+    return raceUsageTimeout(
+      trackAsyncWork(async () => {
+        let authError: unknown;
+        const auth =
+          opts.auth?.find((candidate) => candidate.provider === provider) ??
+          (
+            await resolveProviderAuths({
+              providers: [provider],
+              agentDir: opts.agentDir,
+              config,
+              env,
+              getStore: getAuthStore,
+              store: opts.authStore,
+              onError: (_provider, error) => {
+                authError = error;
+              },
+            })
+          )[0];
+        if (authError) {
+          const message = formatErrorMessage(authError);
+          return failureSnapshot(provider, message.trim() || "Auth failed");
+        }
+        if (!auth) {
+          return undefined;
+        }
+        return await fetchProviderUsageSnapshot({
+          auth,
+          config,
+          env,
+          agentDir: opts.agentDir,
+          workspaceDir: opts.workspaceDir,
+          timeoutMs,
+          fetchFn,
+        });
+      }),
+      timeoutMs,
+      failureSnapshot(provider, "Timeout"),
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return failureSnapshot(provider, message.trim() || "Fetch failed");
+    });
+  });
 
-  const snapshots = await Promise.all(tasks);
+  const snapshots = (await Promise.all(tasks))
+    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
+    .toSorted(
+      (left, right) =>
+        (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
+        (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
+    );
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
+      return true;
+    }
+    if (entry.billing && entry.billing.length > 0) {
+      return true;
+    }
+    if (entry.costHistory?.daily.length) {
+      return true;
+    }
+    if (entry.summary?.trim()) {
       return true;
     }
     if (!entry.error) {

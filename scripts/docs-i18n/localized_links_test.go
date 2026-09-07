@@ -50,6 +50,16 @@ func TestLocalizeBodyLinks(t *testing.T) {
 			want:  `See [Config](/zh-CN/gateway/configuration).`,
 		},
 		{
+			name:  "vbscript scheme stays unchanged",
+			input: `<a href="vbscript:msgbox(1)">bad</a>`,
+			want:  `<a href="vbscript:msgbox(1)">bad</a>`,
+		},
+		{
+			name:  "mixed-case javascript scheme stays unchanged",
+			input: `<a href="Javascript:alert(1)">bad</a>`,
+			want:  `<a href="Javascript:alert(1)">bad</a>`,
+		},
+		{
 			name:  "missing localized page stays unchanged",
 			input: `See [FAQ](/help/faq).`,
 			want:  `See [FAQ](/help/faq).`,
@@ -126,6 +136,19 @@ func TestLocalizeBodyLinks(t *testing.T) {
 				t.Fatalf("unexpected rewrite\nwant: %q\ngot:  %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestUnmaskMarkdownRestoresNestedPlaceholders(t *testing.T) {
+	placeholders := []string{"__OC_I18N_900000__", "__OC_I18N_900001__"}
+	mapping := map[string]string{
+		"__OC_I18N_900000__": "```ts\nconst value = true;\n```",
+		"__OC_I18N_900001__": "Before\n__OC_I18N_900000__\nAfter",
+	}
+	got := unmaskMarkdown("__OC_I18N_900001__", placeholders, mapping)
+	want := "Before\n```ts\nconst value = true;\n```\nAfter"
+	if got != want {
+		t.Fatalf("nested placeholders not fully restored\nwant: %q\ngot:  %q", want, got)
 	}
 }
 

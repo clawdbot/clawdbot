@@ -1,11 +1,14 @@
+// Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { webhook } from "@line/bot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { createLineBot } from "./bot.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -20,14 +23,44 @@ export async function readLineWebhookRequestBody(
   return await readRequestBodyWithLimit(req, {
     maxBytes,
     timeoutMs,
+    // Defer destruction so the caller can answer 413/408 before the connection closes.
+    destroyOnLimit: false,
   });
 }
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
+/**
+ * Answer a body-limit failure through the connection owner.
+ *
+ * The reader defers destruction for these two codes, so the connection is already fenced
+ * and only the owner can still write: responding directly would race the teardown and LINE
+ * would see a reset instead of the status.
+ */
+export async function rejectLineWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
+  if (
+    !isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE") &&
+    !isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
+  ) {
+    return false;
+  }
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json",
+  );
+  return true;
+}
+
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
-  bot: { handleWebhook: (body: webhook.CallbackRequest) => Promise<void> };
+  bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
@@ -98,29 +131,18 @@ export function createLineNodeWebhookHandler(params: {
       }
 
       params.onRequestAuthenticated?.();
-
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
         await params.bot.handleWebhook(body);
       }
-
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
     } catch (err) {
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        res.statusCode = 413;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Payload too large" }));
+      if (await rejectLineWebhookRequest(req, res, err)) {
         return;
       }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
-        return;
-      }
-      params.runtime.error?.(danger(`line webhook error: ${String(err)}`));
+      params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");

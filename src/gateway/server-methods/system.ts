@@ -1,24 +1,129 @@
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
-import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
-import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
-import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+// System gateway methods expose device and host identity, heartbeat controls,
+// presence snapshots, and normalized system events.
+import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
-} from "../../shared/string-coerce.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  type SystemInfoResult,
+  validateSystemInfoParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  validateSystemEventParams,
+} from "../../../packages/gateway-protocol/src/schema/system-event.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
+import {
+  readUtilityModelSetting,
+  resolveUtilityModelRefForAgent,
+} from "../../agents/utility-model.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
+import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
+import {
+  loadOrCreateProcessDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../../infra/device-identity.js";
+import { tryReadDiskSpace } from "../../infra/disk-space.js";
+import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
+import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
+import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import { readSystemDisks } from "../../infra/system-disks.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
+import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { loadGatewaySessionRow } from "../session-utils.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
+let advertisedLanHostPromise: Promise<string | null> | null = null;
+
+function resolveCachedAdvertisedLanHost(): Promise<string | null> {
+  // Route discovery may spawn a platform command. Keep the result process-stable
+  // so each visible Settings page does not repeat that work every ten seconds.
+  advertisedLanHostPromise ??= resolveAdvertisedLanHostCore().catch(() => null);
+  return advertisedLanHostPromise;
+}
+
+async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
+  const cpus = os.cpus();
+  const cpuModel = cpus[0]?.model.trim() || undefined;
+  const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
+  const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
+  const stateDir = resolveStateDir();
+  const disk = tryReadDiskSpace(stateDir);
+  const config = context.getRuntimeConfig();
+  const port = resolveGatewayPort(config);
+  const [lanAddress, disks] = await Promise.all([
+    resolveCachedAdvertisedLanHost(),
+    readSystemDisks(),
+  ]);
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const defaultAgentUtilityModel = soleAgentId
+    ? (() => {
+        const utilitySetting = readUtilityModelSetting(config, soleAgentId);
+        const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: soleAgentId });
+        return utilitySetting.kind === "disabled"
+          ? ({ status: "disabled" } as const)
+          : utilitySetting.kind === "explicit"
+            ? ({ status: "configured", model: utilitySetting.modelRef } as const)
+            : utilityModel
+              ? ({ status: "auto", model: utilityModel } as const)
+              : ({ status: "unavailable" } as const);
+      })()
+    : ({ status: "unavailable" } as const);
+
+  return {
+    machineName: await getMachineDisplayName(),
+    hostname: os.hostname(),
+    platform: os.platform(),
+    release: os.release(),
+    arch: os.arch(),
+    osLabel: resolveRuntimeOsLabel(),
+    ...(lanAddress ? { lanAddress } : {}),
+    port,
+    nodeVersion: process.version,
+    pid: process.pid,
+    processInstanceId: getGatewayProcessInstanceId(),
+    uptimeMs: Math.round(process.uptime() * 1000),
+    cpuCount: cpus.length,
+    ...(cpuModel ? { cpuModel } : {}),
+    ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
+    memoryTotalBytes: os.totalmem(),
+    memoryFreeBytes: os.freemem(),
+    // Keep the existing state-volume reading when native discovery is unavailable;
+    // an empty successful discovery intentionally stays empty.
+    disks:
+      disks ??
+      (disk?.totalBytes != null && disk.totalBytes > 0
+        ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
+        : undefined),
+    ...(disk?.totalBytes != null
+      ? {
+          diskTotalBytes: disk.totalBytes,
+          diskAvailableBytes: disk.availableBytes,
+          diskPath: stateDir,
+        }
+      : {}),
+    defaultAgentUtilityModel,
+  };
+}
+
+/** Gateway handlers for identity, host information, heartbeat toggles, and presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
   "gateway.identity.get": ({ respond }) => {
-    const identity = loadOrCreateDeviceIdentity();
+    const identity = loadOrCreateProcessDeviceIdentity();
     respond(
       true,
       {
@@ -47,17 +152,83 @@ export const systemHandlers: GatewayRequestHandlers = {
     setHeartbeatsEnabled(enabled);
     respond(true, { ok: true, enabled }, undefined);
   },
-  "system-presence": ({ respond }) => {
-    const presence = listSystemPresence();
+  "system-presence": ({ respond, client, context }) => {
+    const presence = createPresenceRecipientProjection({
+      cfg: context.getRuntimeConfig(),
+      presence: listSystemPresence(),
+    })(client);
     respond(true, presence, undefined);
   },
+  "system.info": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
+      return;
+    }
+    respond(true, await collectSystemInfo(context), undefined);
+  },
   "system-event": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
+      return;
+    }
+    // `system-event` is operator.admin-only; role policy rejects node connections before dispatch.
+    // Payload classification below selects behavior and is never an authorization boundary.
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
-    const sessionKey = resolveMainSessionKeyFromConfig();
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
+    const requestedOwner = requestedSessionKey
+      ? resolveRequestedSessionAgentId(cfg, requestedSessionKey)
+      : undefined;
+    if (requestedOwner && !requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    const systemTarget = requestedSessionKey
+      ? { agentId: requestedOwner?.agentId, sessionKey: requestedSessionKey }
+      : resolveSystemMainSessionTarget(cfg);
+    const { agentId: eventOwnerAgentId, sessionKey } = systemTarget;
+    const wake = params.wake === true;
+    const isNodePresenceLine = text.startsWith("Node:");
+    if (wake && isNodePresenceLine) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wake is not supported for node presence events"),
+      );
+      return;
+    }
+    if (wake && requestedSessionKey) {
+      const requestedAgentId = normalizeAgentId(
+        requestedOwner?.agentId ?? resolveAgentIdFromSessionKey(requestedSessionKey),
+      );
+      const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
+      if (!configuredAgentIds.includes(requestedAgentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
+        );
+        return;
+      }
+      // A targeted wake starts a model run. Require a live persisted session
+      // so malformed keys cannot create phantom work under agent defaults.
+      const targetSession = loadGatewaySessionRow(requestedSessionKey, {
+        agentId: requestedAgentId,
+      });
+      if (!targetSession || targetSession.archived) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Unknown or archived session "${requestedSessionKey}"`,
+          ),
+        );
+        return;
+      }
+    }
     const deviceId = readStringValue(params.deviceId);
     const instanceId = readStringValue(params.instanceId);
     const host = readStringValue(params.host);
@@ -67,10 +238,6 @@ export const systemHandlers: GatewayRequestHandlers = {
     const platform = readStringValue(params.platform);
     const deviceFamily = readStringValue(params.deviceFamily);
     const modelIdentifier = readStringValue(params.modelIdentifier);
-    const lastInputSeconds =
-      typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
     const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
@@ -83,6 +250,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     const tags =
       Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
         ? params.tags
+        : undefined;
+    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+      ? null
+      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
+        ? params.lastInputSeconds
         : undefined;
     const presenceUpdate = updateSystemPresence({
       text,
@@ -101,14 +273,19 @@ export const systemHandlers: GatewayRequestHandlers = {
       scopes,
       tags,
     });
-    const isNodePresenceLine = text.startsWith("Node:");
     if (isNodePresenceLine) {
+      // Node presence heartbeats are noisy; only enqueue user-visible system
+      // events when routing context or meaningful node metadata changes.
       const next = presenceUpdate.next;
       const changed = new Set(presenceUpdate.changedKeys);
       const reasonValue = next.reason ?? reason;
       const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
-        normalizedReason.startsWith("periodic") || normalizedReason === "heartbeat";
+        normalizedReason.startsWith("periodic") ||
+        normalizedReason === "heartbeat" ||
+        normalizedReason === "connect" ||
+        normalizedReason === "launch" ||
+        normalizedReason === "instances-refresh";
       const hostChanged = changed.has("host");
       const ipChanged = changed.has("ip");
       const versionChanged = changed.has("version");
@@ -118,6 +295,8 @@ export const systemHandlers: GatewayRequestHandlers = {
       if (hasChanges) {
         const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
         const parts: string[] = [];
+        // Re-state node identity only when the line would otherwise lose
+        // routing context or the host/IP changed.
         if (contextChanged || hostChanged || ipChanged) {
           const hostLabel = normalizeOptionalString(next.host) ?? "Unknown";
           const ipLabel = normalizeOptionalString(next.ip);
@@ -134,15 +313,41 @@ export const systemHandlers: GatewayRequestHandlers = {
         }
         const deltaText = parts.join(" · ");
         if (deltaText) {
-          enqueueSystemEvent(deltaText, {
+          const eventOptions = {
             sessionKey,
             contextKey: presenceUpdate.key,
-          });
+          };
+          enqueueSystemEvent(
+            deltaText,
+            eventOwnerAgentId
+              ? withSystemEventOwner(eventOptions, eventOwnerAgentId)
+              : eventOptions,
+          );
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      const eventOptions = { sessionKey };
+      enqueueSystemEvent(
+        text,
+        eventOwnerAgentId ? withSystemEventOwner(eventOptions, eventOwnerAgentId) : eventOptions,
+      );
+      if (wake) {
+        // Targeted admin events may need a proactive response. Carry the exact
+        // session through the wake so its delivery context, not main, wins.
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "immediate",
+          // The dispatcher recognizes "wake" as a payload-bearing run, so an
+          // empty monitor scratch cannot suppress this queued system event.
+          reason: "wake",
+          ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
+          sessionKey,
+          heartbeat: { target: "last" },
+        });
+      }
     }
+    // Presence changes are observable even when noisy node heartbeat text is
+    // suppressed from the transcript-style system event queue.
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,
       incrementPresenceVersion: context.incrementPresenceVersion,

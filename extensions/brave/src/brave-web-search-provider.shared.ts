@@ -1,17 +1,23 @@
-import { Type } from "@sinclair/typebox";
+/**
+ * Brave Search request normalization and result mapping. It validates Brave
+ * country/language params and converts LLM-context responses into web results.
+ */
+import { resolveSiteName } from "openclaw/plugin-sdk/provider-web-search";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type BraveConfig = {
+type BraveConfig = {
+  baseUrl?: unknown;
   mode?: string;
 };
 
-export type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
+type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
+/** Brave LLM Context API response subset used by OpenClaw. */
 export type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
-  sources?: { url?: string; hostname?: string; date?: string }[];
+  sources?: Record<string, { age?: string[] }>;
 };
 
 const BRAVE_COUNTRY_CODES = new Set([
@@ -119,7 +125,6 @@ const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
 };
 
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
-const MAX_BRAVE_SEARCH_COUNT = 10;
 
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
   if (!value) {
@@ -137,6 +142,7 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   return canonical;
 }
 
+/** Normalize Brave country filter values. */
 export function normalizeBraveCountry(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -162,18 +168,24 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
     return undefined;
   }
   const [, language, region] = match;
+  if (!language || !region) {
+    return undefined;
+  }
   return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
 }
 
+/** Resolve Brave-specific web-search config from scoped search config. */
 export function resolveBraveConfig(searchConfig?: Record<string, unknown>): BraveConfig {
   const brave = searchConfig?.brave;
   return brave && typeof brave === "object" && !Array.isArray(brave) ? (brave as BraveConfig) : {};
 }
 
+/** Resolve whether Brave should use web search or LLM Context API mode. */
 export function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
   return brave?.mode === "llm-context" ? "llm-context" : "web";
 }
 
+/** Normalize Brave search and UI language params, detecting swapped fields. */
 export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: string }): {
   search_lang?: string;
   ui_lang?: string;
@@ -202,20 +214,10 @@ export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_
   return { search_lang, ui_lang };
 }
 
-function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
+/** Map Brave LLM Context API grounding results into web-search result rows. */
 export function mapBraveLlmContextResults(
   data: BraveLlmContextResponse,
-): { url: string; title: string; snippets: string[]; siteName?: string }[] {
+): { url: string; title: string; snippets: string[]; siteName?: string; published?: string }[] {
   const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
   return genericResults.map((entry) => ({
     url: entry.url ?? "",
@@ -224,56 +226,9 @@ export function mapBraveLlmContextResults(
       (snippet) => typeof snippet === "string" && snippet.length > 0,
     ),
     siteName: resolveSiteName(entry.url) || undefined,
+    // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
+    // Only the absolute forms belong in published; never infer a date from recency.
+    published:
+      data.sources?.[entry.url]?.age?.[3] || data.sources?.[entry.url]?.age?.[1] || undefined,
   }));
-}
-
-export function createBraveSchema() {
-  return Type.Object({
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: MAX_BRAVE_SEARCH_COUNT,
-      }),
-    ),
-    country: Type.Optional(
-      Type.String({
-        description:
-          "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
-      }),
-    ),
-    language: Type.Optional(
-      Type.String({
-        description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
-      }),
-    ),
-    freshness: Type.Optional(
-      Type.String({
-        description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
-      }),
-    ),
-    date_after: Type.Optional(
-      Type.String({
-        description: "Only results published after this date (YYYY-MM-DD).",
-      }),
-    ),
-    date_before: Type.Optional(
-      Type.String({
-        description: "Only results published before this date (YYYY-MM-DD).",
-      }),
-    ),
-    search_lang: Type.Optional(
-      Type.String({
-        description:
-          "Brave language code for search results (e.g., 'en', 'de', 'en-gb', 'zh-hans', 'zh-hant', 'pt-br').",
-      }),
-    ),
-    ui_lang: Type.Optional(
-      Type.String({
-        description:
-          "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
-      }),
-    ),
-  });
 }

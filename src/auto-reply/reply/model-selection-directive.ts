@@ -1,0 +1,373 @@
+// Normalizes model selection directives into provider and model ids.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { modelKey } from "../../agents/model-ref-shared.js";
+import {
+  type ModelAliasIndex,
+  resolveModelRefFromString,
+} from "../../agents/model-selection-shared.js";
+import {
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
+export { modelKey };
+export type { ModelAliasIndex };
+
+/** Resolved model choice from a `/model` directive. */
+export type ModelDirectiveSelection = {
+  provider: string;
+  model: string;
+  isDefault: boolean;
+  alias?: string;
+};
+
+function formatNotAllowedError(params: {
+  modelRef: string;
+  policyPath: string;
+  rawRuntime?: string | undefined;
+}): string {
+  const rawRuntime = params.rawRuntime?.trim();
+  const retryCommand = rawRuntime
+    ? `/model ${params.modelRef} --runtime ${rawRuntime}`
+    : `/model ${params.modelRef}`;
+  const lines = [
+    `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    `Add "${params.modelRef}" or its provider wildcard to ${params.policyPath}.`,
+    `Then retry: ${retryCommand}`,
+  ];
+  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
+    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
+  }
+  return lines.join("\n");
+}
+
+const FUZZY_VARIANT_TOKENS = [
+  "lightning",
+  "preview",
+  "mini",
+  "fast",
+  "turbo",
+  "lite",
+  "beta",
+  "small",
+  "nano",
+];
+
+function scoreFuzzyMatch(params: {
+  provider: string;
+  model: string;
+  fragment: string;
+  aliasIndex: ModelAliasIndex;
+  defaultProvider: string;
+  defaultModel: string;
+}): {
+  score: number;
+  isDefault: boolean;
+  variantCount: number;
+  variantMatchCount: number;
+  modelLength: number;
+  key: string;
+} {
+  const provider = normalizeProviderId(params.provider);
+  const model = params.model;
+  const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
+  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const modelLower = normalizeLowercaseStringOrEmpty(model);
+  const haystack = `${providerLower}/${modelLower}`;
+  const key = modelKey(provider, model);
+
+  const scoreFragment = (
+    value: string,
+    weights: { exact: number; starts: number; includes: number },
+  ) => {
+    if (!fragment) {
+      return 0;
+    }
+    let score = 0;
+    if (value === fragment) {
+      score = Math.max(score, weights.exact);
+    }
+    if (value.startsWith(fragment)) {
+      score = Math.max(score, weights.starts);
+    }
+    if (value.includes(fragment)) {
+      score = Math.max(score, weights.includes);
+    }
+    return score;
+  };
+
+  let score = 0;
+  score += scoreFragment(haystack, { exact: 220, starts: 140, includes: 110 });
+  score += scoreFragment(providerLower, {
+    exact: 180,
+    starts: 120,
+    includes: 90,
+  });
+  score += scoreFragment(modelLower, {
+    exact: 160,
+    starts: 110,
+    includes: 80,
+  });
+
+  // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
+  // Bounded to keep this cheap across large model sets.
+  const distModel = levenshteinDistance(fragment, modelLower, 3);
+  if (distModel != null) {
+    score += (3 - distModel) * 70;
+  }
+
+  const aliases = params.aliasIndex.byKey.get(key) ?? [];
+  for (const alias of aliases) {
+    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
+      exact: 140,
+      starts: 90,
+      includes: 60,
+    });
+  }
+
+  if (modelLower.startsWith(providerLower)) {
+    score += 30;
+  }
+
+  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
+  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token));
+  const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
+  const variantCount = modelVariants.length;
+  if (fragmentVariants.length === 0 && variantCount > 0) {
+    score -= variantCount * 30;
+  } else if (fragmentVariants.length > 0) {
+    if (variantMatchCount > 0) {
+      score += variantMatchCount * 40;
+    }
+    if (variantMatchCount === 0) {
+      score -= 20;
+    }
+  }
+
+  const defaultProvider = normalizeProviderId(params.defaultProvider);
+  const isDefault = provider === defaultProvider && model === params.defaultModel;
+  if (isDefault) {
+    score += 20;
+  }
+
+  return {
+    score,
+    isDefault,
+    variantCount,
+    variantMatchCount,
+    modelLength: modelLower.length,
+    key,
+  };
+}
+
+/** Resolves a `/model` directive under the effective model policy. */
+export function resolveModelDirectiveSelection(params: {
+  raw: string;
+  defaultProvider: string;
+  defaultModel: string;
+  aliasIndex: ModelAliasIndex;
+  allowedModelKeys: Set<string>;
+  modelPolicy?: ModelVisibilityPolicy;
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  rawRuntime?: string | undefined;
+}): { selection?: ModelDirectiveSelection; error?: string } {
+  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
+  const policy =
+    params.modelPolicy ??
+    createModelVisibilityPolicy({
+      cfg: params.cfg ?? {},
+      catalog: [],
+      defaultProvider,
+      defaultModel,
+      agentId: params.agentId,
+    });
+
+  const rawTrimmed = raw.trim();
+  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
+
+  const pickAliasForKey = (provider: string, model: string): string | undefined =>
+    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
+
+  const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
+    const alias = pickAliasForKey(provider, model);
+    return {
+      provider,
+      model,
+      isDefault: provider === defaultProvider && model === defaultModel,
+      ...(alias ? { alias } : undefined),
+    };
+  };
+
+  const resolveFuzzy = (paramsLocal: {
+    provider?: string;
+    fragment: string;
+  }): { selection?: ModelDirectiveSelection; error?: string } => {
+    const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
+    if (!fragment) {
+      return {};
+    }
+
+    const providerFilter = paramsLocal.provider
+      ? normalizeProviderId(paramsLocal.provider)
+      : undefined;
+
+    const candidates: Array<{ provider: string; model: string }> = [];
+    for (const key of allowedModelKeys) {
+      const slash = key.indexOf("/");
+      if (slash <= 0) {
+        continue;
+      }
+      const provider = normalizeProviderId(key.slice(0, slash));
+      const model = key.slice(slash + 1);
+      if (model.endsWith("*") || !policy.allowsKey(key)) {
+        continue;
+      }
+      if (providerFilter && provider !== providerFilter) {
+        continue;
+      }
+      candidates.push({ provider, model });
+    }
+
+    // Also allow partial alias matches when the user didn't specify a provider.
+    if (!paramsLocal.provider) {
+      const aliasMatches: Array<{ provider: string; model: string }> = [];
+      for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
+        if (!aliasKey.includes(fragment)) {
+          continue;
+        }
+        aliasMatches.push({
+          provider: entry.ref.provider,
+          model: entry.ref.model,
+        });
+      }
+      for (const match of aliasMatches) {
+        const key = modelKey(match.provider, match.model);
+        if (!policy.allowsKey(key)) {
+          continue;
+        }
+        if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
+          candidates.push(match);
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      return {};
+    }
+
+    const scored = candidates
+      .map((candidate) => {
+        const details = scoreFuzzyMatch({
+          provider: candidate.provider,
+          model: candidate.model,
+          fragment,
+          aliasIndex,
+          defaultProvider,
+          defaultModel,
+        });
+        return Object.assign({ candidate }, details);
+      })
+      .toSorted((a, b) => {
+        // Tie-break deterministically so repeated prompts pick the same model.
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.isDefault !== b.isDefault) {
+          return a.isDefault ? -1 : 1;
+        }
+        if (a.variantMatchCount !== b.variantMatchCount) {
+          return b.variantMatchCount - a.variantMatchCount;
+        }
+        if (a.variantCount !== b.variantCount) {
+          return a.variantCount - b.variantCount;
+        }
+        if (a.modelLength !== b.modelLength) {
+          return a.modelLength - b.modelLength;
+        }
+        return a.key.localeCompare(b.key);
+      });
+
+    const bestScored = scored[0];
+    const best = bestScored?.candidate;
+    if (!best || !bestScored) {
+      return {};
+    }
+
+    const minScore = providerFilter ? 90 : 120;
+    if (bestScored.score < minScore) {
+      return {};
+    }
+
+    return { selection: buildSelection(best.provider, best.model) };
+  };
+
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    raw: rawTrimmed,
+    defaultProvider,
+    aliasIndex,
+  });
+
+  if (!resolved) {
+    const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
+    if (fuzzy.selection || fuzzy.error) {
+      return fuzzy;
+    }
+    return {
+      error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
+    };
+  }
+
+  const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  const explicitSelection = {
+    selection: {
+      provider: resolved.ref.provider,
+      model: resolved.ref.model,
+      isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
+      ...(resolved.alias ? { alias: resolved.alias } : {}),
+    },
+  };
+  const permitted = policy.allowsKey(resolvedKey);
+  // Preserve catalog hints for bare fragments, while explicit routes and aliases
+  // depend only on policy, never on finite picker membership.
+  if (
+    permitted &&
+    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+  ) {
+    return explicitSelection;
+  }
+
+  // If the user specified a provider/model but the exact model isn't allowed,
+  // attempt a fuzzy match within that provider.
+  if (rawLower.includes("/")) {
+    const slash = rawTrimmed.indexOf("/");
+    const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
+    const fragment = rawTrimmed.slice(slash + 1).trim();
+    const fuzzy = resolveFuzzy({ provider, fragment });
+    if (fuzzy.selection || fuzzy.error) {
+      return fuzzy;
+    }
+  }
+
+  // Otherwise, try fuzzy matching across allowlisted models.
+  const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
+  if (fuzzy.selection || fuzzy.error) {
+    return fuzzy;
+  }
+
+  if (permitted) {
+    return explicitSelection;
+  }
+
+  return {
+    error: formatNotAllowedError({
+      modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
+      policyPath: policy.allowRepairConfigPath,
+      rawRuntime: params.rawRuntime,
+    }),
+  };
+}

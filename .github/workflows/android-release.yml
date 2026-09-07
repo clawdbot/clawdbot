@@ -1,0 +1,427 @@
+name: Android Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable OpenClaw release tag to receive the signed Android APK
+        required: true
+        type: string
+      release_publish_run_id:
+        description: OpenClaw Release Publish run that approved this release
+        required: true
+        type: string
+      release_publish_branch:
+        description: Branch or protected tag used by the approving OpenClaw Release Publish run
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish run attempt
+        required: true
+        type: string
+      release_publish_full_ref:
+        description: Exact approving workflow full ref, including refs/heads/ or refs/tags/
+        required: true
+        type: string
+      release_publish_workflow_sha:
+        description: Frozen approving workflow commit SHA
+        required: true
+        type: string
+      release_target_sha:
+        description: Exact release tag commit resolved by OpenClaw Release Publish
+        required: true
+        type: string
+      direct_release_recovery:
+        description: Allow a failed completed parent run for explicit backfill or recovery
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  attestations: write
+  contents: write
+  id-token: write
+
+concurrency:
+  group: android-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+
+jobs:
+  publish_signed_android_apk:
+    name: Publish signed Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: android-release
+    env:
+      DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
+      EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+      EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+      EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+      EXPECTED_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
+      RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download parent release approval
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: android-release-approval-${{ inputs.release_publish_run_id }}
+          path: ${{ runner.temp }}/android-release-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate release approval and target
+        id: release_approval
+        env:
+          APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "Android APK publishing requires a final or correction OpenClaw release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          expected_source_ref="refs/tags/${RELEASE_TAG}"
+          if [[ "${GITHUB_REF}" != "${expected_source_ref}" ]]; then
+            echo "Android publication must run from ${expected_source_ref}, got ${GITHUB_REF}." >&2
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "release_target_sha must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+
+          gh attestation verify "${APPROVAL_PATH}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml" \
+            --source-ref "${EXPECTED_WORKFLOW_FULL_REF}" \
+            --source-digest "${EXPECTED_WORKFLOW_SHA}" \
+            --deny-self-hosted-runners
+          build_timestamp="$(node scripts/validate-release-publish-approval.mjs)"
+          echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify release source and Android version
+        id: release_source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          android_release_version="${release_version%%-*}"
+          package_version="$(node -p 'require("./package.json").version')"
+          android_version="$(node -p 'require("./apps/android/version.json").version')"
+          fallback_base_tag=""
+          fallback_base_sha=""
+          if [[ "${package_version}" == "${release_version}" ]]; then
+            :
+          elif [[ "${RELEASE_TAG}" =~ -[1-9][0-9]*$ && "${package_version}" == "${android_release_version}" ]]; then
+            fallback_base_tag="v${package_version}"
+            fallback_base_sha="$(git rev-parse "${fallback_base_tag}^{commit}")"
+            release_sha="$(git rev-parse HEAD)"
+            if [[ "${fallback_base_sha}" != "${release_sha}" ]]; then
+              echo "Fallback correction ${RELEASE_TAG} must resolve to the same source commit as ${fallback_base_tag}." >&2
+              exit 1
+            fi
+          else
+            echo "Release tag version ${release_version} does not match package.json ${package_version} or a same-commit fallback correction." >&2
+            exit 1
+          fi
+          if [[ "${android_version}" != "${android_release_version}" ]]; then
+            echo "Android version ${android_version} does not match release train ${android_release_version}." >&2
+            exit 1
+          fi
+          echo "fallback_base_tag=${fallback_base_tag}" >> "${GITHUB_OUTPUT}"
+          echo "FALLBACK_ANDROID_BASE_TAG=${fallback_base_tag}" >> "${GITHUB_ENV}"
+          echo "FALLBACK_ANDROID_BASE_SHA=${fallback_base_sha}" >> "${GITHUB_ENV}"
+          git diff --exit-code
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: read-write
+
+      - name: Create apps-signing read token
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
+        id: apps-signing-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Checkout encrypted Android signing assets
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/android/build/release-signing/apps-signing
+          token: ${{ steps.apps-signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Materialize Android release signing
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MATCH_PASSWORD}" ]]; then
+            echo "Android release signing secrets are unavailable." >&2
+            exit 1
+          fi
+          node scripts/android-release-signing.mjs --mode materialize
+
+      - name: Prepare and verify signed Android APK
+        env:
+          GIT_COMMIT: ${{ inputs.release_target_sha }}
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
+            base_dir="${RUNNER_TEMP}/fallback-android-release"
+            mkdir -p "${base_dir}"
+            gh release download "${FALLBACK_ANDROID_BASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern OpenClaw-Android.apk \
+              --pattern OpenClaw-Android-SHA256SUMS.txt \
+              --dir "${base_dir}"
+            (
+              cd "${base_dir}"
+              sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
+            )
+            gh attestation verify "${base_dir}/OpenClaw-Android.apk" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
+              --source-ref "refs/tags/${FALLBACK_ANDROID_BASE_TAG}" \
+              --source-digest "${FALLBACK_ANDROID_BASE_SHA}" \
+              --deny-self-hosted-runners
+            bun apps/android/scripts/build-release-artifacts.ts \
+              --verify-apk "${base_dir}/OpenClaw-Android.apk"
+            cp "${base_dir}/OpenClaw-Android.apk" dist/OpenClaw-Android.apk
+            cp "${base_dir}/OpenClaw-Android-SHA256SUMS.txt" dist/OpenClaw-Android-SHA256SUMS.txt
+          else
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { spawnSync } from "node:child_process";
+
+          const path = "apps/android/build/release-signing/gradle.properties";
+          const expected = new Set([
+            "OPENCLAW_ANDROID_STORE_FILE",
+            "OPENCLAW_ANDROID_STORE_PASSWORD",
+            "OPENCLAW_ANDROID_KEY_ALIAS",
+            "OPENCLAW_ANDROID_KEY_PASSWORD",
+          ]);
+          const properties = new Map();
+          for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/u)) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith("#")) continue;
+            const separator = line.indexOf("=");
+            if (separator <= 0) throw new Error("Malformed Android signing property.");
+            properties.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+          }
+          for (const name of expected) {
+            const value = properties.get(name);
+            if (!value) throw new Error(`Missing Android signing property: ${name}`);
+            process.env[`ORG_GRADLE_PROJECT_${name}`] = value;
+          }
+          const result = spawnSync(
+            "bun",
+            ["apps/android/scripts/build-release-artifacts.ts", "--artifact", "third-party"],
+            { env: process.env, stdio: "inherit" },
+          );
+          process.exit(result.status ?? 1);
+          NODE
+
+            version="$(node -p 'require("./apps/android/version.json").version')"
+            source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
+            source_checksum="${source_apk}.sha256"
+            test -s "${source_apk}"
+            test -s "${source_checksum}"
+            cp "${source_apk}" dist/OpenClaw-Android.apk
+            (
+              cd dist
+              sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
+            )
+          fi
+
+          expected_version_name="${RELEASE_TAG#v}"
+          expected_version_name="${expected_version_name%%-*}"
+          expected_version_code="$(node -p 'require("./apps/android/version.json").versionCode')"
+          actual_app_id="$(apkanalyzer manifest application-id dist/OpenClaw-Android.apk)"
+          actual_version_name="$(apkanalyzer manifest version-name dist/OpenClaw-Android.apk)"
+          actual_version_code="$(apkanalyzer manifest version-code dist/OpenClaw-Android.apk)"
+          if [[ "${actual_app_id}" != "ai.openclaw.app" ]]; then
+            echo "Standalone APK has unexpected application ID ${actual_app_id}." >&2
+            exit 1
+          fi
+          if [[ "${actual_version_name}" != "${expected_version_name}" || "${actual_version_code}" != "${expected_version_code}" ]]; then
+            echo "Standalone APK version metadata does not match apps/android/version.json." >&2
+            exit 1
+          fi
+
+          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
+            echo "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG} for same-commit fallback correction ${RELEASE_TAG}."
+          elif [[ "${RELEASE_TAG}" =~ -([1-9][0-9]*)$ ]]; then
+            correction_number="${BASH_REMATCH[1]}"
+            releases_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+            previous_tag="$(printf '%s' "${releases_json}" | jq -r \
+              --arg base_tag "v${expected_version_name}" \
+              --argjson correction_number "${correction_number}" '
+                [
+                  .[][]
+                  | select(.draft == false and .prerelease == false)
+                  | select(any(.assets[]?; .name == "OpenClaw-Android.apk"))
+                  | select(any(.assets[]?; .name == "OpenClaw-Android-SHA256SUMS.txt"))
+                  | if .tag_name == $base_tag then
+                      { tag: .tag_name, number: 0 }
+                    elif (.tag_name | startswith($base_tag + "-")) then
+                      (.tag_name | ltrimstr($base_tag + "-")) as $suffix
+                      | select($suffix | test("^[1-9][0-9]*$"))
+                      | { tag: .tag_name, number: ($suffix | tonumber) }
+                    else empty end
+                  | select(.number < $correction_number)
+                ]
+                | sort_by(.number)
+                | last
+                | .tag // empty
+              ')"
+            if [[ -n "${previous_tag}" ]]; then
+              previous_dir="${RUNNER_TEMP}/previous-android-release"
+              mkdir -p "${previous_dir}"
+              gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
+                --pattern OpenClaw-Android.apk \
+                --pattern OpenClaw-Android-SHA256SUMS.txt \
+                --dir "${previous_dir}"
+              (
+                cd "${previous_dir}"
+                sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
+              )
+              gh attestation verify "${previous_dir}/OpenClaw-Android.apk" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
+                --source-ref "refs/tags/${previous_tag}" \
+                --deny-self-hosted-runners
+              bun apps/android/scripts/build-release-artifacts.ts \
+                --verify-apk "${previous_dir}/OpenClaw-Android.apk"
+              previous_version_code="$(apkanalyzer manifest version-code "${previous_dir}/OpenClaw-Android.apk")"
+              if (( actual_version_code <= previous_version_code )); then
+                echo "Android correction versionCode ${actual_version_code} must exceed ${previous_tag} versionCode ${previous_version_code}." >&2
+                exit 1
+              fi
+            else
+              echo "No earlier verified standalone APK exists for ${expected_version_name}; accepting this correction as the standalone channel bootstrap."
+            fi
+          fi
+
+      - name: Revalidate release approval before Android provenance
+        env:
+          APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/validate-release-publish-approval.mjs > /dev/null
+
+      - name: Attest Android APK provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/OpenClaw-Android.apk
+
+      - name: Upload immutable Android release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
+        run: |
+          set -euo pipefail
+          attach_or_verify_asset() {
+            local source_path="$1"
+            local asset_name="$2"
+            local existing_dir="${RUNNER_TEMP}/existing-${asset_name}"
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets |
+              jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
+              rm -rf "${existing_dir}"
+              mkdir -p "${existing_dir}"
+              gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --pattern "${asset_name}" --dir "${existing_dir}"
+              cmp --silent "${source_path}" "${existing_dir}/${asset_name}" || {
+                echo "Existing Android release asset ${asset_name} differs from this exact-tag build." >&2
+                exit 1
+              }
+              return
+            fi
+            # Each irreversible write needs fresh authority after any awaited
+            # asset lookup. This is a boundary recheck, not an atomic API guard.
+            node scripts/validate-release-publish-approval.mjs > /dev/null || return 1
+            gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
+          }
+
+          attach_or_verify_asset dist/OpenClaw-Android.apk OpenClaw-Android.apk
+          attach_or_verify_asset dist/OpenClaw-Android-SHA256SUMS.txt OpenClaw-Android-SHA256SUMS.txt
+
+      - name: Verify published Android release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          verify_dir="${RUNNER_TEMP}/verify-android-release"
+          mkdir -p "${verify_dir}"
+          gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern OpenClaw-Android.apk \
+            --pattern OpenClaw-Android-SHA256SUMS.txt \
+            --dir "${verify_dir}"
+          (
+            cd "${verify_dir}"
+            sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
+          )
+          gh attestation verify "${verify_dir}/OpenClaw-Android.apk" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
+            --source-ref "refs/tags/${RELEASE_TAG}" \
+            --deny-self-hosted-runners
+          bun apps/android/scripts/build-release-artifacts.ts \
+            --verify-apk "${verify_dir}/OpenClaw-Android.apk"
+
+          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets)"
+          expected_names='["OpenClaw-Android-SHA256SUMS.txt","OpenClaw-Android.apk"]'
+          actual_names="$(printf '%s' "${release_json}" | jq -c '[.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | sort')"
+          if [[ "${actual_names}" != "${expected_names}" ]]; then
+            echo "Android release asset names do not match the canonical contract." >&2
+            exit 1
+          fi
+
+      - name: Remove materialized signing files
+        if: ${{ always() }}
+        run: rm -rf apps/android/build/release-signing
+
+      - name: Summary
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          {
+            echo "## Signed Android APK published"
+            echo
+            echo "- APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-Android.apk"
+            echo "- Checksums: https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-Android-SHA256SUMS.txt"
+            echo "- Provenance: \`gh attestation verify OpenClaw-Android.apk --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/android-release.yml\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

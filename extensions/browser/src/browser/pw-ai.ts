@@ -1,22 +1,108 @@
-import { markPwAiLoaded } from "./pw-ai-state.js";
-
-markPwAiLoaded();
-
-export {
-  type BrowserConsoleMessage,
+/** Playwright-backed browser helpers loaded as one optional runtime object. */
+import {
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
+  createObservedDialogAbortSignalForPage,
+  createPageViaPlaywright,
+  ensurePageState,
+  focusPageByTargetIdViaPlaywright,
+  forceDisconnectPlaywrightForTarget,
+  getObservedBrowserStateForPage,
+  getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
+  getPageForTargetId,
+  hasCachedPlaywrightBrowserConnection,
+  isBrowserObservedDialogBlockedError,
+  listPagesViaPlaywright,
+  markObservedDialogsHandledRemotelyForPage,
+  refLocator,
+  respondToObservedDialogOnPage,
+  retirePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnectionExact,
+} from "./pw-session.js";
+import {
+  getConsoleMessagesViaPlaywright,
+  getNetworkRequestsViaPlaywright,
+  getPageErrorsViaPlaywright,
+  getPageTextViaPlaywright,
+} from "./pw-tools-core.activity.js";
+import {
+  armDialogViaPlaywright,
+  armFileUploadViaPlaywright,
+  downloadViaPlaywright,
+  uploadViaPlaywright,
+  waitForDownloadViaPlaywright,
+} from "./pw-tools-core.downloads.js";
+import {
+  batchViaPlaywright,
+  clickViaPlaywright,
+  dragViaPlaywright,
+  evaluateViaPlaywright,
+  executeActViaPlaywright,
+  fillFormViaPlaywright,
+  highlightViaPlaywright,
+  hoverViaPlaywright,
+  pressKeyViaPlaywright,
+  screenshotWithLabelsViaPlaywright,
+  scrollIntoViewViaPlaywright,
+  selectOptionViaPlaywright,
+  setInputFilesViaPlaywright,
+  takeScreenshotViaPlaywright,
+  typeViaPlaywright,
+  waitForViaPlaywright,
+} from "./pw-tools-core.interactions.js";
+import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
+import {
+  closePageViaPlaywright,
+  navigateViaPlaywright,
+  pdfViaPlaywright,
+  resizeViewportViaPlaywright,
+  snapshotAiViaPlaywright,
+  snapshotAriaViaPlaywright,
+  snapshotRoleViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
+} from "./pw-tools-core.snapshot.js";
+import {
+  emulateMediaViaPlaywright,
+  setDeviceViaPlaywright,
+  setExtraHTTPHeadersViaPlaywright,
+  setGeolocationViaPlaywright,
+  setHttpCredentialsViaPlaywright,
+  setLocaleViaPlaywright,
+  setOfflineViaPlaywright,
+  setTimezoneViaPlaywright,
+} from "./pw-tools-core.state.js";
+import {
+  cookiesClearViaPlaywright,
+  cookiesGetViaPlaywright,
+  cookiesSetManyViaPlaywright,
+  cookiesSetViaPlaywright,
+  storageClearViaPlaywright,
+  storageGetViaPlaywright,
+  storageSetViaPlaywright,
+} from "./pw-tools-core.storage.js";
+import { traceStartViaPlaywright, traceStopViaPlaywright } from "./pw-tools-core.trace.js";
+
+export const pwAi = {
+  closePageByTargetIdViaPlaywright,
+  closePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnection,
+  retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright,
+  createObservedDialogAbortSignalForPage,
+  getObservedBrowserStateForPage,
+  getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
+  hasCachedPlaywrightBrowserConnection,
+  isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
-  type WithSnapshotForAI,
-} from "./pw-session.js";
-
-export {
+  respondToObservedDialogOnPage,
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   batchViaPlaywright,
@@ -24,6 +110,7 @@ export {
   closePageViaPlaywright,
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,
+  cookiesSetManyViaPlaywright,
   cookiesSetViaPlaywright,
   downloadViaPlaywright,
   dragViaPlaywright,
@@ -34,6 +121,7 @@ export {
   getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright,
   getPageErrorsViaPlaywright,
+  getPageTextViaPlaywright,
   highlightViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
@@ -54,6 +142,7 @@ export {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,
@@ -62,6 +151,7 @@ export {
   traceStartViaPlaywright,
   traceStopViaPlaywright,
   typeViaPlaywright,
+  uploadViaPlaywright,
   waitForDownloadViaPlaywright,
   waitForViaPlaywright,
-} from "./pw-tools-core.js";
+};

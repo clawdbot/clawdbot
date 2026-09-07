@@ -1,6 +1,8 @@
+// Qa Lab plugin module implements env behavior.
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
 
@@ -20,8 +22,8 @@ const QA_LIVE_ENV_ALIASES = Object.freeze([
 ]);
 
 export const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
-export const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
-export const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
+const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
+const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
 export type QaCliBackendAuthMode = "auto" | "api-key" | "subscription";
 
 export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
@@ -32,6 +34,7 @@ export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "ANTHROPIC_API_KEYS",
+  "CODEX_API_KEY",
   "GEMINI_API_KEY",
   "GEMINI_API_KEYS",
   "GOOGLE_API_KEY",
@@ -42,7 +45,12 @@ export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_LIVE_ANTHROPIC_KEYS",
   "OPENCLAW_LIVE_GEMINI_KEY",
   "OPENCLAW_LIVE_OPENAI_KEY",
+  "OPENCLAW_QA_CONVEX_SECRET_CI",
+  "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "VOYAGE_API_KEY",
+]);
+export const QA_PROVIDER_SECRET_ENV_KEY_PATTERNS = Object.freeze([
+  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS?$/u,
 ]);
 
 const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
@@ -54,6 +62,7 @@ const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
 
 const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
   /^DISCORD_/i,
+  ...QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   /^TELEGRAM_/i,
   /^SLACK_/i,
   /^MATRIX_/i,
@@ -77,6 +86,7 @@ const QA_LIVE_ALLOWED_ENV_VARS = Object.freeze([
 const QA_LIVE_ALLOWED_ENV_PATTERNS = Object.freeze([
   /^[A-Z0-9_]+_API_KEYS$/u,
   /^[A-Z0-9_]+_API_KEY_[0-9]+$/u,
+  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEY$/u,
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS$/u,
 ]);
 
@@ -116,7 +126,7 @@ function parsePreservedCliEnv(baseEnv: NodeJS.ProcessEnv) {
 }
 
 function renderPreservedCliEnv(values: string[]) {
-  return JSON.stringify([...new Set(values)]);
+  return JSON.stringify(uniqueStrings(values));
 }
 
 export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?: QaProviderMode) {

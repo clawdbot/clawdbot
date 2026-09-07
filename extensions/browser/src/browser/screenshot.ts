@@ -1,20 +1,31 @@
+/**
+ * Browser screenshot normalization helpers that bound screenshots for media
+ * transport and model input.
+ */
+import { toErrorObject } from "../infra/errors.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
+  isImageProcessorUnavailableError,
   resizeToJpeg,
-} from "../media/image-ops.js";
+} from "../media/media-services.js";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
+/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
     maxSide?: number;
     maxBytes?: number;
   },
-): Promise<{ buffer: Buffer; contentType?: "image/jpeg" }> {
+): Promise<{
+  buffer: Buffer;
+  contentType?: "image/jpeg";
+  sourceDimensions: { width: number; height: number } | null;
+}> {
   const maxSide = Math.max(1, Math.round(opts?.maxSide ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE));
   const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
 
@@ -24,35 +35,52 @@ export async function normalizeBrowserScreenshot(
   const maxDim = Math.max(width, height);
 
   if (buffer.byteLength <= maxBytes && (maxDim === 0 || (width <= maxSide && height <= maxSide))) {
-    return { buffer };
+    return { buffer, sourceDimensions: meta };
   }
 
   const sideStart = maxDim > 0 ? Math.min(maxSide, maxDim) : maxSide;
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
-  let smallest: { buffer: Buffer; size: number } | null = null;
+  let smallestSize: number | undefined;
+  let processorUnavailableError: unknown;
 
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      const out = await resizeToJpeg({
-        buffer,
-        maxSide: side,
-        quality,
-        withoutEnlargement: true,
-      });
+      let out: Buffer;
+      try {
+        out = await resizeToJpeg({
+          buffer,
+          maxSide: side,
+          quality,
+          withoutEnlargement: true,
+        });
+      } catch (err) {
+        if (isImageProcessorUnavailableError(err)) {
+          processorUnavailableError = err;
+          break;
+        }
+        throw err;
+      }
 
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      if (smallestSize === undefined || out.byteLength < smallestSize) {
+        smallestSize = out.byteLength;
       }
 
       if (out.byteLength <= maxBytes) {
-        return { buffer: out, contentType: "image/jpeg" };
+        return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };
       }
+    }
+    if (processorUnavailableError) {
+      break;
     }
   }
 
-  const best = smallest?.buffer ?? buffer;
+  if (processorUnavailableError) {
+    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
+  }
+
+  const bestSize = smallestSize ?? buffer.byteLength;
   throw new Error(
-    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(best.byteLength / (1024 * 1024)).toFixed(2)}MB)`,
+    `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(bestSize / (1024 * 1024)).toFixed(2)}MB)`,
   );
 }

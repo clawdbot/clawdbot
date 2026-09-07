@@ -1,3 +1,5 @@
+// Covers outbound session context construction for canonical keys, policy keys,
+// conversation type inference, requester metadata, and agent derivation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());
@@ -58,20 +60,31 @@ describe("buildOutboundSessionContext", () => {
     expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
       sessionKey: "session:main:123",
       config: { agents: {} },
+      agentId: undefined,
     });
   });
 
-  it("prefers an explicit trimmed agent id over the derived one", () => {
-    resolveSessionAgentIdMock.mockReturnValueOnce("derived-agent");
+  it("passes explicit ownership when resolving an unscoped session key", () => {
+    resolveSessionAgentIdMock.mockImplementationOnce(({ agentId }: { agentId?: string }) => {
+      if (!agentId) {
+        throw new Error("missing explicit agent ownership");
+      }
+      return agentId;
+    });
 
     expect(
       buildOutboundSessionContext({
-        cfg: {} as never,
-        sessionKey: "session:main:123",
+        cfg: { agents: {} } as never,
+        sessionKey: "cron:job-123:failure",
         agentId: "  explicit-agent  ",
       }),
     ).toEqual({
-      key: "session:main:123",
+      key: "cron:job-123:failure",
+      agentId: "explicit-agent",
+    });
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "cron:job-123:failure",
+      config: { agents: {} },
       agentId: "explicit-agent",
     });
   });
@@ -102,16 +115,104 @@ describe("buildOutboundSessionContext", () => {
     expect(
       buildOutboundSessionContext({
         cfg: {} as never,
-        requesterSenderId: "id:telegram:123",
+        requesterSenderId: "id:forum:123",
         requesterSenderName: "  Alice  ",
         requesterSenderUsername: "  alice_u  ",
         requesterSenderE164: "  +15551234567  ",
       }),
     ).toEqual({
-      requesterSenderId: "id:telegram:123",
+      requesterSenderId: "id:forum:123",
       requesterSenderName: "Alice",
       requesterSenderUsername: "alice_u",
       requesterSenderE164: "+15551234567",
+    });
+  });
+
+  it("normalizes explicit conversation type for policy resolution", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        conversationType: "channel",
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+      conversationKind: "channel",
+    });
+
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "dm",
+      }),
+    ).toEqual({
+      conversationType: "direct",
+      conversationKind: "direct",
+    });
+  });
+
+  it("falls back to isGroup when no explicit conversation type is provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        isGroup: true,
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+      conversationKind: "group",
+    });
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationType: "direct",
+      conversationKind: "direct",
+    });
+  });
+
+  it("derives direct conversation type from a canonical delivery session", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:discord:dm:U123",
+      }),
+    ).toEqual({
+      key: "agent:main:discord:dm:U123",
+      conversationType: "direct",
+    });
+  });
+
+  it("never derives the audit conversation kind from session-key parsing", () => {
+    // A policy key can name an acted-on session that is not the delivery
+    // destination; conversationKind must stay unset without declared facts.
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:discord:dm:U123",
+        policySessionKey: "agent:main:whatsapp:default:direct:+15551234567",
+      }),
+    ).toEqual({
+      key: "agent:main:discord:dm:U123",
+      policyKey: "agent:main:whatsapp:default:direct:+15551234567",
+      conversationType: "direct",
+    });
+  });
+
+  it("keeps an explicit conversation type authoritative over a direct fallback", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "channel",
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationType: "group",
+      conversationKind: "channel",
     });
   });
 

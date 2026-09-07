@@ -77,8 +77,13 @@ def package_skill(skill_path, output_dir=None):
     # Create the .skill file (zip format)
     try:
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Walk through the skill directory
-            for file_path in skill_path.rglob("*"):
+            # Walk in a deterministic order. Sort by the archive-relative POSIX
+            # entry name (not Path object order, which is filesystem/OS-flavour
+            # dependent) so written .skill entries are byte-stable everywhere.
+            for file_path in sorted(
+                skill_path.rglob("*"),
+                key=lambda path: path.relative_to(skill_path).as_posix(),
+            ):
                 # Security: never follow or package symlinks.
                 if file_path.is_symlink():
                     print(f"[WARN] Skipping symlink: {file_path}")

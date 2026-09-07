@@ -1,13 +1,18 @@
+// Discord plugin module implements mentions behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeDiscordHandleKey, resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
-const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
+type DiscordMentionAliasesConfig = Record<string, string>;
+
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
+const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
+const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
@@ -33,7 +38,7 @@ export function formatMention(params: {
   if (values.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }
-  const target = values[0];
+  const target = expectDefined(values.at(0), "single Discord mention target");
   if (target.kind === "user") {
     return `<@${target.id}>`;
   }
@@ -43,7 +48,44 @@ export function formatMention(params: {
   return `<#${target.id}>`;
 }
 
-function rewritePlainTextMentions(text: string, accountId?: string | null): string {
+function resolveConfiguredMentionAlias(
+  handle: string,
+  mentionAliases?: DiscordMentionAliasesConfig | null,
+): string | undefined {
+  const key = normalizeDiscordHandleKey(handle);
+  if (!key || !mentionAliases) {
+    return undefined;
+  }
+  const withoutDiscriminator = key.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
+  for (const [rawAlias, rawUserId] of Object.entries(mentionAliases)) {
+    const alias = normalizeDiscordHandleKey(rawAlias);
+    if (!alias) {
+      continue;
+    }
+    const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
+    if (
+      alias === key ||
+      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
+      (aliasWithoutDiscriminator &&
+        aliasWithoutDiscriminator !== alias &&
+        aliasWithoutDiscriminator === key)
+    ) {
+      const userId = normalizeSnowflake(rawUserId);
+      if (userId) {
+        return userId;
+      }
+    }
+  }
+  return undefined;
+}
+
+function rewritePlainTextMentions(
+  text: string,
+  params: {
+    accountId?: string | null;
+    mentionAliases?: DiscordMentionAliasesConfig | null;
+  },
+): string {
   if (!text.includes("@")) {
     return text;
   }
@@ -56,10 +98,12 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
       return match;
     }
-    const userId = resolveDiscordDirectoryUserId({
-      accountId,
-      handle,
-    });
+    const userId =
+      resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
+      resolveDiscordDirectoryUserId({
+        accountId: params.accountId,
+        handle,
+      });
     if (!userId) {
       return match;
     }
@@ -67,22 +111,85 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
   });
 }
 
+function countBacktickRun(text: string, index: number): number {
+  let cursor = index;
+  while (text[cursor] === "`") {
+    cursor += 1;
+  }
+  return cursor - index;
+}
+
+function findInlineBacktickRun(text: string, startIndex: number, runLength: number): number | null {
+  // Inline spans can cross soft line breaks; fence-sized runs use the block scanner below.
+  const newlineIndex = runLength >= 3 ? text.indexOf("\n", startIndex) : -1;
+  const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
+  // A longer backtick run is literal code, not a matching inline delimiter.
+  const close = new RegExp("(?<!`)`{" + runLength + "}(?!`)").exec(text.slice(startIndex, lineEnd));
+  return close ? startIndex + close.index + runLength : null;
+}
+
+function findFenceEnd(text: string, startIndex: number, runLength: number): number {
+  let searchIndex = startIndex + runLength;
+  while (searchIndex < text.length) {
+    const newlineIndex = text.indexOf("\n", searchIndex);
+    if (newlineIndex === -1) {
+      return text.length;
+    }
+    let lineCursor = newlineIndex + 1;
+    while (text[lineCursor] === " " && lineCursor - newlineIndex <= 3) {
+      lineCursor += 1;
+    }
+    const closingRunLength = countBacktickRun(text, lineCursor);
+    if (closingRunLength >= runLength) {
+      return lineCursor + closingRunLength;
+    }
+    searchIndex = lineCursor + Math.max(closingRunLength, 1);
+  }
+  return text.length;
+}
+
+function findNextMarkdownCodeSegment(
+  text: string,
+  startIndex: number,
+): { startIndex: number; endIndex: number } | null {
+  const segmentOffset = text.slice(startIndex).search(/(?<=(?:^|[^\\])(?:\\\\)*)`/);
+  if (segmentOffset === -1) {
+    return null;
+  }
+  const segmentStart = startIndex + segmentOffset;
+  const runLength = countBacktickRun(text, segmentStart);
+  return {
+    startIndex: segmentStart,
+    endIndex:
+      findInlineBacktickRun(text, segmentStart + runLength, runLength) ??
+      (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
+  };
+}
+
 export function rewriteDiscordKnownMentions(
   text: string,
-  params: { accountId?: string | null },
+  params: {
+    accountId?: string | null;
+    mentionAliases?: DiscordMentionAliasesConfig | null;
+  },
 ): string {
   if (!text.includes("@")) {
     return text;
   }
   let rewritten = "";
   let offset = 0;
-  MARKDOWN_CODE_SEGMENT_PATTERN.lastIndex = 0;
-  for (const match of text.matchAll(MARKDOWN_CODE_SEGMENT_PATTERN)) {
-    const matchIndex = match.index ?? 0;
-    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params.accountId);
-    rewritten += match[0];
-    offset = matchIndex + match[0].length;
+  let segment = findNextMarkdownCodeSegment(text, offset);
+  while (segment) {
+    rewritten += rewritePlainTextMentions(text.slice(offset, segment.startIndex), params);
+    rewritten += text.slice(segment.startIndex, segment.endIndex);
+    offset = segment.endIndex;
+    segment = findNextMarkdownCodeSegment(text, offset);
   }
-  rewritten += rewritePlainTextMentions(text.slice(offset), params.accountId);
+  rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;
+}
+
+/** Whether text carries an `@everyone`/`@here` broadcast mention. */
+export function discordTextHasBroadcastMention(text: string): boolean {
+  return DISCORD_BROADCAST_MENTION_PATTERN.test(text);
 }

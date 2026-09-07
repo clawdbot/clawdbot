@@ -1,8 +1,11 @@
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
+// Vitest extension qa config wires the extension qa test shard.
+import { qaExtensionTestRoots } from "./vitest.extension-qa-paths.mjs";
 
-export default createScopedVitestConfig(["qa-channel/**/*.test.ts", "qa-lab/**/*.test.ts"], {
-  dir: "extensions",
-  name: "extension-qa",
-  passWithNoTests: true,
-  setupFiles: ["test/setup.extensions.ts"],
-});
+export function createExtensionQaVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return createExtensionVitestConfig("qa", qaExtensionTestRoots, env);
+}
+
+export default createExtensionQaVitestConfig();

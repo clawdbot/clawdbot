@@ -1,7 +1,35 @@
+// Computes deterministic phase anchors for cron-owned heartbeat monitor jobs.
 import { createHash } from "node:crypto";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
+import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 
-function normalizeModulo(value: number, divisor: number) {
-  return ((value % divisor) + divisor) % divisor;
+export function resolveHeartbeatSchedulerSeed(
+  explicitSeed?: string,
+  options: { env?: NodeJS.ProcessEnv; readOnly?: boolean } = {},
+) {
+  const normalized = normalizeOptionalString(explicitSeed);
+  if (normalized) {
+    return normalized;
+  }
+  const env = options.env ?? process.env;
+  try {
+    const identity = options.readOnly
+      ? readStoredDeviceIdentityReadOnly({ env })
+      : loadOrCreateDeviceIdentity({ env });
+    if (identity) {
+      return identity.deviceId;
+    }
+  } catch {
+    // Read-only Doctor previews never create identity state; absent state
+    // still receives a deterministic monitor anchor.
+  }
+  return createHash("sha256")
+    .update(env.HOME ?? "")
+    .update("\0")
+    .update(process.cwd())
+    .digest("hex");
 }
 
 export function resolveHeartbeatPhaseMs(params: {
@@ -9,51 +37,7 @@ export function resolveHeartbeatPhaseMs(params: {
   agentId: string;
   intervalMs: number;
 }) {
-  const intervalMs = Math.max(1, Math.floor(params.intervalMs));
+  const intervalMs = resolveIntegerOption(params.intervalMs, 1, { min: 1 });
   const digest = createHash("sha256").update(`${params.schedulerSeed}:${params.agentId}`).digest();
   return digest.readUInt32BE(0) % intervalMs;
-}
-
-export function computeNextHeartbeatPhaseDueMs(params: {
-  nowMs: number;
-  intervalMs: number;
-  phaseMs: number;
-}) {
-  const intervalMs = Math.max(1, Math.floor(params.intervalMs));
-  const nowMs = Math.floor(params.nowMs);
-  const phaseMs = normalizeModulo(Math.floor(params.phaseMs), intervalMs);
-  const cyclePositionMs = normalizeModulo(nowMs, intervalMs);
-  let deltaMs = normalizeModulo(phaseMs - cyclePositionMs, intervalMs);
-  if (deltaMs === 0) {
-    deltaMs = intervalMs;
-  }
-  return nowMs + deltaMs;
-}
-
-export function resolveNextHeartbeatDueMs(params: {
-  nowMs: number;
-  intervalMs: number;
-  phaseMs: number;
-  prev?: {
-    intervalMs: number;
-    phaseMs: number;
-    nextDueMs: number;
-  };
-}) {
-  const intervalMs = Math.max(1, Math.floor(params.intervalMs));
-  const phaseMs = normalizeModulo(Math.floor(params.phaseMs), intervalMs);
-  const prev = params.prev;
-  if (
-    prev &&
-    prev.intervalMs === intervalMs &&
-    prev.phaseMs === phaseMs &&
-    prev.nextDueMs > params.nowMs
-  ) {
-    return prev.nextDueMs;
-  }
-  return computeNextHeartbeatPhaseDueMs({
-    nowMs: params.nowMs,
-    intervalMs,
-    phaseMs,
-  });
 }

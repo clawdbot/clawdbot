@@ -1,7 +1,14 @@
-import type { ServerResponse } from "node:http";
+// Gateway HTTP test helpers build minimal request/response doubles and collect
+// client response bodies.
+import { EventEmitter } from "node:events";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
 
+/**
+ * Minimal HTTP response mock used by gateway handler tests.
+ */
 export function makeMockHttpResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
@@ -17,10 +24,36 @@ export function makeMockHttpResponse(): {
     streamEnd();
   });
   const res = Object.assign(stream, {
+    req: new IncomingMessage(new Socket()),
     headersSent: false,
     statusCode: 200,
     setHeader,
+    removeHeader: vi.fn(),
     end,
   }) as unknown as ServerResponse;
   return { res, setHeader, end };
+}
+
+export function makeMockHttpReqRes(
+  reqSocket: EventEmitter | null,
+  resSocket: EventEmitter | null,
+): { req: IncomingMessage; res: ServerResponse } {
+  return {
+    req: { socket: reqSocket } as unknown as IncomingMessage,
+    res: Object.assign(new EventEmitter(), { socket: resSocket }) as unknown as ServerResponse,
+  };
+}
+
+export async function readClientResponseBody(
+  res: IncomingMessage,
+): Promise<{ status: number; body: string }> {
+  let body = "";
+  res.setEncoding("utf8");
+  res.on("data", (chunk) => {
+    body += chunk;
+  });
+  await new Promise<void>((resolve) => {
+    res.once("end", resolve);
+  });
+  return { status: res.statusCode ?? 0, body };
 }

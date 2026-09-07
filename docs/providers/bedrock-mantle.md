@@ -1,24 +1,24 @@
 ---
-summary: "Use Amazon Bedrock Mantle (OpenAI-compatible) models with OpenClaw"
+summary: "Use Amazon Bedrock Mantle OpenAI-compatible and Claude Messages models with OpenClaw"
 read_when:
   - You want to use Bedrock Mantle hosted OSS models with OpenClaw
   - You need the Mantle OpenAI-compatible endpoint for GPT-OSS, Qwen, Kimi, or GLM
+  - You want to use Claude Opus 5, Sonnet 5, or Mythos 5 through Amazon Bedrock Mantle
 title: "Amazon Bedrock Mantle"
 ---
-
-# Amazon Bedrock Mantle
 
 OpenClaw includes a bundled **Amazon Bedrock Mantle** provider that connects to
 the Mantle OpenAI-compatible endpoint. Mantle hosts open-source and
 third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar) through a standard
-`/v1/chat/completions` surface backed by Bedrock infrastructure.
+`/v1/chat/completions` surface backed by Bedrock infrastructure. Mantle also
+exposes Anthropic Claude models through an Anthropic Messages route.
 
-| Property       | Value                                                                               |
-| -------------- | ----------------------------------------------------------------------------------- |
-| Provider ID    | `amazon-bedrock-mantle`                                                             |
-| API            | `openai-completions` (OpenAI-compatible)                                            |
-| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation |
-| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                    |
+| Property       | Value                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------- |
+| Provider ID    | `amazon-bedrock-mantle`                                                                |
+| API            | `openai-completions` for discovered OSS models, `anthropic-messages` for Claude models |
+| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation    |
+| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                       |
 
 ## Getting started
 
@@ -87,10 +87,28 @@ OpenClaw attempts to generate a Mantle bearer token from the AWS default
 credential chain. It then discovers available Mantle models by querying the
 region's `/v1/models` endpoint.
 
-| Behavior          | Detail                    |
-| ----------------- | ------------------------- |
-| Discovery cache   | Results cached for 1 hour |
-| IAM token refresh | Hourly                    |
+| Behavior          | Detail                                                              |
+| ----------------- | ------------------------------------------------------------------- |
+| Discovery cache   | Results cached for 1 hour for the same region and bearer credential |
+| IAM token refresh | Every 2 hours, cached per region                                    |
+
+A failed refresh reports unavailable or rejected catalog access. The catalog keeps
+compatible last-good models with that failure status; expired discovery data does
+not become a successful refresh. A successful empty response clears discovered
+membership. Restore endpoint access and refresh again after a failure.
+
+The plugin's public discovery helpers retain their v2026.9.2 advisory defaults:
+same-credential stale rows can be returned on failure, and implicit resolution
+returns `null` for empty results. Programmatic callers can pass
+`discoveryMode: "strict"` for failure propagation and successful empty provider
+results. The bundled catalog hooks always select that strict mode.
+
+To keep the Mantle plugin enabled but suppress automatic discovery and IAM
+bearer-token generation, disable the plugin-owned discovery toggle:
+
+```bash
+openclaw config set plugins.entries.amazon-bedrock-mantle.config.discovery.enabled false
+```
 
 <Note>
 The bearer token is the same `AWS_BEARER_TOKEN_BEDROCK` used by the standard [Amazon Bedrock](/providers/bedrock) provider.
@@ -132,26 +150,78 @@ If you prefer explicit config instead of auto-discovery:
 }
 ```
 
-## Advanced notes
+An explicit non-empty `models` list controls membership and replaces discovered
+rows, including the Claude rows below. For matching rows, an explicit `input`
+wins; when the source row omits `input`, discovery can fill that capability
+metadata. Omit `models` to retain the automatic Mantle catalog, or include the
+complete Claude model entries you want to use.
+
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Reasoning support">
     Reasoning support is inferred from model IDs containing patterns like
-    `thinking`, `reasoner`, or `gpt-oss-120b`. OpenClaw sets `reasoning: true`
-    automatically for matching models during discovery.
+    `thinking`, `reasoner`, `reasoning`, `deepseek.r`, `gpt-oss-120b`, or
+    `gpt-oss-safeguard-120b`. OpenClaw sets `reasoning: true` automatically for
+    matching models during discovery.
   </Accordion>
 
   <Accordion title="Endpoint unavailability">
-    If the Mantle endpoint is unavailable or returns no models, the provider is
-    silently skipped. OpenClaw does not error; other configured providers
-    continue to work normally.
+    Failed endpoint requests report unavailable or rejected catalog access.
+    Compatible last-good models remain listed with that failure status. A
+    successful empty response clears discovered membership. If no bearer token
+    can be resolved, discovery is not attempted and the implicit provider is
+    skipped. Other configured providers continue to work normally.
+  </Accordion>
+
+  <Accordion title="Claude via the Anthropic Messages route">
+    When automatic discovery owns the model list, OpenClaw appends five Claude
+    models after a successful `/v1/models` lookup that returns at least one model:
+    `amazon-bedrock-mantle/anthropic.claude-opus-5` (Claude Opus 5),
+    `amazon-bedrock-mantle/anthropic.claude-sonnet-5` (Claude Sonnet 5),
+    `amazon-bedrock-mantle/anthropic.claude-opus-4-7` (Claude Opus 4.7), and
+    `amazon-bedrock-mantle/anthropic.claude-mythos-5` (Claude Mythos 5), plus
+    `amazon-bedrock-mantle/anthropic.claude-mythos-preview` (Claude Mythos
+    Preview). They use the `anthropic-messages` API surface and stream through
+    the same bearer-authenticated Anthropic-compatible endpoint
+    (`<mantle-base>/anthropic`), so the AWS bearer token is not treated like an
+    Anthropic API key.
+
+    Claude Opus 5 publishes a 1,000,000-token context window, 128,000-token
+    output limit, image input, and `$5/$25` input/output pricing. Adaptive
+    thinking defaults to `high`; `/think off` disables thinking, and
+    `/think xhigh|max` uses the model's native effort levels. OpenClaw omits
+    caller-selected sampling parameters.
+
+    Claude Sonnet 5 always uses adaptive thinking and defaults to `high`
+    effort. `/think off` and `/think minimal` map to `low` because the Mantle
+    route cannot disable thinking. OpenClaw also omits custom temperature for
+    Sonnet 5 requests.
+
+    Claude Mythos 5 is limited access. It publishes a 1,000,000-token context
+    window and 128,000-token output limit, always uses adaptive thinking, maps
+    `/think off` and `/think minimal` to `low`, and omits caller-selected
+    sampling parameters.
+
+    Claude Mythos Preview always requests reasoning, defaulting to `high`
+    effort when no `/think` level is set (mapped from `xhigh`/`max` down to
+    `high`, and `minimal` up to `low`). Opus 4.7 on Mantle streams without
+    model-provided reasoning, and OpenClaw omits its `temperature` parameter
+    since Opus 4.7 does not accept sampling overrides on this route; Mythos
+    Preview accepts a `temperature` override normally.
+
+    A non-empty explicit `models.providers["amazon-bedrock-mantle"].models`
+    list controls membership and replaces the complete discovered catalog.
+    Matching rows can inherit discovered `input` capability only when the source
+    row omitted it. Omit the list when you want these built-in Claude rows.
+
   </Accordion>
 
   <Accordion title="Relationship to Amazon Bedrock provider">
     Bedrock Mantle is a separate provider from the standard
     [Amazon Bedrock](/providers/bedrock) provider. Mantle uses an
-    OpenAI-compatible `/v1` surface, while the standard Bedrock provider uses
-    the native Bedrock API.
+    OpenAI-compatible `/v1` surface for its OSS catalog, while the standard
+    Bedrock provider uses the native Bedrock Converse API.
 
     Both providers share the same `AWS_BEARER_TOKEN_BEDROCK` credential when
     present.

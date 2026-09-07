@@ -1,1 +1,2 @@
-export { type RunCronAgentTurnResult, runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
+// Public facade for isolated cron agent turn execution.
+export { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";

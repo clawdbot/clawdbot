@@ -1,3 +1,4 @@
+// Msteams tests cover conversation store helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import { findPreferredDmConversationByUserId } from "./conversation-store-helpers.js";
 import type { MSTeamsConversationStoreEntry } from "./conversation-store.js";

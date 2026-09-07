@@ -1,3 +1,7 @@
+/**
+ * Tests timeout behavior for gateway HTTP hook request handling.
+ */
+import { createServer } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createHookRequest,
@@ -17,6 +21,16 @@ vi.mock("./hooks.js", async () => {
   };
 });
 
+function expectRetryAfterHeader(setHeader: ReturnType<typeof vi.fn>): void {
+  const retryAfterCall = setHeader.mock.calls.find(([name]) => name === "Retry-After");
+  if (!retryAfterCall) {
+    throw new Error("Expected Retry-After header call");
+  }
+  const retryAfterValue = retryAfterCall[1];
+  expect(typeof retryAfterValue).toBe("string");
+  expect(Number.parseInt(String(retryAfterValue), 10)).toBeGreaterThan(0);
+}
+
 describe("createHooksRequestHandler timeout status mapping", () => {
   beforeEach(() => {
     readJsonBodyMock.mockClear();
@@ -24,19 +38,65 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
   test("returns 408 for request body timeout", async () => {
     readJsonBodyMock.mockResolvedValue({ ok: false, error: "request body timeout" });
-    const dispatchWakeHook = vi.fn();
-    const dispatchAgentHook = vi.fn(() => "run-1");
+    const dispatchWakeHook = vi.fn(() => ({ eventOutcome: "queued" as const }));
+    const dispatchAgentHook = vi.fn(() => ({
+      ok: true as const,
+      runId: "run-1",
+      completion: Promise.resolve({ status: "ok" as const, replyDisposition: "empty" as const }),
+    }));
     const handler = createHooksHandler({ dispatchWakeHook, dispatchAgentHook });
-    const req = createHookRequest();
+    const tasks: Promise<boolean>[] = [];
+    const server = createServer((req, res) => {
+      tasks.push(handler(req, res));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/hooks/wake`, {
+        method: "POST",
+        headers: { Authorization: "Bearer hook-secret" },
+        body: "{}",
+      });
+      expect(response.status).toBe(408);
+      expect(response.headers.get("connection")).toBe("close");
+      expect(await response.json()).toEqual({ ok: false, error: "request body timeout" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      expect(await Promise.all(tasks)).toEqual([true]);
+    }
+    expect(dispatchWakeHook).not.toHaveBeenCalled();
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [409, "session changed"],
+    [502, "provider preparation failed"],
+    [503, "hook agent run did not start before admission timeout"],
+  ] as const)("returns %s for typed agent admission failures", async (statusCode, error) => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
+    const dispatchAgentHook = vi.fn(async () => ({
+      ok: false as const,
+      statusCode,
+      error,
+      runId: "run-1",
+    }));
+    const handler = createHooksHandler({ dispatchAgentHook });
+    const req = createHookRequest({ url: "/hooks/agent" });
     const { res, end } = createResponse();
 
     const handled = await handler(req, res);
 
     expect(handled).toBe(true);
-    expect(res.statusCode).toBe(408);
-    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "request body timeout" }));
-    expect(dispatchWakeHook).not.toHaveBeenCalled();
-    expect(dispatchAgentHook).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(statusCode);
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error, runId: "run-1" }));
   });
 
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {
@@ -62,7 +122,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(mappedRes.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+    expectRetryAfterHeader(setHeader);
   });
 
   test("uses trusted proxy forwarded client ip for hook auth throttling", async () => {
@@ -92,11 +152,11 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(forwardedRes.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+    expectRetryAfterHeader(setHeader);
   });
 
   test.each(["0.0.0.0", "::"])(
-    "does not throw when bindHost=%s while parsing non-hook request URL",
+    "returns unhandled when bindHost=%s sees a non-hook request URL",
     async (bindHost) => {
       const handler = createHooksHandler({ bindHost });
       const req = createHookRequest({ url: "/" });

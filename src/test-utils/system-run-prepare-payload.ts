@@ -1,3 +1,4 @@
+// Builds expected system-run payloads for execution approval tests.
 import { formatExecCommand } from "../infra/system-run-command.js";
 
 type SystemRunPrepareInput = {
@@ -8,6 +9,7 @@ type SystemRunPrepareInput = {
   sessionKey?: unknown;
 };
 
+/** Builds the normalized system-run prepare payload used by approval tests. */
 export function buildSystemRunPreparePayload(params: SystemRunPrepareInput) {
   const argv = Array.isArray(params.command) ? params.command.map(String) : [];
   const previewCommand =

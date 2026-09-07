@@ -1,3 +1,4 @@
+// Reports script supports OpenClaw repository automation.
 import type { ReportModule, TopologyEnvelope, TopologyRecord } from "./types.js";
 
 function canonicalExportName(record: TopologyRecord): string {
@@ -110,5 +111,9 @@ const reportModules: Record<ReportModule["name"], ReportModule> = {
 };
 
 export function renderTextReport(envelope: TopologyEnvelope, limit: number): string {
-  return reportModules[envelope.report].describe(envelope, limit);
+  const reportModule = reportModules[envelope.report];
+  if (!reportModule) {
+    throw new Error(`Unsupported topology report: ${envelope.report}`);
+  }
+  return reportModule.describe(envelope, limit);
 }

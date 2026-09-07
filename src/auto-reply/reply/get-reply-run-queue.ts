@@ -1,21 +1,25 @@
-import { logVerbose } from "../../globals.js";
+/** Active-run queue admission for prepared reply turns. */
 import type { ReplyPayload } from "../types.js";
 import type { ActiveRunQueueAction } from "./queue-policy.js";
 import type { QueueSettings } from "./queue.js";
 
-export type ReplyRunQueueBusyState = {
+/** Snapshot of the active reply run state used by queue admission. */
+type ReplyRunQueueBusyState = {
   activeSessionId: string | undefined;
   isActive: boolean;
-  isStreaming: boolean;
 };
 
+export const REPLY_RUN_STILL_SHUTTING_DOWN_TEXT =
+  "⚠️ Previous run is still shutting down. Please try again in a moment.";
+
+/** Resolves whether a new reply may continue after active-run queue handling. */
 export async function resolvePreparedReplyQueueState(params: {
   activeRunQueueAction: ActiveRunQueueAction;
   activeSessionId: string | undefined;
   queueMode: QueueSettings["mode"];
   sessionKey: string | undefined;
   sessionId: string;
-  abortActiveRun: (sessionId: string) => boolean;
+  interruptActiveRun: () => Promise<boolean>;
   waitForActiveRunEnd: (sessionId: string) => Promise<unknown>;
   refreshPreparedState: () => Promise<void>;
   resolveBusyState: () => ReplyRunQueueBusyState;
@@ -27,20 +31,17 @@ export async function resolvePreparedReplyQueueState(params: {
   }
 
   if (params.queueMode === "interrupt") {
-    const aborted = params.abortActiveRun(params.activeSessionId);
-    logVerbose(
-      `Interrupting active run for ${params.sessionKey ?? params.sessionId} (aborted=${aborted})`,
-    );
+    await params.interruptActiveRun();
+  } else {
+    await params.waitForActiveRunEnd(params.activeSessionId);
   }
-
-  await params.waitForActiveRunEnd(params.activeSessionId);
   await params.refreshPreparedState();
   const refreshedBusyState = params.resolveBusyState();
   if (refreshedBusyState.isActive) {
     return {
       kind: "reply",
       reply: {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+        text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       },
     };
   }

@@ -1,3 +1,5 @@
+// Covers outbound thread/topic id normalization for strings, numbers, and empty
+// route values.
 import { describe, expect, it } from "vitest";
 import { normalizeOutboundThreadId } from "./thread-id.js";
 

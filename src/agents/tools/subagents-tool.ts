@@ -1,58 +1,188 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
-import { optionalStringEnum } from "../schema/typebox.js";
+/**
+ * subagents built-in tool.
+ *
+ * Lists and cancels background work in the caller's session tree.
+ */
+import { Type } from "typebox";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
+import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
+import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
   listControlledSubagentRuns,
   MAX_RECENT_MINUTES,
-  MAX_STEER_MESSAGE_CHARS,
-  resolveControlledSubagentTarget,
   resolveSubagentController,
-  steerControlledSubagentRun,
-} from "../subagent-control.js";
-import {
-  buildSubagentList,
-  createPendingDescendantCounter,
-  isActiveSubagentRun,
-} from "../subagent-list.js";
+} from "../subagents/registry/subagent-control.js";
+import { buildSubagentList } from "../subagents/registry/subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 
-const SUBAGENT_ACTIONS = ["list", "kill", "steer"] as const;
+const SUBAGENT_ACTIONS = ["list", "cancel"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
 const SubagentsToolSchema = Type.Object({
   action: optionalStringEnum(SUBAGENT_ACTIONS),
-  target: Type.Optional(Type.String()),
-  message: Type.Optional(Type.String()),
-  recentMinutes: Type.Optional(Type.Number({ minimum: 1 })),
+  recentMinutes: optionalPositiveIntegerSchema(),
+  taskId: Type.Optional(Type.String({ description: "Task id" })),
 });
 
-export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
+const STATUS_MAP: Record<TaskStatus, string> = {
+  queued: "queued",
+  running: "running",
+  succeeded: "completed",
+  failed: "failed",
+  timed_out: "timed_out",
+  cancelled: "cancelled",
+  lost: "failed",
+};
+
+type SubagentsToolOptions = {
+  agentSessionKey?: string;
+  /** Policy/sandbox key retained task rows may still carry from pre-change code, when it
+   * differs from the durable {@link agentSessionKey}. Lets split-key callers (e.g. Telegram
+   * DM) keep seeing and cancelling retained media/spawn tasks created before the durable-key
+   * alignment. Undefined and equal-to-agentSessionKey values are no-ops. */
+  callerPolicySessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  listTasks?: typeof listTaskRecordsUnsorted;
+  cancelTask?: typeof cancelDetachedTaskRunById;
+};
+
+function taskUpdatedAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
+}
+
+function taskOwnerMatches(
+  task: TaskRecord,
+  allowedOwnerKeys: ReadonlySet<string>,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  return (
+    allowedOwnerKeys.has(task.ownerKey) &&
+    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
+  );
+}
+
+function listTreeTasks(
+  tasks: TaskRecord[],
+  rootSessionKeys: ReadonlySet<string>,
+  rootAgentId: string,
+  cfg: OpenClawConfig,
+): TaskRecord[] {
+  const visibleSessions = new Set<string>();
+  for (const key of rootSessionKeys) {
+    visibleSessions.add(`${rootAgentId}\0${key}`);
+  }
+  const visibleTasks = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of tasks) {
+      if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
+        continue;
+      }
+      const taskRequesterAgentId = resolveTaskSessionAgentId(
+        task.ownerKey,
+        task.requesterAgentId,
+        cfg,
+      );
+      if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
+        continue;
+      }
+      visibleTasks.add(task.taskId);
+      if (task.childSessionKey) {
+        const childIdentity = `${task.agentId ?? taskRequesterAgentId ?? ""}\0${task.childSessionKey}`;
+        if (!visibleSessions.has(childIdentity)) {
+          visibleSessions.add(childIdentity);
+          changed = true;
+        }
+      }
+    }
+  }
+  return tasks.filter((task) => visibleTasks.has(task.taskId));
+}
+
+function mapTask(task: TaskRecord) {
+  // Task failures can contain hidden provider/runtime context; reuse the bounded status owner.
+  const error = sanitizeTaskStatusText(task.error, {
+    errorContext: true,
+    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+  });
+  return {
+    taskId: task.taskId,
+    runtime: task.runtime,
+    status:
+      task.status === "succeeded" && task.terminalOutcome === "blocked"
+        ? "blocked"
+        : STATUS_MAP[task.status],
+    ...(task.label ? { label: task.label } : {}),
+    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
+    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+/** Creates the subagents list tool scoped to the caller's controlled session tree. */
+export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
   return {
     label: "Subagents",
     name: "subagents",
-    description:
-      "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+    description: "Background work: subagents, media gen, automation runs. list/cancel.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
-      const cfg = loadConfig();
+      const action = (readToolStringParam(params, "action") ?? "list") as SubagentAction;
+      const cfg = opts.config ?? getRuntimeConfig();
+      const recentMinutesRaw = readPositiveIntegerParam(params, "recentMinutes");
+      const recentMinutes =
+        recentMinutesRaw === undefined
+          ? DEFAULT_RECENT_MINUTES
+          : Math.min(MAX_RECENT_MINUTES, recentMinutesRaw);
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
+        agentId: opts.agentId,
       });
-      const runs = listControlledSubagentRuns(controller.controllerSessionKey);
-      const recentMinutesRaw = readNumberParam(params, "recentMinutes");
-      const recentMinutes = recentMinutesRaw
-        ? Math.max(1, Math.min(MAX_RECENT_MINUTES, Math.floor(recentMinutesRaw)))
-        : DEFAULT_RECENT_MINUTES;
-      const pendingDescendantCount = createPendingDescendantCounter();
-      const isActive = (entry: (typeof runs)[number]) =>
-        isActiveSubagentRun(entry, pendingDescendantCount);
+      const controllerAgentId = controller.controllerAgentId;
+      if (!controllerAgentId) {
+        throw new ToolInputError("subagent controller agent required");
+      }
+      // Owner keys this caller may match task rows against: the durable controller key plus
+      // the retained policy key, so rows created before the durable-key alignment stay
+      // reachable and cancellable for split-key callers (e.g. Telegram DM).
+      const allowedOwnerKeys = new Set<string>();
+      if (controller.controllerSessionKey) {
+        allowedOwnerKeys.add(controller.controllerSessionKey);
+      }
+      const callerPolicySessionKey = opts?.callerPolicySessionKey?.trim();
+      if (callerPolicySessionKey) {
+        allowedOwnerKeys.add(callerPolicySessionKey);
+      }
+      // The caller only sees subagents controlled by its effective controller session.
+      const runs = listControlledSubagentRuns(
+        controller.controllerSessionKey,
+        controllerAgentId,
+        cfg,
+      );
+      const treeTasks = listTreeTasks(
+        (opts.listTasks ?? listTaskRecordsUnsorted)(),
+        allowedOwnerKeys,
+        controllerAgentId,
+        cfg,
+      );
 
       if (action === "list") {
         const list = buildSubagentList({
@@ -60,6 +190,16 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           runs,
           recentMinutes,
         });
+        const cutoff = Date.now() - recentMinutes * 60_000;
+        const tasks = treeTasks
+          .filter(
+            (task) =>
+              task.status === "queued" ||
+              task.status === "running" ||
+              taskUpdatedAt(task) >= cutoff,
+          )
+          .toSorted((left, right) => taskUpdatedAt(right) - taskUpdatedAt(left))
+          .map(mapTask);
         return jsonResult({
           status: "ok",
           action: "list",
@@ -67,111 +207,38 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           callerSessionKey: controller.callerSessionKey,
           callerIsSubagent: controller.callerIsSubagent,
           total: list.total,
+          taskTotal: tasks.length,
+          tasks,
           active: list.active.map(({ line: _line, ...view }) => view),
           recent: list.recent.map(({ line: _line, ...view }) => view),
           text: list.text,
         });
       }
 
-      if (action === "kill") {
-        const target = readStringParam(params, "target", { required: true });
-        if (target === "all" || target === "*") {
-          const result = await killAllControlledSubagentRuns({
-            cfg,
-            controller,
-            runs,
-          });
-          if (result.status === "forbidden") {
-            return jsonResult({
-              status: "forbidden",
-              action: "kill",
-              target: "all",
-              error: result.error,
-            });
-          }
+      if (action === "cancel") {
+        const taskId = readToolStringParam(params, "taskId", { required: true });
+        const target = treeTasks.find((task) => task.taskId === taskId);
+        if (!target) {
+          return jsonResult({ status: "forbidden", error: "Task outside session tree." });
+        }
+        // Leaf subagents may cancel only their own tasks, matching the
+        // control-scope gate every other cross-session subagent mutation enforces.
+        if (
+          controller.controlScope !== "children" &&
+          !taskOwnerMatches(target, allowedOwnerKeys, controllerAgentId, cfg)
+        ) {
           return jsonResult({
-            status: "ok",
-            action: "kill",
-            target: "all",
-            killed: result.killed,
-            labels: result.labels,
-            text:
-              result.killed > 0
-                ? `killed ${result.killed} subagent${result.killed === 1 ? "" : "s"}.`
-                : "no running subagents to kill.",
+            status: "forbidden",
+            error: "Leaf subagents cannot cancel other sessions.",
           });
         }
-        const resolved = resolveControlledSubagentTarget(runs, target, {
-          recentMinutes,
-          isActive,
-        });
-        if (!resolved.entry) {
-          return jsonResult({
-            status: "error",
-            action: "kill",
-            target,
-            error: resolved.error ?? "Unknown subagent target.",
-          });
-        }
-        const result = await killControlledSubagentRun({
-          cfg,
-          controller,
-          entry: resolved.entry,
-        });
+        const result = await (opts.cancelTask ?? cancelDetachedTaskRunById)({ cfg, taskId });
         return jsonResult({
-          status: result.status,
-          action: "kill",
-          target,
-          runId: result.runId,
-          sessionKey: result.sessionKey,
-          label: result.label,
-          cascadeKilled: "cascadeKilled" in result ? result.cascadeKilled : undefined,
-          cascadeLabels: "cascadeLabels" in result ? result.cascadeLabels : undefined,
-          error: "error" in result ? result.error : undefined,
-          text: result.text,
-        });
-      }
-
-      if (action === "steer") {
-        const target = readStringParam(params, "target", { required: true });
-        const message = readStringParam(params, "message", { required: true });
-        if (message.length > MAX_STEER_MESSAGE_CHARS) {
-          return jsonResult({
-            status: "error",
-            action: "steer",
-            target,
-            error: `Message too long (${message.length} chars, max ${MAX_STEER_MESSAGE_CHARS}).`,
-          });
-        }
-        const resolved = resolveControlledSubagentTarget(runs, target, {
-          recentMinutes,
-          isActive,
-        });
-        if (!resolved.entry) {
-          return jsonResult({
-            status: "error",
-            action: "steer",
-            target,
-            error: resolved.error ?? "Unknown subagent target.",
-          });
-        }
-        const result = await steerControlledSubagentRun({
-          cfg,
-          controller,
-          entry: resolved.entry,
-          message,
-        });
-        return jsonResult({
-          status: result.status,
-          action: "steer",
-          target,
-          runId: result.runId,
-          sessionKey: result.sessionKey,
-          sessionId: result.sessionId,
-          mode: "mode" in result ? result.mode : undefined,
-          label: "label" in result ? result.label : undefined,
-          error: "error" in result ? result.error : undefined,
-          text: result.text,
+          status: result.cancelled ? "cancelled" : "error",
+          taskId,
+          found: result.found,
+          cancelled: result.cancelled,
+          ...(result.reason ? { reason: result.reason } : {}),
         });
       }
 

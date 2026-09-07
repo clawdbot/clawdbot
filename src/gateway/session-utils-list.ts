@@ -1,0 +1,669 @@
+import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import {
+  countActiveDescendantRuns,
+  getSessionDisplaySubagentRunByChildSessionKey,
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
+import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
+import {
+  isIncognitoSessionKey,
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
+import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import {
+  projectSessionOwner,
+  addSessionOwnerFacetIdentity,
+  sortSessionOwnerFacet,
+  projectSessionParticipants,
+  projectSessionPeople,
+  projectSessionPeopleFacet,
+  resolveSessionListProfileReference,
+} from "./session-identity-projection.js";
+import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
+import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListActiveRunProjector,
+  SessionListRowContext,
+  SessionListRowContextProvider,
+} from "./session-utils-contracts.js";
+import {
+  deriveSessionTitle,
+  buildStoreChildSessionIndex,
+  isFinitePositiveTimestamp,
+  isCurrentSessionChildOwner,
+  shouldKeepStoreOnlyChildLink,
+} from "./session-utils-core.js";
+import { getSessionDefaults } from "./session-utils-model.js";
+import {
+  buildSessionListRowMetadataContext,
+  populateSessionListAcpMetadata,
+} from "./session-utils-projection.js";
+import { buildGatewaySessionRow } from "./session-utils-row.js";
+import {
+  createSessionListSearchMatcher,
+  resolveSessionListRowContext,
+} from "./session-utils-search.js";
+import type {
+  GatewaySessionRow,
+  SessionListModelCatalog,
+  SessionsListResult,
+} from "./session-utils.types.js";
+
+// Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
+const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
+const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
+
+const SESSIONS_LIST_DEFAULT_LIMIT = 100;
+const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
+
+type SessionSelectionScope =
+  | { opts: SessionsListParams; targetsBySessionKey: GatewayStoredSessionTargets }
+  | {
+      opts: Omit<SessionsListParams, "search"> & { search?: never };
+      targetsBySessionKey?: never;
+    };
+
+type ListSessionsFromStoreParams = {
+  cfg: OpenClawConfig;
+  durableStorePath?: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  // Sentinels retain the first projected store's owner; their raw key cannot recover it.
+  targetsBySessionKey: GatewayStoredSessionTargets;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
+  opts: SessionsListParams;
+  involvingActorId?: string;
+  ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
+};
+
+type SessionEntrySelection = {
+  entries: SessionEntryPair[];
+  ownerCount: number;
+  ownerFacet: SessionOwnerFacetIdentity[];
+  people?: SessionsListResult["people"];
+  peopleIncomplete?: boolean;
+  peopleSessionCount?: number;
+  involvingProfileId?: string;
+  totalCount: number;
+  limitApplied?: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
+
+function resolveSessionsListLimit(
+  opts: SessionsListParams,
+  defaultLimit?: number,
+): number | undefined {
+  if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
+    return defaultLimit;
+  }
+  return Math.max(1, Math.floor(opts.limit));
+}
+
+function resolveSessionsListOffset(opts: SessionsListParams): number {
+  if (typeof opts.offset !== "number" || !Number.isFinite(opts.offset)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(opts.offset));
+}
+
+function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
+  if (limit === undefined) {
+    return undefined;
+  }
+  const windowLimit = offset + limit;
+  return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
+}
+
+function filterSessionEntries(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
+  opts: SessionsListParams;
+  now: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+  configuredAgentIds?: ReadonlySet<string>;
+  getRowContext?: SessionListRowContextProvider;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
+  involvingActorId?: string;
+  ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
+}): Pick<
+  SessionEntrySelection,
+  | "ownerFacet"
+  | "entries"
+  | "people"
+  | "peopleIncomplete"
+  | "peopleSessionCount"
+  | "involvingProfileId"
+> & { ownerEntries: SessionEntryPair[] } {
+  const { cfg, store, opts, now } = params;
+  const includeGlobal = opts.includeGlobal === true;
+  const includeUnknown = opts.includeUnknown === true;
+  const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const label = normalizeOptionalString(opts.label) ?? "";
+  const boardFace = opts.boardFace;
+  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const activeMinutes =
+    typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
+      ? Math.max(1, Math.floor(opts.activeMinutes))
+      : undefined;
+  const creatorId = normalizeOptionalString(opts.creatorId);
+  const ownerId = normalizeOptionalString(opts.ownerId);
+  const involvingActorId = normalizeOptionalString(params.involvingActorId);
+  const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
+  const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
+  const entries: SessionEntryPair[] = [];
+  const ownerEntries: SessionEntryPair[] = [];
+  const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
+  let peopleSessionCount = 0;
+  let peopleIncomplete = false;
+  const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
+  const identities =
+    params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const visibleEntries = Object.entries(store).filter(
+    ([key, entry]) => params.entryFilter?.(key, entry) ?? true,
+  );
+  const allowedProfileIds =
+    opts.involvingProfileId && params.restrictProfileReferences
+      ? new Set(
+          visibleEntries.flatMap(([, entry]) => {
+            const owner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+            return projectSessionPeople(entry, identities, cfg, owner).map(
+              (person) => person.identity.id,
+            );
+          }),
+        )
+      : undefined;
+  const profileReference = opts.involvingProfileId
+    ? resolveSessionListProfileReference(
+        opts.involvingProfileId,
+        visibleEntries,
+        identities,
+        allowedProfileIds,
+      )
+    : undefined;
+  if (profileReference && !profileReference.ok) {
+    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
+  }
+  const selectedProfileId = profileReference?.value;
+
+  const candidateEntries = visibleEntries.filter(([key, entry]) => {
+    const target = params.targetsBySessionKey?.get(key);
+    const storeKey = target?.storeKey ?? key;
+    if (
+      isCronRunSessionKey(key) ||
+      (!includeGlobal && storeKey === "global") ||
+      (!includeUnknown && storeKey === "unknown")
+    ) {
+      return false;
+    }
+    if (agentId && storeKey !== "global") {
+      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
+      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
+        return false;
+      }
+    }
+    if (isPhantomAgentStoreListEntry(key, entry)) {
+      return false;
+    }
+    if (spawnedBy) {
+      if (storeKey === "unknown" || storeKey === "global") {
+        return false;
+      }
+      const filterRowContext = resolveSessionListRowContext(params);
+      const latest = filterRowContext
+        ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
+        : getSessionDisplaySubagentRunByChildSessionKey(key);
+      const keepSpawned = latest
+        ? isCurrentSessionChildOwner({
+            entry,
+            ownerSessionKey: spawnedBy,
+            controllerSessionKey:
+              normalizeOptionalString(latest.controllerSessionKey) ||
+              normalizeOptionalString(latest.requesterSessionKey),
+          }) &&
+          shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: filterRowContext
+              ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
+              : countActiveDescendantRuns(key),
+            now,
+          })
+        : shouldKeepStoreOnlyChildLink(entry, now) &&
+          (entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy);
+      if (!keepSpawned) {
+        return false;
+      }
+    }
+    if (opts.archived !== "all") {
+      const archived = entry.archivedAt !== undefined;
+      if (opts.archived === true ? !archived : archived) {
+        return false;
+      }
+    }
+    if (
+      opts.requireLastInteraction === true &&
+      (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
+        normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
+    ) {
+      return false;
+    }
+    if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
+      return false;
+    }
+    return true;
+  });
+  // Search batches runtime metadata; excluded rows must not participate in ownership resolution.
+  const matchesSearch = search
+    ? createSessionListSearchMatcher({
+        cfg,
+        search,
+        now,
+        visibleEntries: candidateEntries,
+        targetsBySessionKey: expectDefined(params.targetsBySessionKey, "search row owners"),
+        getRowContext: params.getRowContext,
+        projectActiveRun: params.projectActiveRun,
+      })
+    : undefined;
+
+  for (const [key, entry] of candidateEntries) {
+    if (matchesSearch && !matchesSearch(key, entry)) {
+      continue;
+    }
+    if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
+      continue;
+    }
+    const effectiveOwner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+    if (effectiveOwner) {
+      addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
+    }
+    if (creatorId && entry.createdActor?.id !== creatorId) {
+      continue;
+    }
+    if (ownerId && effectiveOwner?.id !== ownerId) {
+      continue;
+    }
+    if (involvingActorId) {
+      const viewerOwns =
+        effectiveOwner?.identity?.type === "profile" &&
+        effectiveOwner.identity.id === involvingActorId;
+      const viewerParticipates = projectSessionParticipants(entry, identities, cfg).has(
+        JSON.stringify({ type: "profile", id: involvingActorId }),
+      );
+      if (!viewerOwns && !viewerParticipates) {
+        continue;
+      }
+    }
+    if (opts.includePeople || opts.involvingProfileId) {
+      const associated = projectSessionPeople(entry, identities, cfg, effectiveOwner);
+      peopleSessionCount += 1;
+      peopleIncomplete ||=
+        (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
+        entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
+      for (const person of associated) {
+        const existing = people.get(person.identity.id);
+        people.set(person.identity.id, {
+          ...person,
+          sessionCount: (existing?.sessionCount ?? 0) + 1,
+        });
+      }
+      if (opts.involvingProfileId) {
+        if (!associated.some((person) => person.identity.id === selectedProfileId)) {
+          continue;
+        }
+      }
+    }
+    if (
+      effectiveOwner?.identity?.type === "profile" &&
+      effectiveOwner.identity.id === ownerFirstActorId
+    ) {
+      ownerEntries.push([key, entry]);
+    }
+    entries.push([key, entry]);
+  }
+
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
+    people.values(),
+    selectedProfileId,
+  );
+  return {
+    entries,
+    ownerEntries,
+    ownerFacet: sortSessionOwnerFacet(ownerFacet),
+    // Empty time/search windows do not invalidate a resolved person link.
+    involvingProfileId: selectedProfileId,
+    ...(opts.includePeople
+      ? {
+          people: visiblePeople,
+          peopleIncomplete: peopleIncomplete || overflow,
+          peopleSessionCount,
+        }
+      : {}),
+  };
+}
+
+function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
+  const parsed = parseAgentSessionKey(key);
+  return (
+    parsed?.rest === "sessions" &&
+    !normalizeOptionalString(entry?.sessionId) &&
+    entry?.updatedAt == null
+  );
+}
+
+function selectSessionEntries(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
+  opts: SessionsListParams;
+  now: number;
+  getRowContext?: SessionListRowContextProvider;
+  defaultLimit?: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+  configuredAgentIds?: ReadonlySet<string>;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
+  involvingActorId?: string;
+  ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
+}): SessionEntrySelection {
+  const { ownerEntries, entries: filtered, ...facets } = filterSessionEntries(params);
+  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
+  const offset = resolveSessionsListOffset(params.opts);
+  const windowLimit = resolveSessionsListWindowLimit(limit, offset);
+  const sortedWindow = sortAndLimitSessionEntries(filtered, windowLimit, params.opts.sortBy);
+  const sharedEntries =
+    limit === undefined ? sortedWindow.slice(offset) : sortedWindow.slice(offset, offset + limit);
+  let entries = sharedEntries;
+  let ownerCount = 0;
+  if (params.ownerFirstActorId && offset === 0) {
+    const owned = sortAndLimitSessionEntries(
+      ownerEntries,
+      Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT),
+      params.opts.sortBy,
+    );
+    ownerCount = owned.length;
+    const ownedKeys = new Set(owned.map(([key]) => key));
+    entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
+  }
+  const nextOffset = offset + sharedEntries.length;
+  const hasMore = nextOffset < filtered.length;
+  return {
+    ...facets,
+    entries,
+    ownerCount,
+    totalCount: filtered.length,
+    limitApplied: limit,
+    offset,
+    nextOffset: hasMore ? nextOffset : null,
+    hasMore,
+  };
+}
+
+function prepareSessionList(params: ListSessionsFromStoreParams) {
+  const { cfg, store, opts } = params;
+  const now = Date.now();
+  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+  const configuredAgentIds = new Set(listAgentIds(cfg));
+  let rowContext: SessionListRowContext | undefined;
+  const getRowContext = () => {
+    rowContext ??= buildSessionListRowMetadataContext({ now, userProfileIdentityById });
+    return rowContext;
+  };
+  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
+  const filteredSessionKeys = new Set<string>();
+  let hasIncognito = false;
+  const entryFilter = (key: string, entry: SessionEntry) => {
+    if (params.entryFilter && !params.entryFilter(key, entry)) {
+      filteredSessionKeys.add(key);
+      return false;
+    }
+    hasIncognito ||= entry.incognito === true || isIncognitoSessionKey(key);
+    return true;
+  };
+  const selection = selectSessionEntries({
+    cfg,
+    store,
+    targetsBySessionKey: params.targetsBySessionKey,
+    opts,
+    now,
+    entryFilter,
+    // This wrapper also tracks incognito for unrestricted callers; preserve the original scope.
+    restrictProfileReferences: params.entryFilter !== undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
+    getRowContext:
+      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
+        ? getRowContext
+        : undefined,
+    userProfileIdentityById,
+    configuredAgentIds,
+    involvingActorId: params.involvingActorId,
+    ownerFirstActorId: params.ownerFirstActorId,
+    projectActiveRun: params.projectActiveRun,
+  });
+  // The two registry caches can differ after an external worker write. Preserve
+  // live child reads where the existing short-list path did not prepare a snapshot.
+  const usePreparedChildReads =
+    Boolean(rowContext) ||
+    hasSpawnedByFilter ||
+    filteredSessionKeys.size > 0 ||
+    selection.entries.length > SESSIONS_LIST_ROW_CONTEXT_THRESHOLD;
+  const sharedRowContext =
+    usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
+  const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
+  const storeChildSessionsByKey = buildStoreChildSessionIndex({
+    store,
+    keys: [
+      ...new Set(
+        selection.entries.map(([key]) => params.targetsBySessionKey.get(key)?.storeKey ?? key),
+      ),
+    ],
+    now,
+    subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
+    excludedChildKeys: filteredSessionKeys,
+    requireCurrentController: !usePreparedChildReads,
+  });
+  populateSessionListAcpMetadata({
+    cfg,
+    entries: selection.entries,
+    targetsBySessionKey: params.targetsBySessionKey,
+    rowContext: sharedRowContext,
+  });
+  return {
+    ...selection,
+    includeDerivedTitles: opts.includeDerivedTitles === true,
+    includeLastMessage: opts.includeLastMessage === true,
+    // The independent owner window must not consume the shared page's transcript budget.
+    transcriptFieldRows: SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS + selection.ownerCount,
+    now,
+    configuredAgentIds,
+    rowContext: sharedRowContext,
+    storeChildSessionsByKey,
+    storePath,
+  };
+}
+
+function buildSessionsListResult(
+  params: ListSessionsFromStoreParams,
+  list: ReturnType<typeof prepareSessionList>,
+  sessions: GatewaySessionRow[],
+): SessionsListResult {
+  const { cfg, opts, modelCatalog } = params;
+  // The defaults projection uses the same agent identity as getSessionDefaults:
+  // the requested agent when scoped, otherwise the legacy compatibility agent.
+  // Legacy plain-array catalogs (direct list callers) pass through
+  // unchanged; per-agent maps resolve by the same identity.
+  const preparedDefaultsCatalog =
+    modelCatalog instanceof Map
+      ? modelCatalog.get(resolveSessionsListDefaultsAgentId(cfg, opts.agentId))
+      : undefined;
+  const defaultsCatalog =
+    modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
+  return {
+    ts: list.now,
+    path: list.storePath,
+    count: sessions.length,
+    totalCount: list.totalCount,
+    limitApplied: list.limitApplied,
+    offset: list.offset > 0 ? list.offset : undefined,
+    nextOffset: list.nextOffset,
+    hasMore: list.hasMore,
+    owners: list.ownerFacet,
+    involvingProfileId: list.involvingProfileId,
+    ...(list.people
+      ? {
+          people: list.people,
+          peopleIncomplete: list.peopleIncomplete,
+          peopleSessionCount: list.peopleSessionCount,
+        }
+      : {}),
+    defaults: getSessionDefaults(cfg, defaultsCatalog, {
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      allowPluginNormalization: false,
+      providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+    }),
+    sessions,
+  };
+}
+
+function resolveSessionsListDefaultsAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  return requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
+}
+
+export function filterAndSortSessionEntries(
+  params: {
+    cfg: OpenClawConfig;
+    entryFilter?: (key: string, entry: SessionEntry) => boolean;
+    store: Record<string, SessionEntry>;
+    now: number;
+    getRowContext?: SessionListRowContextProvider;
+    involvingActorId?: string;
+  } & SessionSelectionScope,
+): [string, SessionEntry][] {
+  return selectSessionEntries({
+    ...params,
+    restrictProfileReferences: params.entryFilter !== undefined,
+  }).entries;
+}
+
+/** Projects lightweight list rows while sharing the event loop with other requests. */
+export async function listSessionsFromStoreAsync(
+  params: ListSessionsFromStoreParams & { workStartedAt?: number },
+): Promise<SessionsListResult> {
+  // Pin the active plugin-registry workspace dir for the duration of this
+  // call so per-row metadata lookups use a stable memo key. Without this pin,
+  // concurrent agent turns / crons mutate the process-global workspace dir
+  // between rows, the memo never hits, and each row triggers a full
+  // loadPluginMetadataSnapshot scan (~100 ms).
+  return withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    let workStartedAt = params.workStartedAt ?? performance.now();
+    const { cfg, store, targetsBySessionKey } = params;
+    const list = prepareSessionList(params);
+    const sessions: GatewaySessionRow[] = [];
+    const transcriptScopes = list.entries
+      .slice(0, list.transcriptFieldRows)
+      .flatMap(([key, entry]) => {
+        if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
+          return [];
+        }
+        const target = expectDefined(targetsBySessionKey.get(key), "transcript row target");
+        return [
+          {
+            ...target.storeTarget,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.storeKey ?? key,
+          },
+        ];
+      });
+    const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    // Consume synchronous sharing facts and capture transcripts before yielding.
+    // Loading and preparation can spend the budget even for zero or one row.
+    if (performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS) {
+      await yieldToEventLoop();
+      workStartedAt = performance.now();
+    }
+    let transcriptFieldIndex = 0;
+    for (let i = 0; i < list.entries.length; i++) {
+      const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
+      const target = expectDefined(targetsBySessionKey.get(key), "session row owner");
+      const includeTranscriptFields = i < list.transcriptFieldRows;
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: target.storeKey ? target.storeTarget.storePath : list.storePath,
+        store,
+        key: target.storeKey ?? key,
+        entry,
+        agentId: target.agentId,
+        modelCatalog: params.modelCatalog,
+        now: list.now,
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+        storeChildSessionsByKey: list.storeChildSessionsByKey,
+        rowContext: list.rowContext,
+        configuredAgentIds: list.configuredAgentIds,
+        skipTranscriptUsageFallback: true,
+        lightweightListRow: true,
+      });
+      row.key = key;
+      if (
+        entry?.sessionId &&
+        includeTranscriptFields &&
+        (list.includeDerivedTitles || list.includeLastMessage)
+      ) {
+        const fields = expectDefined(
+          transcriptFields[transcriptFieldIndex],
+          "batched transcript fields at transcriptFieldIndex",
+        );
+        transcriptFieldIndex += 1;
+        if (list.includeDerivedTitles) {
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
+        }
+        if (list.includeLastMessage && fields.lastMessagePreview) {
+          row.lastMessagePreview = fields.lastMessagePreview;
+        }
+      }
+      sessions.push(row);
+      if (
+        i + 1 < list.entries.length &&
+        performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
+      ) {
+        await yieldToEventLoop();
+        // Waiting behind other work is not projection work; start the next budget on resume.
+        workStartedAt = performance.now();
+      }
+    }
+
+    return buildSessionsListResult(params, list, sessions);
+  });
+}

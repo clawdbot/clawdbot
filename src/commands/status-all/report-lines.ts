@@ -1,13 +1,20 @@
+// Renders `openclaw status --all` report data into terminal lines.
+// Styling is applied here so data builders remain color/theme agnostic.
+
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
-import { isRich, theme } from "../../terminal/theme.js";
+import type { BestEffortConfigSnapshot } from "../../config/io.js";
+import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
+import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import {
-  buildStatusAgentsSection,
-  buildStatusChannelDetailsSections,
-  buildStatusChannelsSection,
-  buildStatusOverviewSection,
-} from "./report-sections.js";
+  buildStatusAgentTableRows,
+  buildStatusChannelDetailSections,
+  statusAgentsTableColumns,
+  statusOverviewTableColumns,
+} from "./report-tables.js";
 import { appendStatusReportSections, appendStatusSectionHeading } from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
@@ -43,8 +50,10 @@ type AgentStatusLike = {
   }>;
 };
 
+/** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   overviewRows: OverviewRow[];
   channels: ChannelsTable;
   channelIssues: ChannelIssueLike[];
@@ -65,41 +74,58 @@ export async function buildStatusAllReportLines(params: {
   const tableWidth = getTerminalTableWidth();
 
   const lines: string[] = [];
+  if (params.configDiagnostics) {
+    lines.push(
+      warn("Config diagnostics:"),
+      ...formatStatusConfigDiagnosticEntries(params.configDiagnostics),
+      "",
+    );
+  }
   lines.push(heading("OpenClaw status --all"));
   appendStatusReportSections({
     lines,
     heading,
+    width: tableWidth,
+    renderTable,
     sections: [
-      buildStatusOverviewSection({
-        width: tableWidth,
-        renderTable,
+      {
+        kind: "table",
+        title: "Overview",
+        columns: [...statusOverviewTableColumns],
         rows: params.overviewRows,
-      }),
-      buildStatusChannelsSection({
-        width: tableWidth,
-        renderTable,
-        rows: params.channels.rows,
-        channelIssues: params.channelIssues,
-        ok,
-        warn,
-        muted,
-        accentDim: theme.accentDim,
-        formatIssueMessage: (message) => message.slice(0, 90),
-      }),
-      ...buildStatusChannelDetailsSections({
+      },
+      {
+        kind: "table",
+        title: "Channels",
+        // The status-all report has more horizontal space than compact status output.
+        columns: statusChannelsTableColumns.map((column) =>
+          column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
+        ),
+        rows: buildStatusChannelsTableRows({
+          rows: params.channels.rows,
+          channelIssues: params.channelIssues,
+          ok,
+          warn,
+          muted,
+          accentDim: theme.accentDim,
+          formatIssueMessage: (message) => truncateUtf16Safe(message, 90),
+        }),
+      },
+      ...buildStatusChannelDetailSections({
         details: params.channels.details,
-        width: tableWidth,
-        renderTable,
         ok,
         warn,
       }),
-      buildStatusAgentsSection({
-        width: tableWidth,
-        renderTable,
-        agentStatus: params.agentStatus,
-        ok,
-        warn,
-      }),
+      {
+        kind: "table",
+        title: "Agents",
+        columns: [...statusAgentsTableColumns],
+        rows: buildStatusAgentTableRows({
+          agentStatus: params.agentStatus,
+          ok,
+          warn,
+        }),
+      },
     ],
   });
   appendStatusSectionHeading({

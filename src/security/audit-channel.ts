@@ -1,35 +1,35 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+// Audits channel configuration for exposure, auth, and trust risks.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
+import { parseAccessGroupAllowFromEntry } from "../channels/allow-from.js";
+import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
-import { resolveDmAllowState } from "./dm-policy-shared.js";
+import {
+  listExactDirectMessageBindingPeerIds,
+  resolveAgentRoute,
+  type ResolvedAgentRoute,
+} from "../routing/resolve-route.js";
+import { parseSessionDeliveryRoute, resolveLinkedDirectPeerId } from "../routing/session-key.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 
-function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
-  const s = message.toLowerCase();
-  if (
-    s.includes("dms: open") ||
-    s.includes('grouppolicy="open"') ||
-    s.includes('dmpolicy="open"')
-  ) {
-    return "critical";
-  }
-  if (s.includes("allows any") || s.includes("anyone can dm") || s.includes("public")) {
-    return "critical";
-  }
-  if (s.includes("locked") || s.includes("disabled")) {
-    return "info";
-  }
-  return "warn";
-}
+type DmPrincipalRoute = {
+  accountKey: string;
+  logicalPrincipalKey: string;
+  bucketKey: string;
+};
 
 function dedupeFindings(findings: SecurityAuditFinding[]): SecurityAuditFinding[] {
   const seen = new Set<string>();
@@ -77,30 +77,66 @@ function formatChannelAccountNote(params: {
     : "";
 }
 
-export async function collectChannelSecurityFindings(params: {
+/** Collect channel-specific security findings across active channel plugins/accounts. */
+export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-  plugins: ReturnType<typeof listChannelPlugins>;
+  plugins: ChannelPlugin[];
+  mode?: "audit" | "doctor";
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const principalRoutes: DmPrincipalRoute[] = [];
   const sourceConfig = params.sourceConfig ?? params.cfg;
+  const includeAuditOnly = params.mode !== "doctor";
+  const recordPrincipal = (
+    plugin: ChannelPlugin,
+    route: ResolvedAgentRoute,
+    sessionKey: string,
+    logicalPrincipalKey: string,
+    indexNamespaces = false,
+  ) => {
+    const canonicalKey = canonicalizeMainSessionAlias({
+      cfg: params.cfg,
+      agentId: route.agentId,
+      sessionKey,
+    });
+    const principal = {
+      accountKey: `${plugin.id}-${route.accountId}`,
+      logicalPrincipalKey,
+      bucketKey: `${route.agentId}\0${canonicalKey}`,
+    };
+    principalRoutes.push(principal);
+    if (!indexNamespaces) {
+      return;
+    }
+    const parsed = parseSessionDeliveryRoute(canonicalKey);
+    const directChannel =
+      parsed?.peerKind === "direct" || parsed?.peerKind === "dm" ? parsed.channel : undefined;
+    if (directChannel || (sessionKey === route.sessionKey && route.dmScope === "per-peer")) {
+      principalRoutes.push({ ...principal, bucketKey: `${route.agentId}\0symbolic:dm:peer` });
+    }
+    if (directChannel) {
+      principalRoutes.push({
+        ...principal,
+        bucketKey: `${route.agentId}\0symbolic:dm:channel:${directChannel}`,
+      });
+    }
+  };
 
   const inspectChannelAccount = async (
     plugin: (typeof params.plugins)[number],
     cfg: OpenClawConfig,
     accountId: string,
-  ) =>
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
+  ) => {
+    if (plugin.config.inspectAccount) {
+      return await plugin.config.inspectAccount(cfg, accountId);
+    }
+    return await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    }));
-
-  const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+    });
+  };
 
   const resolveChannelAuditAccount = async (
     plugin: (typeof params.plugins)[number],
@@ -139,6 +175,9 @@ export async function collectChannelSecurityFindings(params: {
       };
     }
     const useSourceUnavailableAccount = Boolean(
+      // Secret resolution can replace a configured account with an unresolved
+      // placeholder. Use source config when needed so audits still explain the
+      // originally configured credential surface.
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
       (!hasResolvedCredentialValue(resolvedAccount) ||
@@ -146,7 +185,7 @@ export async function collectChannelSecurityFindings(params: {
     );
     const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
     const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-    const accountRecord = asAccountRecord(account);
+    const accountRecord = asNullableRecord(account);
     let enabled =
       typeof selectedInspection?.enabled === "boolean"
         ? selectedInspection.enabled
@@ -200,16 +239,20 @@ export async function collectChannelSecurityFindings(params: {
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
     allowFromPath: string;
+    approveHint: string;
     normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
-    const { hasWildcard, isMultiUserDm } = await resolveDmAllowState({
+    // DM allowlist audit may need channel-specific normalization and async
+    // account ownership checks before classifying open/multi-user exposure.
+    const auditState = await resolveDmAllowAuditState({
       provider: input.provider,
       accountId: input.accountId,
       allowFrom: input.allowFrom,
+      dmPolicy: input.dmPolicy,
       normalizeEntry: input.normalizeEntry,
     });
-    const dmScope = params.cfg.session?.dmScope ?? "main";
+    const { hasWildcard } = auditState;
 
     if (input.dmPolicy === "open") {
       const allowFromKey = `${input.allowFromPath}allowFrom`;
@@ -237,22 +280,19 @@ export async function collectChannelSecurityFindings(params: {
         title: `${input.label} DMs are disabled`,
         detail: `${policyPath}="disabled" ignores inbound DMs.`,
       });
-      return;
+      return auditState;
     }
 
-    if (dmScope === "main" && isMultiUserDm) {
+    if (input.dmPolicy !== "open" && auditState.admittedPrincipals.length === 0) {
       findings.push({
-        checkId: `channels.${input.provider}.dm.scope_main_multiuser`,
-        severity: "warn",
-        title: `${input.label} DMs share the main session`,
-        detail:
-          "Multiple DM senders currently share the main session, which can leak context across users.",
-        remediation:
-          "Run: " +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-          ' (or "per-account-channel-peer" for multi-account channels) to isolate DM sessions per sender.',
+        checkId: `channels.${input.provider}.dm.locked`,
+        severity: "info",
+        title: `${input.label} DMs are locked`,
+        detail: `${policyPath}="${input.dmPolicy}" has no admitted senders; unknown senders are blocked or receive a pairing code.`,
+        remediation: input.approveHint,
       });
     }
+    return auditState;
   };
 
   for (const plugin of params.plugins) {
@@ -265,7 +305,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(
@@ -281,7 +321,7 @@ export async function collectChannelSecurityFindings(params: {
         findings.push({
           checkId: `channels.${plugin.id}.account.read_only_resolution`,
           severity: "warn",
-          title: `${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
+          title: `[secrets] ${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
           detail: diagnostic,
           remediation:
             "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
@@ -294,41 +334,175 @@ export async function collectChannelSecurityFindings(params: {
         continue;
       }
 
+      const accountNote = formatChannelAccountNote({
+        orderedAccountIds,
+        hasExplicitAccountPath,
+        accountId,
+      });
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      if (isDangerousNameMatchingEnabled(accountConfig)) {
-        const accountNote = formatChannelAccountNote({
-          orderedAccountIds,
-          hasExplicitAccountPath,
-          accountId,
-        });
-        findings.push({
-          checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
-          severity: "info",
-          title: `${plugin.meta.label ?? plugin.id} dangerous name matching is enabled${accountNote}`,
-          detail:
-            "dangerouslyAllowNameMatching=true re-enables mutable name/email/tag matching for sender authorization. This is a break-glass compatibility mode, not a hardened default.",
-          remediation:
-            "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
-        });
-      }
-
       const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg: params.cfg,
         accountId,
         account,
       });
+      const nameMatchingEnabled = isDangerousNameMatchingEnabled(accountConfig);
+      const configuredEntries = (dmPolicy?.allowFrom ?? [])
+        .map(String)
+        .filter((raw) => raw.trim() !== "*");
+      const mutableEntries = configuredEntries.filter(
+        // Symbolic groups resolve membership separately; they are not identifier entries.
+        (raw) =>
+          parseAccessGroupAllowFromEntry(raw) === null &&
+          dmPolicy?.classifyEntryAuthentication?.(raw) === "mutable",
+      ).length;
+      if (includeAuditOnly && nameMatchingEnabled) {
+        findings.push({
+          checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
+          severity: "info",
+          title: `${plugin.meta.label ?? plugin.id} dangerous name matching is enabled${accountNote}`,
+          detail:
+            "dangerouslyAllowNameMatching=true enables mutable aliases (changeable/shared labels, weak even when honestly set) for sender authorization. Exact, stable identifiers with unproven ownership are a separate weak class; ingress diagnostics distinguish mutable_identifier_disabled from identifier_authentication_too_weak." +
+            (dmPolicy?.classifyEntryAuthentication
+              ? ` ${mutableEntries} of ${configuredEntries.length} allowFrom entries depend on mutable matching and would stop authorizing if dangerouslyAllowNameMatching is disabled.`
+              : ""),
+          remediation:
+            "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
+        });
+      }
+
+      if (!nameMatchingEnabled && mutableEntries > 0 && dmPolicy) {
+        findings.push({
+          checkId: `channels.${plugin.id}.allowFrom.mutable_entries_inert`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} mutable allowFrom entries are inert${accountNote}`,
+          detail: `${mutableEntries} of ${configuredEntries.length} entries in ${dmPolicy.allowFromPath}allowFrom only match mutable identifiers (display names/tags/aliases) and can never authorize a sender under the current policy, so they are silently inert.`,
+          remediation:
+            "Replace them with stable sender IDs; enabling dangerouslyAllowNameMatching is a discouraged break-glass alternative.",
+        });
+      }
       if (dmPolicy) {
-        await warnDmPolicy({
-          label: plugin.meta.label ?? plugin.id,
+        const auditState = await warnDmPolicy({
+          label: `${plugin.meta.label ?? plugin.id}${accountNote}`,
           provider: plugin.id,
           accountId,
           dmPolicy: dmPolicy.policy,
           allowFrom: dmPolicy.allowFrom,
           policyPath: dmPolicy.policyPath,
           allowFromPath: dmPolicy.allowFromPath,
+          approveHint: dmPolicy.approveHint,
           normalizeEntry: dmPolicy.normalizeEntry,
         });
+        if (dmPolicy.policy !== "disabled") {
+          const dmRouting = plugin.security.dmRouting;
+          const admittedPrincipals = uniqueStrings([
+            ...auditState.admittedPrincipals,
+            ...(auditState.hasWildcard
+              ? listExactDirectMessageBindingPeerIds({
+                  cfg: params.cfg,
+                  channel: plugin.id,
+                  accountId,
+                })
+              : []),
+          ]);
+          // Missing ownership is an audit finding, not an execution request. Keep
+          // checking bound principals and sibling accounts without inventing a route.
+          for (const principalId of [
+            ...admittedPrincipals,
+            ...(auditState.hasWildcard ? [undefined] : []),
+          ]) {
+            const principalContext = {
+              cfg: params.cfg,
+              accountId,
+              account,
+              ...(principalId === undefined ? {} : { principalId }),
+            };
+            const channelDmScope = dmRouting?.resolveDmScope?.(principalContext);
+            let route: ResolvedAgentRoute;
+            try {
+              route = resolveAgentRoute({
+                cfg: params.cfg,
+                channel: plugin.id,
+                accountId,
+                peer: { kind: "direct", id: principalId ?? "" },
+                dmScope: channelDmScope,
+              });
+            } catch (error) {
+              if (!(error instanceof AgentSelectionRequiredError)) {
+                throw error;
+              }
+              findings.push({
+                checkId: `channels.${plugin.id}.routing.owner_missing.${accountId}`,
+                severity: "warn",
+                title: `${plugin.meta.label ?? plugin.id}${accountNote} routing has no explicit owner`,
+                detail: error.message,
+                remediation: error.hint,
+              });
+              continue;
+            }
+            const result = dmRouting?.resolveDmRoute?.({ ...principalContext, route });
+            if (principalId !== undefined) {
+              const sessionKey =
+                result && "sessionKey" in result ? result.sessionKey : route.sessionKey;
+              const linkedIdentity = resolveLinkedDirectPeerId({
+                identityLinks: params.cfg.session?.identityLinks,
+                channel: plugin.id,
+                peerId: principalId,
+              });
+              recordPrincipal(
+                plugin,
+                route,
+                sessionKey,
+                linkedIdentity
+                  ? `linked:${normalizeLowercaseStringOrEmpty(linkedIdentity)}`
+                  : `direct:${plugin.id}:${route.accountId}:${normalizeLowercaseStringOrEmpty(principalId)}`,
+                true,
+              );
+              continue;
+            }
+            const customRoute = dmRouting?.resolveDmRoute;
+            if (customRoute && !result) {
+              findings.push({
+                checkId: `channels.${plugin.id}.dm.wildcard_routing_unverified.${route.accountId}`,
+                severity: "warn",
+                title: `${plugin.meta.label ?? plugin.id}${accountNote} wildcard DM isolation is unverified`,
+                detail:
+                  "dmRouting.resolveDmRoute returned no unknown-principal policy; isolation for arbitrary senders cannot be established.",
+              });
+            }
+            const useCoreRoute =
+              !customRoute || Boolean(result && "kind" in result && result.kind === "core");
+            const sessionKey =
+              result && "sessionKey" in result
+                ? result.sessionKey
+                : useCoreRoute && route.dmScope === "main"
+                  ? route.sessionKey
+                  : undefined;
+            if (sessionKey) {
+              for (const suffix of ["1", "2"]) {
+                recordPrincipal(
+                  plugin,
+                  route,
+                  sessionKey,
+                  `wildcard:shared:${plugin.id}-${route.accountId}:${suffix}`,
+                );
+              }
+            } else if (
+              useCoreRoute &&
+              (route.dmScope === "per-channel-peer" || route.dmScope === "per-peer")
+            ) {
+              const namespaces =
+                route.dmScope === "per-peer" ? ["peer"] : [`channel:${plugin.id}`, "peer"];
+              for (const namespace of namespaces) {
+                principalRoutes.push({
+                  accountKey: `${plugin.id}-${route.accountId}`,
+                  logicalPrincipalKey: `wildcard:${route.dmScope}:${plugin.id}-${route.accountId}`,
+                  bucketKey: `${route.agentId}\0symbolic:dm:${namespace}`,
+                });
+              }
+            }
+          }
+        }
       }
 
       if (plugin.security.collectWarnings) {
@@ -337,20 +511,27 @@ export async function collectChannelSecurityFindings(params: {
           accountId,
           account,
         });
-        for (const message of warnings ?? []) {
+        for (const warning of warnings ?? []) {
+          if (typeof warning !== "string") {
+            findings.push(warning);
+            continue;
+          }
+          const message = warning;
           const trimmed = message.trim();
           if (!trimmed) {
             continue;
           }
           findings.push({
             checkId: `channels.${plugin.id}.warning.${findings.length + 1}`,
-            severity: classifyChannelWarningSeverity(trimmed),
+            // The legacy collectWarnings contract records warnings only. Producers that need
+            // critical or informational severity must return a structured audit finding.
+            severity: "warn",
             title: `${plugin.meta.label ?? plugin.id} security warning`,
             detail: trimmed.replace(/^-\s*/, ""),
           });
         }
       }
-      if (plugin.security.collectAuditFindings) {
+      if (includeAuditOnly && plugin.security.collectAuditFindings) {
         const auditFindings = await plugin.security.collectAuditFindings({
           cfg: params.cfg,
           sourceConfig,
@@ -364,6 +545,56 @@ export async function collectChannelSecurityFindings(params: {
         }
       }
     }
+  }
+
+  const routesByBucket = new Map<string, DmPrincipalRoute[]>();
+  for (const route of principalRoutes) {
+    const routes = routesByBucket.get(route.bucketKey) ?? [];
+    routes.push(route);
+    routesByBucket.set(route.bucketKey, routes);
+  }
+  const groupedRoutes = [...routesByBucket.entries()].filter(
+    ([, routes]) => new Set(routes.map((route) => route.logicalPrincipalKey)).size > 1,
+  );
+  const broadWildcardAgents = new Set(
+    groupedRoutes
+      .filter(
+        ([bucketKey, routes]) =>
+          bucketKey.endsWith("\0symbolic:dm:peer") &&
+          routes.some((route) => route.logicalPrincipalKey.startsWith("wildcard:per-peer:")),
+      )
+      .map(([bucketKey]) => bucketKey.split("\0", 1)[0]),
+  );
+  const collisions = groupedRoutes
+    .filter(([bucketKey, routes]) => {
+      if (!bucketKey.includes("\0symbolic:")) {
+        return true;
+      }
+      const agentId = bucketKey.split("\0", 1)[0];
+      if (bucketKey.endsWith("\0symbolic:dm:peer")) {
+        return routes.some((route) => route.logicalPrincipalKey.startsWith("wildcard:per-peer:"));
+      }
+      return (
+        !broadWildcardAgents.has(agentId) &&
+        routes.some((route) => route.logicalPrincipalKey.startsWith("wildcard:per-channel-peer:"))
+      );
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  for (const [collisionIndex, [bucketKey, routes]] of collisions.entries()) {
+    const accountKeys = uniqueStrings(routes.map((route) => route.accountKey)).toSorted();
+    const symbolic = bucketKey.includes("\0symbolic:");
+    findings.push({
+      checkId: `channels.dm.session_collision.${accountKeys.join("_")}.${collisionIndex + 1}`,
+      severity: "warn",
+      title: symbolic ? "DM principals may share a session" : "DM principals share a session",
+      detail:
+        `Collision topology ${collisionIndex + 1}: ${new Set(routes.map((route) => route.logicalPrincipalKey)).size} distinct admitted DM principals from ${accountKeys.join(", ")} ` +
+        `${symbolic ? "can resolve" : "resolve"} to the same session bucket owned by agent "${bucketKey.split("\0", 1)[0]}"` +
+        (params.cfg.session?.scope === "global" ? ' under session.scope="global".' : ".") +
+        " This can leak context across users.",
+      remediation:
+        "Set the effective DM route to an account-safe isolated scope; update the matching binding or session.dmScope as applicable.",
+    });
   }
 
   return dedupeFindings(findings);

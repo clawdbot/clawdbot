@@ -12,33 +12,19 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 
-export function toDecayLambda(halfLifeDays: number): number {
-  if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
-    return 0;
-  }
-  return Math.LN2 / halfLifeDays;
-}
-
-export function calculateTemporalDecayMultiplier(params: {
-  ageInDays: number;
-  halfLifeDays: number;
-}): number {
-  const lambda = toDecayLambda(params.halfLifeDays);
-  const clampedAge = Math.max(0, params.ageInDays);
-  if (lambda <= 0 || !Number.isFinite(clampedAge)) {
-    return 1;
-  }
-  return Math.exp(-lambda * clampedAge);
-}
-
-export function applyTemporalDecayToScore(params: {
+function applyTemporalDecayToScore(params: {
   score: number;
   ageInDays: number;
   halfLifeDays: number;
 }): number {
-  return params.score * calculateTemporalDecayMultiplier(params);
+  const { halfLifeDays } = params;
+  const clampedAge = Math.max(0, params.ageInDays);
+  if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0 || !Number.isFinite(clampedAge)) {
+    return params.score;
+  }
+  return params.score * Math.exp(-(Math.LN2 / halfLifeDays) * clampedAge);
 }
 
 function parseMemoryDateFromPath(filePath: string): Date | null {
@@ -70,7 +56,7 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
 
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  if (normalized === "MEMORY.md" || normalized === "memory.md") {
+  if (normalized === "MEMORY.md" || normalized === "USER.md") {
     return true;
   }
   if (!normalized.startsWith("memory/")) {
@@ -83,7 +69,14 @@ async function extractTimestamp(params: {
   filePath: string;
   source?: string;
   workspaceDir?: string;
+  sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
 }): Promise<Date | null> {
+  if (params.source === "sessions") {
+    // Session paths are logical SQLite identities, not workspace files. Ranking
+    // uses the indexed source activity, never a same-named filesystem artifact.
+    const mtime = params.sessionSourceMtimes?.get(params.filePath);
+    return mtime !== undefined && Number.isFinite(mtime) ? new Date(mtime) : null;
+  }
   const fromPath = parseMemoryDateFromPath(params.filePath);
   if (fromPath) {
     return fromPath;
@@ -113,17 +106,13 @@ async function extractTimestamp(params: {
   }
 }
 
-function ageInDaysFromTimestamp(timestamp: Date, nowMs: number): number {
-  const ageMs = Math.max(0, nowMs - timestamp.getTime());
-  return ageMs / DAY_MS;
-}
-
 export async function applyTemporalDecayToHybridResults<
   T extends { path: string; score: number; source: string },
 >(params: {
   results: T[];
   temporalDecay?: Partial<TemporalDecayConfig>;
   workspaceDir?: string;
+  sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
   nowMs?: number;
 }): Promise<T[]> {
   const config = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
@@ -143,6 +132,7 @@ export async function applyTemporalDecayToHybridResults<
           filePath: entry.path,
           source: entry.source,
           workspaceDir: params.workspaceDir,
+          sessionSourceMtimes: params.sessionSourceMtimes,
         });
         timestampPromiseCache.set(cacheKey, timestampPromise);
       }
@@ -154,7 +144,7 @@ export async function applyTemporalDecayToHybridResults<
 
       const decayedScore = applyTemporalDecayToScore({
         score: entry.score,
-        ageInDays: ageInDaysFromTimestamp(timestamp, nowMs),
+        ageInDays: (nowMs - timestamp.getTime()) / DAY_MS,
         halfLifeDays: config.halfLifeDays,
       });
 

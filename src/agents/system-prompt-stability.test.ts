@@ -1,9 +1,12 @@
+// System prompt stability tests cover deterministic workspace bootstrap file
+// loading so prompt-cache inputs stay byte-stable.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, beforeEach } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   loadWorkspaceBootstrapFiles,
   DEFAULT_AGENTS_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
 } from "./workspace.js";
 
@@ -16,7 +19,6 @@ describe("system prompt stability for cache hits", () => {
 
   it("returns identical results for same inputs across multiple calls", async () => {
     const agentsContent = "# AGENTS.md - Your Workspace\n\nTest agents file.";
-    const toolsContent = "# TOOLS.md - Local Notes\n\nTest tools file.";
     const soulContent = "# SOUL.md - Who You Are\n\nTest soul file.";
 
     // Write workspace files
@@ -24,11 +26,6 @@ describe("system prompt stability for cache hits", () => {
       dir: workspaceDir,
       name: DEFAULT_AGENTS_FILENAME,
       content: agentsContent,
-    });
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_TOOLS_FILENAME,
-      content: toolsContent,
     });
     await writeWorkspaceFile({
       dir: workspaceDir,
@@ -54,28 +51,24 @@ describe("system prompt stability for cache hits", () => {
     const agentsFiles = results.map((result) =>
       result.find((f) => f.name === DEFAULT_AGENTS_FILENAME),
     );
-    const toolsFiles = results.map((result) =>
-      result.find((f) => f.name === DEFAULT_TOOLS_FILENAME),
-    );
     const soulFiles = results.map((result) => result.find((f) => f.name === DEFAULT_SOUL_FILENAME));
 
     // All instances should have identical content
     for (let i = 1; i < agentsFiles.length; i++) {
       expect(agentsFiles[i]?.content).toBe(agentsFiles[0]?.content);
-      expect(toolsFiles[i]?.content).toBe(toolsFiles[0]?.content);
       expect(soulFiles[i]?.content).toBe(soulFiles[0]?.content);
     }
 
     // Verify the actual content matches what we wrote
     expect(agentsFiles[0]?.content).toBe(agentsContent);
-    expect(toolsFiles[0]?.content).toBe(toolsContent);
     expect(soulFiles[0]?.content).toBe(soulContent);
   });
 
   it("returns consistent ordering across calls", async () => {
+    // Prompt cache keys depend on file order, so repeated loads must preserve
+    // the canonical bootstrap ordering independent of filesystem timing.
     const testFiles = [
       { name: DEFAULT_AGENTS_FILENAME, content: "# Agents content" },
-      { name: DEFAULT_TOOLS_FILENAME, content: "# Tools content" },
       { name: DEFAULT_SOUL_FILENAME, content: "# Soul content" },
     ];
 
@@ -94,7 +87,7 @@ describe("system prompt stability for cache hits", () => {
     // All results should have the same file order
     for (let i = 1; i < results.length; i++) {
       const names1 = results[0].map((f) => f.name);
-      const namesI = results[i].map((f) => f.name);
+      const namesI = expectDefined(results[i], "results[i] test invariant").map((f) => f.name);
       expect(namesI).toEqual(names1);
     }
   });
@@ -122,12 +115,8 @@ describe("system prompt stability for cache hits", () => {
     // Verify missing files are consistently marked as missing
     for (const result of results) {
       const agentsFile = result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-      const toolsFile = result.find((f) => f.name === DEFAULT_TOOLS_FILENAME);
-
       expect(agentsFile?.missing).toBe(false);
       expect(agentsFile?.content).toBe("# Agents only");
-      expect(toolsFile?.missing).toBe(true);
-      expect(toolsFile?.content).toBeUndefined();
     }
   });
 

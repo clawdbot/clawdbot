@@ -1,14 +1,28 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+// Discord tests cover thread bindings.lifecycle plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setDiscordRuntime } from "../runtime.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
+
+type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -55,7 +69,7 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-const { __testing, createThreadBindingManager } = await import("./thread-bindings.manager.js");
+const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const {
   autoBindSpawnedDiscordSubagent,
   reconcileAcpThreadBindingsOnStartup,
@@ -65,14 +79,63 @@ const {
 } = await import("./thread-bindings.lifecycle.js");
 const { resolveThreadBindingInactivityExpiresAt, resolveThreadBindingMaxAgeExpiresAt } =
   await import("./thread-bindings.state.js");
-const { resolveThreadBindingIntroText } = await import("./thread-bindings.messages.js");
 const discordClientModule = await import("../client.js");
 const discordThreadBindingApi = await import("./thread-bindings.discord-api.js");
 const acpRuntime = await import("openclaw/plugin-sdk/acp-runtime");
 
+function createTestThreadBindingManager(
+  params: Omit<Parameters<typeof createThreadBindingManager>[0], "cfg"> & {
+    cfg?: OpenClawConfig;
+  },
+) {
+  return createThreadBindingManager({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    ...params,
+  });
+}
+
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
+
+function expectFields(
+  value: unknown,
+  label: string,
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(record[key]).toEqual(expected);
+  }
+  return record;
+}
+
+function expectThreadCreateOptionsWithoutArchiveOverride(value: unknown): void {
+  const options = requireRecord(value, "thread options");
+  expect(options.name).toBeTypeOf("string");
+  expect(options).not.toHaveProperty("autoArchiveMinutes");
+}
+
+function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`Expected ${label} mock calls`);
+  }
+  const call = calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
 describe("thread binding lifecycle", () => {
   beforeEach(() => {
-    __testing.resetThreadBindingsForTests();
+    resetPluginStateStoreForTests();
+    resetThreadBindingsForTests();
+    setDiscordRuntime({
+      state: {
+        openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateSyncKeyedStoreForTests("discord", options),
+      },
+    } as unknown as DiscordRuntime);
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     hoisted.sendMessageDiscord.mockReset().mockResolvedValue({});
@@ -162,7 +225,6 @@ describe("thread binding lifecycle", () => {
           params.channelId,
           {
             name: params.threadName,
-            autoArchiveMinutes: 60,
           },
           {
             accountId: params.accountId,
@@ -200,10 +262,10 @@ describe("thread binding lifecycle", () => {
   });
 
   const createDefaultSweeperManager = () =>
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
-      enableSweeper: false,
+      enableSweeper: true,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
     });
@@ -233,36 +295,80 @@ describe("thread binding lifecycle", () => {
     return binding;
   };
 
-  it("includes idle and max-age details in intro text", () => {
-    const intro = resolveThreadBindingIntroText({
-      agentId: "main",
-      label: "worker",
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 48 * 60 * 60 * 1000,
-    });
-    expect(intro).toContain("idle auto-unfocus after 24h inactivity");
-    expect(intro).toContain("max age 48h");
-  });
+  it.each([false, true])(
+    "ignores stale sweep results after rebinding (restart=%s)",
+    async (restart) => {
+      vi.useFakeTimers();
+      const probe = createDeferred<void>();
+      let manager = createDefaultSweeperManager();
+      try {
+        await bindDefaultThreadTarget(manager);
+        hoisted.restGet.mockImplementationOnce(async () => {
+          await probe.promise;
+          return {
+            id: "thread-1",
+            type: 11,
+            parent_id: "parent-1",
+            thread_metadata: { archived: true },
+          };
+        });
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(hoisted.restGet).toHaveBeenCalledTimes(1);
 
-  it("includes cwd near the top of intro text", () => {
-    const intro = resolveThreadBindingIntroText({
-      agentId: "codex",
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      sessionCwd: "/home/bob/clawd",
-      sessionDetails: ["session ids: pending (available after the first reply)"],
-    });
-    expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
-  });
+        if (restart) {
+          manager.stop();
+          manager = createDefaultSweeperManager();
+        }
+        await manager.bindTarget({
+          threadId: "thread-1",
+          channelId: "parent-1",
+          targetKind: "subagent",
+          targetSessionKey: "agent:main:subagent:replacement",
+          agentId: "main",
+          webhookId: "wh-1",
+          webhookToken: "tok-1",
+        });
+        probe.resolve();
+        await vi.advanceTimersByTimeAsync(0);
 
-  it("auto-unfocuses idle-expired bindings and sends inactivity message", async () => {
+        expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
+          "agent:main:subagent:replacement",
+        );
+        expect(hoisted.sendMessageDiscord).not.toHaveBeenCalled();
+      } finally {
+        probe.resolve();
+        manager.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "auto-unbinds idle-expired bindings and sends inactivity message",
+      idleTimeoutMs: 60_000,
+      maxAgeMs: 0,
+      introText: "intro",
+      farewellText: "after 1m of inactivity",
+      expectNoProbe: true,
+    },
+    {
+      name: "auto-unbinds max-age-expired bindings and sends max-age message",
+      idleTimeoutMs: 0,
+      maxAgeMs: 60_000,
+      farewellText: "max age of 1m",
+      expectNoProbe: false,
+    },
+  ])("$name", async ({ idleTimeoutMs, maxAgeMs, introText, farewellText, expectNoProbe }) => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
+        enableSweeper: true,
+        idleTimeoutMs,
+        maxAgeMs,
       });
 
       const binding = await manager.bindTarget({
@@ -273,99 +379,67 @@ describe("thread binding lifecycle", () => {
         agentId: "main",
         webhookId: "wh-1",
         webhookToken: "tok-1",
-        introText: "intro",
+        ...(introText ? { introText } : {}),
       });
-      expect(binding).not.toBeNull();
+      expectFields(binding, "binding", {
+        threadId: "thread-1",
+        targetSessionKey: "agent:main:subagent:child",
+      });
       hoisted.sendMessageDiscord.mockClear();
       hoisted.sendWebhookMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
-      expect(hoisted.restGet).not.toHaveBeenCalled();
+      if (expectNoProbe) {
+        expect(hoisted.restGet).not.toHaveBeenCalled();
+      }
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
-      expect(farewell).toContain("after 1m of inactivity");
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
+      expect(farewell).toContain(farewellText);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("auto-unfocuses max-age-expired bindings and sends max-age message", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 0,
-        maxAgeMs: 60_000,
-      });
-
-      const binding = await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
-      expect(binding).not.toBeNull();
-      hoisted.sendMessageDiscord.mockClear();
-
-      await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
-
-      expect(manager.getByThreadId("thread-1")).toBeUndefined();
-      expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
-      expect(farewell).toContain("max age of 1m");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps binding when thread sweep probe fails transiently", async () => {
+  it.each<{
+    name: string;
+    probeError: unknown;
+    keepsBinding: boolean;
+  }>([
+    {
+      name: "keeps binding when thread sweep probe fails transiently",
+      probeError: new Error("ECONNRESET"),
+      keepsBinding: true,
+    },
+    {
+      name: "unbinds when thread sweep probe reports unknown channel",
+      probeError: { status: 404, rawError: { code: 10003, message: "Unknown Channel" } },
+      keepsBinding: false,
+    },
+  ])("$name", async ({ probeError, keepsBinding }) => {
     vi.useFakeTimers();
     try {
       const manager = createDefaultSweeperManager();
       await bindDefaultThreadTarget(manager);
 
-      hoisted.restGet.mockRejectedValueOnce(new Error("ECONNRESET"));
+      hoisted.restGet.mockRejectedValueOnce(probeError);
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
 
-      expect(requireBinding(manager, "thread-1")).toMatchObject({
-        threadId: "thread-1",
-        targetSessionKey: "agent:main:subagent:child",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
-      expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("unbinds when thread sweep probe reports unknown channel", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createDefaultSweeperManager();
-      await bindDefaultThreadTarget(manager);
-
-      hoisted.restGet.mockRejectedValueOnce({
-        status: 404,
-        rawError: { code: 10003, message: "Unknown Channel" },
-      });
-
-      await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
-
-      expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      if (keepsBinding) {
+        expectFields(requireBinding(manager, "thread-1"), "thread binding", {
+          threadId: "thread-1",
+          targetSessionKey: "agent:main:subagent:child",
+          webhookId: "wh-1",
+          webhookToken: "tok-1",
+        });
+      } else {
+        expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      }
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -376,7 +450,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T23:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -404,11 +478,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "idle-timeout thread binding");
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
       expect(updated[0]?.boundAt).toBe(boundAt);
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBe(new Date("2026-02-21T01:15:00.000Z").getTime());
@@ -421,7 +496,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -445,11 +520,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "max-age thread binding");
       expect(updated[0]?.boundAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(
         resolveThreadBindingMaxAgeExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultMaxAgeMs: manager.getMaxAgeMs(),
         }),
       ).toBe(new Date("2026-02-20T13:30:00.000Z").getTime());
@@ -462,7 +538,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -501,11 +577,11 @@ describe("thread binding lifecycle", () => {
         webhookToken: "tok-1",
       });
 
-      expect(rebound).toMatchObject({
+      expectFields(rebound, "rebound binding", {
         idleTimeoutMs: 2 * 60 * 60 * 1000,
         maxAgeMs: 3 * 60 * 60 * 1000,
       });
-      expect(requireBinding(manager, "thread-1")).toMatchObject({
+      expectFields(requireBinding(manager, "thread-1"), "thread binding", {
         idleTimeoutMs: 2 * 60 * 60 * 1000,
         maxAgeMs: 3 * 60 * 60 * 1000,
       });
@@ -517,10 +593,10 @@ describe("thread binding lifecycle", () => {
   it("keeps binding when idle timeout is disabled per session key", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
-        enableSweeper: false,
+        enableSweeper: true,
         idleTimeoutMs: 60_000,
         maxAgeMs: 0,
       });
@@ -544,9 +620,8 @@ describe("thread binding lifecycle", () => {
       expect(updated[0]?.idleTimeoutMs).toBe(0);
 
       await vi.advanceTimersByTimeAsync(240_000);
-      await __testing.runThreadBindingSweepForAccount("default");
 
-      expect(requireBinding(manager, "thread-1")).toMatchObject({
+      expectFields(requireBinding(manager, "thread-1"), "thread binding", {
         threadId: "thread-1",
         targetSessionKey: "agent:main:subagent:child",
         idleTimeoutMs: 0,
@@ -559,10 +634,10 @@ describe("thread binding lifecycle", () => {
   it("keeps a binding when activity is touched during the same sweep pass", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
-        enableSweeper: false,
+        enableSweeper: true,
         idleTimeoutMs: 60_000,
         maxAgeMs: 0,
       });
@@ -608,9 +683,8 @@ describe("thread binding lifecycle", () => {
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
 
-      expect(requireBinding(manager, "thread-2")).toMatchObject({
+      expectFields(requireBinding(manager, "thread-2"), "thread binding", {
         threadId: "thread-2",
         targetSessionKey: "agent:main:subagent:second",
       });
@@ -624,7 +698,7 @@ describe("thread binding lifecycle", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -642,7 +716,10 @@ describe("thread binding lifecycle", () => {
 
       vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
       const touched = manager.touchThread({ threadId: "thread-1", persist: false });
-      expect(touched).not.toBeNull();
+      expectFields(touched, "touched binding", {
+        threadId: "thread-1",
+        lastActivityAt: new Date("2026-02-20T00:00:30.000Z").getTime(),
+      });
 
       const record = requireBinding(manager, "thread-1");
       expect(record.lastActivityAt).toBe(new Date("2026-02-20T00:00:30.000Z").getTime());
@@ -663,9 +740,9 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      __testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      const manager = createThreadBindingManager({
+      const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
         enableSweeper: false,
@@ -687,8 +764,8 @@ describe("thread binding lifecycle", () => {
       vi.setSystemTime(touchedAt);
       manager.touchThread({ threadId: "thread-1" });
 
-      __testing.resetThreadBindingsForTests();
-      const reloaded = createThreadBindingManager({
+      resetThreadBindingsForTests();
+      const reloaded = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
         enableSweeper: false,
@@ -705,7 +782,7 @@ describe("thread binding lifecycle", () => {
         }),
       ).toBe(new Date("2026-02-20T00:01:30.000Z").getTime());
     } finally {
-      __testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -716,8 +793,36 @@ describe("thread binding lifecycle", () => {
     }
   });
 
+  it("keeps thread binding startup in memory when SQLite persistence is unavailable", async () => {
+    setDiscordRuntime({
+      state: {
+        openSyncKeyedStore: () => {
+          throw new Error("sqlite unavailable");
+        },
+      },
+    } as unknown as DiscordRuntime);
+
+    const manager = createTestThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await manager.bindTarget({
+      threadId: "thread-sqlite-down",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:sqlite-down",
+      agentId: "main",
+    });
+
+    expect(manager.getByThreadId("thread-sqlite-down")).toMatchObject({
+      targetSessionKey: "agent:main:subagent:sqlite-down",
+    });
+  });
+
   it("reuses webhook credentials after unbind when rebinding in the same channel", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -732,7 +837,10 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-1",
       agentId: "main",
     });
-    expect(first).not.toBeNull();
+    expectFields(first, "first binding", {
+      threadId: "thread-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+    });
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
 
     manager.unbindThread({
@@ -747,14 +855,15 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-2",
       agentId: "main",
     });
-    expect(second).not.toBeNull();
-    expect(second?.webhookId).toBe("wh-created");
-    expect(second?.webhookToken).toBe("tok-created");
+    expectFields(second, "second binding", {
+      webhookId: "wh-created",
+      webhookToken: "tok-created",
+    });
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
   });
 
   it("creates a new thread when spawning from an already bound thread", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -773,6 +882,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-1",
@@ -781,12 +891,21 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
+    expectFields(childBinding, "child binding", {
+      threadId: "thread-created-2",
+      targetSessionKey: "agent:main:subagent:child-2",
+    });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
-    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
-      "parent-1",
-      expect.objectContaining({ autoArchiveMinutes: 60 }),
-      expect.objectContaining({ accountId: "default" }),
+    expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
+    expectThreadCreateOptionsWithoutArchiveOverride(
+      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
+    );
+    expectFields(
+      mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
+      "thread context",
+      {
+        accountId: "default",
+      },
     );
     expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:parent");
     expect(manager.getByThreadId("thread-created-2")?.targetSessionKey).toBe(
@@ -795,7 +914,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("resolves parent channel when thread target is passed via to without threadId", async () => {
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -813,6 +932,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-lookup",
@@ -820,13 +940,18 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
-    expect(childBinding?.channelId).toBe("parent-1");
+    expectFields(childBinding, "child binding", { channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
-    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
-      "parent-1",
-      expect.objectContaining({ autoArchiveMinutes: 60 }),
-      expect.objectContaining({ accountId: "default" }),
+    expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
+    expectThreadCreateOptionsWithoutArchiveOverride(
+      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
+    );
+    expectFields(
+      mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
+      "thread context",
+      {
+        accountId: "default",
+      },
     );
   });
 
@@ -834,7 +959,7 @@ describe("thread binding lifecycle", () => {
     const cfg = {
       channels: { discord: { token: "tok" } },
     } as OpenClawConfig;
-    createThreadBindingManager({
+    createTestThreadBindingManager({
       accountId: "runtime",
       token: "runtime-token",
       cfg,
@@ -863,11 +988,17 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
-    const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
-      | { accountId?: string; token?: string }
-      | undefined;
-    expect(firstClientArgs).toMatchObject({
+    expectFields(childBinding, "child binding", {
+      threadId: "thread-created-runtime",
+      targetSessionKey: "agent:main:subagent:child-runtime",
+    });
+    const firstClientArgs = mockCallArg(
+      hoisted.createDiscordRestClient,
+      0,
+      0,
+      "createDiscordRestClient",
+    ) as { accountId?: string; token?: string } | undefined;
+    expectFields(firstClientArgs, "first client args", {
       accountId: "runtime",
       token: "runtime-token",
     });
@@ -890,7 +1021,7 @@ describe("thread binding lifecycle", () => {
     const refreshedCfg = {
       channels: { discord: { token: "refreshed-token" } },
     } as OpenClawConfig;
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "runtime",
       token: "runtime-token",
       cfg: startupCfg,
@@ -913,7 +1044,10 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
+    expectFields(bound, "bound thread", {
+      threadId: "thread-created-runtime-cfg",
+      targetSessionKey: "agent:main:subagent:runtime-cfg",
+    });
     const usedRefreshedCfg = hoisted.createDiscordRestClient.mock.calls.some((call) => {
       if (call?.[1] === refreshedCfg) {
         return true;
@@ -940,23 +1074,27 @@ describe("thread binding lifecycle", () => {
     expect(usedStartupCfg).toBe(false);
   });
 
-  it("refreshes manager token when an existing manager is reused", async () => {
-    createThreadBindingManager({
+  it.each([false, true])("keeps refreshed tokens after stale cleanup=%s", async (lateStop) => {
+    const initialOptions = {
       accountId: "runtime",
       token: "token-old",
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
-    });
-    const manager = createThreadBindingManager({
-      accountId: "runtime",
+    };
+    const initial = createTestThreadBindingManager(initialOptions);
+    if (lateStop) {
+      initial.stop();
+      createTestThreadBindingManager(initialOptions);
+    }
+    const manager = createTestThreadBindingManager({
+      ...initialOptions,
       token: "token-new",
-      persist: false,
-      enableSweeper: false,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
     });
+    if (lateStop) {
+      initial.stop();
+    }
 
     hoisted.createThreadDiscord.mockClear();
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-token-refresh" });
@@ -970,11 +1108,23 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
-    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+    expectFields(bound, "bound thread", {
+      threadId: "thread-created-token-refresh",
+      targetSessionKey: "agent:main:subagent:token-refresh",
+    });
+    expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "parent-runtime",
-      expect.objectContaining({ autoArchiveMinutes: 60 }),
-      expect.objectContaining({ accountId: "runtime", token: "token-new" }),
+    );
+    expectThreadCreateOptionsWithoutArchiveOverride(
+      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
+    );
+    expectFields(
+      mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
+      "thread context",
+      {
+        accountId: "runtime",
+        token: "token-new",
+      },
     );
     const usedTokenNew = hoisted.createDiscordRestClient.mock.calls.some(
       (call) => (call?.[0] as { token?: string } | undefined)?.token === "token-new",
@@ -982,9 +1132,128 @@ describe("thread binding lifecycle", () => {
     expect(usedTokenNew).toBe(true);
   });
 
-  it("binds current Discord DMs as direct conversation bindings", async () => {
-    createThreadBindingManager({
+  it("normalizes prefixed parentConversationId before creating child thread bindings", async () => {
+    createTestThreadBindingManager({
       accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.createThreadDiscord.mockClear();
+    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-parent-normalized" });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-parent-normalized",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558668",
+        parentConversationId: "channel:1491611525914558667",
+      },
+      placement: "child",
+      metadata: {
+        agentId: "codex",
+        label: "Codex ACP bind test",
+        threadName: "Codex ACP bind test",
+      },
+    });
+
+    const boundConversation = requireRecord(
+      requireRecord(bound, "bound session").conversation,
+      "bound conversation",
+    );
+    expectFields(boundConversation, "bound conversation", {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-created-parent-normalized",
+    });
+    expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
+      "1491611525914558667",
+    );
+    expectThreadCreateOptionsWithoutArchiveOverride(
+      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
+    );
+    expectFields(
+      mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
+      "thread context",
+      {
+        accountId: "default",
+      },
+    );
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+  });
+
+  it("preserves prefixed current channel conversation ids as binding keys", async () => {
+    createTestThreadBindingManager({
+      accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "codex" }] },
+      },
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.restPost.mockClear();
+
+    const service = getSessionBindingService();
+    const bound = await service.bind({
+      targetSessionKey: "agent:codex:acp:current-channel",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      },
+      placement: "current",
+    });
+
+    const boundConversation = requireRecord(
+      requireRecord(bound, "bound session").conversation,
+      "bound conversation",
+    );
+    expectFields(boundConversation, "bound conversation", {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:1491611525914558667",
+    });
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "codex",
+    });
+    expectFields(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      }),
+      "resolved binding",
+      {
+        targetSessionKey: "agent:codex:acp:current-channel",
+      },
+    );
+    expect(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1491611525914558667",
+      }),
+    ).toBeNull();
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(hoisted.restPost).not.toHaveBeenCalled();
+  });
+
+  it("binds current Discord DMs as direct conversation bindings", async () => {
+    createTestThreadBindingManager({
+      accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "codex", default: true }] },
+      },
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1010,99 +1279,107 @@ describe("thread binding lifecycle", () => {
       },
     });
 
-    expect(bound).toMatchObject({
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-        parentConversationId: "user:1177378744822943744",
-      },
-    });
-    expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      }),
-    ).toMatchObject({
-      conversation: {
-        conversationId: "user:1177378744822943744",
-      },
-    });
-    expect(hoisted.restGet).not.toHaveBeenCalled();
-    expect(hoisted.restPost).not.toHaveBeenCalled();
-  });
-
-  it("preserves direct-binding metadata when rebinding the same conversation", async () => {
-    createThreadBindingManager({
+    const boundConversation = requireRecord(
+      requireRecord(bound, "bound session").conversation,
+      "bound conversation",
+    );
+    expectFields(boundConversation, "bound conversation", {
+      channel: "discord",
       accountId: "default",
-      persist: false,
-      enableSweeper: false,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
+      conversationId: "user:1177378744822943744",
+      parentConversationId: "user:1177378744822943744",
     });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        agentId: "codex",
-        boundBy: "system",
-      },
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "codex",
     });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        label: "codex-dm",
-      },
-    });
-
-    expect(
+    const resolved = requireRecord(
       getSessionBindingService().resolveByConversation({
         channel: "discord",
         accountId: "default",
         conversationId: "user:1177378744822943744",
       }),
-    ).toMatchObject({
-      metadata: expect.objectContaining({
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        agentId: "codex",
-        boundBy: "system",
-        label: "codex-dm",
-      }),
-    });
+      "resolved binding",
+    );
+    expect(requireRecord(resolved.conversation, "resolved conversation").conversationId).toBe(
+      "user:1177378744822943744",
+    );
     expect(hoisted.restGet).not.toHaveBeenCalled();
     expect(hoisted.restPost).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      createTestThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+        idleTimeoutMs: 24 * 60 * 60 * 1000,
+        maxAgeMs: 0,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "owner-plugin",
+          pluginRoot: "/plugins/owner-plugin",
+          agentId: "previous-agent",
+          boundBy: "system",
+        },
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: replace ? "agent:main:acp:replacement" : "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          label: "updated",
+        },
+      });
+
+      const resolved = requireRecord(
+        getSessionBindingService().resolveByConversation({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        }),
+        "resolved binding",
+      );
+      expectFields(requireRecord(resolved.metadata, "resolved metadata"), "resolved metadata", {
+        pluginBindingOwner: replace ? undefined : "plugin",
+        pluginId: replace ? undefined : "owner-plugin",
+        pluginRoot: replace ? undefined : "/plugins/owner-plugin",
+        agentId: replace ? "main" : "previous-agent",
+        boundBy: "system",
+        label: "updated",
+      });
+      expect(hoisted.restGet).not.toHaveBeenCalled();
+      expect(hoisted.restPost).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps overlapping thread ids isolated per account", async () => {
-    const a = createThreadBindingManager({
+    const a = createTestThreadBindingManager({
       accountId: "a",
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
     });
-    const b = createThreadBindingManager({
+    const b = createTestThreadBindingManager({
       accountId: "b",
       persist: false,
       enableSweeper: false,
@@ -1140,7 +1417,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("removes stale ACP bindings during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1200,20 +1477,20 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
     expect(result.checked).toBe(2);
     expect(result.removed).toBe(1);
     expect(result.staleSessionKeys).toContain("agent:codex:acp:stale");
-    expect(requireBinding(manager, "thread-acp-healthy")).toMatchObject({
+    expectFields(requireBinding(manager, "thread-acp-healthy"), "healthy binding", {
       threadId: "thread-acp-healthy",
       targetKind: "acp",
       targetSessionKey: "agent:codex:acp:healthy",
     });
     expect(manager.getByThreadId("thread-acp-stale")).toBeUndefined();
-    expect(requireBinding(manager, "thread-subagent")).toMatchObject({
+    expectFields(requireBinding(manager, "thread-subagent"), "subagent binding", {
       threadId: "thread-subagent",
       targetKind: "subagent",
       targetSessionKey: "agent:main:subagent:child",
@@ -1223,7 +1500,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1244,7 +1521,7 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:uncertain",
       storeSessionKey: "agent:codex:acp:uncertain",
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       storePath: "/tmp/mock-sessions.json",
       storeReadFailed: true,
       entry: undefined,
@@ -1252,14 +1529,14 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
-    expect(requireBinding(manager, "thread-acp-uncertain")).toMatchObject({
+    expect(result.staleSessionKeys).toStrictEqual([]);
+    expectFields(requireBinding(manager, "thread-acp-uncertain"), "uncertain binding", {
       threadId: "thread-acp-uncertain",
       targetKind: "acp",
       targetSessionKey: "agent:codex:acp:uncertain",
@@ -1267,7 +1544,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("does not reconcile plugin-owned direct bindings as stale ACP sessions", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1291,24 +1568,28 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue(null);
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
     expect(result.checked).toBe(0);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
-    expect(manager.getByThreadId("user:1177378744822943744")).toMatchObject({
-      threadId: "user:1177378744822943744",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
+    expect(result.staleSessionKeys).toStrictEqual([]);
+    const binding = expectFields(
+      manager.getByThreadId("user:1177378744822943744"),
+      "plugin direct binding",
+      {
+        threadId: "user:1177378744822943744",
       },
+    );
+    expectFields(requireRecord(binding.metadata, "binding metadata"), "binding metadata", {
+      pluginBindingOwner: "plugin",
+      pluginId: "openclaw-codex-app-server",
     });
   });
 
   it("removes ACP bindings when health probe marks running session as stale", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1340,7 +1621,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
     });
@@ -1352,7 +1633,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("keeps running ACP bindings when health probe is uncertain", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1384,23 +1665,27 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "uncertain", reason: "status-timeout" }),
     });
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
-    expect(requireBinding(manager, "thread-acp-running-uncertain")).toMatchObject({
-      threadId: "thread-acp-running-uncertain",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:running-uncertain",
-    });
+    expect(result.staleSessionKeys).toStrictEqual([]);
+    expectFields(
+      requireBinding(manager, "thread-acp-running-uncertain"),
+      "running uncertain binding",
+      {
+        threadId: "thread-acp-running-uncertain",
+        targetKind: "acp",
+        targetSessionKey: "agent:codex:acp:running-uncertain",
+      },
+    );
   });
 
   it("keeps ACP bindings in stored error state when no explicit stale probe verdict exists", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1432,14 +1717,14 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
-    expect(requireBinding(manager, "thread-acp-error")).toMatchObject({
+    expect(result.staleSessionKeys).toStrictEqual([]);
+    expectFields(requireBinding(manager, "thread-acp-error"), "error binding", {
       threadId: "thread-acp-error",
       targetKind: "acp",
       targetSessionKey: "agent:codex:acp:error",
@@ -1447,7 +1732,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("starts ACP health probes in parallel during startup reconciliation", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1498,7 +1783,7 @@ describe("thread binding lifecycle", () => {
     let secondProbeStartedBeforeFirstResolved = false;
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCallCount += 1;
@@ -1510,8 +1795,9 @@ describe("thread binding lifecycle", () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(probeCallCount).toBe(2);
+    });
     const observedParallelStart = secondProbeStartedBeforeFirstResolved;
 
     resolveFirstProbe?.({ status: "healthy" });
@@ -1523,7 +1809,7 @@ describe("thread binding lifecycle", () => {
   });
 
   it("caps ACP startup health probe concurrency", async () => {
-    const manager = createThreadBindingManager({
+    const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1570,7 +1856,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCalls += 1;
@@ -1596,155 +1882,38 @@ describe("thread binding lifecycle", () => {
     expect(maxInFlight).toBeLessThanOrEqual(PROBE_LIMIT);
   });
 
-  it("migrates legacy expiresAt bindings to idle/max-age semantics", () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    try {
-      __testing.resetThreadBindingsForTests();
-      const bindingsPath = __testing.resolveThreadBindingsPath();
-      fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
-      const boundAt = Date.now() - 10_000;
-      const expiresAt = boundAt + 60_000;
-      fs.writeFileSync(
-        bindingsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            bindings: {
-              "thread-legacy-active": {
-                accountId: "default",
-                channelId: "parent-1",
-                threadId: "thread-legacy-active",
-                targetKind: "subagent",
-                targetSessionKey: "agent:main:subagent:legacy-active",
-                agentId: "main",
-                boundBy: "system",
-                boundAt,
-                expiresAt,
-              },
-              "thread-legacy-disabled": {
-                accountId: "default",
-                channelId: "parent-1",
-                threadId: "thread-legacy-disabled",
-                targetKind: "subagent",
-                targetSessionKey: "agent:main:subagent:legacy-disabled",
-                agentId: "main",
-                boundBy: "system",
-                boundAt,
-                expiresAt: 0,
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const manager = createThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 24 * 60 * 60 * 1000,
-        maxAgeMs: 0,
-      });
-
-      const active = manager.getByThreadId("thread-legacy-active");
-      if (!active) {
-        throw new Error("missing migrated legacy active thread binding");
-      }
-      expect(active.idleTimeoutMs).toBe(0);
-      expect(active.maxAgeMs).toBe(expiresAt - boundAt);
-      expect(
-        resolveThreadBindingMaxAgeExpiresAt({
-          record: active,
-          defaultMaxAgeMs: manager.getMaxAgeMs(),
-        }),
-      ).toBe(expiresAt);
-      expect(
-        resolveThreadBindingInactivityExpiresAt({
-          record: active,
-          defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
-        }),
-      ).toBeUndefined();
-
-      const disabled = manager.getByThreadId("thread-legacy-disabled");
-      if (!disabled) {
-        throw new Error("missing migrated legacy disabled thread binding");
-      }
-      expect(disabled.idleTimeoutMs).toBe(0);
-      expect(disabled.maxAgeMs).toBe(0);
-      expect(
-        resolveThreadBindingMaxAgeExpiresAt({
-          record: disabled,
-          defaultMaxAgeMs: manager.getMaxAgeMs(),
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveThreadBindingInactivityExpiresAt({
-          record: disabled,
-          defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
-        }),
-      ).toBeUndefined();
-    } finally {
-      __testing.resetThreadBindingsForTests();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
   it("persists unbinds even when no manager is active", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      __testing.resetThreadBindingsForTests();
-      const bindingsPath = __testing.resolveThreadBindingsPath();
-      fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
+      resetThreadBindingsForTests();
       const now = Date.now();
-      fs.writeFileSync(
-        bindingsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            bindings: {
-              "thread-1": {
-                accountId: "default",
-                channelId: "parent-1",
-                threadId: "thread-1",
-                targetKind: "subagent",
-                targetSessionKey: "agent:main:subagent:child",
-                agentId: "main",
-                boundBy: "system",
-                boundAt: now,
-                lastActivityAt: now,
-                idleTimeoutMs: 60_000,
-                maxAgeMs: 0,
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      const store = createPluginStateSyncKeyedStoreForTests("discord", {
+        namespace: "thread-bindings",
+        maxEntries: 10_000,
+      });
+      store.register("default:thread-1", {
+        accountId: "default",
+        channelId: "parent-1",
+        threadId: "thread-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        boundBy: "system",
+        boundAt: now,
+        lastActivityAt: now,
+        idleTimeoutMs: 60_000,
+        maxAgeMs: 0,
+      });
 
       const removed = unbindThreadBindingsBySessionKey({
         targetSessionKey: "agent:main:subagent:child",
       });
       expect(removed).toHaveLength(1);
-
-      const payload = JSON.parse(fs.readFileSync(bindingsPath, "utf-8")) as {
-        bindings?: Record<string, unknown>;
-      };
-      expect(Object.keys(payload.bindings ?? {})).toEqual([]);
+      expect(store.entries()).toStrictEqual([]);
     } finally {
-      __testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -1754,3 +1923,4 @@ describe("thread binding lifecycle", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

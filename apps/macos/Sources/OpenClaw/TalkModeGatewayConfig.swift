@@ -2,17 +2,24 @@ import Foundation
 import OpenClawKit
 
 struct TalkModeGatewayConfigState {
-    let activeProvider: String
-    let normalizedPayload: Bool
-    let missingResolvedPayload: Bool
+    let snapshot: TalkConfigSnapshot
     let voiceId: String?
-    let voiceAliases: [String: String]
     let modelId: String?
     let outputFormat: String?
-    let interruptOnSpeech: Bool
-    let silenceTimeoutMs: Int
     let apiKey: String?
+    let referenceAudioPath: String?
+    let referenceText: String?
     let seamColorHex: String?
+
+    var interruptOnSpeech: Bool {
+        self.snapshot.interruptOnSpeech ?? true
+    }
+
+    var hasGatewayRealtimeRelayTuple: Bool {
+        self.snapshot.realtime.mode == "realtime" &&
+            self.snapshot.realtime.transport == "gateway-relay" &&
+            self.snapshot.realtime.brain == "agent-consult"
+    }
 }
 
 enum TalkModeGatewayConfigParser {
@@ -26,23 +33,13 @@ enum TalkModeGatewayConfigParser {
         envApiKey: String?) -> TalkModeGatewayConfigState
     {
         let talk = snapshot.config?["talk"]?.dictionaryValue
-        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: defaultProvider)
-        let activeProvider = selection?.provider ?? defaultProvider
-        let activeConfig = selection?.config
-        let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
-            talk,
-            fallback: defaultSilenceTimeoutMs)
+        let common = TalkConfigSnapshot(
+            talk, defaultProvider: defaultProvider, defaultSilenceTimeoutMs: defaultSilenceTimeoutMs)
+        let activeProvider = common.activeProvider
+        let activeConfig = common.providerConfig
         let ui = snapshot.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let voice = activeConfig?["voiceId"]?.stringValue
-        let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue
-        let resolvedAliases: [String: String] =
-            rawAliases?.reduce(into: [:]) { acc, entry in
-                let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard !key.isEmpty, !value.isEmpty else { return }
-                acc[key] = value
-            } ?? [:]
         let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel: String? = if model?.isEmpty == false {
             model!
@@ -52,8 +49,11 @@ enum TalkModeGatewayConfigParser {
             nil
         }
         let outputFormat = activeConfig?["outputFormat"]?.stringValue
-        let interrupt = talk?["interruptOnSpeech"]?.boolValue
         let apiKey = activeConfig?["apiKey"]?.stringValue
+        let referenceAudioPath = activeConfig?["referenceAudioPath"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let referenceText = activeConfig?["referenceText"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice: String? = if activeProvider == defaultProvider {
             (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -69,16 +69,13 @@ enum TalkModeGatewayConfigParser {
         }
 
         return TalkModeGatewayConfigState(
-            activeProvider: activeProvider,
-            normalizedPayload: selection?.normalizedPayload == true,
-            missingResolvedPayload: talk != nil && selection == nil,
+            snapshot: common,
             voiceId: resolvedVoice,
-            voiceAliases: resolvedAliases,
             modelId: resolvedModel,
             outputFormat: outputFormat,
-            interruptOnSpeech: interrupt ?? true,
-            silenceTimeoutMs: silenceTimeoutMs,
             apiKey: resolvedApiKey,
+            referenceAudioPath: referenceAudioPath?.isEmpty == false ? referenceAudioPath : nil,
+            referenceText: referenceText?.isEmpty == false ? referenceText : nil,
             seamColorHex: rawSeam.isEmpty ? nil : rawSeam)
     }
 
@@ -95,16 +92,14 @@ enum TalkModeGatewayConfigParser {
         let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
 
         return TalkModeGatewayConfigState(
-            activeProvider: "elevenlabs",
-            normalizedPayload: false,
-            missingResolvedPayload: false,
+            snapshot: TalkConfigSnapshot(
+                nil, defaultProvider: "elevenlabs", defaultSilenceTimeoutMs: defaultSilenceTimeoutMs),
             voiceId: resolvedVoice,
-            voiceAliases: [:],
             modelId: defaultModelIdFallback,
             outputFormat: nil,
-            interruptOnSpeech: true,
-            silenceTimeoutMs: defaultSilenceTimeoutMs,
             apiKey: resolvedApiKey,
+            referenceAudioPath: nil,
+            referenceText: nil,
             seamColorHex: nil)
     }
 }

@@ -1,9 +1,14 @@
-import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+/**
+ * Configured binding matching helpers.
+ *
+ * Matches compiled binding rules against inbound conversations and materializes targets.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingChannel,
@@ -14,6 +19,9 @@ import type {
   ChannelConfiguredBindingMatch,
 } from "./types.adapters.js";
 
+/**
+ * Ranks account pattern matches for configured binding rules.
+ */
 export function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -25,24 +33,17 @@ export function resolveAccountMatchPriority(match: string | undefined, actual: s
   return normalizeAccountId(trimmed) === actual ? 2 : 0;
 }
 
-function matchCompiledBindingConversation(params: {
-  rule: CompiledConfiguredBinding;
-  conversationId: string;
-  parentConversationId?: string;
-}): ChannelConfiguredBindingMatch | null {
-  return params.rule.provider.matchInboundConversation({
-    binding: params.rule.binding,
-    compiledBinding: params.rule.target,
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-}
-
+/**
+ * Normalizes a raw channel id into a configured-binding channel id.
+ */
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 
+/**
+ * Converts an outbound conversation ref into configured-binding match input.
+ */
 export function toConfiguredBindingConversationRef(conversation: ConversationRef): {
   channel: ConfiguredBindingChannel;
   accountId: string;
@@ -62,6 +63,9 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
   };
 }
 
+/**
+ * Materializes a configured binding record from the winning rule and conversation.
+ */
 export function materializeConfiguredBindingRecord(params: {
   rule: CompiledConfiguredBinding;
   accountId: string;
@@ -73,6 +77,9 @@ export function materializeConfiguredBindingRecord(params: {
   });
 }
 
+/**
+ * Resolves the best configured binding rule for a conversation.
+ */
 export function resolveMatchingConfiguredBinding(params: {
   rules: CompiledConfiguredBinding[];
   conversation: ReturnType<typeof toConfiguredBindingConversationRef>;
@@ -81,23 +88,24 @@ export function resolveMatchingConfiguredBinding(params: {
     return null;
   }
 
-  let wildcardMatch: {
-    rule: CompiledConfiguredBinding;
-    match: ChannelConfiguredBindingMatch;
-  } | null = null;
-  let exactMatch: { rule: CompiledConfiguredBinding; match: ChannelConfiguredBindingMatch } | null =
+  let bestMatch: { rule: CompiledConfiguredBinding; match: ChannelConfiguredBindingMatch } | null =
     null;
+  let bestAccountPriority = 0;
+  let bestMatchPriority = 0;
 
   for (const rule of params.rules) {
     const accountMatchPriority = resolveAccountMatchPriority(
       rule.accountPattern,
       params.conversation.accountId,
     );
+    // Exact account matches beat wildcard matches, but both still respect the
+    // provider's per-conversation match priority within that account tier.
     if (accountMatchPriority === 0) {
       continue;
     }
-    const match = matchCompiledBindingConversation({
-      rule,
+    const match = rule.provider.matchInboundConversation({
+      binding: rule.binding,
+      compiledBinding: rule.target,
       conversationId: params.conversation.conversationId,
       parentConversationId: params.conversation.parentConversationId,
     });
@@ -105,16 +113,16 @@ export function resolveMatchingConfiguredBinding(params: {
       continue;
     }
     const matchPriority = match.matchPriority ?? 0;
-    if (accountMatchPriority === 2) {
-      if (!exactMatch || matchPriority > (exactMatch.match.matchPriority ?? 0)) {
-        exactMatch = { rule, match };
-      }
-      continue;
-    }
-    if (!wildcardMatch || matchPriority > (wildcardMatch.match.matchPriority ?? 0)) {
-      wildcardMatch = { rule, match };
+    if (
+      !bestMatch ||
+      accountMatchPriority > bestAccountPriority ||
+      (accountMatchPriority === bestAccountPriority && matchPriority > bestMatchPriority)
+    ) {
+      bestMatch = { rule, match };
+      bestAccountPriority = accountMatchPriority;
+      bestMatchPriority = matchPriority;
     }
   }
 
-  return exactMatch ?? wildcardMatch;
+  return bestMatch;
 }

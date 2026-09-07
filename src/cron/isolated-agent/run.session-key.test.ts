@@ -1,3 +1,4 @@
+// Session key tests cover deterministic keys for isolated cron run sessions.
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -55,11 +56,5 @@ describe("resolveCronAgentSessionKey", () => {
         cfg,
       }),
     ).toBe("agent:ops:hook:webhook:42");
-  });
-
-  it("behaves unchanged when cfg is omitted (backward compat)", () => {
-    expect(resolveCronAgentSessionKey({ sessionKey: "main", agentId: "main" })).toBe(
-      "agent:main:main",
-    );
   });
 });

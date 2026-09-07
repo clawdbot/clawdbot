@@ -1,53 +1,49 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Command execution startup tests cover startup behavior before CLI command execution.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
-const ensureCliCommandBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: routeLogsToStderrMock,
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: routeLogsToStderrMock,
+  };
+});
+
+vi.mock("./program/config-guard.js", () => ({
+  ensureConfigReady: ensureConfigReadyMock,
 }));
 
-vi.mock("./command-bootstrap.js", () => ({
-  ensureCliCommandBootstrap: ensureCliCommandBootstrapMock,
+vi.mock("./plugin-registry-loader.js", () => ({
+  ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
 }));
 
 describe("command-execution-startup", () => {
   let mod: typeof import("./command-execution-startup.js");
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
   });
 
-  it("resolves startup context from argv and mode", () => {
-    expect(
-      mod.resolveCliExecutionStartupContext({
-        argv: ["node", "openclaw", "status", "--json"],
-        jsonOutputMode: true,
-        routeMode: true,
-      }),
-    ).toEqual({
-      invocation: {
-        argv: ["node", "openclaw", "status", "--json"],
-        commandPath: ["status"],
-        primary: "status",
-        hasHelpOrVersion: false,
-        isRootHelpInvocation: false,
-      },
-      commandPath: ["status"],
-      startupPolicy: {
-        suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: true,
-        loadPlugins: false,
-      },
-    });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/cli-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {
@@ -57,6 +53,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: false,
         loadPlugins: true,
+        pluginRegistry: { scope: "all" },
       },
       version: "1.2.3",
       argv: ["node", "openclaw", "status"],
@@ -73,12 +70,30 @@ describe("command-execution-startup", () => {
         hideBanner: true,
         skipConfigGuard: false,
         loadPlugins: true,
+        pluginRegistry: { scope: "all" },
       },
       version: "1.2.3",
       showBanner: true,
     });
 
     expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not emit the banner for JSON output", async () => {
+    await mod.applyCliExecutionStartupPresentation({
+      startupPolicy: {
+        suppressDoctorStdout: true,
+        hideBanner: false,
+        skipConfigGuard: false,
+        loadPlugins: false,
+        pluginRegistry: { scope: "channels" },
+      },
+      version: "1.2.3",
+      argv: ["node", "openclaw", "status", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
   it("forwards startup policy into bootstrap defaults and overrides", async () => {
@@ -89,19 +104,19 @@ describe("command-execution-startup", () => {
       startupPolicy: {
         suppressDoctorStdout: true,
         hideBanner: false,
-        skipConfigGuard: true,
+        skipConfigGuard: false,
         loadPlugins: false,
+        pluginRegistry: { scope: "channels" },
       },
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: statusRuntime,
       commandPath: ["status"],
+      measure: expect.any(Function),
       suppressDoctorStdout: true,
-      allowInvalid: undefined,
-      loadPlugins: false,
-      skipConfigGuard: true,
     });
+    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     const messageRuntime = {} as never;
     await mod.ensureCliExecutionBootstrap({
@@ -112,18 +127,25 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: false,
         loadPlugins: false,
+        pluginRegistry: { scope: "all" },
       },
       allowInvalid: true,
       loadPlugins: true,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
       runtime: messageRuntime,
       commandPath: ["message", "send"],
-      suppressDoctorStdout: false,
+      measure: expect.any(Function),
       allowInvalid: true,
-      loadPlugins: true,
-      skipConfigGuard: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: false,
     });
   });
 });

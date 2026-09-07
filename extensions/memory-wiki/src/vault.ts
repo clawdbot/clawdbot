@@ -1,13 +1,27 @@
+// Memory Wiki plugin module implements vault behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  activateMemoryWikiCompiledCacheOwner,
+  invalidateMemoryWikiCompiledCache,
+  isMemoryWikiCompiledCacheOwnerActive,
+  reconcileMemoryWikiCompiledCacheOwner,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { appendMemoryWikiLog } from "./log.js";
+import {
+  appendMemoryWikiLog,
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+} from "./log.js";
+import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 
-export const WIKI_VAULT_DIRECTORIES = [
+const WIKI_VAULT_DIRECTORIES = [
   "entities",
   "concepts",
   "syntheses",
@@ -16,11 +30,11 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
-  ".openclaw-wiki/locks",
-  ".openclaw-wiki/cache",
 ] as const;
 
-export type InitializeMemoryWikiVaultResult = {
+const WIKI_VAULT_SCAFFOLD = ["AGENTS.md", "WIKI.md", "index.md", ".openclaw-wiki/log.jsonl"];
+
+type InitializeMemoryWikiVaultResult = {
   rootDir: string;
   created: boolean;
   createdDirectories: string[];
@@ -47,7 +61,7 @@ function buildAgentsMarkdown(): string {
 - Preserve human notes outside managed markers.
 - Prefer source-backed claims over wiki-to-wiki citation loops.
 - Prefer structured \`claims\` with evidence over burying key beliefs only in prose.
-- Use \`.openclaw-wiki/cache/agent-digest.json\` and \`claims.jsonl\` for machine reads; markdown pages are the human view.
+- Use the wiki tools for machine reads; Markdown pages are the human view.
 `);
 }
 
@@ -63,8 +77,9 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 
 ## Architecture
 - Raw sources remain the evidence layer.
+- To keep unmanaged raw Markdown in \`sources/\`, add \`${WIKI_RAW_SOURCE_MARKER}\` near the top of the page.
 - Wiki pages are the human-readable synthesis layer.
-- \`.openclaw-wiki/cache/agent-digest.json\` is the agent-facing compiled digest.
+- Compiled query and prompt snapshots live in OpenClaw plugin state, not vault files.
 
 ## Notes
 <!-- openclaw:human:start -->
@@ -72,39 +87,47 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 `);
 }
 
-async function pathExists(inputPath: string): Promise<boolean> {
-  try {
-    await fs.access(inputPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function writeFileIfMissing(
-  filePath: string,
+  rootDir: string,
+  relativePath: string,
   content: string,
   createdFiles: string[],
 ): Promise<void> {
-  if (await pathExists(filePath)) {
-    return;
+  const root = await fsRoot(rootDir);
+  try {
+    await root.create(relativePath, content);
+  } catch (err) {
+    if (err instanceof FsSafeError && err.code === "already-exists") {
+      return;
+    }
+    throw err;
   }
-  await fs.writeFile(filePath, content, "utf8");
-  createdFiles.push(filePath);
+  createdFiles.push(path.join(rootDir, relativePath));
 }
 
 export async function initializeMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
-  options?: { nowMs?: number },
+  options?: { nowMs?: number; signal?: AbortSignal },
 ): Promise<InitializeMemoryWikiVaultResult> {
+  options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
   const createdDirectories: string[] = [];
   const createdFiles: string[] = [];
+  const rootCreated = !(await pathExists(rootDir));
 
-  if (!(await pathExists(rootDir))) {
+  if (rootCreated) {
     createdDirectories.push(rootDir);
   }
   await fs.mkdir(rootDir, { recursive: true });
+  const hadVaultScaffold = (
+    await Promise.all(
+      WIKI_VAULT_SCAFFOLD.map((relativePath) => pathExists(path.join(rootDir, relativePath))),
+    )
+  ).every(Boolean);
+  if (!hadVaultScaffold) {
+    // Missing scaffold means a new/recreated vault, even when its parent directory survived.
+    await invalidateMemoryWikiCompiledCache(config);
+  }
 
   for (const relativeDir of WIKI_VAULT_DIRECTORIES) {
     const fullPath = path.join(rootDir, relativeDir);
@@ -114,44 +137,33 @@ export async function initializeMemoryWikiVault(
     await fs.mkdir(fullPath, { recursive: true });
   }
 
-  await writeFileIfMissing(path.join(rootDir, "AGENTS.md"), buildAgentsMarkdown(), createdFiles);
+  await writeFileIfMissing(rootDir, "AGENTS.md", buildAgentsMarkdown(), createdFiles);
+  await writeFileIfMissing(rootDir, "WIKI.md", buildWikiOverviewMarkdown(config), createdFiles);
+  await writeFileIfMissing(rootDir, "index.md", buildIndexMarkdown(), createdFiles);
   await writeFileIfMissing(
-    path.join(rootDir, "WIKI.md"),
-    buildWikiOverviewMarkdown(config),
-    createdFiles,
-  );
-  await writeFileIfMissing(path.join(rootDir, "index.md"), buildIndexMarkdown(), createdFiles);
-  await writeFileIfMissing(
-    path.join(rootDir, "inbox.md"),
+    rootDir,
+    "inbox.md",
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
     createdFiles,
   );
-  await writeFileIfMissing(
-    path.join(rootDir, ".openclaw-wiki", "state.json"),
-    withTrailingNewline(
-      JSON.stringify(
-        {
-          version: 1,
-          createdAt: new Date(options?.nowMs ?? Date.now()).toISOString(),
-          renderMode: config.vault.renderMode,
-        },
-        null,
-        2,
-      ),
-    ),
-    createdFiles,
-  );
-  await writeFileIfMissing(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", createdFiles);
+  await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);
 
   if (createdDirectories.length > 0 || createdFiles.length > 0) {
     await appendMemoryWikiLog(rootDir, {
       type: "init",
-      timestamp: new Date(options?.nowMs ?? Date.now()).toISOString(),
+      timestamp: resolveMemoryWikiTimestamp(options?.nowMs),
       details: {
         createdDirectories: createdDirectories.map((dir) => path.relative(rootDir, dir) || "."),
         createdFiles: createdFiles.map((file) => path.relative(rootDir, file)),
       },
     });
+  }
+  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
+  options?.signal?.throwIfAborted();
+  // Ordinary requests reuse the reconciled owner. Cold activation and explicit
+  // lifecycle refresh validate source hashes; scaffold/generation replacement retires it.
+  if (!isMemoryWikiCompiledCacheOwnerActive(config, vaultGeneration)) {
+    await activateExistingMemoryWikiVault(config, options?.signal);
   }
 
   return {
@@ -160,4 +172,30 @@ export async function initializeMemoryWikiVault(
     createdDirectories,
     createdFiles,
   };
+}
+
+export async function activateExistingMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const rootDir = config.vault.path;
+  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+  if (!identity.vaultGeneration) {
+    throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
+  }
+  signal?.throwIfAborted();
+  const needsReconcile = activateMemoryWikiCompiledCacheOwner(
+    config,
+    identity.vaultGeneration,
+    identity.compiledCachePublicationId,
+  );
+  // Repeated request setup must retain the loaded publication. Reconciliation
+  // runs again only when its path, generation, or publication identity changes.
+  if (needsReconcile) {
+    await reconcileMemoryWikiCompiledCacheOwner(config, () =>
+      loadMemoryWikiValidatedVaultIdentity(rootDir),
+    );
+  }
+  signal?.throwIfAborted();
 }

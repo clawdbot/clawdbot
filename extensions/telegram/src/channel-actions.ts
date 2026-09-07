@@ -1,7 +1,7 @@
 import {
-  createMessageToolButtonsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
+  readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -10,26 +10,26 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   createTelegramActionGate,
-  listEnabledTelegramAccounts,
-  resolveTelegramAccount,
+  listTelegramAccountIds,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
+import {
+  createTelegramPollExtraToolSchemas,
+  createTelegramReactionEmojiSchema,
+  createTelegramRichSendExtraToolSchemas,
+} from "./message-tool-schema.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
-let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
+const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
-async function loadTelegramActionRuntime() {
-  telegramActionRuntimePromise ??= import("./action-runtime.js");
-  return await telegramActionRuntimePromise;
-}
-
-export const telegramMessageActionRuntime = {
+const telegramMessageActionRuntime = {
   handleTelegramAction: async (
     ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
   ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> => {
@@ -41,6 +41,7 @@ export const telegramMessageActionRuntime = {
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
   edit: "editMessage",
+  "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
   send: "sendMessage",
@@ -50,12 +51,65 @@ const TELEGRAM_MESSAGE_ACTION_MAP = {
   "topic-edit": "editForumTopic",
 } as const satisfies Partial<Record<ChannelMessageActionName, string>>;
 
+const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
+  "createForumTopic",
+  "delete",
+  "deleteMessage",
+  "edit",
+  "editForumTopic",
+  "editMessage",
+  "poll",
+  "react",
+  "send",
+  "sendMessage",
+  "sendSticker",
+  "sticker",
+  "topic-create",
+  "topic-edit",
+]);
+
 function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
 }
 
-function resolveTelegramActionDiscovery(cfg: Parameters<typeof listEnabledTelegramAccounts>[0]) {
-  const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
+async function prepareTelegramSendPayload({
+  ctx,
+  payload,
+}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  rejectTelegramNativeButtonParams(ctx.params);
+  if (
+    ctx.action !== "send" ||
+    (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+  ) {
+    return null;
+  }
+  const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
+  if (!quoteText) {
+    return payload;
+  }
+  const rawTelegramData = payload.channelData?.telegram;
+  const telegramData = asNonArrayRecord(rawTelegramData);
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      telegram: { ...telegramData, quoteText },
+    },
+  };
+}
+
+function resolveTelegramActionDiscovery({
+  cfg,
+  accountId,
+}: {
+  cfg: Parameters<typeof listTelegramAccountIds>[0];
+  accountId?: string | null;
+}) {
+  const accountIds = accountId ? [accountId] : listTelegramAccountIds(cfg);
+  const inspected = accountIds
+    .map((id) => inspectTelegramAccount({ cfg, accountId: id }))
+    .filter((account) => account.enabled && account.configured);
+  const accounts = listTokenSourcedAccounts(inspected);
   if (accounts.length === 0) {
     return null;
   }
@@ -76,35 +130,9 @@ function resolveTelegramActionDiscovery(cfg: Parameters<typeof listEnabledTelegr
     isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
   );
   return {
-    isEnabled: (key: keyof TelegramActionConfig, defaultValue = true) =>
-      unionGate(key, defaultValue),
+    isEnabled: unionGate,
     pollEnabled,
     buttonsEnabled,
-  };
-}
-
-function resolveScopedTelegramActionDiscovery(params: {
-  cfg: Parameters<typeof listEnabledTelegramAccounts>[0];
-  accountId?: string | null;
-}) {
-  if (!params.accountId) {
-    return resolveTelegramActionDiscovery(params.cfg);
-  }
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || account.tokenSource === "none") {
-    return null;
-  }
-  const gate = createTelegramActionGate({
-    cfg: params.cfg,
-    accountId: account.accountId,
-  });
-  return {
-    isEnabled: (key: keyof TelegramActionConfig, defaultValue = true) => gate(key, defaultValue),
-    pollEnabled: resolveTelegramPollActionGateState(gate).enabled,
-    buttonsEnabled: isTelegramInlineButtonsEnabled({
-      cfg: params.cfg,
-      accountId: account.accountId,
-    }),
   };
 }
 
@@ -114,7 +142,7 @@ function describeTelegramMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveScopedTelegramActionDiscovery({ cfg, accountId });
+  const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
@@ -122,12 +150,16 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const actions = new Set<ChannelMessageActionName>();
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("send");
+  }
   if (discovery.pollEnabled) {
     actions.add("poll");
   }
   if (discovery.isEnabled("reactions")) {
     actions.add("react");
+    actions.add("emoji-list");
   }
   if (discovery.isEnabled("deleteMessage")) {
     actions.add("delete");
@@ -146,28 +178,43 @@ function describeTelegramMessageTool({
     actions.add("topic-edit");
   }
   const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (discovery.buttonsEnabled) {
-    schema.push({
-      properties: {
-        buttons: createMessageToolButtonsSchema(),
-      },
-    });
-  }
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
       visibility: "all-configured",
     });
   }
+  if (discovery.isEnabled("reactions")) {
+    schema.push({
+      properties: createTelegramReactionEmojiSchema(),
+      // The shared emoji parameter keeps react valid across channels; this
+      // contribution only adds Telegram-specific guidance for that parameter.
+      actions: [],
+    });
+  }
+  if (discovery.isEnabled("sendMessage")) {
+    schema.push({
+      properties: createTelegramRichSendExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
   return {
     actions: Array.from(actions),
-    capabilities: discovery.buttonsEnabled ? ["interactive", "buttons"] : [],
+    capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
     schema,
   };
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
+  resolveExecutionMode: () => "gateway",
+  messageActionTargetAliases: {
+    react: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
+  },
+  prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };
@@ -184,24 +231,70 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
+  isToolDeliveryAction: ({ args }) =>
+    typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
+  handleAction: async ({
+    action,
+    params,
+    reply,
+    cfg,
+    accountId,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+    sessionKey,
+    inboundEventKind,
+    toolContext,
+    conversationReadOrigin,
+    requesterAccountId,
+    gatewayClientScopes,
+    deliveryRetryOwner,
+    onPlatformSendDispatch,
+    assertDirectAdapterHandoff,
+    skipQueue,
+  }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
     }
+    const {
+      conversationReadOrigin: _modelConversationReadOrigin,
+      mediaAccess: _modelMediaAccess,
+      requesterAccountId: _modelRequesterAccountId,
+      reply: _modelReply,
+      toolContext: _modelToolContext,
+      ...runtimeParams
+    } = params;
     return await telegramMessageActionRuntime.handleTelegramAction(
       {
-        ...params,
+        // Authority stays in the host-owned options object below. Model tool
+        // arguments with these names must never reach the runtime as context.
+        ...runtimeParams,
         action: telegramAction,
         accountId: accountId ?? undefined,
         ...(action === "react"
           ? {
-              messageId: resolveReactionMessageId({ args: params, toolContext }),
+              messageId: resolveReactionMessageId({ args: runtimeParams, toolContext }),
             }
           : {}),
       },
       cfg,
-      { mediaLocalRoots },
+      {
+        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
+        mediaLocalRoots,
+        mediaReadFile,
+        sessionKey,
+        inboundEventKind,
+        gatewayClientScopes,
+        deliveryRetryOwner,
+        onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
+        skipQueue,
+        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+        ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(reply ? { reply } : {}),
+        ...(toolContext ? { toolContext } : {}),
+      },
     );
   },
 };

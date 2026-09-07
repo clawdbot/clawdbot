@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tag Duplicate PRs and Issues"
+  short_description: "Find duplicate PRs and issues with gitcrawl, group them in prtags, and let prtags sync the GitHub comment"
+  default_prompt: "Use $tag-duplicate-prs-issues to decide whether an OpenClaw PR or issue is a duplicate, gather candidates with gitcrawl, verify live state with GitHub, group related items in prtags, and save the duplicate judgment."

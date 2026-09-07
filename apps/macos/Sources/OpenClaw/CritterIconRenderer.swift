@@ -18,89 +18,102 @@ enum CritterIconRenderer {
         let context: CGContext
     }
 
+    private struct Antenna {
+        let start: CGPoint
+        let control: CGPoint
+        let tip: CGPoint
+    }
+
     private struct Geometry {
         let bodyRect: CGRect
-        let bodyCorner: CGFloat
-        let leftEarRect: CGRect
-        let rightEarRect: CGRect
-        let earCorner: CGFloat
-        let earW: CGFloat
-        let earH: CGFloat
+        let armRadius: CGFloat
+        let leftArmCenter: CGPoint
+        let rightArmCenter: CGPoint
+        let antennaLineWidth: CGFloat
+        let leftAntenna: Antenna
+        let rightAntenna: Antenna
         let legW: CGFloat
         let legH: CGFloat
-        let legSpacing: CGFloat
-        let legStartX: CGFloat
+        let legCenters: [CGFloat]
         let legYBase: CGFloat
         let legLift: CGFloat
-        let legHeightScale: CGFloat
-        let eyeW: CGFloat
+        let eyeSize: CGSize
         let eyeY: CGFloat
         let eyeOffset: CGFloat
 
-        init(canvas: Canvas, legWiggle: CGFloat, earWiggle: CGFloat, earScale: CGFloat) {
+        init(canvas: Canvas, legWiggle: CGFloat, earWiggle: CGFloat, earScale: CGFloat, antennaDroop: CGFloat) {
             let w = canvas.w
             let h = canvas.h
-            let snapX = canvas.snapX
-            let snapY = canvas.snapY
+            let cx = w / 2
 
-            let bodyW = snapX(w * 0.78)
-            let bodyH = snapY(h * 0.58)
-            let bodyX = snapX((w - bodyW) / 2)
-            let bodyY = snapY(h * 0.36)
-            let bodyCorner = snapX(w * 0.09)
+            // Chubby near-circular body: the mascot's dominant shape must survive 18pt.
+            let bodyW = w * 0.72
+            let bodyH = h * 0.66
+            let bodyX = (w - bodyW) / 2
+            let bodyY = h * 0.19
+            let bodyTop = bodyY + bodyH
 
-            let earW = snapX(w * 0.22)
-            let earH = snapY(bodyH * 0.54 * earScale * (1 - 0.08 * abs(earWiggle)))
-            let earCorner = snapX(earW * 0.24)
-            let leftEarRect = CGRect(
-                x: snapX(bodyX - earW * 0.55 + earWiggle),
-                y: snapY(bodyY + bodyH * 0.08 + earWiggle * 0.4),
-                width: earW,
-                height: earH)
-            let rightEarRect = CGRect(
-                x: snapX(bodyX + bodyW - earW * 0.45 - earWiggle),
-                y: snapY(bodyY + bodyH * 0.08 - earWiggle * 0.4),
-                width: earW,
-                height: earH)
+            // Round arm nubs poking out at the sides, slightly below center like the mascot.
+            let armRadius = w * 0.10
+            let armY = bodyY + bodyH * 0.42
+            self.armRadius = armRadius
+            self.leftArmCenter = CGPoint(x: bodyX + armRadius * 0.1, y: armY)
+            self.rightArmCenter = CGPoint(x: bodyX + bodyW - armRadius * 0.1, y: armY)
 
-            let legW = snapX(w * 0.11)
-            let legH = snapY(h * 0.26)
-            let legSpacing = snapX(w * 0.085)
-            let legsWidth = snapX(4 * legW + 3 * legSpacing)
-            let legStartX = snapX((w - legsWidth) / 2)
-            let legLift = snapY(legH * 0.35 * legWiggle)
-            let legYBase = snapY(bodyY - legH + h * 0.05)
-            let legHeightScale = 1 - 0.12 * legWiggle
+            // Stubby antennae curling outward; droop folds them down when asleep/paused.
+            // Voice-wake earScale straightens and lengthens them instead of growing horns.
+            let antennaLineWidth = w * 0.115
+            let reach = 1 + (min(earScale, 1.9) - 1) * 0.6
+            let wiggleShift = earWiggle * 0.28
 
-            let eyeW = snapX(bodyW * 0.2)
-            let eyeY = snapY(bodyY + bodyH * 0.56)
-            let eyeOffset = snapX(bodyW * 0.24)
+            func antenna(side: CGFloat) -> Antenna {
+                let start = CGPoint(x: cx + side * bodyW * 0.16, y: bodyTop - antennaLineWidth * 0.9)
+                // Idle tips sit below the canvas clamp so the voice-wake reach has
+                // real headroom; boosted antennae go taller AND steeper (x pulls
+                // inward) or the perk would be invisible at 18pt.
+                let upTip = CGPoint(
+                    x: cx + side * bodyW * (0.40 - 0.20 * (reach - 1)) + side * wiggleShift,
+                    y: min(bodyTop + h * 0.06 * reach + earWiggle * 0.2 * side, h - antennaLineWidth * 0.55))
+                let upControl = CGPoint(
+                    x: cx + side * bodyW * 0.22,
+                    y: bodyTop + h * 0.075 * reach)
+                let downTip = CGPoint(x: cx + side * bodyW * 0.52, y: bodyTop - h * 0.13)
+                let downControl = CGPoint(x: cx + side * bodyW * 0.38, y: bodyTop + h * 0.04)
+                let tip = CGPoint(
+                    x: upTip.x + (downTip.x - upTip.x) * antennaDroop,
+                    y: upTip.y + (downTip.y - upTip.y) * antennaDroop)
+                let control = CGPoint(
+                    x: upControl.x + (downControl.x - upControl.x) * antennaDroop,
+                    y: upControl.y + (downControl.y - upControl.y) * antennaDroop)
+                return Antenna(start: start, control: control, tip: tip)
+            }
+            self.leftAntenna = antenna(side: -1)
+            self.rightAntenna = antenna(side: 1)
+            self.antennaLineWidth = antennaLineWidth
 
-            self.bodyRect = CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH)
-            self.bodyCorner = bodyCorner
-            self.leftEarRect = leftEarRect
-            self.rightEarRect = rightEarRect
-            self.earCorner = earCorner
-            self.earW = earW
-            self.earH = earH
+            // Stubby legs tucked under the body; they must overlap the body so the
+            // silhouette stays connected at menu bar size.
+            let legW = w * 0.14
+            let legH = h * 0.18
             self.legW = legW
             self.legH = legH
-            self.legSpacing = legSpacing
-            self.legStartX = legStartX
-            self.legYBase = legYBase
-            self.legLift = legLift
-            self.legHeightScale = legHeightScale
-            self.eyeW = eyeW
-            self.eyeY = eyeY
-            self.eyeOffset = eyeOffset
+            self.legCenters = [cx - w * 0.13, cx + w * 0.13]
+            self.legYBase = bodyY - legH * 0.5
+            self.legLift = legH * 0.35 * legWiggle
+
+            // Big friendly eyes just above center.
+            self.eyeSize = CGSize(width: bodyW * 0.22, height: bodyH * 0.26)
+            self.eyeY = bodyY + bodyH * 0.58
+            self.eyeOffset = bodyW * 0.22
+
+            self.bodyRect = CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH)
         }
     }
 
     private struct FaceOptions {
         let blink: CGFloat
-        let earHoles: Bool
-        let earScale: CGFloat
         let eyesClosedLines: Bool
+        let happyEyes: Bool
     }
 
     static func makeIcon(
@@ -108,8 +121,9 @@ enum CritterIconRenderer {
         legWiggle: CGFloat = 0,
         earWiggle: CGFloat = 0,
         earScale: CGFloat = 1,
-        earHoles: Bool = false,
+        antennaDroop: CGFloat = 0,
         eyesClosedLines: Bool = false,
+        happyEyes: Bool = false,
         badge: Badge? = nil) -> NSImage
     {
         guard let rep = self.makeBitmapRep() else {
@@ -125,17 +139,21 @@ enum CritterIconRenderer {
         }
         NSGraphicsContext.current = context
         context.imageInterpolation = .none
-        context.cgContext.setShouldAntialias(false)
+        context.cgContext.setShouldAntialias(true)
 
         let canvas = self.makeCanvas(for: rep, context: context)
-        let geometry = Geometry(canvas: canvas, legWiggle: legWiggle, earWiggle: earWiggle, earScale: earScale)
+        let geometry = Geometry(
+            canvas: canvas,
+            legWiggle: legWiggle,
+            earWiggle: earWiggle,
+            earScale: earScale,
+            antennaDroop: antennaDroop)
 
         self.drawBody(in: canvas, geometry: geometry)
         let face = FaceOptions(
             blink: blink,
-            earHoles: earHoles,
-            earScale: earScale,
-            eyesClosedLines: eyesClosedLines)
+            eyesClosedLines: eyesClosedLines,
+            happyEyes: happyEyes)
         self.drawFace(in: canvas, geometry: geometry, options: face)
 
         if let badge {
@@ -186,39 +204,48 @@ enum CritterIconRenderer {
     }
 
     private static func drawBody(in canvas: Canvas, geometry: Geometry) {
-        canvas.context.setFillColor(NSColor.labelColor.cgColor)
+        let ctx = canvas.context
 
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.bodyRect,
-            cornerWidth: geometry.bodyCorner,
-            cornerHeight: geometry.bodyCorner,
-            transform: nil))
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.leftEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.rightEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
+        // Antennae first so the body fill covers their roots.
+        ctx.setStrokeColor(NSColor.labelColor.cgColor)
+        ctx.setLineWidth(geometry.antennaLineWidth)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
 
-        for i in 0..<4 {
-            let x = geometry.legStartX + CGFloat(i) * (geometry.legW + geometry.legSpacing)
+        let antennae = CGMutablePath()
+        for antenna in [geometry.leftAntenna, geometry.rightAntenna] {
+            antennae.move(to: antenna.start)
+            antennae.addQuadCurve(to: antenna.tip, control: antenna.control)
+        }
+        ctx.addPath(antennae)
+        ctx.strokePath()
+
+        ctx.setFillColor(NSColor.labelColor.cgColor)
+
+        for (i, legCenter) in geometry.legCenters.enumerated() {
             let lift = i % 2 == 0 ? geometry.legLift : -geometry.legLift
             let rect = CGRect(
-                x: x,
+                x: legCenter - geometry.legW / 2,
                 y: geometry.legYBase + lift,
                 width: geometry.legW,
-                height: geometry.legH * geometry.legHeightScale)
-            canvas.context.addPath(CGPath(
+                height: geometry.legH)
+            ctx.addPath(CGPath(
                 roundedRect: rect,
-                cornerWidth: geometry.legW * 0.34,
-                cornerHeight: geometry.legW * 0.34,
+                cornerWidth: geometry.legW / 2,
+                cornerHeight: geometry.legW / 2,
                 transform: nil))
         }
-        canvas.context.fillPath()
+
+        for center in [geometry.leftArmCenter, geometry.rightArmCenter] {
+            ctx.addEllipse(in: CGRect(
+                x: center.x - geometry.armRadius,
+                y: center.y - geometry.armRadius,
+                width: geometry.armRadius * 2,
+                height: geometry.armRadius * 2))
+        }
+
+        ctx.addEllipse(in: geometry.bodyRect)
+        ctx.fillPath()
     }
 
     private static func drawFace(
@@ -226,101 +253,67 @@ enum CritterIconRenderer {
         geometry: Geometry,
         options: FaceOptions)
     {
-        canvas.context.saveGState()
-        canvas.context.setBlendMode(.clear)
+        let ctx = canvas.context
+        let leftCenter = CGPoint(x: canvas.w / 2 - geometry.eyeOffset, y: geometry.eyeY)
+        let rightCenter = CGPoint(x: canvas.w / 2 + geometry.eyeOffset, y: geometry.eyeY)
 
-        let leftCenter = CGPoint(
-            x: canvas.snapX(canvas.w / 2 - geometry.eyeOffset),
-            y: canvas.snapY(geometry.eyeY))
-        let rightCenter = CGPoint(
-            x: canvas.snapX(canvas.w / 2 + geometry.eyeOffset),
-            y: canvas.snapY(geometry.eyeY))
+        ctx.saveGState()
+        ctx.setBlendMode(.clear)
 
-        if options.earHoles || options.earScale > 1.05 {
-            let holeW = canvas.snapX(geometry.earW * 0.6)
-            let holeH = canvas.snapY(geometry.earH * 0.46)
-            let holeCorner = canvas.snapX(holeW * 0.34)
-            let leftHoleRect = CGRect(
-                x: canvas.snapX(geometry.leftEarRect.midX - holeW / 2),
-                y: canvas.snapY(geometry.leftEarRect.midY - holeH / 2 + geometry.earH * 0.04),
-                width: holeW,
-                height: holeH)
-            let rightHoleRect = CGRect(
-                x: canvas.snapX(geometry.rightEarRect.midX - holeW / 2),
-                y: canvas.snapY(geometry.rightEarRect.midY - holeH / 2 + geometry.earH * 0.04),
-                width: holeW,
-                height: holeH)
-
-            canvas.context.addPath(CGPath(
-                roundedRect: leftHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
-            canvas.context.addPath(CGPath(
-                roundedRect: rightHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
+        if options.happyEyes || options.eyesClosedLines {
+            // Curved lids: happy "∩ ∩" for celebrations, sleepy "⌣ ⌣" while dozing.
+            let radius = geometry.eyeSize.width * 0.62
+            let lineWidth = max(canvas.stepY * 2, geometry.eyeSize.height * 0.34)
+            ctx.setLineWidth(lineWidth)
+            ctx.setLineCap(.round)
+            for center in [leftCenter, rightCenter] {
+                let arcCenter = CGPoint(
+                    x: center.x,
+                    y: center.y + (options.happyEyes ? -radius * 0.4 : radius * 0.55))
+                let path = CGMutablePath()
+                // Counterclockwise sweeps the short arc in this y-up context:
+                // top half for "∩", bottom half for "⌣".
+                path.addArc(
+                    center: arcCenter,
+                    radius: radius,
+                    startAngle: options.happyEyes ? .pi * 0.12 : .pi * 1.12,
+                    endAngle: options.happyEyes ? .pi * 0.88 : .pi * 1.88,
+                    clockwise: false)
+                ctx.addPath(path)
+            }
+            ctx.replacePathWithStrokedPath()
+            ctx.fillPath()
+            ctx.restoreGState()
+            return
         }
 
-        if options.eyesClosedLines {
-            let lineW = canvas.snapX(geometry.eyeW * 0.95)
-            let lineH = canvas.snapY(max(canvas.stepY * 2, geometry.bodyRect.height * 0.06))
-            let corner = canvas.snapX(lineH * 0.6)
-            let leftRect = CGRect(
-                x: canvas.snapX(leftCenter.x - lineW / 2),
-                y: canvas.snapY(leftCenter.y - lineH / 2),
-                width: lineW,
-                height: lineH)
-            let rightRect = CGRect(
-                x: canvas.snapX(rightCenter.x - lineW / 2),
-                y: canvas.snapY(rightCenter.y - lineH / 2),
-                width: lineW,
-                height: lineH)
-            canvas.context.addPath(CGPath(
-                roundedRect: leftRect,
-                cornerWidth: corner,
-                cornerHeight: corner,
-                transform: nil))
-            canvas.context.addPath(CGPath(
-                roundedRect: rightRect,
-                cornerWidth: corner,
-                cornerHeight: corner,
-                transform: nil))
-        } else {
-            let eyeOpen = max(0.05, 1 - options.blink)
-            let eyeH = canvas.snapY(geometry.bodyRect.height * 0.26 * eyeOpen)
-
-            let left = CGMutablePath()
-            left.move(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y - eyeH)))
-            left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y)))
-            left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y + eyeH)))
-            left.closeSubpath()
-
-            let right = CGMutablePath()
-            right.move(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y - eyeH)))
-            right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y)))
-            right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y + eyeH)))
-            right.closeSubpath()
-
-            canvas.context.addPath(left)
-            canvas.context.addPath(right)
+        // Blink squeezes the eye toward a soft line so the face never vanishes mid-blink.
+        let eyeOpen = max(0.22, 1 - options.blink)
+        let eyeH = geometry.eyeSize.height * eyeOpen
+        for center in [leftCenter, rightCenter] {
+            ctx.addEllipse(in: CGRect(
+                x: center.x - geometry.eyeSize.width / 2,
+                y: center.y - eyeH / 2,
+                width: geometry.eyeSize.width,
+                height: eyeH))
         }
+        ctx.fillPath()
+        ctx.restoreGState()
 
-        canvas.context.fillPath()
-        canvas.context.restoreGState()
+        // Glossy glint inside each open eye, echoing the mascot's shiny pupils.
+        // Skipped while blinking: a dot inside a near-closed lid reads as noise.
+        if eyeH > geometry.eyeSize.height * 0.7 {
+            let glintR = geometry.eyeSize.width * 0.26
+            ctx.setFillColor(NSColor.labelColor.cgColor)
+            for center in [leftCenter, rightCenter] {
+                ctx.addEllipse(in: CGRect(
+                    x: center.x - geometry.eyeSize.width * 0.22 - glintR,
+                    y: center.y + geometry.eyeSize.height * 0.18 - glintR,
+                    width: glintR * 2,
+                    height: glintR * 2))
+            }
+            ctx.fillPath()
+        }
     }
 
     private static func drawBadge(_ badge: Badge, canvas: Canvas) {
@@ -330,12 +323,11 @@ enum CritterIconRenderer {
         case .overridden: 0.85
         }
 
-        // Bigger, higher-contrast badge:
-        // - Increase diameter so tool activity is noticeable.
-        // - Draw a filled "puck", then knock out the symbol shape (transparent hole).
-        //   This reads better in template-rendered menu bar icons than tiny monochrome glyphs.
-        let diameter = canvas.snapX(canvas.w * 0.52 * (0.92 + 0.08 * strength)) // ~9–10pt on an 18pt canvas
-        let margin = canvas.snapX(max(0.45, canvas.w * 0.03))
+        // Filled "puck" with the symbol knocked out (transparent hole): reads better
+        // in template-rendered menu bar icons than tiny monochrome glyphs. Sized so
+        // the critter behind it stays recognizable.
+        let diameter = canvas.snapX(canvas.w * 0.46 * (0.92 + 0.08 * strength))
+        let margin = canvas.snapX(max(0.45, canvas.w * 0.02))
         let rect = CGRect(
             x: canvas.snapX(canvas.w - diameter - margin),
             y: canvas.snapY(margin),

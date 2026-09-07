@@ -1,7 +1,9 @@
+// Assertion helpers for command execution tests and captured output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 
+// macOS exposes /tmp through /private/var; normalize both spellings for assertions.
 function normalizeDarwinTmpPath(filePath: string): string {
   return process.platform === "darwin" && filePath.startsWith("/private/var/")
     ? filePath.slice("/private".length)
@@ -17,6 +19,7 @@ function canonicalizeComparableDir(dirPath: string): string {
   }
 }
 
+/** Verifies secure npm install staging uses ignore-scripts and the expected target parent. */
 export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   calls: Array<[unknown, { cwd?: string } | undefined]>;
   expectedTargetDir: string;
@@ -28,7 +31,7 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     throw new Error("expected npm install call");
   }
   const [argv, opts] = first;
-  expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
+  expect(argv).toEqual(["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"]);
   expect(opts?.cwd).toBeTruthy();
   const cwd = String(opts?.cwd);
   const expectedTargetDir = params.expectedTargetDir;
@@ -36,22 +39,4 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     canonicalizeComparableDir(path.dirname(expectedTargetDir)),
   );
   expect(path.basename(cwd)).toMatch(/^\.openclaw-install-stage-/);
-}
-
-export function expectSingleNpmPackIgnoreScriptsCall(params: {
-  calls: Array<[unknown, unknown]>;
-  expectedSpec: string;
-}) {
-  const packCalls = params.calls.filter(
-    (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "pack",
-  );
-  expect(packCalls.length).toBe(1);
-  const packCall = packCalls[0];
-  if (!packCall) {
-    throw new Error("expected npm pack call");
-  }
-  const [argv, options] = packCall;
-  expect(argv).toEqual(["npm", "pack", params.expectedSpec, "--ignore-scripts", "--json"]);
-  const commandOptions = typeof options === "number" ? undefined : options;
-  expect(commandOptions).toMatchObject({ env: { NPM_CONFIG_IGNORE_SCRIPTS: "true" } });
 }

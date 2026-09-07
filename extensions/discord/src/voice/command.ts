@@ -1,31 +1,42 @@
-import {
-  ChannelType as CarbonChannelType,
-  Command,
-  CommandWithSubcommands,
-  type CommandInteraction,
-  type CommandOptions,
-} from "@buape/carbon";
+// Discord plugin module implements command behavior.
 import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
+import {
+  Command,
+  CommandWithSubcommands,
+  type CommandInteraction,
+  type CommandOptions,
+} from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
-import { normalizeDiscordSlug } from "../monitor/allow-list.js";
-import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
+import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
+import {
+  createDiscordLivePolicyReader,
+  type DiscordLivePolicyReader,
+} from "../monitor/live-policy.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
-import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
+import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
-import type { DiscordVoiceManager } from "./manager.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
   DiscordChannelType.GuildVoice,
   DiscordChannelType.GuildStageVoice,
 ];
 
+export const DISCORD_VOICE_COMMAND_SPEC = {
+  name: "vc",
+  description: "Voice channel controls",
+  acceptsArgs: false,
+} satisfies NativeCommandSpec;
+
 type VoiceCommandContext = {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
@@ -62,61 +73,41 @@ async function authorizeVoiceCommand(
   }
 
   const channelId = channelOverride?.id ?? channel?.id ?? "";
-  const rawChannelName =
-    channelOverride?.name ?? (channel && "name" in channel ? (channel.name as string) : undefined);
-  const rawParentId =
-    channelOverride?.parentId ??
-    ("parentId" in (channel ?? {})
-      ? ((channel as { parentId?: string }).parentId ?? undefined)
-      : undefined);
-  const channelInfo = channelId
-    ? await resolveDiscordChannelInfo(interaction.client, channelId)
-    : null;
-  const channelName = rawChannelName ?? channelInfo?.name;
-  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const isThreadChannel =
-    channelInfo?.type === CarbonChannelType.PublicThread ||
-    channelInfo?.type === CarbonChannelType.PrivateThread ||
-    channelInfo?.type === CarbonChannelType.AnnouncementThread;
-  let parentId: string | undefined;
-  let parentName: string | undefined;
-  let parentSlug: string | undefined;
-  if (isThreadChannel && channelId) {
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: interaction.client,
-      threadChannel: {
-        id: channelId,
-        name: channelName,
-        parentId: rawParentId ?? channelInfo?.parentId,
-        parent: undefined,
-      },
-      channelInfo,
-    });
-    parentId = parentInfo.id;
-    parentName = parentInfo.name;
-    parentSlug = parentName ? normalizeDiscordSlug(parentName) : undefined;
-  }
+  const channelContext = await resolveDiscordThreadLikeChannelContext({
+    client: interaction.client,
+    channel: channelOverride ?? channel,
+    channelIdFallback: channelId,
+  });
+  const channelName = channelOverride?.name ?? channelContext.channelName;
 
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
+  const policy = await params.readPolicy?.();
+  if (policy?.isCurrent() === false) {
+    return { ok: false, message: "Access policy changed. Try this interaction again." };
+  }
+  const currentParams = { ...params, ...policy };
+  const voiceAccess = resolveDiscordVoiceAccess(currentParams);
   const access = await authorizeDiscordVoiceIngress({
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    groupPolicy: params.groupPolicy,
-    useAccessGroups: params.useAccessGroups,
+    cfg: currentParams.cfg,
+    discordConfig: currentParams.discordConfig,
+    accountId: currentParams.accountId,
+    groupPolicy: currentParams.groupPolicy,
+    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,
     channelName,
-    channelSlug,
-    parentId,
-    parentName,
-    parentSlug,
-    scope: isThreadChannel ? "thread" : "channel",
+    channelSlug: channelContext.channelSlug,
+    parentId: channelOverride?.parentId ?? channelContext.threadParentId,
+    parentName: channelContext.threadParentName,
+    parentSlug: channelContext.threadParentSlug,
+    scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
+    admissionAllowFrom: voiceAccess.admissionAllowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -171,16 +162,31 @@ async function ensureVoiceCommandAccess(params: {
   return false;
 }
 
-export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandWithSubcommands {
+export function createDiscordVoiceCommand(
+  startupParams: VoiceCommandContext,
+): CommandWithSubcommands {
+  const params = {
+    ...startupParams,
+    readPolicy:
+      startupParams.readPolicy ??
+      createDiscordLivePolicyReader({
+        ...startupParams,
+        discordConfig: { ...startupParams.discordConfig, groupPolicy: startupParams.groupPolicy },
+        resolvedAllowlist: {
+          guildEntries: startupParams.discordConfig.guilds,
+          allowFrom: startupParams.discordConfig.allowFrom,
+        },
+      }),
+  };
   const resolveSessionChannelId = (manager: DiscordVoiceManager, guildId: string) =>
     manager.status().find((entry) => entry.guildId === guildId)?.channelId;
 
   class JoinCommand extends Command {
-    name = "join";
-    description = "Join a voice channel";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
-    options: CommandOptions = [
+    override name = "join";
+    override description = "Join a voice channel";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
+    override options: CommandOptions = [
       {
         name: "channel",
         description: "Voice channel to join",
@@ -200,11 +206,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
       const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: {
           id: channel.id,
-          name: "name" in channel ? (channel.name as string) : undefined,
-          parentId:
-            "parentId" in channel
-              ? ((channel as { parentId?: string }).parentId ?? undefined)
-              : undefined,
+          name: resolveDiscordChannelNameSafe(channel),
         },
       });
       if (!access.ok) {
@@ -239,10 +241,10 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class LeaveCommand extends Command {
-    name = "leave";
-    description = "Leave the current voice channel";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
+    override name = "leave";
+    override description = "Leave the current voice channel";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -267,10 +269,10 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class StatusCommand extends Command {
-    name = "status";
-    description = "Show active voice sessions";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
+    override name = "status";
+    override description = "Show active voice sessions";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -294,19 +296,20 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         return;
       }
       const lines = sessions.map(
-        (entry) => `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})`,
+        (entry) =>
+          `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})${entry.warning ? `\n${entry.warning}` : ""}`,
       );
       await interaction.reply({ content: lines.join("\n"), ephemeral: true });
     }
   }
 
   return new (class extends CommandWithSubcommands {
-    name = "vc";
-    description = "Voice channel controls";
+    override name = DISCORD_VOICE_COMMAND_SPEC.name;
+    override description = DISCORD_VOICE_COMMAND_SPEC.description;
     subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
   })();
 }
 
-function isVoiceChannelType(type: CarbonChannelType) {
-  return type === CarbonChannelType.GuildVoice || type === CarbonChannelType.GuildStageVoice;
+function isVoiceChannelType(type: DiscordChannelType) {
+  return type === DiscordChannelType.GuildVoice || type === DiscordChannelType.GuildStageVoice;
 }

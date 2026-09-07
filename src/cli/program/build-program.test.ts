@@ -1,3 +1,4 @@
+// Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,10 +42,10 @@ describe("buildProgram", () => {
   }
 
   async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
-    const error = await promise.catch((err) => err);
+    const error = await promise.catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(CommanderError);
-    expect(error).toMatchObject({ exitCode });
+    expect((error as CommanderError).exitCode).toBe(exitCode);
     return error as CommanderError;
   }
 
@@ -53,9 +54,9 @@ describe("buildProgram", () => {
     mockProcessOutput();
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
-      channelOptions: ["telegram"],
-      messageChannelOptions: "telegram",
-      agentChannelOptions: "last|telegram",
+      channelOptions: ["quietchat"],
+      messageChannelOptions: "quietchat",
+      agentChannelOptions: "last|quietchat",
     } satisfies ProgramContext);
   });
 
@@ -136,5 +137,29 @@ describe("buildProgram", () => {
 
     expect(error.code).toBe("commander.help");
     expect(process.exitCode).toBe(1);
+  });
+
+  it("preserves caller-configured Commander error output", async () => {
+    let stderr = "";
+    const outputError = vi.fn((value: string, write: (value: string) => void) => {
+      write(`custom: ${value}`);
+    });
+    const originalArgv = process.argv;
+    const program = buildProgram().configureOutput({
+      writeErr: (value) => {
+        stderr += value;
+      },
+      outputError,
+    });
+    program.command("probe").action(() => {});
+    process.argv = ["node", "openclaw", "probe", "--wat"];
+    try {
+      await expectCommanderExit(program.parseAsync(process.argv), 1);
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(outputError).toHaveBeenCalledOnce();
+    expect(stderr).toContain("custom: error: unknown option '--wat'");
   });
 });

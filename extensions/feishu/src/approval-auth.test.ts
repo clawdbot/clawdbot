@@ -1,3 +1,4 @@
+// Feishu tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { feishuApprovalAuth } from "./approval-auth.js";
 

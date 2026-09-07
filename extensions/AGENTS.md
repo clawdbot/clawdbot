@@ -31,6 +31,14 @@ third-party plugins see.
 - Do not use relative imports that escape the current extension package root.
 - Keep plugin metadata accurate in `openclaw.plugin.json` and the package
   `openclaw` block so discovery and setup work without executing plugin code.
+- Plugin runtime dependencies belong to the owning plugin package. If a plugin
+  dependency has a runtime peer, declare/provide it in that plugin's
+  `package.json`; do not move it to root unless root/package dist owns the
+  import. Runtime never installs deps; install/update/doctor are repair points.
+- Keep plugin dependency assertions in generic contracts
+  (`package-manifest.contract.test.ts`,
+  `extension-runtime-dependencies.contract.test.ts`) rather than plugin e2e
+  tests when they express package ownership.
 - Treat files like `src/**`, `onboard.ts`, and other local helpers as private
   unless you intentionally promote them through `api.ts` and, if needed, a
   matching `src/plugin-sdk/<id>.ts` facade.
@@ -67,9 +75,9 @@ third-party plugins see.
 
 ## Expanding The Boundary
 
-- If an extension needs a new seam, add a typed Plugin SDK subpath or additive
-  export instead of reaching into core.
-- Keep new plugin-facing seams backwards-compatible and versioned. Third-party
-  plugins consume this surface.
+- If an extension needs a new seam, add or replace a typed Plugin SDK subpath
+  instead of reaching into core.
+- ALL bundled plugins must move to modern SDK seams in the same change. Do not
+  keep extension-local compat paths for internal callers.
 - When intentionally expanding the contract, update the docs, exported subpath
   list, package exports, and API/contract checks in the same change.

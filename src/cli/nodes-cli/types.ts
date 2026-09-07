@@ -1,3 +1,5 @@
+// Shared option/result types for node CLI command modules.
+/** Common Gateway/node options consumed across node CLI subcommands. */
 export type NodesRpcOpts = {
   url?: string;
   token?: string;
@@ -43,9 +45,5 @@ export type NodesRpcOpts = {
   audio?: boolean;
 };
 
-export type {
-  NodeListNode,
-  PairedNode,
-  PairingList,
-  PendingRequest,
-} from "../../shared/node-list-types.js";
+/** Node list, paired-node, and pending-request payload types from shared parsers. */
+export type { NodeListNode, PairedNode, PendingRequest } from "../../shared/node-list-types.js";

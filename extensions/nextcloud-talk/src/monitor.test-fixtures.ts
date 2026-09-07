@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements monitor fixtures behavior.
 import { generateNextcloudTalkSignature } from "./signature.js";
 
 export function createSignedCreateMessageRequest(params?: { backend?: string }) {

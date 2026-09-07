@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Verifies implicit provider secret wiring for NVIDIA, MiniMax portal, and vLLM.
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import {
@@ -6,11 +7,43 @@ import {
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
 
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProviderCore: () => undefined,
+}));
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: () => [],
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  // Fixed candidate map keeps provider-secret resolution deterministic.
+  const candidates = {
+    minimax: ["MINIMAX_API_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+    nvidia: ["NVIDIA_API_KEY"],
+    vllm: ["VLLM_API_KEY"],
+  } as const;
+  return {
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvAuthLookupMaps: () => ({
+      aliasMap: {},
+      envCandidateMap: candidates,
+      authEvidenceMap: {},
+    }),
+  };
+});
+
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
 function createTestModel(id: string): ModelDefinitionConfig {
+  // Minimal catalog row; these tests care about auth wiring, not model metadata.
   return {
     id,
     name: id,
@@ -23,6 +56,7 @@ function createTestModel(id: string): ModelDefinitionConfig {
 }
 
 function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  // MiniMax custom hosts still speak the Anthropic-compatible path.
   const rawHost = env.MINIMAX_API_HOST?.trim();
   if (!rawHost) {
     return MINIMAX_BASE_URL;
@@ -47,6 +81,7 @@ function buildMinimaxPortalCatalog(params: {
   explicitBaseUrl?: string;
   hasProfiles?: boolean;
 }): ModelProviderConfig | null {
+  // Portal catalog is only available when OAuth/env/profile auth exists.
   const apiKey =
     params.envApiKey ??
     params.explicitApiKey ??
@@ -76,7 +111,7 @@ describe("NVIDIA provider", () => {
       profileApiKey: undefined,
     });
     expect(provider.apiKey).toBe("NVIDIA_API_KEY");
-    expect(provider.models?.length).toBeGreaterThan(0);
+    expect(provider.models).toStrictEqual([createTestModel("nvidia/test-model")]);
   });
 
   it("resolves the nvidia api key value from env", () => {

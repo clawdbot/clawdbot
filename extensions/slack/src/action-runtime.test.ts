@@ -1,11 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { WebClient } from "@slack/web-api";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Slack tests cover action runtime plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
+import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+import type { SlackSendResult } from "./send.js";
+import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
-const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
+const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
@@ -16,8 +25,40 @@ const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
-const recordSlackThreadParticipation = vi.fn();
-const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const resolveSlackConversationName = vi.fn(
+  async (..._args: unknown[]): Promise<string | undefined> => undefined,
+);
+const resolveSlackConversationInfo = vi.fn(
+  async (params: {
+    cfg: OpenClawConfig;
+    channelId: string;
+    requireFreshName?: boolean;
+  }): Promise<{ type: "channel" | "group" | "dm" | "unknown"; name?: string; user?: string }> => {
+    if (/^D/i.test(params.channelId)) {
+      return { type: "dm", user: "U123" };
+    }
+    if (/^G/i.test(params.channelId)) {
+      return { type: "group" };
+    }
+    const slackConfig = params.cfg.channels?.slack as
+      | { userToken?: string; botToken?: string; channels?: Record<string, unknown> }
+      | undefined;
+    const token = slackConfig?.userToken ?? slackConfig?.botToken;
+    const tokenOverride = token && token !== slackConfig?.botToken ? { token } : {};
+    const channelName = params.requireFreshName
+      ? await resolveSlackConversationName(params.channelId, {
+          cfg: params.cfg,
+          ...tokenOverride,
+        })
+      : undefined;
+    return { type: "channel", ...(channelName ? { name: channelName } : {}) };
+  },
+);
+const sendSlackMessage = vi.fn(
+  async (..._args: unknown[]): Promise<Partial<SlackSendResult> & { channelId: string }> => ({
+    channelId: "C123",
+  }),
+);
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
 describe("handleSlackAction", () => {
@@ -31,6 +72,168 @@ describe("handleSlackAction", () => {
       },
     } as OpenClawConfig;
   }
+
+  it("reads pins from the trusted current workspace", async () => {
+    const cfg = slackConfig();
+    listSlackPins.mockResolvedValueOnce([]);
+
+    const result = await handleSlackAction({ action: "listPins", channelId: "C123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    });
+
+    expect(requireDetails(result).ok).toBe(true);
+    expect(requireMockArg(listSlackPins, "listSlackPins", 0, 0)).toBe("C123");
+    expectRecordFields(requireRecordArg(listSlackPins, "listSlackPins", 0, 1), {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("rejects a bare detached target for an authenticated Enterprise install", async () => {
+    const cfg = slackConfig();
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        handleSlackAction(
+          { action: "react", channelId: "C123", messageId: "123.456", emoji: "thumbsup" },
+          cfg,
+        ),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(reactSlackMessage).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("reads the current requester from the trusted current workspace", async () => {
+    const cfg = slackConfig();
+    getSlackMemberInfo.mockResolvedValueOnce({
+      ok: true,
+      user: { id: "U123", is_bot: false },
+    });
+
+    const result = await handleSlackAction({ action: "memberInfo", userId: "U123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+    });
+
+    expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(requireDetails(result)).toEqual({
+      ok: true,
+      info: { ok: true, user: { id: "U123", is_bot: false } },
+    });
+  });
+
+  it("scopes every message and pin write to the trusted current workspace", async () => {
+    const cfg = slackConfig();
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "created" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        content: "updated",
+      },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "deleteMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "pinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "unpinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "created", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "updated", {
+      cfg,
+      teamId: "T123",
+      blocks: undefined,
+    });
+    expect(deleteSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(pinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(unpinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("scopes history, file, reaction, and emoji reads to the trusted workspace", async () => {
+    const cfg = slackConfig();
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    listSlackReactions.mockResolvedValueOnce([]);
+    downloadSlackFile.mockResolvedValueOnce(null);
+    listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: { openai: "url" } });
+
+    await handleSlackAction({ action: "readMessages", channelId: "C123" }, cfg, context);
+    await handleSlackAction(
+      { action: "reactions", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "downloadFile", channelId: "C123", fileId: "F123" },
+      cfg,
+      context,
+    );
+    await handleSlackAction({ action: "emojiList" }, cfg, context);
+
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C123",
+      expect.objectContaining({ cfg, teamId: "T123" }),
+    );
+    expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({ cfg, teamId: "T123", channelId: "C123" }),
+    );
+    expect(listSlackEmojis).toHaveBeenCalledWith({ cfg, teamId: "T123" });
+  });
 
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
     return {
@@ -49,43 +252,178 @@ describe("handleSlackAction", () => {
     return { cfg, context, hasRepliedRef };
   }
 
-  function expectLastSlackSend(content: string, threadTs?: string) {
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", content, {
+  const requireRecord = createRequireRecord("object", "label-not-object");
+
+  function requireArray(value: unknown, label: string): unknown[] {
+    expect(Array.isArray(value)).toBe(true);
+    if (!Array.isArray(value)) {
+      throw new Error(`${label} was not an array`);
+    }
+    return value;
+  }
+
+  function requireMockCall(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    index = 0,
+  ): unknown[] {
+    const call = source.mock.calls[index];
+    if (!call) {
+      throw new Error(`missing ${label} call ${index + 1}`);
+    }
+    return call;
+  }
+
+  function requireMockArg(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    callIndex: number,
+    argIndex: number,
+  ): unknown {
+    return requireMockCall(source, label, callIndex)[argIndex];
+  }
+
+  function requireRecordArg(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    callIndex: number,
+    argIndex: number,
+  ): Record<string, unknown> {
+    return requireRecord(
+      requireMockArg(source, label, callIndex, argIndex),
+      `${label} call ${callIndex + 1} argument ${argIndex + 1}`,
+    );
+  }
+
+  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+    for (const [key, value] of Object.entries(fields)) {
+      expect(record[key]).toEqual(value);
+    }
+  }
+
+  function requireSlackSendCall(index: number) {
+    const call = sendSlackMessage.mock.calls[index] as unknown[] | undefined;
+    if (!call) {
+      throw new Error(`missing Slack send call ${index + 1}`);
+    }
+    return call;
+  }
+
+  function expectSlackSendCall(
+    index: number,
+    target: string,
+    content: string,
+    optionFields: Record<string, unknown>,
+  ) {
+    const [actualTarget, actualContent, options] = requireSlackSendCall(index);
+    expect(actualTarget).toBe(target);
+    expect(actualContent).toBe(content);
+    expectRecordFields(requireRecord(options, "Slack send options"), optionFields);
+    return requireRecord(options, "Slack send options");
+  }
+
+  function expectLastSlackSend(content: string, cfg: OpenClawConfig, threadTs?: string) {
+    expectSlackSendCall(sendSlackMessage.mock.calls.length - 1, "channel:C123", content, {
+      cfg,
       mediaUrl: undefined,
       threadTs,
       blocks: undefined,
     });
   }
 
+  function requireDetails(result: Awaited<ReturnType<typeof handleSlackAction>>) {
+    return requireRecord(result.details, "action result details");
+  }
+
   async function sendSecondMessageAndExpectNoThread(params: {
     cfg: OpenClawConfig;
-    context: ReturnType<typeof createReplyToFirstContext>;
+    context: SlackActionContext;
   }) {
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C123", content: "Second" },
       params.cfg,
       params.context,
     );
-    expectLastSlackSend("Second");
+    expectLastSlackSend("Second", params.cfg);
   }
+
+  it("fails closed for same-channel sends from thread-required contexts with no thread ts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await expect(
+      handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "keep private" },
+        cfg,
+        {
+          currentChannelId: "C123",
+          replyToMode: "all",
+          sameChannelThreadRequired: true,
+        },
+      ),
+    ).rejects.toThrow("Slack thread context is required");
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit top-level sends from thread-required contexts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "root", topLevel: true },
+      cfg,
+      {
+        currentChannelId: "C123",
+        replyToMode: "all",
+        sameChannelThreadRequired: true,
+      },
+    );
+
+    expectLastSlackSend("root", cfg);
+  });
+
+  it("forwards preformatted Slack fallback text without reparsing", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "- Account: &lt;@U123&gt;",
+        mediaUrl: "https://example.com/report.csv",
+        textIsSlackMrkdwn: true,
+      },
+      cfg,
+    );
+
+    expectSlackSendCall(0, "channel:C123", "- Account: &lt;@U123&gt;", {
+      cfg,
+      mediaUrl: "https://example.com/report.csv",
+      textIsSlackMrkdwn: true,
+      blocks: undefined,
+    });
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+  });
 
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
-    const opts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
-    return opts?.token;
+    const token = requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1).token;
+    return typeof token === "string" ? token : undefined;
   }
 
   async function resolveSendToken(cfg: OpenClawConfig): Promise<string | undefined> {
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
-    const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
-    return opts?.token;
+    const token = requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2).token;
+    return typeof token === "string" ? token : undefined;
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
+    resolveSlackConversationInfo.mockClear();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
       deleteSlackMessage,
       downloadSlackFile,
@@ -98,18 +436,45 @@ describe("handleSlackAction", () => {
       pinSlackMessage,
       reactSlackMessage,
       readSlackMessages,
-      recordSlackThreadParticipation,
       removeOwnSlackReactions,
       removeSlackReaction,
+      resolveSlackConversationName,
+      resolveSlackConversationInfo,
       sendSlackMessage,
       unpinSlackMessage,
     });
   });
 
   it.each([
-    { name: "raw channel id", channelId: "C1" },
-    { name: "channel: prefixed id", channelId: "channel:C1" },
-  ])("adds reactions for $name", async ({ channelId }) => {
+    { name: "raw channel id", channelId: "C1", expectedChannelId: "C1" },
+    { name: "channel: prefixed id", channelId: "channel:C1", expectedChannelId: "C1" },
+    {
+      name: "folded channel id",
+      channelId: "channel:c08gqh53ejm",
+      expectedChannelId: "C08GQH53EJM",
+    },
+  ])("adds reactions for $name", async ({ channelId, expectedChannelId }) => {
+    const cfg = slackConfig();
+    const result = await handleSlackAction(
+      {
+        action: "react",
+        channelId,
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith(expectedChannelId, "123.456", "✅", { cfg });
+    expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
+      ok: true,
+      added: "✅",
+    });
+  });
+
+  it("routes workspace-qualified reactions through the target workspace client", async () => {
+    const cfg = slackConfig();
+    const channelId = "team:T123:channel:C123";
+
     await handleSlackAction(
       {
         action: "react",
@@ -117,12 +482,134 @@ describe("handleSlackAction", () => {
         messageId: "123.456",
         emoji: "✅",
       },
-      slackConfig(),
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: channelId,
+        requesterAccountId: "default",
+      },
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("qualifies a bare reaction target from the trusted current conversation", async () => {
+    const cfg = slackConfig();
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await handleSlackAction(
+        {
+          action: "react",
+          channelId: "C123",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        cfg,
+        {
+          currentChannelProvider: "slack",
+          currentChannelId: "team:T123:channel:C123",
+          requesterAccountId: "default",
+        },
+      );
+
+      expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+        cfg,
+        teamId: "T123",
+      });
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it.each([
+    {
+      name: "provider does not match",
+      context: {
+        currentChannelProvider: "discord",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "account does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "other",
+      },
+    },
+    {
+      name: "current targets disagree on workspace",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T456:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+  ])("does not infer a workspace when the trusted $name", async ({ context }) => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+      context,
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", { cfg });
+  });
+
+  it("routes workspace-qualified reaction removal through the target workspace client", async () => {
+    const cfg = slackConfig();
+    const channelId = "team:T123:channel:C123";
+
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId,
+        messageId: "123.456",
+        emoji: "✅",
+        remove: true,
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: channelId,
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(removeSlackReaction).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("accepts workspace-qualified reaction targets without an installation setting", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "team:T123:channel:C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
   });
 
   it("removes reactions on empty emoji", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "react",
@@ -130,12 +617,13 @@ describe("handleSlackAction", () => {
         messageId: "123.456",
         emoji: "",
       },
-      slackConfig(),
+      cfg,
     );
-    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456");
+    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { cfg });
   });
 
   it("removes reactions when remove flag set", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "react",
@@ -144,9 +632,9 @@ describe("handleSlackAction", () => {
         emoji: "✅",
         remove: true,
       },
-      slackConfig(),
+      cfg,
     );
-    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅");
+    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
   });
 
   it("rejects removes without emoji", async () => {
@@ -178,7 +666,22 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
+  it("rejects Slack reaction reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C_OTHER", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -186,11 +689,33 @@ describe("handleSlackAction", () => {
         content: "Hello thread",
         threadTs: "1234567890.123456",
       },
-      slackConfig(),
+      cfg,
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
+    expectSlackSendCall(0, "channel:C123", "Hello thread", {
+      cfg,
       mediaUrl: undefined,
       threadTs: "1234567890.123456",
+      blocks: undefined,
+    });
+  });
+
+  it("passes replyBroadcast to sendSlackMessage for thread replies", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Hello thread",
+        threadTs: "1234567890.123456",
+        replyBroadcast: true,
+      },
+      cfg,
+    );
+    expectSlackSendCall(0, "channel:C123", "Hello thread", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+      replyBroadcast: true,
       blocks: undefined,
     });
   });
@@ -201,18 +726,46 @@ describe("handleSlackAction", () => {
       {
         action: "downloadFile",
         fileId: "F123",
+        channelId: "C1",
       },
       slackConfig(),
     );
-    expect(downloadSlackFile).toHaveBeenCalledWith(
-      "F123",
-      expect.objectContaining({ maxBytes: 20 * 1024 * 1024 }),
+    expect(requireMockArg(downloadSlackFile, "downloadSlackFile", 0, 0)).toBe("F123");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).maxBytes).toBe(
+      20 * 1024 * 1024,
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({ ok: false }),
-      }),
+    expect(requireDetails(result)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/requested Slack channel or explicit thread/i),
+    });
+  });
+
+  it("fails closed for downloadFile when no channel target can be authorized", async () => {
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig()),
+    ).rejects.toThrow(
+      "Slack file download requires channelId or to so the read target can be authorized.",
     );
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+  });
+
+  it("uses current channel context to authorize downloadFile", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C1: { enabled: true },
+      },
+    });
+
+    const result = await handleSlackAction({ action: "downloadFile", fileId: "F123" }, cfg, {
+      currentChannelId: "C1",
+    });
+
+    expectRecordFields(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1), {
+      channelId: "C1",
+    });
+    expect(requireDetails(result).ok).toBe(false);
   });
 
   it("passes download scope (channel/thread) to downloadSlackFile", async () => {
@@ -228,31 +781,62 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(downloadSlackFile).toHaveBeenCalledWith(
-      "F123",
-      expect.objectContaining({
+    expect(requireMockArg(downloadSlackFile, "downloadSlackFile", 0, 0)).toBe("F123");
+    expectRecordFields(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1), {
+      channelId: "C1",
+      threadId: "123.456",
+    });
+    expect(requireDetails(result).ok).toBe(false);
+  });
+
+  it("returns non-image downloadFile results as file metadata instead of image content", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/openclaw-media/report.pdf",
+      contentType: "application/pdf",
+      placeholder: "[Slack file: report.pdf (fileId: F123)]",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
         channelId: "C1",
-        threadId: "123.456",
-      }),
+      },
+      slackConfig(),
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({ ok: false }),
-      }),
-    );
+
+    expect(result.content).toHaveLength(1);
+    const firstContent = requireRecord(result.content[0], "first content item");
+    expect(firstContent.type).toBe("text");
+    expect(String(firstContent.text)).toContain("/tmp/openclaw-media/report.pdf");
+    expect(result.content.map((entry) => entry.type)).not.toContain("image");
+    const details = requireDetails(result);
+    expectRecordFields(details, {
+      ok: true,
+      fileId: "F123",
+      path: "/tmp/openclaw-media/report.pdf",
+      contentType: "application/pdf",
+    });
+    expect(details.media).toEqual({
+      mediaUrl: "/tmp/openclaw-media/report.pdf",
+      outbound: false,
+      contentType: "application/pdf",
+    });
   });
 
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
-    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
-    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBe("tok");
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
+      slackConfig(),
+    );
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
   });
 
   it("keeps resolved userToken for downloadFile reads when configured", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     await handleSlackAction(
-      { action: "downloadFile", fileId: "F123" },
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
       slackConfig({
         accounts: {
           default: {
@@ -262,8 +846,7 @@ describe("handleSlackAction", () => {
         },
       }),
     );
-    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBe("xoxp-user");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("xoxp-user");
   });
 
   it.each([
@@ -280,20 +863,25 @@ describe("handleSlackAction", () => {
       expectedBlocks: [{ type: "divider" }],
     },
   ])("accepts $name and allows empty content", async ({ blocks, expectedBlocks }) => {
-    await handleSlackAction(
+    const cfg = slackConfig();
+    const nativeResult = { channelId: "C123", messageId: "123.456", threadTs: "123.400" };
+    sendSlackMessage.mockResolvedValueOnce(nativeResult);
+    const result = await handleSlackAction(
       {
         action: "sendMessage",
         to: "channel:C123",
         content: "",
         blocks,
       },
-      slackConfig(),
+      cfg,
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
+    expectSlackSendCall(0, "channel:C123", "", {
+      cfg,
       mediaUrl: undefined,
       threadTs: undefined,
       blocks: expectedBlocks,
     });
+    expect(result.details).toEqual({ ok: true, result: nativeResult });
   });
 
   it.each([
@@ -331,6 +919,7 @@ describe("handleSlackAction", () => {
   });
 
   it("routes uploadFile through sendSlackMessage with upload metadata", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "uploadFile",
@@ -341,10 +930,11 @@ describe("handleSlackAction", () => {
         title: "Report Final",
         threadTs: "111.222",
       },
-      slackConfig(),
+      cfg,
     );
 
-    expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
+    expectSlackSendCall(0, "user:U123", "fresh report", {
+      cfg,
       mediaUrl: "/tmp/report.png",
       threadTs: "111.222",
       uploadFileName: "report-final.png",
@@ -352,19 +942,355 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it("rejects blocks combined with mediaUrl", async () => {
+  it("routes uploads through a workspace-qualified destination", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+    });
+  });
+
+  it("qualifies a bare upload destination from the trusted current conversation", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+    });
+  });
+
+  it.each([
+    {
+      name: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "original image",
+        mediaUrl: "/tmp/original.png",
+        forceDocument: true,
+      },
+      expectedTarget: "channel:C123",
+    },
+    {
+      name: "workspace-qualified uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+        filePath: "/tmp/original.png",
+        initialComment: "original image",
+        forceDocument: true,
+      },
+      expectedTarget: "team:T123:channel:C123",
+    },
+  ] as const)("forwards forced-media intent for $name", async ({ params, expectedTarget }) => {
+    await handleSlackAction(params, slackConfig());
+
+    expectSlackSendCall(0, expectedTarget, "original image", {
+      forceDocument: true,
+    });
+  });
+
+  it.each([
+    {
+      action: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "render",
+        mediaUrl: "renders/chart.png",
+      },
+    },
+    {
+      action: "uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "renders/chart.png",
+        initialComment: "render",
+      },
+    },
+  ] as const)("forwards trusted media access unchanged for $action", async ({ params }) => {
+    const cfg = slackConfig();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+
+    await handleSlackAction(params, cfg, {
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+
+    const sendOptions = expectSlackSendCall(0, "channel:C123", "render", {
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: undefined,
+    });
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+  });
+
+  it("rejects replyBroadcast for uploadFile", async () => {
     await expect(
       handleSlackAction(
         {
-          action: "sendMessage",
+          action: "uploadFile",
           to: "channel:C123",
-          content: "hello",
-          mediaUrl: "https://example.com/file.png",
-          blocks: JSON.stringify([{ type: "divider" }]),
+          filePath: "/tmp/report.txt",
+          threadTs: "111.222",
+          replyBroadcast: true,
         },
         slackConfig(),
       ),
-    ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
+  });
+
+  it.each([false, true])("sends media before separate blocks (prepared=%s)", async (prepared) => {
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "F123" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.456" });
+
+    const cfg = slackConfig();
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "hello",
+        mediaUrl: "https://example.com/file.png",
+        blocks: JSON.stringify([{ type: "divider" }]),
+      },
+      cfg,
+      prepared
+        ? { preparedMessages: [{ text: "hello", blocks: [{ type: "divider" }] }] }
+        : undefined,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
+    expectSlackSendCall(0, "channel:C123", "", {
+      cfg,
+      mediaUrl: "https://example.com/file.png",
+      threadTs: undefined,
+    });
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2)).not.toHaveProperty(
+      "blocks",
+    );
+    expectSlackSendCall(1, "channel:C123", "hello", {
+      cfg,
+      blocks: [{ type: "divider" }],
+      threadTs: undefined,
+    });
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 1, 2)).not.toHaveProperty(
+      "mediaUrl",
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        channelId: "C123",
+        messageId: "123.456",
+        receipt: { platformMessageIds: ["F123", "123.456"] },
+      },
+    });
+  });
+
+  it("keeps oversized text and native blocks in the same resolved thread", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = createReplyToFirstContext(hasRepliedRef);
+    const content = "x".repeat(8001);
+    const blocks = [{ type: "divider" }];
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.456" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "C123", messageId: "123.457" });
+
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        replyBroadcast: true,
+      },
+      cfg,
+      context,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
+    expectSlackSendCall(0, "channel:C123", "", {
+      cfg,
+      blocks,
+      threadTs: "1111111111.111111",
+    });
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2)).not.toHaveProperty(
+      "replyBroadcast",
+    );
+    const textOptions = expectSlackSendCall(1, "channel:C123", content, {
+      cfg,
+      replyBroadcast: true,
+      threadTs: "1111111111.111111",
+    });
+    expect(textOptions).not.toHaveProperty("blocks");
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        channelId: "C123",
+        messageId: "123.457",
+        receipt: { platformMessageIds: ["123.456", "123.457"] },
+      },
+    });
+  });
+
+  it("keeps overlong native-data accessibility and blocks in one send", async () => {
+    const cfg = slackConfig();
+    const content = `Pipeline summary\n\n${"x".repeat(8001)}`;
+    const blocks = [
+      {
+        type: "data_table",
+        caption: "Pipeline",
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+    ];
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        nativeDataFallbackBaseText: "Pipeline summary",
+      },
+      cfg,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, "channel:C123", content, {
+      cfg,
+      blocks,
+      nativeDataFallbackBaseText: "Pipeline summary",
+      threadTs: undefined,
+    });
+  });
+
+  it("delivers a prepared presentation plan in order on one resolved thread", async () => {
+    const cfg = slackConfig();
+    const chartBlocks = [
+      { type: "data_visualization", title: "Revenue", chart: {} },
+      { type: "actions", elements: [{ type: "button", action_id: "question-choice" }] },
+    ];
+    const controlBlocks = [{ type: "actions", elements: [] }];
+    const hasRepliedRef = { value: false };
+    for (const [index, ids] of [["123.456"], ["123.457", "123.458"], ["123.459"]].entries()) {
+      sendSlackMessage.mockResolvedValueOnce({
+        channelId: "C123",
+        messageId: ids.at(-1),
+        ...(index === 0 ? { meta: { slackQuestionActionIds: ["question-choice"] } } : {}),
+        receipt: {
+          platformMessageIds: ids,
+          primaryPlatformMessageId: ids[0],
+          parts: ids.map((platformMessageId, partIndex) => ({
+            platformMessageId,
+            kind: index === 1 ? "text" : "card",
+            index: partIndex,
+            threadId: "1111111111.111111",
+          })),
+          threadId: "1111111111.111111",
+          sentAt: 123,
+        },
+      });
+    }
+
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Summary",
+        replyBroadcast: true,
+      },
+      cfg,
+      {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "first",
+        hasRepliedRef,
+        preparedMessages: [
+          { text: "Revenue", blocks: chartBlocks as never, authoredTextPlacement: "blocks" },
+          { text: "Wide table fallback", textIsSlackPlainText: true },
+          { text: "Refresh", blocks: controlBlocks as never, authoredTextPlacement: "none" },
+        ],
+      },
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(3);
+    expectSlackSendCall(0, "channel:C123", "Revenue", {
+      cfg,
+      blocks: chartBlocks,
+      authoredTextPlacement: "blocks",
+      replyBroadcast: true,
+      threadTs: "1111111111.111111",
+    });
+    expectSlackSendCall(1, "channel:C123", "Wide table fallback", {
+      cfg,
+      textIsSlackPlainText: true,
+      threadTs: "1111111111.111111",
+    });
+    expectSlackSendCall(2, "channel:C123", "Refresh", {
+      cfg,
+      blocks: controlBlocks,
+      authoredTextPlacement: "none",
+      threadTs: "1111111111.111111",
+    });
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        channelId: "C123",
+        messageId: "123.459",
+        meta: {
+          slackQuestionActionIds: ["question-choice"],
+          slackQuestionMessageId: "123.456",
+        },
+        receipt: {
+          primaryPlatformMessageId: "123.456",
+          platformMessageIds: ["123.456", "123.457", "123.458", "123.459"],
+          parts: [
+            { platformMessageId: "123.456", kind: "card", index: 0 },
+            { platformMessageId: "123.457", kind: "text", index: 1 },
+            { platformMessageId: "123.458", kind: "text", index: 2 },
+            { platformMessageId: "123.459", kind: "card", index: 3 },
+          ],
+          threadId: "1111111111.111111",
+          sentAt: 123,
+        },
+      },
+    });
   });
 
   it.each([
@@ -379,6 +1305,7 @@ describe("handleSlackAction", () => {
       expectedBlocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
     },
   ])("passes $name to editSlackMessage", async ({ blocks, expectedBlocks }) => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "editMessage",
@@ -387,9 +1314,14 @@ describe("handleSlackAction", () => {
         content: "",
         blocks,
       },
-      slackConfig(),
+      cfg,
     );
-    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+    const editCall = requireMockCall(editSlackMessage, "editSlackMessage");
+    expect(editCall[0]).toBe("C123");
+    expect(editCall[1]).toBe("123.456");
+    expect(editCall[2]).toBe("");
+    expectRecordFields(requireRecordArg(editSlackMessage, "editSlackMessage", 0, 3), {
+      cfg,
       blocks: expectedBlocks,
     });
   });
@@ -409,20 +1341,90 @@ describe("handleSlackAction", () => {
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
         to: "channel:C123",
         content: "Threaded reply",
       },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "all",
       },
     );
-    expectLastSlackSend("Threaded reply", "1111111111.111111");
+    expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
+  });
+
+  it("auto-injects threadTs for matching DM user targets", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      cfg,
+      {
+        currentChannelId: "slack:U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+      blocks: undefined,
+    });
+  });
+
+  it("auto-injects threadTs for routable DM targets while retaining the native channel", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      cfg,
+      {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+      blocks: undefined,
+    });
+  });
+
+  it.each([
+    { name: "topLevel true", patch: { topLevel: true } },
+    { name: "threadTs null", patch: { threadTs: null } },
+  ] as const)("does not auto-inject threadTs for $name", async (testCase) => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Channel root",
+        ...testCase.patch,
+      },
+      cfg,
+      {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectLastSlackSend("Channel root", cfg);
   });
 
   it("replyToMode=first threads first message then stops", async () => {
@@ -434,7 +1436,233 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expectLastSlackSend("First", "1111111111.111111");
+    expectLastSlackSend("First", cfg, "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it.each([
+    { replyToMode: "first", action: "sendMessage" },
+    { replyToMode: "first", action: "uploadFile" },
+    { replyToMode: "batched", action: "sendMessage" },
+    { replyToMode: "batched", action: "uploadFile" },
+  ] as const)(
+    "keeps the $replyToMode reply thread available after a failed $action",
+    async ({ replyToMode, action }) => {
+      const cfg = slackConfig({ replyToMode });
+      const hasRepliedRef = { value: false };
+      const context = {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode,
+        hasRepliedRef,
+      };
+      const params =
+        action === "uploadFile"
+          ? {
+              action,
+              to: "channel:C123",
+              filePath: "/tmp/report.txt",
+              initialComment: "First",
+            }
+          : { action, to: "channel:C123", content: "First" };
+      sendSlackMessage.mockRejectedValueOnce(new Error("Slack transport failed"));
+
+      await expect(handleSlackAction(params, cfg, context)).rejects.toThrow(
+        "Slack transport failed",
+      );
+      expect(hasRepliedRef.value).toBe(false);
+
+      await handleSlackAction(params, cfg, context);
+
+      expectSlackSendCall(0, "channel:C123", "First", {
+        cfg,
+        threadTs: "1111111111.111111",
+      });
+      expectSlackSendCall(1, "channel:C123", "First", {
+        cfg,
+        threadTs: "1111111111.111111",
+      });
+      expect(hasRepliedRef.value).toBe(true);
+      await sendSecondMessageAndExpectNoThread({ cfg, context });
+    },
+  );
+
+  it.each(["first", "batched"] as const)(
+    "records the accepted %s reply when a later prepared message fails",
+    async (replyToMode) => {
+      const cfg = slackConfig({ replyToMode });
+      const hasRepliedRef = { value: false };
+      const context = {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode,
+        hasRepliedRef,
+        preparedMessages: [{ text: "First" }, { text: "Second" }],
+      };
+      sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
+      sendSlackMessage.mockRejectedValueOnce(new Error("Second Slack delivery failed"));
+
+      await expect(
+        handleSlackAction(
+          { action: "sendMessage", to: "channel:C123", content: "First" },
+          cfg,
+          context,
+        ),
+      ).rejects.toThrow("Second Slack delivery failed");
+
+      expectSlackSendCall(0, "channel:C123", "First", {
+        cfg,
+        threadTs: "1111111111.111111",
+      });
+      expect(hasRepliedRef.value).toBe(true);
+    },
+  );
+
+  it.each(["first", "batched"] as const)(
+    "records an accepted %s Slack text chunk when the next platform post fails",
+    async (replyToMode) => {
+      const cfg = slackConfig({ replyToMode });
+      const hasRepliedRef = { value: false };
+      const context = {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode,
+        hasRepliedRef,
+      };
+      const client = new WebClient("xoxb-test", { retryConfig: { retries: 0 } });
+      vi.spyOn(client.chat, "postMessage")
+        .mockResolvedValueOnce({ ok: true, channel: "C123", ts: "1111111111.111112" })
+        .mockRejectedValueOnce(new Error("Second Slack text chunk failed"));
+      sendSlackMessage.mockImplementationOnce(async (...args) => {
+        const [target, content, options] = args;
+        if (typeof target !== "string" || typeof content !== "string") {
+          throw new Error("Expected a Slack target and text");
+        }
+        return await sendSlackMessageThroughPublicOwner(target, content, {
+          ...requireRecord(options, "Slack send options"),
+          cfg,
+          client,
+        });
+      });
+
+      await expect(
+        handleSlackAction(
+          { action: "sendMessage", to: "channel:C123", content: "a".repeat(8500) },
+          cfg,
+          context,
+        ),
+      ).rejects.toThrow("Second Slack text chunk failed");
+
+      expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+      expect(hasRepliedRef.value).toBe(true);
+    },
+  );
+
+  it.each(["first", "batched"] as const)(
+    "keeps concurrent %s replies in their thread until a delivery succeeds",
+    async (replyToMode) => {
+      const cfg = slackConfig({ replyToMode });
+      const hasRepliedRef = { value: false };
+      const context = {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode,
+        hasRepliedRef,
+      };
+      const firstDelivery = createDeferred<{ channelId: string }>();
+      sendSlackMessage.mockReturnValueOnce(firstDelivery.promise);
+      const firstAttempt = handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "Pending" },
+        cfg,
+        context,
+      );
+      await vi.waitFor(() => expect(sendSlackMessage).toHaveBeenCalledOnce());
+
+      await handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "Accepted" },
+        cfg,
+        context,
+      );
+      expectSlackSendCall(1, "channel:C123", "Accepted", {
+        cfg,
+        threadTs: "1111111111.111111",
+      });
+      expect(hasRepliedRef.value).toBe(true);
+
+      firstDelivery.reject(new Error("First Slack delivery failed"));
+      await expect(firstAttempt).rejects.toThrow("First Slack delivery failed");
+      expect(hasRepliedRef.value).toBe(true);
+    },
+  );
+
+  it("replyToMode=first threads standalone message-tool sends without ReplyToId", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      hasRepliedRef,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "First" },
+      cfg,
+      context,
+    );
+
+    expectLastSlackSend("First", cfg, "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("does not use standalone current-message anchors for different channels", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      hasRepliedRef,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C999", content: "Other channel" },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "channel:C999", "Other channel", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expect(hasRepliedRef.value).toBe(false);
+  });
+
+  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "#c123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
@@ -452,48 +1680,132 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expectLastSlackSend("Explicit", "9999999999.999999");
+    expectLastSlackSend("Explicit", cfg, "9999999999.999999");
     expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
-  it("replyToMode=first without hasRepliedRef does not thread", async () => {
+  it("replyToMode=first consumes a routable DM target with a native channel context", async () => {
+    const cfg = slackConfig();
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+
     await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "No ref" },
-      slackConfig(),
       {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "first",
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
       },
+      cfg,
+      context,
     );
-    expectLastSlackSend("No ref");
+
+    expect(hasRepliedRef.value).toBe(true);
+    await handleSlackAction(
+      { action: "sendMessage", to: "user:U123", content: "Second" },
+      cfg,
+      context,
+    );
+    expectSlackSendCall(1, "user:U123", "Second", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+  });
+
+  it("replyToMode=first without hasRepliedRef does not thread", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction({ action: "sendMessage", to: "channel:C123", content: "No ref" }, cfg, {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first",
+    });
+    expectLastSlackSend("No ref", cfg);
   });
 
   it("does not auto-inject threadTs when replyToMode=off", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C123", content: "No thread" },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "off",
       },
     );
-    expectLastSlackSend("No thread");
+    expectLastSlackSend("No thread", cfg);
+  });
+
+  it("keeps same-channel sends and uploads top-level for a prepared channel override", async () => {
+    const cfg = slackConfig({
+      replyToMode: "all",
+      channels: { C123: { replyToMode: "off" } },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+        ReplyToId: "1111111111.111111",
+        ReplyToMode: "off",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Channel root" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "channel:C123", "Channel root", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expectSlackSendCall(1, "channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+      uploadFileName: undefined,
+      uploadTitle: undefined,
+    });
   });
 
   it("does not auto-inject threadTs when sending to different channel", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C999", content: "Other channel" },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Other channel", {
+    expectSlackSendCall(0, "channel:C999", "Other channel", {
+      cfg,
       mediaUrl: undefined,
       threadTs: undefined,
       blocks: undefined,
@@ -501,6 +1813,7 @@ describe("handleSlackAction", () => {
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -508,27 +1821,25 @@ describe("handleSlackAction", () => {
         content: "Explicit wins",
         threadTs: "9999999999.999999",
       },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "all",
       },
     );
-    expectLastSlackSend("Explicit wins", "9999999999.999999");
+    expectLastSlackSend("Explicit wins", cfg, "9999999999.999999");
   });
 
   it("handles channel target without prefix when replyToMode=all", async () => {
-    await handleSlackAction(
-      { action: "sendMessage", to: "C123", content: "Bare target" },
-      slackConfig(),
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expect(sendSlackMessage).toHaveBeenCalledWith("C123", "Bare target", {
+    const cfg = slackConfig();
+    await handleSlackAction({ action: "sendMessage", to: "C123", content: "Bare target" }, cfg, {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "all",
+    });
+    expectSlackSendCall(0, "C123", "Bare target", {
+      cfg,
       mediaUrl: undefined,
       threadTs: "1111111111.111111",
       blocks: undefined,
@@ -546,33 +1857,337 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        hasMore: false,
-        messages: [
-          expect.objectContaining({
-            ts: "1712345678.123456",
-            timestampMs: 1712345678123,
-          }),
-        ],
-      },
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.hasMore).toBe(false);
+    expectRecordFields(details, {
+      channelId: "C1",
+    });
+    expect(details).not.toHaveProperty("threadId");
+    const messages = requireArray(details.messages, "read messages");
+    expectRecordFields(requireRecord(messages[0], "first message"), {
+      ts: "1712345678.123456",
+      timestampMs: 1712345678123,
     });
   });
 
   it("passes threadId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
-    await handleSlackAction(
+    const cfg = slackConfig();
+    const result = await handleSlackAction(
       { action: "readMessages", channelId: "C1", threadId: "1712345678.123456" },
-      slackConfig(),
+      cfg,
     );
 
-    expect(readSlackMessages).toHaveBeenCalledWith("C1", {
+    expectRecordFields(requireDetails(result), {
+      channelId: "C1",
+      threadId: "1712345678.123456",
+    });
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
+      cfg,
       threadId: "1712345678.123456",
       limit: undefined,
       before: undefined,
       after: undefined,
+    });
+  });
+
+  it("parses string readMessages limits before reading Slack messages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      { action: "readMessages", channelId: "C1", limit: "20" },
+      slackConfig(),
+    );
+
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
+      limit: 20,
+    });
+  });
+
+  it("rejects fractional readMessages limits before reading Slack messages", async () => {
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("reads from allowlisted Slack target channels", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_ALLOWED" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_ALLOWED");
+  });
+
+  it("resolves name-allowlisted reads from a core-shaped Slack threading context", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("allowed-channel");
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        Channel: "slack",
+        To: "channel:C0123456789",
+      },
+    });
+
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg, context);
+
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C0123456789", { cfg });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
+  });
+
+  it("does not treat the core Channel provider value as a Slack room name", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("actual-room");
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#slack": { enabled: true },
+      },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        Channel: "slack",
+        To: "channel:C0123456789",
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg, context),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C0123456789", { cfg });
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize different Slack targets with the current context channel ID", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("other-channel");
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C9876543210" }, cfg, {
+        currentChannelId: "C0123456789",
+      }),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C9876543210", { cfg });
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured user read token to resolve name-allowlisted channels", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("allowed-channel");
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      userToken: "xoxp-reader",
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg);
+
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C0123456789", {
+      cfg,
+      token: "xoxp-reader",
+    });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
+  });
+
+  it("resolves Slack target channel names before applying wildcard fallback denial", async () => {
+    resolveSlackConversationName.mockResolvedValueOnce("allowed-channel");
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "*": { enabled: false },
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg);
+
+    expect(resolveSlackConversationName).toHaveBeenCalledWith("C0123456789", { cfg });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
+  });
+
+  it("does not let a name match override an explicit channel-id denial", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        C0123456789: { enabled: false },
+        "#allowed-channel": { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(resolveSlackConversationName).not.toHaveBeenCalled();
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before reading when Slack cannot resolve the target name", async () => {
+    resolveSlackConversationName.mockRejectedValueOnce(new Error("missing_scope"));
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg),
+    ).rejects.toThrow("missing_scope");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("allows Slack reads from unlisted targets when group policy is open", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_CONFIGURED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_OTHER");
+  });
+
+  it("rejects Slack reads from disabled targets when group policy is open", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_DISABLED: { enabled: false },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_DISABLED" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for read-like Slack actions when provider config is missing", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C1", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+
+    await expect(handleSlackAction({ action: "listPins", channelId: "C1" }, cfg)).rejects.toThrow(
+      "Slack read target channel is not allowed.",
+    );
+    expect(listSlackPins).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack file downloads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack pin reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "listPins", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackPins).not.toHaveBeenCalled();
+  });
+
+  it("passes messageId through to readSlackMessages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "readMessages",
+        channelId: "C1",
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
+      },
+      cfg,
+    );
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
+      cfg,
+      threadId: "1712345678.123456",
+      messageId: "1712345678.654321",
     });
   });
 
@@ -581,51 +2196,38 @@ describe("handleSlackAction", () => {
 
     const result = await handleSlackAction({ action: "listPins", channelId: "C1" }, slackConfig());
 
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        pins: [
-          {
-            message: expect.objectContaining({
-              ts: "1712345678.123456",
-              timestampMs: 1712345678123,
-            }),
-          },
-        ],
-      },
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    const pins = requireArray(details.pins, "pins");
+    const firstPin = requireRecord(pins[0], "first pin");
+    expectRecordFields(requireRecord(firstPin.message, "first pin message"), {
+      ts: "1712345678.123456",
+      timestampMs: 1712345678123,
     });
   });
 
-  it("uses user token for reads when available", async () => {
-    const token = await resolveReadToken(
-      slackConfig({
-        accounts: {
-          default: {
-            botToken: "xoxb-bot",
-            userToken: "xoxp-user",
-          },
-        },
+  it.each<{
+    name: string;
+    config: OpenClawConfig;
+    operation: "read" | "send";
+    expectedToken?: string;
+  }>([
+    {
+      name: "uses user token for reads when available",
+      config: slackConfig({
+        accounts: { default: { botToken: "xoxb-bot", userToken: "xoxp-user" } },
       }),
-    );
-    expect(token).toBe("xoxp-user");
-  });
-
-  it("falls back to bot token for reads when user token missing", async () => {
-    const token = await resolveReadToken(
-      slackConfig({
-        accounts: {
-          default: {
-            botToken: "xoxb-bot",
-          },
-        },
-      }),
-    );
-    expect(token).toBeUndefined();
-  });
-
-  it("uses bot token for writes when userTokenReadOnly is true", async () => {
-    const token = await resolveSendToken(
-      slackConfig({
+      operation: "read",
+      expectedToken: "xoxp-user",
+    },
+    {
+      name: "falls back to bot token for reads when user token missing",
+      config: slackConfig({ accounts: { default: { botToken: "xoxb-bot" } } }),
+      operation: "read",
+    },
+    {
+      name: "uses bot token for writes when userTokenReadOnly is true",
+      config: slackConfig({
         accounts: {
           default: {
             botToken: "xoxb-bot",
@@ -634,42 +2236,74 @@ describe("handleSlackAction", () => {
           },
         },
       }),
-    );
-    expect(token).toBeUndefined();
+      operation: "send",
+    },
+    {
+      name: "allows user token writes when bot token is missing",
+      config: {
+        channels: {
+          slack: {
+            accounts: { default: { userToken: "xoxp-user", userTokenReadOnly: false } },
+          },
+        },
+      } as OpenClawConfig,
+      operation: "send",
+      expectedToken: "xoxp-user",
+    },
+  ])("$name", async ({ config, operation, expectedToken }) => {
+    const token = await (operation === "read"
+      ? resolveReadToken(config)
+      : resolveSendToken(config));
+    expect(token).toBe(expectedToken);
   });
 
-  it("allows user token writes when bot token is missing", async () => {
+  it("uses the user token for user-identity writes", async () => {
     const token = await resolveSendToken({
       channels: {
         slack: {
-          accounts: {
-            default: {
-              userToken: "xoxp-user",
-              userTokenReadOnly: false,
-            },
-          },
+          postAs: "user",
+          userToken: "test-user-token",
         },
       },
     } as OpenClawConfig);
-    expect(token).toBe("xoxp-user");
+
+    expect(token).toBe("test-user-token");
   });
 
-  it("returns all emojis when no limit is provided", async () => {
+  it("does not fall back to a bot token when a user identity has no user token", async () => {
+    await expect(
+      resolveSendToken({
+        channels: {
+          slack: {
+            postAs: "user",
+            botToken: "test-bot-token",
+          },
+        },
+      } as OpenClawConfig),
+    ).rejects.toThrow('Slack operation token missing for account "default".');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns sorted usable emoji identifiers and preserves alias targets", async () => {
     listSlackEmojis.mockResolvedValueOnce({
       ok: true,
-      emoji: { party: "https://example.com/party.png", wave: "https://example.com/wave.png" },
+      cache_ts: "ignored-provider-metadata",
+      emoji: {
+        wave: "https://example.com/wave.png",
+        celebrate: "alias:party",
+        party: "https://example.com/party.png",
+      },
     });
 
     const result = await handleSlackAction({ action: "emojiList" }, slackConfig());
 
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        emojis: {
-          emoji: { party: "https://example.com/party.png", wave: "https://example.com/wave.png" },
-        },
-      },
-    });
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.emojis).toEqual([
+      { name: "celebrate", identifier: "celebrate", aliasOf: "party" },
+      { name: "party", identifier: "party" },
+      { name: "wave", identifier: "wave" },
+    ]);
   });
 
   it("applies limit to emoji-list results", async () => {
@@ -684,16 +2318,40 @@ describe("handleSlackAction", () => {
 
     const result = await handleSlackAction({ action: "emojiList", limit: 2 }, slackConfig());
 
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        emojis: {
-          emoji: {
-            party: "https://example.com/party.png",
-            tada: "https://example.com/tada.png",
-          },
-        },
-      },
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.emojis).toEqual([
+      { name: "party", identifier: "party" },
+      { name: "tada", identifier: "tada" },
+    ]);
+  });
+
+  it.each([undefined, 150])("bounds emoji-list output for limit %s", async (limit) => {
+    listSlackEmojis.mockResolvedValueOnce({
+      ok: true,
+      emoji: Object.fromEntries(
+        Array.from({ length: 101 }, (_, index) => [
+          `emoji${String(index).padStart(3, "0")}`,
+          "https://example.com/emoji.png",
+        ]),
+      ),
     });
+
+    const result = await handleSlackAction(
+      { action: "emojiList", ...(limit === undefined ? {} : { limit }) },
+      slackConfig(),
+    );
+
+    const emojis = requireArray(requireDetails(result).emojis, "emoji list");
+    expect(emojis).toHaveLength(100);
+    expect(emojis.at(-1)).toEqual({ name: "emoji099", identifier: "emoji099" });
+  });
+
+  it("rejects fractional emoji-list limits before reading emojis", async () => {
+    await expect(
+      handleSlackAction({ action: "emojiList", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(listSlackEmojis).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

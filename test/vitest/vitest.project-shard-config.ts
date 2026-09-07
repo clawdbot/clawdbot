@@ -1,3 +1,4 @@
+// Vitest project shard helper builds configs for full-suite shards.
 import { defineConfig } from "vitest/config";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 

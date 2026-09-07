@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -27,28 +28,30 @@ type docResult struct {
 }
 
 type runConfig struct {
-	targetLang string
-	sourceLang string
-	docsRoot   string
-	tmPath     string
-	mode       string
-	thinking   string
-	overwrite  bool
-	maxFiles   int
-	parallel   int
+	targetLang   string
+	sourceLang   string
+	docsRoot     string
+	tmPath       string
+	mode         string
+	thinking     string
+	overwrite    bool
+	allowPartial bool
+	maxFiles     int
+	parallel     int
 }
 
 func main() {
 	var (
-		targetLang = flag.String("lang", "zh-CN", "target language (e.g., zh-CN)")
-		sourceLang = flag.String("src", "en", "source language")
-		docsRoot   = flag.String("docs", "docs", "docs root")
-		tmPath     = flag.String("tm", "", "translation memory path")
-		mode       = flag.String("mode", "segment", "translation mode (segment|doc)")
-		thinking   = flag.String("thinking", "high", "thinking level (low|high)")
-		overwrite  = flag.Bool("overwrite", false, "overwrite existing translations")
-		maxFiles   = flag.Int("max", 0, "max files to process (0 = all)")
-		parallel   = flag.Int("parallel", 1, "parallel workers for doc mode")
+		targetLang   = flag.String("lang", "zh-CN", "target language (e.g., zh-CN)")
+		sourceLang   = flag.String("src", "en", "source language")
+		docsRoot     = flag.String("docs", "docs", "docs root")
+		tmPath       = flag.String("tm", "", "translation memory path")
+		mode         = flag.String("mode", "segment", "translation mode (segment|doc)")
+		thinking     = flag.String("thinking", "xhigh", "thinking level (low|medium|high|xhigh|max)")
+		overwrite    = flag.Bool("overwrite", false, "overwrite existing translations")
+		allowPartial = flag.Bool("allow-partial", false, "write successful doc-mode outputs even when another file fails")
+		maxFiles     = flag.Int("max", 0, "max files to process (0 = all)")
+		parallel     = flag.Int("parallel", 1, "parallel workers for doc mode")
 	)
 	flag.Parse()
 	files := flag.Args()
@@ -57,17 +60,18 @@ func main() {
 	}
 
 	if err := runDocsI18N(context.Background(), runConfig{
-		targetLang: *targetLang,
-		sourceLang: *sourceLang,
-		docsRoot:   *docsRoot,
-		tmPath:     *tmPath,
-		mode:       *mode,
-		thinking:   *thinking,
-		overwrite:  *overwrite,
-		maxFiles:   *maxFiles,
-		parallel:   *parallel,
+		targetLang:   *targetLang,
+		sourceLang:   *sourceLang,
+		docsRoot:     *docsRoot,
+		tmPath:       *tmPath,
+		mode:         *mode,
+		thinking:     *thinking,
+		overwrite:    *overwrite,
+		allowPartial: *allowPartial,
+		maxFiles:     *maxFiles,
+		parallel:     *parallel,
 	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
-		return NewPiTranslator(srcLang, tgtLang, glossary, thinking)
+		return NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
 	}); err != nil {
 		fatal(err)
 	}
@@ -105,15 +109,17 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 	}
 	totalFiles := len(ordered)
 	preSkipped := 0
+	prePostprocessFiles := []string{}
 	if cfg.mode == "doc" && !cfg.overwrite {
-		filtered, skipped, err := filterDocQueue(resolvedDocsRoot, cfg.targetLang, ordered)
+		filtered, skipped, existingOutputs, err := filterDocQueue(resolvedDocsRoot, cfg.targetLang, ordered, cfg.maxFiles)
 		if err != nil {
 			return err
 		}
 		ordered = filtered
 		preSkipped = skipped
+		prePostprocessFiles = append(prePostprocessFiles, existingOutputs...)
 	}
-	if cfg.maxFiles > 0 && cfg.maxFiles < len(ordered) {
+	if (cfg.mode != "doc" || cfg.overwrite) && cfg.maxFiles > 0 && cfg.maxFiles < len(ordered) {
 		ordered = ordered[:cfg.maxFiles]
 	}
 
@@ -126,19 +132,19 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 	start := time.Now()
 	processed := 0
 	skipped := 0
-	localizedFiles := []string{}
-	var runErr error
+	localizedFiles := append([]string{}, prePostprocessFiles...)
+	var translationErr error
 
 	log.Printf("docs-i18n: mode=%s total=%d pending=%d pre_skipped=%d overwrite=%t thinking=%s parallel=%d", cfg.mode, totalFiles, len(ordered), preSkipped, cfg.overwrite, cfg.thinking, parallel)
 	switch cfg.mode {
 	case "doc":
 		if parallel > 1 {
-			proc, skip, outputs, err := runDocParallel(ctx, ordered, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, parallel, glossary, cfg.thinking, newTranslator)
+			proc, skip, outputs, err := runDocParallel(ctx, ordered, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial, parallel, glossary, cfg.thinking, newTranslator)
 			processed += proc
 			skipped += skip
 			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
-				runErr = err
+				translationErr = err
 			}
 		} else {
 			translator, err := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
@@ -146,12 +152,12 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 				return err
 			}
 			defer translator.Close()
-			proc, skip, outputs, err := runDocSequential(ctx, ordered, translator, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite)
+			proc, skip, outputs, err := runDocSequential(ctx, ordered, translator, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial)
 			processed += proc
 			skipped += skip
 			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
-				runErr = err
+				translationErr = err
 			}
 		}
 	case "segment":
@@ -167,37 +173,55 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 		processed += proc
 		localizedFiles = append(localizedFiles, outputs...)
 		if err != nil {
-			runErr = err
+			translationErr = err
 		}
 	default:
 		return fmt.Errorf("unknown mode: %s", cfg.mode)
 	}
 
-	if err := tm.Save(); err != nil && runErr == nil {
-		runErr = err
+	if err := tm.Save(); err != nil {
+		return err
 	}
-	if err := postprocessLocalizedDocs(resolvedDocsRoot, cfg.targetLang, localizedFiles); err != nil && runErr == nil {
-		runErr = err
+	if err := postprocessLocalizedDocs(resolvedDocsRoot, cfg.targetLang, localizedFiles); err != nil {
+		return err
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
-	return runErr
+	if translationErr != nil && cfg.allowPartial && cfg.mode == "doc" && processed > 0 {
+		if ctx.Err() != nil || errors.Is(translationErr, context.Canceled) || errors.Is(translationErr, context.DeadlineExceeded) {
+			return translationErr
+		}
+		log.Printf("docs-i18n: allowing partial doc output after translation error: %v", translationErr)
+		return nil
+	}
+	return translationErr
 }
 
-func runDocSequential(ctx context.Context, ordered []string, translator docsTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, []string, error) {
+func runDocSequential(ctx context.Context, ordered []string, translator docsTranslator, docsRoot, srcLang, tgtLang string, overwrite, allowPartial bool) (int, int, []string, error) {
 	processed := 0
 	skipped := 0
 	outputs := []string{}
+	var firstErr error
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
 		skip, outputPath, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
 		if err != nil {
-			return processed, skipped, outputs, err
+			if shouldStopDocRun(ctx, err, allowPartial) {
+				return processed, skipped, outputs, err
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("docs-i18n: [%d/%d] failed %s (%s): %v", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond), err)
+			continue
 		}
 		if skip {
 			skipped++
+			if outputPath != "" {
+				outputs = append(outputs, outputPath)
+			}
 			log.Printf("docs-i18n: [%d/%d] skipped %s (%s)", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond))
 		} else {
 			processed++
@@ -205,10 +229,10 @@ func runDocSequential(ctx context.Context, ordered []string, translator docsTran
 			log.Printf("docs-i18n: [%d/%d] done %s (%s)", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond))
 		}
 	}
-	return processed, skipped, outputs, nil
+	return processed, skipped, outputs, firstErr
 }
 
-func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string, newTranslator docsTranslatorFactory) (int, int, []string, error) {
+func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite, allowPartial bool, parallel int, glossary []GlossaryEntry, thinking string, newTranslator docsTranslatorFactory) (int, int, []string, error) {
 	jobs := make(chan docJob)
 	results := make(chan docResult, len(ordered))
 	ctx, cancel := context.WithCancel(ctx)
@@ -240,7 +264,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 					skipped:  skip,
 					err:      err,
 				}
-				if err != nil {
+				if err != nil && shouldStopDocRun(ctx, err, allowPartial) {
 					cancel()
 					return
 				}
@@ -275,7 +299,12 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 		}
 		if result.skipped {
 			skipped++
+			if result.output != "" {
+				outputs = append(outputs, result.output)
+			}
 			log.Printf("docs-i18n: [w* %d/%d] skipped %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
+		} else if result.err != nil {
+			log.Printf("docs-i18n: [w* %d/%d] failed %s (%s): %v", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond), result.err)
 		} else if result.err == nil {
 			processed++
 			outputs = append(outputs, result.output)
@@ -283,6 +312,13 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 		}
 	}
 	return processed, skipped, outputs, firstErr
+}
+
+func shouldStopDocRun(ctx context.Context, err error, allowPartial bool) bool {
+	if !allowPartial {
+		return true
+	}
+	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func runSegmentSequential(ctx context.Context, ordered []string, translator docsTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, []string, error) {
@@ -311,29 +347,40 @@ func resolveRelPath(docsRoot, file string) string {
 	return relPath
 }
 
-func filterDocQueue(docsRoot, targetLang string, ordered []string) ([]string, int, error) {
+func filterDocQueue(docsRoot, targetLang string, ordered []string, maxFiles int) ([]string, int, []string, error) {
 	pending := make([]string, 0, len(ordered))
+	existingOutputs := []string{}
 	skipped := 0
 	for _, file := range ordered {
 		absPath, relPath, err := resolveDocsPath(docsRoot, file)
 		if err != nil {
-			return nil, skipped, err
+			return nil, skipped, nil, err
 		}
 		content, err := os.ReadFile(absPath)
 		if err != nil {
-			return nil, skipped, err
+			return nil, skipped, nil, err
 		}
 		sourceHash := hashBytes(content)
 		outputPath := filepath.Join(docsRoot, targetLang, relPath)
-		skip, err := shouldSkipDoc(outputPath, sourceHash)
+		status, err := classifyDocOutput(outputPath, sourceHash, targetLang)
 		if err != nil {
-			return nil, skipped, err
+			return nil, skipped, nil, err
 		}
-		if skip {
+		switch status {
+		case docOutputReady:
 			skipped++
-			continue
+		case docOutputNeedsPostprocess:
+			if maxFiles > 0 && len(pending)+len(existingOutputs) >= maxFiles {
+				continue
+			}
+			skipped++
+			existingOutputs = append(existingOutputs, outputPath)
+		case docOutputNeedsTranslation:
+			if maxFiles > 0 && len(pending)+len(existingOutputs) >= maxFiles {
+				continue
+			}
+			pending = append(pending, file)
 		}
-		pending = append(pending, file)
 	}
-	return pending, skipped, nil
+	return pending, skipped, existingOutputs, nil
 }

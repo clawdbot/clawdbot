@@ -1,12 +1,12 @@
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
+/**
+ * Channel plugin root type contract.
+ *
+ * Defines the full plugin object shape composed from config, runtime, setup, and adapter surfaces.
+ */
+import type { ChannelMessageAdapterShape } from "../message/types.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
 import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
-import type { ChannelConfigSchema } from "./types.config.js";
-export type {
-  ChannelConfigRuntimeIssue,
-  ChannelConfigRuntimeParseResult,
-  ChannelConfigRuntimeSchema,
-  ChannelConfigSchema,
-  ChannelConfigUiHint,
-} from "./types.config.js";
 import type {
   ChannelApprovalCapability,
   ChannelAuthAdapter,
@@ -30,6 +30,7 @@ import type {
   ChannelAllowlistAdapter,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
+import type { ChannelConfigSchema } from "./types.config.js";
 import type {
   ChannelAgentTool,
   ChannelAgentToolFactory,
@@ -47,8 +48,14 @@ import type {
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
 
-// Omitted generic means "plugin with some account shape", not "plugin whose
-// account is literally Record<string, unknown>".
+type ChannelGatewayMethodDescriptor = {
+  name: string;
+  scope?: OperatorScope;
+  description?: string;
+};
+
+// Omitted generic means "plugin with some account shape"; using unknown makes
+// callback parameters contravariant and rejects concrete plugin implementations.
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -59,10 +66,24 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    /** Published dynamic reads; `*` matches one nonempty dotted config key. */
+    noopPrefixes?: string[];
+    /**
+     * Opt into restarting only the changed non-default named account.
+     * Set only when sibling account resolution and lifecycle state are isolated and
+     * account stop fully settles owned work. Shared, default, removed, or unresolved
+     * account changes still restart the whole channel.
+     */
+    accountScopedRestart?: boolean;
+  };
   setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
+  /** Channel-owned typed setup contract. Preferred over the legacy shared input adapter. */
+  setupContract?: ChannelOwnedSetupContract;
+  /** @deprecated Use setupContract for new plugins. */
   setup?: ChannelSetupAdapter;
   pairing?: ChannelPairingAdapter;
   security?: ChannelSecurityAdapter<ResolvedAccount>;
@@ -71,6 +92,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   outbound?: ChannelOutboundAdapter;
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
+  gatewayMethodDescriptors?: ChannelGatewayMethodDescriptor[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;
@@ -85,6 +107,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
+  message?: ChannelMessageAdapterShape;
   messaging?: ChannelMessagingAdapter;
   agentPrompt?: ChannelAgentPromptAdapter;
   directory?: ChannelDirectoryAdapter;

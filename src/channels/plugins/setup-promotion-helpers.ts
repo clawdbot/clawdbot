@@ -1,57 +1,22 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getBundledChannelPlugin } from "./bundled.js";
-import { getLoadedChannelPlugin } from "./registry.js";
+/**
+ * Channel setup promotion helpers.
+ *
+ * Moves legacy single-account channel config into account-scoped config records.
+ */
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
+import {
+  collectSingleAccountPromotionEntries,
+  isCommonSingleAccountPromotionKey,
+  isSetupSingleAccountPromotionKey,
+} from "./setup-promotion-keys.js";
 
 type ChannelSectionBase = {
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
 };
 
-const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
-  "name",
-  "token",
-  "tokenFile",
-  "botToken",
-  "appToken",
-  "account",
-  "signalNumber",
-  "authDir",
-  "cliPath",
-  "dbPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookPath",
-  "webhookUrl",
-  "webhookSecret",
-  "service",
-  "region",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceName",
-  "url",
-  "code",
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-  "defaultTo",
-]);
-
-const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Some setup/migration paths run before the channel setup surface has been loaded.
-  telegram: ["streaming"],
-};
-
-const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
-  telegram: ["botToken", "tokenFile"],
-};
-
-type ChannelSetupPromotionSurface = {
+export type ChannelSetupPromotionSurface = {
+  configPromotion?: "preserve-root";
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {
@@ -59,105 +24,118 @@ type ChannelSetupPromotionSurface = {
   }) => string | undefined;
 };
 
-function getChannelSetupPromotionSurface(
-  channelKey: string,
-  opts?: { loadBundledFallback?: boolean },
-): ChannelSetupPromotionSurface | null {
-  const setup =
-    getLoadedChannelPlugin(channelKey)?.setup ??
-    (opts?.loadBundledFallback ? getBundledChannelPlugin(channelKey)?.setup : undefined);
-  if (!setup || typeof setup !== "object") {
-    return null;
-  }
-  return setup as ChannelSetupPromotionSurface;
-}
-
-function isStaticSingleAccountPromotionKey(channelKey: string, key: string): boolean {
-  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key)) {
-    return true;
-  }
-  return BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[channelKey]?.includes(key) ?? false;
-}
-
-export function shouldMoveSingleAccountChannelKey(params: {
-  channelKey: string;
-  key: string;
-}): boolean {
-  if (isStaticSingleAccountPromotionKey(params.channelKey, params.key)) {
-    return true;
-  }
-  const contractKeys = getChannelSetupPromotionSurface(params.channelKey, {
-    loadBundledFallback: true,
-  })?.singleAccountKeysToMove;
-  if (contractKeys?.includes(params.key)) {
-    return true;
-  }
-  return false;
-}
-
-export function resolveSingleAccountKeysToMove(params: {
+type SingleAccountPromotionParams = {
   channelKey: string;
   channel: Record<string, unknown>;
-}): string[] {
-  const hasNamedAccounts =
-    Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
-    0;
-  const entries = Object.entries(params.channel)
-    .filter(([key, value]) => key !== "accounts" && key !== "enabled" && value !== undefined)
-    .map(([key]) => key);
-  if (entries.length === 0) {
-    return [];
-  }
+  setupSurface?: ChannelSetupPromotionSurface;
+  includeSetupKeys?: boolean;
+  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
+};
 
-  let setupSurface: ChannelSetupPromotionSurface | null | undefined;
-  const resolveSetupSurface = () => {
-    setupSurface ??= getChannelSetupPromotionSurface(params.channelKey, {
-      loadBundledFallback: true,
-    });
-    return setupSurface;
-  };
+type SingleAccountPromotion =
+  | { kind: "preserve-root" }
+  | { kind: "promote"; keysToMove: string[]; shouldDeferPromotion: boolean };
 
-  const keysToMove = entries.filter((key) => {
-    if (isStaticSingleAccountPromotionKey(params.channelKey, key)) {
-      return true;
-    }
-    return Boolean(resolveSetupSurface()?.singleAccountKeysToMove?.includes(key));
-  });
-  if (!hasNamedAccounts || keysToMove.length === 0) {
-    return keysToMove;
-  }
+// Published undeclared adapters still depend on these keys: Chatu, GroupMe, OneBot,
+// and WhatsApp Cloud use accessToken; Claworld uses appToken; OneBot uses httpUrl;
+// MQTT and TrueConf use password; Rocket.Chat uses rooms and userId; WorkClaw and
+// TIMBot use userId; Vama, Pinto, and Roam use webhookSecret (2026-07-22 sweep).
+// Delete each key as soon as no published plugin reads it; no version boundary is needed.
+const LEGACY_UNDECLARED_ADAPTER_PROMOTION_KEYS = {
+  common: ["accessToken", "appToken", "httpUrl", "password", "userId", "webhookSecret"],
+  setupOnly: ["rooms"],
+} as const;
 
-  const namedAccountPromotionKeys =
-    setupSurface?.namedAccountPromotionKeys ??
-    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
-    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  if (!namedAccountPromotionKeys) {
-    return keysToMove;
-  }
-  return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
+const legacyUndeclaredAdapterCommonPromotionKeys = new Set<string>(
+  LEGACY_UNDECLARED_ADAPTER_PROMOTION_KEYS.common,
+);
+const legacyUndeclaredAdapterSetupOnlyPromotionKeys = new Set<string>(
+  LEGACY_UNDECLARED_ADAPTER_PROMOTION_KEYS.setupOnly,
+);
+
+function hasPromotionDeclarations(surface: ChannelSetupPromotionSurface | null): boolean {
+  return Boolean(surface && Object.hasOwn(surface, "singleAccountKeysToMove"));
 }
 
-export function resolveSingleAccountPromotionTarget(params: {
-  channelKey: string;
-  channel: ChannelSectionBase;
-}): string {
-  const accounts = params.channel.accounts ?? {};
-  const resolveExistingAccountId = (targetAccountId: string): string => {
-    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
-    const matchedAccountId = Object.keys(accounts).find(
-      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
-    );
-    return matchedAccountId ?? normalizedTargetAccountId;
+function isLegacyUndeclaredAdapterPromotionKey(key: string, includeSetupKeys: boolean): boolean {
+  return (
+    legacyUndeclaredAdapterCommonPromotionKeys.has(key) ||
+    (includeSetupKeys && legacyUndeclaredAdapterSetupOnlyPromotionKeys.has(key))
+  );
+}
+
+function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null {
+  return setup && typeof setup === "object" ? (setup as ChannelSetupPromotionSurface) : null;
+}
+
+function getLoadedChannelSetupPromotionSurface(
+  channelKey: string,
+): ChannelSetupPromotionSurface | null {
+  const plugin = getLoadedChannelPluginForRead(channelKey);
+  return asPromotionSurface(plugin?.setupContract ?? plugin?.setup);
+}
+
+/**
+ * Resolves all root-level keys eligible for single-account promotion.
+ */
+export function resolveSingleAccountPromotion(
+  params: SingleAccountPromotionParams,
+): SingleAccountPromotion {
+  const callerSetupSurface =
+    params.setupSurface === undefined ? undefined : asPromotionSurface(params.setupSurface);
+  let discoveredSetupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveSetupSurface = () => {
+    if (callerSetupSurface !== undefined) {
+      return callerSetupSurface;
+    }
+    if (discoveredSetupSurface === undefined) {
+      discoveredSetupSurface =
+        getLoadedChannelSetupPromotionSurface(params.channelKey) ??
+        params.resolveBundledSurface?.(params.channelKey) ??
+        null;
+    }
+    return discoveredSetupSurface;
   };
-  const surface = getChannelSetupPromotionSurface(params.channelKey, {
-    loadBundledFallback: true,
-  });
-  const resolved = surface?.resolveSingleAccountPromotionTarget?.({
-    channel: params.channel,
-  });
-  const normalizedResolved = normalizeOptionalString(resolved);
-  if (normalizedResolved) {
-    return resolveExistingAccountId(normalizedResolved);
+  // Generic policy fields also belong to a preserved root identity.
+  if (resolveSetupSurface()?.configPromotion === "preserve-root") {
+    return { kind: "preserve-root" };
   }
-  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
+  const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
+  if (entries.length === 0) {
+    return { kind: "promote", keysToMove: [], shouldDeferPromotion: false };
+  }
+  const isGenericPromotionKey = params.includeSetupKeys
+    ? isSetupSingleAccountPromotionKey
+    : isCommonSingleAccountPromotionKey;
+  const isLegacyPromotionKey = (key: string) =>
+    isLegacyUndeclaredAdapterPromotionKey(key, params.includeSetupKeys === true);
+  const hasUncoveredRootKeys = entries.some(
+    (key) => !isGenericPromotionKey(key) && !isLegacyPromotionKey(key),
+  );
+  const buildResult = (keysToMove: string[]): SingleAccountPromotion => ({
+    kind: "promote",
+    keysToMove,
+    shouldDeferPromotion: hasUncoveredRootKeys && !hasPromotionDeclarations(resolveSetupSurface()),
+  });
+
+  const keysToMove = entries.filter((key) => {
+    if (isGenericPromotionKey(key)) {
+      return true;
+    }
+    const setupSurface = resolveSetupSurface();
+    return hasPromotionDeclarations(setupSurface)
+      ? Boolean(setupSurface?.singleAccountKeysToMove?.includes(key))
+      : isLegacyPromotionKey(key);
+  });
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return buildResult(keysToMove);
+  }
+
+  // Once named accounts exist, only keys explicitly allowed for named-account
+  // promotion should move. This avoids flattening root-only channel settings.
+  const namedAccountPromotionKeys = resolveSetupSurface()?.namedAccountPromotionKeys;
+  if (!namedAccountPromotionKeys) {
+    return buildResult(keysToMove);
+  }
+  return buildResult(keysToMove.filter((key) => namedAccountPromotionKeys.includes(key)));
 }

@@ -1,19 +1,26 @@
+/**
+ * Chutes provider plugin entrypoint with OAuth and API-key auth methods.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveOAuthApiKeyMarker,
   type ProviderAuthContext,
   type ProviderAuthResult,
+  buildOauthProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { loginChutes } from "openclaw/plugin-sdk/provider-auth-login";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { loginChutes, refreshChutesOAuthCredential } from "./oauth.js";
 import {
   CHUTES_DEFAULT_MODEL_REF,
   applyChutesApiKeyConfig,
   applyChutesProviderConfig,
 } from "./onboard.js";
-import { buildChutesProvider } from "./provider-catalog.js";
+import { buildChutesProvider, buildStaticChutesProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "chutes";
 
@@ -73,6 +80,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       onAuth,
       onPrompt,
       onProgress: (message) => progress.update(message),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
 
     progress.stop("Chutes OAuth complete");
@@ -166,20 +174,31 @@ export default definePluginEntry({
       catalog: {
         order: "profile",
         run: async (ctx) => {
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderAuth(PROVIDER_ID, {
+          const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderAuth(PROVIDER_ID, {
             oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
           });
           if (!apiKey) {
             return null;
           }
-          return {
-            provider: {
-              ...(await buildChutesProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: discoveryApiKey ? profileId : undefined,
+            run: async () => ({
+              provider: {
+                ...(await buildChutesProvider(discoveryApiKey, { discoveryMode: "strict" })),
+                apiKey,
+              },
+            }),
+          });
         },
       },
+      staticCatalog: {
+        order: "profile",
+        run: async () => ({
+          provider: buildStaticChutesProvider(),
+        }),
+      },
+      refreshOAuth: refreshChutesOAuthCredential,
     });
   },
 });

@@ -1,6 +1,7 @@
+// Lmstudio tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 import {
   buildLmstudioAuthHeaders,
@@ -17,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
     ...actual,
     resolveApiKeyForProvider: (...args: unknown[]) => resolveApiKeyForProviderMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+  vi.resetModules();
 });
 
 function buildLmstudioConfig(overrides?: {
@@ -56,7 +62,7 @@ describe("lmstudio-runtime", () => {
       resolveLmstudioRuntimeApiKey({
         config: buildLmstudioConfig({ auth: "api-key" }),
       }),
-    ).rejects.toThrow(/LM Studio API key is required/i);
+    ).rejects.toThrow('or run "openclaw models auth login --provider lmstudio".');
   });
 
   it("falls back to configured env marker key when profile resolution fails", async () => {
@@ -131,6 +137,24 @@ describe("lmstudio-runtime", () => {
             Authorization: "Bearer proxy-token",
           },
         }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows header-only runtime auth when an api key env template is unset", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+        env: {},
       }),
     ).resolves.toBeUndefined();
   });
@@ -243,6 +267,34 @@ describe("lmstudio-runtime", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a configured env marker resolves its concrete credential",
+      apiKey: "GOOGLE_API_KEY",
+      env: { GOOGLE_API_KEY: "direct-env-key" },
+      expected: "direct-env-key",
+    },
+    {
+      name: "a SecretRef resolving to an env marker is not dereferenced again",
+      apiKey: { source: "env", provider: "default", id: "LM_API_TOKEN" },
+      env: { LM_API_TOKEN: "GOOGLE_API_KEY", GOOGLE_API_KEY: "nested-env-key" },
+      expected: undefined,
+    },
+    {
+      name: "a configured synthetic auth marker is suppressed",
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      env: {},
+      expected: undefined,
+    },
+  ])("preserves configured auth semantics when $name", async ({ apiKey, env, expected }) => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({ apiKey }),
+        env,
+      }),
+    ).resolves.toBe(expected);
+  });
+
   it("resolves env-template api keys from config", async () => {
     await expect(
       resolveLmstudioConfiguredApiKey({
@@ -254,6 +306,39 @@ describe("lmstudio-runtime", () => {
         },
       }),
     ).resolves.toBe("template-lmstudio-key");
+  });
+
+  it("resolves arbitrary env-template api keys from config", async () => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+        }),
+        env: {
+          LMSTUDIO_API_KEY: "custom-template-lmstudio-key",
+        },
+      }),
+    ).resolves.toBe("custom-template-lmstudio-key");
+  });
+
+  it.each([
+    { name: "env template", apiKey: "${LMSTUDIO_API_KEY}" },
+    {
+      name: "SecretRef",
+      apiKey: { source: "env", provider: "default", id: "LMSTUDIO_API_KEY" },
+    },
+  ])("fails closed for an unresolved $name unless explicitly allowed", async ({ apiKey }) => {
+    const options = {
+      config: buildLmstudioConfig({ apiKey }),
+      env: {},
+    };
+
+    await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
+      /models\.providers\.lmstudio\.apiKey/i,
+    );
+    await expect(
+      resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
+    ).resolves.toBeUndefined();
   });
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {

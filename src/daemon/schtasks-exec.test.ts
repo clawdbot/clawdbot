@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Windows schtasks exec tests cover scheduled task command execution.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execSchtasks } from "./schtasks-exec.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -11,8 +12,11 @@ beforeEach(() => {
   runCommandWithTimeout.mockReset();
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("execSchtasks", () => {
   it("runs schtasks with bounded timeouts", async () => {
+    vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
     runCommandWithTimeout.mockResolvedValue({
       stdout: "ok",
       stderr: "",
@@ -28,9 +32,13 @@ describe("execSchtasks", () => {
       code: 0,
     });
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
+      baseEnv: expect.any(Object),
       timeoutMs: 15_000,
-      noOutputTimeoutMs: 5_000,
+      noOutputTimeoutMs: 30_000,
     });
+    expect(runCommandWithTimeout.mock.calls[0]?.[1].baseEnv).not.toHaveProperty(
+      "BOUNDARY_PARENT_ONLY",
+    );
   });
 
   it("maps a timeout into a non-zero schtasks result", async () => {

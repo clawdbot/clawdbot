@@ -1,3 +1,4 @@
+// Verifies config code does not cross plugin runtime boundaries.
 import { describe, expect, it } from "vitest";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";

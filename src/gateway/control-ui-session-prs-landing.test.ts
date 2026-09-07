@@ -1,0 +1,183 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as worktreeGit from "../agents/worktrees/git.js";
+import { resolveBranchLanding } from "./control-ui-session-prs-landing.js";
+
+const execFileAsync = promisify(execFile);
+
+describe("resolveBranchLanding", () => {
+  let root: string;
+
+  const git = (...args: string[]) =>
+    execFileAsync("git", ["-c", "user.email=test@openclaw.ai", "-c", "user.name=Test", ...args], {
+      cwd: root,
+    });
+  const sha = async (ref: string) => (await git("rev-parse", ref)).stdout.trim();
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prs-landing-")));
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each([
+    { scenario: "no merged PRs", mergedHeads: [] },
+    {
+      scenario: "a merge into another base without a propagation commit",
+      mergedHeads: [{ sha: "1".repeat(40), baseRef: "release" }],
+    },
+  ])(
+    "resolves an unpublished branch with $scenario without reading an unused HEAD",
+    async ({ mergedHeads }) => {
+      const base = await sha("HEAD");
+      await git("checkout", "-b", "feature");
+      await fs.appendFile(path.join(root, "a.txt"), "two\n");
+      await git("commit", "-am", "unpublished work");
+      const runGit = vi.spyOn(worktreeGit, "runGit");
+
+      expect(
+        await resolveBranchLanding(root, {
+          branch: "feature",
+          defaultBranch: "main",
+          mergedHeads,
+        }),
+      ).toEqual({
+        pushedSha: null,
+        statsBase: base,
+        hasLandedPullRequest: false,
+        provenNewPushedWork: false,
+      });
+      expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
+    },
+  );
+
+  it("marks a squash-landed tip and bases stats on the merged head", async () => {
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "a.txt"), "two\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "feature work");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const mergedHead = await sha("HEAD");
+
+    const landing = await resolveBranchLanding(root, {
+      branch: "feature",
+      defaultBranch: "main",
+      mergedHeads: [{ sha: mergedHead, baseRef: "main" }],
+    });
+
+    expect(landing).toEqual({
+      pushedSha: mergedHead,
+      statsBase: mergedHead,
+      hasLandedPullRequest: true,
+      provenNewPushedWork: false,
+    });
+  });
+
+  it.each(["single", "duplicate", "distinct"])(
+    "checks %s landing receipts per unique head",
+    async (scenario) => {
+      const base = await sha("HEAD");
+      await git("checkout", "-b", "feature");
+      await fs.appendFile(path.join(root, "a.txt"), "two\n");
+      await git("add", "a.txt");
+      await git("commit", "-m", "feature work");
+      const mergedHead = await sha("HEAD");
+      await git("checkout", "main");
+      await fs.appendFile(path.join(root, "a.txt"), "two\n");
+      await git("add", "a.txt");
+      await git("commit", "-m", "squash land");
+      const mergeCommit = await sha("HEAD");
+      // A reset of main can land the same head without incorporating the older merge.
+      const otherMerge =
+        scenario === "distinct"
+          ? (
+              await git(
+                "commit-tree",
+                (await git("write-tree")).stdout.trim(),
+                "-p",
+                base,
+                "-m",
+                "another landing",
+              )
+            ).stdout.trim()
+          : mergeCommit;
+      await git("update-ref", "refs/remotes/origin/main", "HEAD");
+      await git("checkout", "feature");
+      await git("reset", "--hard", "refs/remotes/origin/main");
+      await fs.writeFile(path.join(root, "b.txt"), "second\n");
+      await git("add", "b.txt");
+      await git("commit", "-m", "second PR work");
+      await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+      const head = await sha("HEAD");
+      const runGit = vi.spyOn(worktreeGit, "runGit");
+      const landedHead = { sha: mergedHead, baseRef: "main", mergeCommitSha: mergeCommit };
+
+      const landing = await resolveBranchLanding(root, {
+        branch: "feature",
+        defaultBranch: "main",
+        mergedHeads:
+          scenario === "single"
+            ? [landedHead]
+            : [landedHead, { ...landedHead, mergeCommitSha: otherMerge }],
+      });
+
+      expect(landing.provenNewPushedWork).toBe(scenario !== "distinct");
+      // The first squash remains the baseline even when another landing is missing.
+      expect(landing.statsBase).toBe(mergeCommit);
+      expect(
+        runGit.mock.calls.filter(
+          ([, args]) =>
+            args[0] === "merge-base" &&
+            args[1] === "--is-ancestor" &&
+            args[2] === mergedHead &&
+            args[3] === head,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("selects the newest of three related baselines via the batched path", async () => {
+    // Linear chain: fork point (merge base) -> merged head 1 -> merged head 2
+    // -> HEAD; the maximal published baseline is merged head 2.
+    const base = await sha("HEAD");
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "a.txt"), "two\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "pr1 work");
+    const head1 = await sha("HEAD");
+    await fs.appendFile(path.join(root, "a.txt"), "three\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "pr2 work");
+    const head2 = await sha("HEAD");
+    await fs.writeFile(path.join(root, "c.txt"), "wip\n");
+    await git("add", "c.txt");
+    await git("commit", "-m", "follow-up");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const runGit = vi.spyOn(worktreeGit, "runGit");
+
+    const landing = await resolveBranchLanding(root, {
+      branch: "feature",
+      defaultBranch: "main",
+      mergedHeads: [
+        { sha: head1, baseRef: "main" },
+        { sha: head2, baseRef: "main" },
+      ],
+    });
+
+    expect(landing.statsBase).toBe(head2);
+    expect(landing.hasLandedPullRequest).toBe(true);
+    expect(runGit).not.toHaveBeenCalledWith(root, ["merge-base", "--is-ancestor", base, head2]);
+  });
+});

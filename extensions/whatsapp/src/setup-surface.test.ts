@@ -1,26 +1,24 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Whatsapp tests cover setup surface plugin behavior.
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
   runSetupWizardFinalize,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
-  createWhatsAppAllowlistModeInput,
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
   createWhatsAppRootAllowFromConfig,
   createWhatsAppWorkAccountConfig,
   expectNoWhatsAppLoginFollowup,
-  expectWhatsAppAllowlistModeSetup,
   expectWhatsAppLoginFollowup,
   expectWhatsAppOpenPolicySetup,
   expectWhatsAppOwnerAllowlistSetup,
   expectWhatsAppPersonalPhoneSetup,
-  expectWhatsAppSeparatePhoneDisabledSetup,
   expectWhatsAppWorkAccountAccessNote,
   expectWhatsAppWorkAccountOpenAccess,
 } from "./setup-test-helpers.js";
@@ -29,22 +27,38 @@ const hoisted = vi.hoisted(() => ({
   detectWhatsAppLinked: vi.fn<(cfg: OpenClawConfig, accountId: string) => Promise<boolean>>(
     async () => false,
   ),
+  hasWebCredsSync: vi.fn(() => false),
+  loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
-  resolveWhatsAppAuthDir: vi.fn(() => ({
+  readWebAuthState: vi.fn<(authDir: string) => Promise<"linked" | "not-linked" | "unstable">>(
+    async () => "not-linked",
+  ),
+  resolveWhatsAppAuthDir: vi.fn<
+    (params: { cfg: OpenClawConfig; accountId: string }) => { authDir: string }
+  >(() => ({
     authDir: "/tmp/openclaw-whatsapp-test",
   })),
 }));
 
-vi.mock("./login.js", () => ({
-  loginWeb: hoisted.loginWeb,
-}));
+vi.mock("./login.js", () => {
+  hoisted.loginModuleState.loaded = true;
+  return { loginWeb: hoisted.loginWeb };
+});
 
 vi.mock("./setup-finalize.js", async () => {
   const actual = await vi.importActual<typeof import("./setup-finalize.js")>("./setup-finalize.js");
   return {
     ...actual,
     detectWhatsAppLinked: hoisted.detectWhatsAppLinked,
+  };
+});
+
+vi.mock("./creds-files.js", async () => {
+  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
+  return {
+    ...actual,
+    hasWebCredsSync: hoisted.hasWebCredsSync,
   };
 });
 
@@ -60,17 +74,22 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-  };
+  });
 });
 
-function createRuntime(): RuntimeEnv {
-  return {
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return Object.assign({}, actual, {
+    readWebAuthState: hoisted.readWebAuthState,
+  });
+});
+
+const createRuntime = (): RuntimeEnv =>
+  ({
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
+  }) as unknown as RuntimeEnv;
 
 const whatsappGetStatus = createPluginSetupWizardStatus({
   id: "whatsapp",
@@ -86,6 +105,7 @@ async function runFinalizeWithHarness(params: {
   runtime?: RuntimeEnv;
   forceAllowFrom?: boolean;
   accountId?: string;
+  options?: Parameters<NonNullable<typeof whatsappSetupWizard.finalize>>[0]["options"];
 }) {
   return await runSetupWizardFinalize({
     finalize: whatsappSetupWizard.finalize,
@@ -93,6 +113,7 @@ async function runFinalizeWithHarness(params: {
     accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
     runtime: params.runtime ?? createRuntime(),
     prompter: params.harness.prompter,
+    options: params.options,
     forceAllowFrom: params.forceAllowFrom ?? false,
   });
 }
@@ -108,34 +129,28 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 function expectFinalizeResult(result: Awaited<ReturnType<typeof runFinalizeWithHarness>>): {
   cfg: OpenClawConfig;
 } {
-  expect(result).toBeDefined();
   if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
     throw new Error("Expected WhatsApp finalize result with cfg");
   }
   return result as { cfg: OpenClawConfig };
 }
 
-async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
-  hoisted.pathExists.mockResolvedValue(true);
-  const harness = createSeparatePhoneHarness({
-    selectValues: params.selectValues,
-    textValues: params.textValues,
-  });
-  const result = expectFinalizeResult(
-    await runFinalizeWithHarness({
-      harness,
-    }),
-  );
-  return { harness, result };
-}
-
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     hoisted.detectWhatsAppLinked.mockReset();
     hoisted.detectWhatsAppLinked.mockResolvedValue(false);
-    hoisted.loginWeb.mockReset();
+    hoisted.hasWebCredsSync.mockReset();
+    hoisted.hasWebCredsSync.mockReturnValue(false);
+    hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
+      const loginOptions = args[4] as
+        | { beforeCredentialPersistence?: () => Promise<void> }
+        | undefined;
+      await loginOptions?.beforeCredentialPersistence?.();
+    });
     hoisted.pathExists.mockReset();
     hoisted.pathExists.mockResolvedValue(false);
+    hoisted.readWebAuthState.mockReset();
+    hoisted.readWebAuthState.mockResolvedValue("not-linked");
     hoisted.resolveWhatsAppAuthDir.mockReset();
     hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
   });
@@ -152,14 +167,6 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
-  });
-
-  it("supports disabled DM policy for separate-phone setup", async () => {
-    const { harness, result } = await runSeparatePhoneFlow({
-      selectValues: ["separate", "disabled"],
-    });
-
-    expectWhatsAppSeparatePhoneDisabledSetup(result.cfg, harness);
   });
 
   it("writes named-account DM policy and allowFrom instead of the channel root", async () => {
@@ -203,8 +210,11 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("uses configured defaultAccount for omitted-account setup status", async () => {
-    hoisted.detectWhatsAppLinked.mockImplementation(
-      async (_cfg: OpenClawConfig, accountId: string) => accountId === "work",
+    hoisted.resolveWhatsAppAuthDir.mockImplementation(({ accountId }: { accountId: string }) => ({
+      authDir: accountId === "work" ? "/tmp/work" : "/tmp/default",
+    }));
+    hoisted.readWebAuthState.mockImplementation(async (authDir: string) =>
+      authDir === "/tmp/work" ? "linked" : "not-linked",
     );
 
     const status = await whatsappGetStatus({
@@ -228,11 +238,33 @@ describe("whatsapp setup wizard", () => {
 
     expect(status.configured).toBe(true);
     expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
-    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(
-      expect.any(Object),
-      DEFAULT_ACCOUNT_ID,
-    );
-    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(expect.any(Object), "work");
+    expect(hoisted.readWebAuthState).toHaveBeenCalledWith("/tmp/default");
+    expect(hoisted.readWebAuthState).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("shows auth stabilizing when auth reads time out", async () => {
+    hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/work" });
+    hoisted.readWebAuthState.mockResolvedValue("unstable");
+
+    const status = await whatsappGetStatus({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {
+        whatsapp: "work",
+      },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["WhatsApp (work): auth stabilizing"]);
   });
 
   it("uses configured defaultAccount for omitted-account finalize writes", async () => {
@@ -251,12 +283,6 @@ describe("whatsapp setup wizard", () => {
 
     expectWhatsAppWorkAccountOpenAccess(result.cfg);
     expectWhatsAppWorkAccountAccessNote(harness);
-  });
-
-  it("normalizes allowFrom entries when list mode is selected", async () => {
-    const { result } = await runSeparatePhoneFlow(createWhatsAppAllowlistModeInput());
-
-    expectWhatsAppAllowlistModeSetup(result.cfg);
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
@@ -292,17 +318,79 @@ describe("whatsapp setup wizard", () => {
     hoisted.pathExists.mockResolvedValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
     const runtime = createRuntime();
+    expect(hoisted.loginModuleState.loaded).toBe(false);
+    const beforePersistentEffect = vi.fn(async () => {
+      expect(hoisted.loginModuleState.loaded).toBe(true);
+    });
 
     await runFinalizeWithHarness({
       harness,
       runtime,
+      options: { beforePersistentEffect },
     });
 
-    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID, {
+      beforeCredentialPersistence: expect.any(Function),
+    });
+  });
+
+  it("propagates the persistent-effect guard before WhatsApp login persists state", async () => {
+    hoisted.pathExists.mockResolvedValue(false);
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntime();
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+
+    await expect(
+      runFinalizeWithHarness({
+        harness,
+        runtime,
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects delayed credential persistence when the inference route changes during login", async () => {
+    hoisted.pathExists.mockResolvedValue(false);
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntime();
+    const guardError = new Error("verified inference route changed");
+    let routeOwner = "original";
+    const beforePersistentEffect = vi.fn(async () => {
+      if (routeOwner !== "original") {
+        throw guardError;
+      }
+    });
+    hoisted.loginWeb.mockImplementationOnce(async (...args: unknown[]) => {
+      const loginOptions = args[4] as
+        | { beforeCredentialPersistence?: () => Promise<void> }
+        | undefined;
+      routeOwner = "replacement";
+      await loginOptions?.beforeCredentialPersistence?.();
+    });
+
+    await expect(
+      runFinalizeWithHarness({
+        harness,
+        runtime,
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(hoisted.loginWeb).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });

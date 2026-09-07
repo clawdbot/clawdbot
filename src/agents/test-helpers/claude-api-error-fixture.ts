@@ -1,4 +1,9 @@
-export const CLAUDE_API_ERROR_MESSAGE =
+/**
+ * Claude API error fixture.
+ *
+ * Provides matching message, API error text, and JSONL rows for transcript/error parsing tests.
+ */
+const CLAUDE_API_ERROR_MESSAGE =
   "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
 
 export function createClaudeApiErrorFixture() {

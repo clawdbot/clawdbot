@@ -1,26 +1,13 @@
-import { describe, expect, it } from "vitest";
+// Discord tests cover setup account state plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectDiscordSetupAccount,
-  listDiscordSetupAccountIds,
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 
 describe("discord setup account state", () => {
-  it("lists normalized setup account ids plus the implicit default account", () => {
-    expect(
-      listDiscordSetupAccountIds({
-        channels: {
-          discord: {
-            accounts: {
-              Work: { token: "work-token" },
-              alerts: { token: "alerts-token" },
-            },
-          },
-        },
-      }),
-    ).toEqual(["alerts", "default", "work"]);
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("resolves setup account config when account key casing differs from normalized id", () => {
     const resolved = resolveDiscordSetupAccountConfig({
@@ -87,5 +74,43 @@ describe("discord setup account state", () => {
     expect(inspected.tokenSource).toBe("none");
     expect(inspected.tokenStatus).toBe("missing");
     expect(inspected.configured).toBe(false);
+  });
+
+  it("reports unresolved SecretRef account tokens as configured but unavailable", () => {
+    const inspected = inspectDiscordSetupAccount({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                token: { source: "exec", provider: "vault", id: "discord/work" },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(inspected.token).toBe("");
+    expect(inspected.tokenSource).toBe("config");
+    expect(inspected.tokenStatus).toBe("configured_unavailable");
+    expect(inspected.configured).toBe(true);
+  });
+
+  it("keeps the runtime resolver's default-account-only environment fallback", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "Bot setup-token");
+
+    expect(inspectDiscordSetupAccount({ cfg: {}, accountId: "default" })).toMatchObject({
+      token: "setup-token",
+      tokenSource: "env",
+      configured: true,
+    });
+    expect(
+      inspectDiscordSetupAccount({
+        cfg: { channels: { discord: { accounts: { work: {} } } } },
+        accountId: "work",
+      }),
+    ).toMatchObject({ token: "", tokenSource: "none", configured: false });
   });
 });

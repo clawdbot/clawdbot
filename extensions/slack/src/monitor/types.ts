@@ -1,20 +1,22 @@
+// Slack type declarations define plugin contracts.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackFile, SlackMessageEvent } from "../types.js";
+import type { SlackAppContext } from "../agent-context.js";
+import type { SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
-  mode?: "socket" | "http";
+  mode?: "socket" | "http" | "relay";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
-  /** Callback to update the channel account status snapshot (e.g. lastEventAt). */
+  /** Callback to update app-level channel account activity (e.g. lastEventAt). */
   setStatus?: (next: Record<string, unknown>) => void;
   /** Callback to read the current channel account status snapshot. */
   getStatus?: () => Record<string, unknown>;
@@ -60,6 +62,42 @@ export type SlackChannelIdChangedEvent = {
   event_ts?: string;
 };
 
+export type SlackAppHomeOpenedEvent = {
+  type: "app_home_opened";
+  user?: string;
+  channel?: string;
+  tab?: "home" | "messages";
+  context?: SlackAppContext;
+  event_ts?: string;
+};
+
+export type SlackAppContextChangedEvent = {
+  type: "app_context_changed";
+  user?: string;
+  context?: SlackAppContext;
+  event_ts?: string;
+};
+
+export type SlackAgentSessionStoppedEvent = {
+  type: "agent_session_stopped";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  event_ts: string;
+  streaming_message_ts: string[];
+};
+
+export type SlackAgentSessionTitleChangedEvent = {
+  type: "agent_session_title_changed";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  title: string;
+  previous_title?: string;
+  team_id: string;
+  event_ts: string;
+};
+
 export type SlackPinEvent = {
   type: "pin_added" | "pin_removed";
   channel_id?: string;
@@ -68,12 +106,17 @@ export type SlackPinEvent = {
   event_ts?: string;
 };
 
+type SlackMessageSubtypeMessage = Pick<
+  SlackMessageEvent,
+  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
+>;
+
 export type SlackMessageChangedEvent = {
   type: "message";
   subtype: "message_changed";
   channel?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  message?: SlackMessageSubtypeMessage;
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };
 
@@ -82,17 +125,6 @@ export type SlackMessageDeletedEvent = {
   subtype: "message_deleted";
   channel?: string;
   deleted_ts?: string;
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };
-
-export type SlackThreadBroadcastEvent = {
-  type: "message";
-  subtype: "thread_broadcast";
-  channel?: string;
-  user?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  event_ts?: string;
-};
-
-export type { SlackFile, SlackMessageEvent };

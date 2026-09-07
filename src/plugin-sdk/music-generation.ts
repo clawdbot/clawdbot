@@ -12,3 +12,9 @@ export type {
   MusicGenerationSourceImage,
   MusicGenerationOutputFormat,
 } from "../music-generation/types.js";
+export {
+  downloadGeneratedMusicAsset,
+  extractGeneratedMusicFileCandidates,
+  generatedMusicAssetFromBase64,
+  type GeneratedMusicFileCandidate,
+} from "../music-generation/provider-assets.js";

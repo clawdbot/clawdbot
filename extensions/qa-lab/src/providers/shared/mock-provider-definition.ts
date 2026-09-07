@@ -1,7 +1,8 @@
+// Qa Lab provider module implements model/runtime integration.
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
 
-export type MockQaProviderDefinitionParams = {
+type MockQaProviderDefinitionParams = {
   mode: Extract<QaProviderMode, "aimock" | "mock-openai">;
   commandName: string;
   commandDescription: string;
@@ -10,7 +11,7 @@ export type MockQaProviderDefinitionParams = {
 };
 
 function mockModelRef(providerId: string, alternate?: boolean) {
-  return `${providerId}/${alternate ? "gpt-5.4-alt" : "gpt-5.4"}`;
+  return `${providerId}/${alternate ? "gpt-5.6-luna-alt" : "gpt-5.6-luna"}`;
 }
 
 export function createMockQaProviderDefinition(
@@ -25,17 +26,21 @@ export function createMockQaProviderDefinition(
       serverLabel: params.serverLabel,
     },
     defaultModel: (options) => mockModelRef(params.mode, options?.alternate),
-    defaultImageGenerationProviderIds: [],
-    defaultImageGenerationModel: () => `${params.mode}/gpt-image-1`,
+    defaultImageGenerationProviderIds: ["openai"],
+    defaultImageGenerationModel: ({ modelProviderIds }) =>
+      modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
     usesFastModeByDefault: () => false,
     resolveModelParams: () => ({
       transport: "sse",
       openaiWsWarmup: false,
     }),
     resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
-    buildGatewayModels: ({ providerBaseUrl }) => ({
+    buildGatewayModels: ({ providerBaseUrl, primaryModel, alternateModel }) => ({
       mode: "replace",
-      providers: createMockProviderMap(params.mode, providerBaseUrl),
+      providers: createMockProviderMap(params.mode, providerBaseUrl, [
+        primaryModel,
+        alternateModel,
+      ]),
     }),
     mockAuthProviders: params.mockAuthProviders,
     usesModelProviderPlugins: false,

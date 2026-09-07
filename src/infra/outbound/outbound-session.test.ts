@@ -1,23 +1,61 @@
+// Covers outbound session-route resolution through plugin hooks and fallback
+// target parsing, plus best-effort session route persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import {
+  bindOutboundSessionEntry,
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
+type InboundMetadataParams = {
+  sessionKey?: string;
+  storePath?: string;
+};
+
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
+  loadSessionEntryReadOnly:
+    vi.fn<(params: { sessionKey: string; storePath: string }) => SessionEntry | undefined>(),
+  updateSessionLastRoute: vi.fn(async (_params: InboundMetadataParams) => ({
+    sessionId: "session-1",
+    updatedAt: 1,
+  })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
 }));
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
+  updateSessionLastRoute: mocks.updateSessionLastRoute,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
@@ -28,19 +66,120 @@ describe("resolveOutboundSessionRoute", () => {
     session: {
       dmScope: "per-peer",
       identityLinks: {
-        alice: ["discord:123"],
+        alice: ["guildchat:123"],
       },
     },
   } as OpenClawConfig;
-  const slackMpimCfg = {
+  const workspaceMpimCfg = {
     channels: {
-      slack: {
+      workspace: {
         dm: {
           groupChannels: ["G123"],
         },
       },
     },
   } as OpenClawConfig;
+
+  it("uses a prepared runtime plugin for session-route resolution", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
+          sessionKey: `agent:main:external-channel:direct:${target}`,
+          baseSessionKey: `agent:main:external-channel:direct:${target}`,
+          peer: { kind: "direct" as const, id: target },
+          chatType: "direct" as const,
+          from: `external-channel:${target}`,
+          to: `user:${target}`,
+        }),
+      },
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "u123",
+    });
+
+    expect(route?.to).toBe("user:u123");
+    expect(route?.chatType).toBe("direct");
+  });
+
+  it.each([
+    {
+      name: "group binding collapses an exact room into main",
+      globalSession: { groupScope: "per-group" as const },
+      peer: { kind: "group" as const, id: "team-room" },
+      bindingAgentId: "main",
+      bindingSession: { groupScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:group:team-room",
+      pluginSessionKey: "agent:main:bound-channel:group:team-room",
+      expectedSessionKey: "agent:main:main",
+      expectedBaseSessionKey: "agent:main:main",
+      expectedRecipientSessionExact: true,
+    },
+    {
+      name: "DM binding collapses an exact peer into main and preserves its thread",
+      globalSession: { dmScope: "per-channel-peer" as const },
+      peer: { kind: "direct" as const, id: "alice" },
+      bindingAgentId: "main",
+      bindingSession: { dmScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:direct:alice",
+      pluginSessionKey: "agent:main:bound-channel:direct:alice:thread:topic-1",
+      expectedSessionKey: "agent:main:main:thread:topic-1",
+      expectedBaseSessionKey: "agent:main:main",
+      expectedRecipientSessionExact: true,
+    },
+    {
+      name: "cross-agent binding downgrades an agent-local exact route",
+      globalSession: { dmScope: "per-channel-peer" as const },
+      peer: { kind: "direct" as const, id: "alice" },
+      bindingAgentId: "other",
+      bindingSession: { dmScope: "per-channel-peer" as const },
+      pluginBaseKey: "agent:main:bound-channel:direct:alice",
+      pluginSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedBaseSessionKey: "agent:main:bound-channel:direct:alice",
+      expectedRecipientSessionExact: false,
+    },
+  ])("applies $name before returning the canonical route", async (testCase) => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "bound-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: testCase.pluginSessionKey,
+          baseSessionKey: testCase.pluginBaseKey,
+          recipientSessionExact: true as const,
+          peer: testCase.peer,
+          chatType: testCase.peer.kind === "direct" ? ("direct" as const) : ("group" as const),
+          from: `bound-channel:${testCase.peer.id}`,
+          to: testCase.peer.id,
+        }),
+      },
+    } satisfies ChannelPlugin;
+    const route = await resolveOutboundSessionRoute({
+      cfg: {
+        session: testCase.globalSession,
+        bindings: [
+          {
+            agentId: testCase.bindingAgentId,
+            match: { channel: "bound-channel", peer: testCase.peer },
+            session: testCase.bindingSession,
+          },
+        ],
+      } as OpenClawConfig,
+      channel: "bound-channel",
+      plugin,
+      agentId: "main",
+      target: testCase.peer.id,
+    });
+
+    expect(route?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(route?.baseSessionKey).toBe(testCase.expectedBaseSessionKey);
+    expect(route?.recipientSessionExact).toBe(testCase.expectedRecipientSessionExact);
+  });
 
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
@@ -86,14 +225,24 @@ describe("resolveOutboundSessionRoute", () => {
 
   it.each([
     {
-      name: "WhatsApp group jid",
+      name: "MobileChat group jid",
       cfg: baseConfig,
-      channel: "whatsapp",
+      channel: "mobilechat",
       target: "120363040000000000@g.us",
       expected: {
-        sessionKey: "agent:main:whatsapp:group:120363040000000000@g.us",
+        sessionKey: "agent:main:mobilechat:group:120363040000000000@g.us",
         from: "120363040000000000@g.us",
         to: "120363040000000000@g.us",
+        chatType: "group",
+      },
+    },
+    {
+      name: "global groupScope main",
+      cfg: { session: { groupScope: "main" } } as OpenClawConfig,
+      channel: "mobilechat",
+      target: "120363040000000000@g.us",
+      expected: {
+        sessionKey: "agent:main:main",
         chatType: "group",
       },
     },
@@ -110,75 +259,75 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "MSTeams conversation target",
+      name: "MeetingChat conversation target",
       cfg: baseConfig,
-      channel: "msteams",
+      channel: "meetingchat",
       target: "conversation:19:meeting_abc@thread.tacv2",
       expected: {
-        sessionKey: "agent:main:msteams:channel:19:meeting_abc@thread.tacv2",
-        from: "msteams:channel:19:meeting_abc@thread.tacv2",
+        sessionKey: "agent:main:meetingchat:channel:19:meeting_abc@thread.tacv2",
+        from: "meetingchat:channel:19:meeting_abc@thread.tacv2",
         to: "conversation:19:meeting_abc@thread.tacv2",
         chatType: "channel",
       },
     },
     {
-      name: "Slack thread",
+      name: "Workspace thread",
       cfg: baseConfig,
-      channel: "slack",
+      channel: "workspace",
       target: "channel:C123",
       replyToId: "456",
       expected: {
-        sessionKey: "agent:main:slack:channel:c123:thread:456",
-        from: "slack:channel:C123",
+        sessionKey: "agent:main:workspace:channel:c123:thread:456",
+        from: "workspace:channel:C123",
         to: "channel:C123",
         threadId: "456",
       },
     },
     {
-      name: "Telegram topic group",
+      name: "Forum topic group",
       cfg: baseConfig,
-      channel: "telegram",
+      channel: "forum",
       target: "-100123456:topic:42",
       expected: {
-        sessionKey: "agent:main:telegram:group:-100123456:topic:42",
-        from: "telegram:group:-100123456:topic:42",
-        to: "telegram:-100123456",
+        sessionKey: "agent:main:forum:group:-100123456:topic:42",
+        from: "forum:group:-100123456:topic:42",
+        to: "forum:-100123456",
         threadId: 42,
       },
     },
     {
-      name: "Telegram DM with topic",
+      name: "Forum DM with topic",
       cfg: perChannelPeerCfg,
-      channel: "telegram",
+      channel: "forum",
       target: "123456789:topic:99",
       expected: {
-        sessionKey: "agent:main:telegram:direct:123456789:thread:99",
-        from: "telegram:123456789:topic:99",
-        to: "telegram:123456789",
+        sessionKey: "agent:main:forum:direct:123456789:thread:99",
+        from: "forum:123456789:topic:99",
+        to: "forum:123456789",
         threadId: 99,
         chatType: "direct",
       },
     },
     {
-      name: "Telegram unresolved username DM",
+      name: "Forum unresolved username DM",
       cfg: perChannelPeerCfg,
-      channel: "telegram",
+      channel: "forum",
       target: "@alice",
       expected: {
-        sessionKey: "agent:main:telegram:direct:@alice",
+        sessionKey: "agent:main:forum:direct:@alice",
         chatType: "direct",
       },
     },
     {
-      name: "Telegram DM scoped threadId fallback",
+      name: "Forum DM scoped threadId fallback",
       cfg: perChannelPeerCfg,
-      channel: "telegram",
+      channel: "forum",
       target: "12345",
       threadId: "12345:99",
       expected: {
-        sessionKey: "agent:main:telegram:direct:12345:thread:99",
-        from: "telegram:12345:topic:99",
-        to: "telegram:12345",
+        sessionKey: "agent:main:forum:direct:12345:thread:99",
+        from: "forum:12345:topic:99",
+        to: "forum:12345",
         threadId: 99,
         chatType: "direct",
       },
@@ -186,7 +335,7 @@ describe("resolveOutboundSessionRoute", () => {
     {
       name: "identity-links per-peer",
       cfg: identityLinksCfg,
-      channel: "discord",
+      channel: "guildchat",
       target: "user:123",
       expected: {
         sessionKey: "agent:main:direct:alice",
@@ -205,12 +354,12 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "BlueBubbles chat_* prefix stripping",
+      name: "LocalChat chat_* prefix stripping",
       cfg: baseConfig,
-      channel: "bluebubbles",
+      channel: "localchat",
       target: "chat_guid:ABC123",
       expected: {
-        sessionKey: "agent:main:bluebubbles:group:abc123",
+        sessionKey: "agent:main:localchat:group:abc123",
         from: "group:ABC123",
       },
     },
@@ -261,72 +410,120 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "Slack mpim allowlist -> group key",
-      cfg: slackMpimCfg,
-      channel: "slack",
+      name: "Workspace group allowlist -> group key",
+      cfg: workspaceMpimCfg,
+      channel: "workspace",
       target: "channel:G123",
       expected: {
-        sessionKey: "agent:main:slack:group:g123",
-        from: "slack:group:G123",
+        sessionKey: "agent:main:workspace:group:g123",
+        from: "workspace:group:G123",
       },
     },
     {
-      name: "Feishu explicit group prefix keeps group routing",
+      name: "CollabChat explicit group prefix keeps group routing",
       cfg: baseConfig,
-      channel: "feishu",
+      channel: "collabchat",
       target: "group:oc_group_chat",
       expected: {
-        sessionKey: "agent:main:feishu:group:oc_group_chat",
-        from: "feishu:group:oc_group_chat",
+        sessionKey: "agent:main:collabchat:group:oc_group_chat",
+        from: "collabchat:group:oc_group_chat",
         to: "oc_group_chat",
         chatType: "group",
       },
     },
     {
-      name: "Feishu explicit dm prefix keeps direct routing",
+      name: "CollabChat explicit dm prefix keeps direct routing",
       cfg: perChannelPeerCfg,
-      channel: "feishu",
+      channel: "collabchat",
       target: "dm:oc_dm_chat",
       expected: {
-        sessionKey: "agent:main:feishu:direct:oc_dm_chat",
-        from: "feishu:oc_dm_chat",
+        sessionKey: "agent:main:collabchat:direct:oc_dm_chat",
+        from: "collabchat:oc_dm_chat",
         to: "oc_dm_chat",
         chatType: "direct",
       },
     },
     {
-      name: "Feishu bare oc_ target defaults to direct routing",
+      name: "CollabChat bare oc_ target defaults to direct routing",
       cfg: perChannelPeerCfg,
-      channel: "feishu",
+      channel: "collabchat",
       target: "oc_ambiguous_chat",
       expected: {
-        sessionKey: "agent:main:feishu:direct:oc_ambiguous_chat",
-        from: "feishu:oc_ambiguous_chat",
+        sessionKey: "agent:main:collabchat:direct:oc_ambiguous_chat",
+        from: "collabchat:oc_ambiguous_chat",
         to: "oc_ambiguous_chat",
         chatType: "direct",
       },
     },
     {
-      name: "Slack user DM target",
+      name: "Workspace user DM target",
       cfg: perChannelPeerCfg,
-      channel: "slack",
+      channel: "workspace",
       target: "user:U12345ABC",
       expected: {
-        sessionKey: "agent:main:slack:direct:u12345abc",
-        from: "slack:U12345ABC",
+        sessionKey: "agent:main:workspace:direct:u12345abc",
+        from: "workspace:U12345ABC",
         to: "user:U12345ABC",
         chatType: "direct",
       },
     },
     {
-      name: "Slack channel target without thread",
+      name: "Workspace channel target without thread",
       cfg: baseConfig,
-      channel: "slack",
+      channel: "workspace",
       target: "channel:C999XYZ",
       expected: {
-        sessionKey: "agent:main:slack:channel:c999xyz",
-        from: "slack:channel:C999XYZ",
+        sessionKey: "agent:main:workspace:channel:c999xyz",
+        from: "workspace:channel:C999XYZ",
         to: "channel:C999XYZ",
+        chatType: "channel",
+      },
+    },
+    {
+      name: "FallbackChat explicit group prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "group:ops",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:ops",
+        from: "fallbackchat:group:ops",
+        to: "channel:ops",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat plugin parser classifies space-style target",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "spaces/AAA",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:spaces/aaa",
+        from: "fallbackchat:group:spaces/AAA",
+        to: "channel:spaces/AAA",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat explicit user prefix",
+      cfg: perChannelPeerCfg,
+      channel: "fallbackchat",
+      target: "user:U123",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:direct:u123",
+        from: "fallbackchat:U123",
+        to: "user:U123",
+        chatType: "direct",
+      },
+    },
+    {
+      name: "FallbackChat explicit thread prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "thread:abc",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:channel:abc",
+        from: "fallbackchat:channel:abc",
+        to: "channel:abc",
         chatType: "channel",
       },
     },
@@ -336,55 +533,75 @@ describe("resolveOutboundSessionRoute", () => {
 
   it.each([
     {
-      name: "uses resolved Discord user targets to route bare numeric ids as DMs",
+      name: "uses resolved GuildChat user targets to route bare numeric ids as DMs",
       target: "123",
       resolvedTarget: {
         to: "user:123",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
-        sessionKey: "agent:main:discord:direct:123",
-        from: "discord:123",
+        sessionKey: "agent:main:guildchat:direct:123",
+        from: "guildchat:123",
         to: "user:123",
         chatType: "direct",
       },
     },
     {
-      name: "uses resolved Discord channel targets to route bare numeric ids as channels without thread suffixes",
+      name: "uses resolved GuildChat channel targets to route bare numeric ids as channels without thread suffixes",
       target: "456",
       threadId: "789",
       resolvedTarget: {
         to: "channel:456",
         kind: "channel" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
-        sessionKey: "agent:main:discord:channel:456",
-        baseSessionKey: "agent:main:discord:channel:456",
-        from: "discord:channel:456",
+        sessionKey: "agent:main:guildchat:channel:456",
+        baseSessionKey: "agent:main:guildchat:channel:456",
+        from: "guildchat:channel:456",
         to: "channel:456",
         chatType: "channel",
         threadId: "789",
       },
     },
     {
-      name: "uses resolved Mattermost user targets to route bare ids as DMs",
+      name: "uses resolved BoardChat user targets to route bare ids as DMs",
       target: "dthcxgoxhifn3pwh65cut3ud3w",
-      channel: "mattermost",
+      channel: "boardchat",
       resolvedTarget: {
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
-        sessionKey: "agent:main:mattermost:direct:dthcxgoxhifn3pwh65cut3ud3w",
-        from: "mattermost:dthcxgoxhifn3pwh65cut3ud3w",
+        sessionKey: "agent:main:boardchat:direct:dthcxgoxhifn3pwh65cut3ud3w",
+        from: "boardchat:dthcxgoxhifn3pwh65cut3ud3w",
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
         chatType: "direct",
       },
     },
-  ])("$name", async ({ channel = "discord", target, threadId, resolvedTarget, expected }) => {
+    {
+      name: "uses resolved direct-only channel user targets to avoid phantom group sessions",
+      target: "wxid_abc123@im.wechat",
+      channel: "openclaw-weixin",
+      resolvedTarget: {
+        to: "wxid_abc123@im.wechat",
+        kind: "user" as const,
+        source: "normalized" as const,
+        resolutionSource: "normalized" as const,
+      },
+      expected: {
+        sessionKey: "agent:main:openclaw-weixin:direct:wxid_abc123@im.wechat",
+        from: "openclaw-weixin:wxid_abc123@im.wechat",
+        to: "user:wxid_abc123@im.wechat",
+        chatType: "direct",
+      },
+    },
+  ])("$name", async ({ channel = "guildchat", target, threadId, resolvedTarget, expected }) => {
     const route = await resolveOutboundSessionRoute({
       cfg: perChannelPeerSessionCfg,
       channel,
@@ -394,24 +611,27 @@ describe("resolveOutboundSessionRoute", () => {
       resolvedTarget,
     });
 
-    expect(route).toMatchObject(expected);
+    for (const [key, value] of Object.entries(expected)) {
+      expect((route as Record<string, unknown>)[key]).toEqual(value);
+    }
   });
 
-  it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
+  it("rejects bare numeric GuildChat targets when the caller has no kind hint", async () => {
     await expect(
       resolveOutboundSessionRoute({
         cfg: perChannelPeerSessionCfg,
-        channel: "discord",
+        channel: "guildchat",
         agentId: "main",
         target: "123",
       }),
-    ).rejects.toThrow(/Ambiguous Discord recipient/);
+    ).rejects.toThrow(/Ambiguous Guild Chat recipient/);
   });
 });
 
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.loadSessionEntryReadOnly.mockReset();
+    mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
   });
 
@@ -422,13 +642,13 @@ describe("ensureOutboundSessionEntry", () => {
           store: "/stores/{agentId}.json",
         },
       } as OpenClawConfig,
-      channel: "slack",
+      channel: "workspace",
       route: {
-        sessionKey: "agent:main:slack:channel:c1",
-        baseSessionKey: "agent:work:slack:channel:resolved",
+        sessionKey: "agent:main:workspace:channel:c1",
+        baseSessionKey: "agent:work:workspace:channel:resolved",
         peer: { kind: "channel", id: "c1" },
         chatType: "channel",
-        from: "slack:channel:C1",
+        from: "workspace:channel:C1",
         to: "channel:C1",
       },
     });
@@ -436,11 +656,113 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/stores/main.json",
-        sessionKey: "agent:main:slack:channel:c1",
+    expect(mocks.updateSessionLastRoute).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
+    expect(metadata.ctx).toMatchObject({
+      NativeChannelId: "c1",
+      OriginatingTo: "channel:C1",
+    });
+  });
+
+  it("persists the canonical direct peer separately from its adapter target", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {} as OpenClawConfig,
+      channel: "reef",
+      route: {
+        sessionKey: "agent:main:main",
+        baseSessionKey: "agent:main:main",
+        peer: { kind: "direct", id: "peer-agent" },
+        chatType: "direct",
+        from: "reef:peer-agent",
+        to: "reef:peer-agent",
+      },
+    });
+
+    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect(metadata.ctx).toMatchObject({
+      NativeDirectUserId: "peer-agent",
+      OriginatingTo: "reef:peer-agent",
+    });
+    expect(metadata.createIfMissing).toBe(true);
+  });
+
+  it.each(["operator", "required-parent", "unstamped-parent"] as const)(
+    "carries %s creation policy without requiring current role configuration",
+    async (source) => {
+      const actor = { type: "human" as const, source: "profile" as const, id: "outbound-creator" };
+      const creation = { via: "operator" as const, actor, sandbox: "required" as const };
+      mocks.loadSessionEntryReadOnly.mockImplementation((params) =>
+        params.sessionKey === "agent:other:main" && params.storePath === "/stores/other.json"
+          ? {
+              sessionId: "source-session",
+              updatedAt: 1,
+              createdVia: "operator",
+              createdActor: actor,
+              ...(source === "required-parent" ? { sandbox: "required" as const } : {}),
+            }
+          : undefined,
+      );
+
+      await ensureOutboundSessionEntry({
+        cfg: {},
+        channel: "reef",
+        route: {
+          sessionKey: "agent:main:reef:direct:first-contact",
+          baseSessionKey: "agent:main:reef:direct:first-contact",
+          peer: { kind: "direct", id: "first-contact" },
+          chatType: "direct",
+          from: "reef:first-contact",
+          to: "user:first-contact",
+        },
+        ...(source === "operator" ? { creation } : { sourceSessionKey: "agent:other:main" }),
+      });
+
+      const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+      if (source === "unstamped-parent") {
+        expect(metadata.ctx).not.toHaveProperty("SessionCreation", expect.anything());
+      } else {
+        expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
+      }
+    },
+  );
+
+  it("keeps ordinary outbound sends best-effort when route persistence fails", async () => {
+    mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(
+      ensureOutboundSessionEntry({
+        cfg: {} as OpenClawConfig,
+        channel: "reef",
+        route: {
+          sessionKey: "agent:main:main",
+          baseSessionKey: "agent:main:main",
+          peer: { kind: "direct", id: "peer-agent" },
+          chatType: "direct",
+          from: "reef:peer-agent",
+          to: "reef:peer-agent",
+        },
       }),
-    );
+    ).resolves.toBeUndefined();
+  });
+
+  it("surfaces route persistence failures when a conversation requires binding", async () => {
+    mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(
+      bindOutboundSessionEntry({
+        cfg: {} as OpenClawConfig,
+        channel: "reef",
+        route: {
+          sessionKey: "agent:main:main",
+          baseSessionKey: "agent:main:main",
+          peer: { kind: "direct", id: "peer-agent" },
+          chatType: "direct",
+          from: "reef:peer-agent",
+          to: "reef:peer-agent",
+        },
+      }),
+    ).rejects.toThrow("storage unavailable");
   });
 });

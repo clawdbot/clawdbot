@@ -1,42 +1,20 @@
-/**
- * Minimal PNG encoder for generating simple RGBA images without native dependencies.
- * Used for QR codes, live probes, and other programmatic image generation.
- */
-import { deflateSync } from "node:zlib";
+// PNG encode helpers build small PNG files without external image dependencies.
+import { crc32, deflateSync } from "node:zlib";
 
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-/** Compute CRC32 checksum for a buffer (used in PNG chunk encoding). */
-export function crc32(buf: Buffer): number {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i += 1) {
-    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-/** Create a PNG chunk with type, data, and CRC. */
-export function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crc = crc32(Buffer.concat([typeBuf, data]));
+/** Keep chunk parts separate so final assembly copies compressed data only once. */
+function pngChunkParts(type: string, data: Buffer): Buffer[] {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(data.length, 0);
+  header.write(type, 4, "ascii");
   const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc, 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
+  crcBuf.writeUInt32BE(crc32(data, crc32(header.subarray(4))), 0);
+  return [header, data, crcBuf];
 }
 
-/** Write a pixel to an RGBA buffer. Ignores out-of-bounds writes. */
+/**
+ * Writes one RGBA pixel into a width-strided buffer.
+ * Out-of-bounds coordinates are ignored so fixture drawing code can clip shapes cheaply.
+ */
 export function fillPixel(
   buf: Buffer,
   x: number,
@@ -60,13 +38,13 @@ export function fillPixel(
   buf[idx + 3] = a;
 }
 
-/** Encode an RGBA buffer as a PNG image. */
-export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
-  const stride = width * 4;
+function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 4): Buffer {
+  const stride = width * channels;
   const raw = Buffer.alloc((stride + 1) * height);
   for (let row = 0; row < height; row += 1) {
     const rawOffset = row * (stride + 1);
-    raw[rawOffset] = 0; // filter: none
+    // Each scanline starts with PNG filter byte 0 so raw RGB/RGBA rows stay literal.
+    raw[rawOffset] = 0;
     buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
   }
   const compressed = deflateSync(raw);
@@ -76,15 +54,25 @@ export function encodePngRgba(buffer: Buffer, width: number, height: number): Bu
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // color type RGBA
+  ihdr[9] = channels === 4 ? 6 : 2; // color type RGB/RGBA
   ihdr[10] = 0; // compression
   ihdr[11] = 0; // filter
   ihdr[12] = 0; // interlace
 
   return Buffer.concat([
     signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
+    ...pngChunkParts("IHDR", ihdr),
+    ...pngChunkParts("IDAT", compressed),
+    ...pngChunkParts("IEND", Buffer.alloc(0)),
   ]);
+}
+
+/** Encodes tightly packed RGB bytes (`width * height * 3`) as a PNG image. */
+export function encodePngRgb(buffer: Buffer, width: number, height: number): Buffer {
+  return encodePng(buffer, width, height, 3);
+}
+
+/** Encodes tightly packed RGBA bytes (`width * height * 4`) as a PNG image. */
+export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
+  return encodePng(buffer, width, height, 4);
 }

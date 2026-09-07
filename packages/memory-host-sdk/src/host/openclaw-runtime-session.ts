@@ -1,0 +1,133 @@
+// Session/runtime facade for memory transcript helpers.
+import path from "node:path";
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
+} from "../../../../src/config/sessions/session-accessor.js";
+
+export { readTranscriptStatsBatchReadOnlySync };
+
+export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
+export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
+export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
+export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
+export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+export {
+  HEARTBEAT_TOKEN,
+  SILENT_REPLY_TOKEN,
+  isSilentReplyPayloadText,
+} from "../../../../src/auto-reply/tokens.js";
+export {
+  getRuntimeConfig,
+  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
+  loadConfig,
+} from "../../../../src/config/config.js";
+export {
+  isCompactionCheckpointTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
+} from "../../../../src/config/sessions/artifacts.js";
+export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
+export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
+export {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+  type SessionTranscriptInstance,
+} from "../../../../src/config/sessions/session-history.js";
+export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export type { SessionEntry } from "../../../../src/config/sessions/types.js";
+export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
+export {
+  loadTranscriptEventsSync,
+  listSessionEntries,
+  parseSqliteSessionFileMarker,
+  readTranscriptStatsSync,
+  resolveTranscriptSessionKeyBySessionId,
+  resolveStorePath,
+} from "../../../../src/plugin-sdk/session-store-runtime.js";
+export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
+export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+
+/** Returns an opaque revision that changes for every canonical transcript mutation. */
+export function readTranscriptContentRevisionSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): string {
+  const stats = readAccessorTranscriptStatsSync(params);
+  return [
+    "sqlite",
+    stats.maxSeq,
+    stats.sizeBytes,
+    stats.eventCount,
+    stats.lastMutationAtMs ?? "",
+    stats.lastObservedMutationAtMs ?? "",
+  ].join(":");
+}
+/** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */
+export function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
+  const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
+  const sessionsSegment = parts.at(-1);
+  const agentId = parts.at(-2);
+  const agentsSegment = parts.at(-3);
+  const isWindows = process.platform === "win32";
+  // Windows preserves path casing while matching canonical segments without it.
+  // Reject malformed ids before normalization to prevent cross-agent aliasing.
+  if (
+    !sessionsSegment ||
+    !agentId ||
+    !agentsSegment ||
+    (isWindows ? sessionsSegment.toLowerCase() : sessionsSegment) !== "sessions" ||
+    (isWindows ? agentsSegment.toLowerCase() : agentsSegment) !== "agents" ||
+    (isWindows && (agentId !== agentId.trim() || !isValidAgentId(agentId)))
+  ) {
+    return null;
+  }
+  return isWindows ? normalizeAgentId(agentId) : agentId;
+}
+
+/** Finds the nearest canonical sessions owner without escaping its directory. */
+export function extractAgentIdFromSessionPath(absPath: string): string | null {
+  let currentDir = path.dirname(path.resolve(absPath));
+  while (true) {
+    const currentSegment = path.basename(currentDir);
+    const isSessionsDir =
+      (process.platform === "win32" ? currentSegment.toLowerCase() : currentSegment) === "sessions";
+    if (isSessionsDir) {
+      const agentId = extractAgentIdFromSessionsDir(currentDir);
+      // Nested transcript folders may also be named `sessions`; only a
+      // canonical agents/<id>/sessions ancestor establishes ownership.
+      if (agentId) {
+        return agentId;
+      }
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return null;
+    }
+    currentDir = parentDir;
+  }
+}
+
+/** Session-key prefix marking transcripts generated by memory dreaming runs. */
+export const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+
+/** True when a session-store key belongs to a dreaming narrative run. */
+export function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const firstSeparator = trimmed.indexOf(":");
+  if (firstSeparator < 0) {
+    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+  }
+  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}

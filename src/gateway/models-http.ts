@@ -1,15 +1,22 @@
+// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendInvalidRequest, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
-  type AuthorizedGatewayHttpRequest,
+  isOpenClawAgentModelId,
   resolveAgentIdFromModel,
+  type AuthorizedGatewayHttpRequest,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -55,10 +62,12 @@ async function authorizeRequest(
 }
 
 function loadAgentModelIds(): string[] {
-  const cfg = loadConfig();
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const cfg = getRuntimeConfig();
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
-  ids.add(`openclaw/${defaultAgentId}`);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (compatibilityAgentId) {
+    ids.add(`openclaw/${compatibilityAgentId}`);
+  }
   for (const agentId of listAgentIds(cfg)) {
     ids.add(`openclaw/${agentId}`);
   }
@@ -66,9 +75,10 @@ function loadAgentModelIds(): string[] {
 }
 
 function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`).pathname;
+  return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
+/** Handle OpenAI-compatible model list/detail requests, returning false for unrelated paths. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -92,13 +102,7 @@ export async function handleOpenAiModelsHttpRequest(
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
 
@@ -125,9 +129,24 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (decodedId !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(decodedId)) {
+  if (!isOpenClawAgentModelId(decodedId)) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
+  }
+
+  const normalizedModelId = decodedId.trim().toLowerCase();
+  if (normalizedModelId !== OPENCLAW_MODEL_ID && normalizedModelId !== OPENCLAW_DEFAULT_MODEL_ID) {
+    const cfg = getRuntimeConfig();
+    const agentId = resolveAgentIdFromModel(decodedId, cfg);
+    if (!agentId || !listAgentIds(cfg).includes(agentId)) {
+      sendJson(res, 404, {
+        error: {
+          message: `Model '${decodedId}' not found.`,
+          type: "invalid_request_error",
+        },
+      });
+      return true;
+    }
   }
 
   if (!ids.includes(decodedId)) {

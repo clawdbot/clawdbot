@@ -1,0 +1,73 @@
+import type { TabAccessEpoch, TabAccessMode, TabAccessPolicy } from "./tab-access.js";
+import type { BrowserTabSnapshot } from "./tab-eligibility.js";
+
+type ChromeEvent<Listener> = {
+  addListener(listener: Listener): void;
+};
+
+export type TabAccessEventsChromeApi = {
+  debugger: {
+    onEvent: ChromeEvent<
+      (source: { tabId?: number; sessionId?: string }, method: string, params: unknown) => void
+    >;
+    onDetach: ChromeEvent<(source: { tabId?: number }, reason: string) => void>;
+  };
+  tabs: {
+    onRemoved: ChromeEvent<(tabId: number) => void>;
+    onReplaced: ChromeEvent<(addedTabId: number, removedTabId: number) => void>;
+    onUpdated: ChromeEvent<
+      (
+        tabId: number,
+        changeInfo: { groupId?: number; url?: string; status?: string },
+        tab: BrowserTabSnapshot,
+      ) => void
+    >;
+  };
+  tabGroups: {
+    onUpdated: ChromeEvent<(group?: { id: number; title?: string }) => void>;
+    onRemoved: ChromeEvent<(group?: { id: number; title?: string }) => void>;
+  };
+};
+
+export type TabAccessEventPolicy = {
+  readonly mode: TabAccessMode;
+  beginRevocation(tabId: number): symbol;
+  endRevocation(token: symbol): void;
+  capture(tabId: number): TabAccessEpoch;
+  epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
+  invalidateTab(tabId: number): void;
+  retireTab(tabId: number): void;
+  forwardDocumentEvent: TabAccessPolicy["forwardDocumentEvent"];
+  renewTabAccess(
+    tabId: number,
+    attachedEpoch: TabAccessEpoch | undefined,
+    tab: BrowserTabSnapshot | undefined,
+  ): TabAccessEpoch | undefined;
+  invalidateGroup(group?: { id: number; title?: string }, removed?: boolean): void;
+  observeTabUpdate(
+    tabId: number,
+    change: { groupId?: number; url?: string; status?: string },
+    tab?: BrowserTabSnapshot,
+  ): boolean;
+  inspectTab(tabId: number, epoch: TabAccessEpoch): Promise<{ accessible: boolean }>;
+  listAccessibleTabs(): Promise<Array<{ id: number }>>;
+  forgetTab(tabId: number): Promise<void>;
+  replaceTab(addedTabId: number, removedTabId: number): Promise<boolean>;
+};
+
+export function registerTabAccessEvents(options: {
+  chromeApi?: TabAccessEventsChromeApi;
+  accessReady: Promise<unknown>;
+  policy: TabAccessEventPolicy;
+  attachments: Map<
+    number,
+    { epoch?: TabAccessEpoch; pending?: Promise<unknown>; retired?: boolean }
+  >;
+  nativeDetached(tabId: number): void;
+  send(message: Record<string, unknown>): void;
+  scheduleTabsSync(): void;
+  detachDebugger(tabId: number): Promise<void>;
+  pauseTab(tabId: number): void | Promise<void>;
+  removeTabFromOpenClawGroup(tabId: number): void | Promise<void>;
+  runAccessMutation(task: () => void | Promise<void>): Promise<void>;
+}): void;

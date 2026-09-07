@@ -1,10 +1,22 @@
-import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
+// Microsoft Foundry plugin module implements runtime behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type {
+  ProviderPreparedRuntimeAuth,
+  ProviderPrepareRuntimeAuthContext,
+} from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
+  ANTHROPIC_MESSAGES_API,
   type CachedTokenEntry,
+  FOUNDRY_ANTHROPIC_SCOPE,
   TOKEN_REFRESH_MARGIN_MS,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
@@ -15,29 +27,50 @@ import {
 
 const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
-
-export function resetFoundryRuntimeAuthCaches(): void {
-  cachedTokens.clear();
-  refreshPromises.clear();
-}
+const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
+// Bound settled credential material across profile generations. In-flight
+// refresh ownership remains separate so admission never evicts active work.
+const FOUNDRY_TOKEN_CACHE_MAX_ENTRIES = 128;
 
 async function refreshEntraToken(params?: {
+  scope?: string;
   subscriptionId?: string;
   tenantId?: string;
 }): Promise<{ apiKey: string; expiresAt: number }> {
   const result = await getAccessTokenResultAsync(params);
   const rawExpiry = result.expiresOn ? new Date(result.expiresOn).getTime() : Number.NaN;
-  const expiresAt = Number.isFinite(rawExpiry) ? rawExpiry : Date.now() + 55 * 60 * 1000;
+  const now = resolveDateTimestampMs(Date.now());
+  const expiresAt =
+    asDateTimestampMs(rawExpiry) ??
+    resolveExpiresAtMsFromDurationMs(FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS, { nowMs: now }) ??
+    now;
+  for (const [cacheKey, cachedToken] of cachedTokens) {
+    if (cachedToken.expiresAt <= now) {
+      cachedTokens.delete(cacheKey);
+    }
+  }
   cachedTokens.set(getFoundryTokenCacheKey(params), {
     token: result.accessToken,
     expiresAt,
   });
+  pruneMapToMaxSize(cachedTokens, FOUNDRY_TOKEN_CACHE_MAX_ENTRIES);
   return { apiKey: result.accessToken, expiresAt };
 }
 
-export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthContext) {
+export async function prepareFoundryRuntimeAuth(
+  ctx: ProviderPrepareRuntimeAuthContext,
+): Promise<ProviderPreparedRuntimeAuth> {
   if (ctx.apiKey !== "__entra_id_dynamic__") {
-    return null;
+    return {
+      apiKey: ctx.apiKey,
+      request: {
+        auth: {
+          mode: "header" as const,
+          headerName: ctx.model.api === ANTHROPIC_MESSAGES_API ? "x-api-key" : "api-key",
+          value: ctx.apiKey,
+        },
+      },
+    };
   }
   try {
     const authStore = ensureAuthProfileStore(ctx.agentDir, {
@@ -49,38 +82,58 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
       normalizeOptionalString(ctx.modelId) ??
       normalizeOptionalString(metadata?.modelId) ??
       ctx.modelId;
-    const activeModelNameHint = ctx.modelId === metadata?.modelId ? metadata?.modelName : undefined;
+    const requestedModelId = normalizeOptionalString(ctx.modelId);
+    const metadataModelId = normalizeOptionalString(metadata?.modelId);
+    const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
+    const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
     const modelNameHint = resolveConfiguredModelNameHint(
       modelId,
       ctx.model.name ?? activeModelNameHint,
     );
-    const configuredApi =
-      typeof metadata?.api === "string" && isFoundryProviderApi(metadata.api)
+    const configuredApi = isFoundryProviderApi(ctx.model.api)
+      ? ctx.model.api
+      : activeModelUsesMetadata &&
+          typeof metadata?.api === "string" &&
+          isFoundryProviderApi(metadata.api)
         ? metadata.api
-        : isFoundryProviderApi(ctx.model.api)
-          ? ctx.model.api
-          : undefined;
+        : undefined;
     const endpoint =
-      normalizeOptionalString(metadata?.endpoint) ??
-      extractFoundryEndpoint(ctx.model.baseUrl ?? "");
+      extractFoundryEndpoint(ctx.model.baseUrl ?? "") ??
+      normalizeOptionalString(metadata?.endpoint);
+    const tokenScope =
+      configuredApi === ANTHROPIC_MESSAGES_API ? FOUNDRY_ANTHROPIC_SCOPE : undefined;
     const baseUrl = endpoint
       ? buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, configuredApi)
       : undefined;
     const cacheKey = getFoundryTokenCacheKey({
+      scope: tokenScope,
       subscriptionId: metadata?.subscriptionId,
       tenantId: metadata?.tenantId,
     });
     const cachedToken = cachedTokens.get(cacheKey);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
+    const rawNow = Date.now();
+    const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
+    const now = resolveDateTimestampMs(rawNow);
+    const refreshAfterMs =
+      resolveExpiresAtMsFromDurationMs(TOKEN_REFRESH_MARGIN_MS, { nowMs: now }) ?? now;
+    if (cachedToken && hasValidClock && cachedToken.expiresAt > refreshAfterMs) {
+      // Map insertion order is the eviction order; touch valid hits to retain active accounts.
+      cachedTokens.delete(cacheKey);
+      cachedTokens.set(cacheKey, cachedToken);
       return {
         apiKey: cachedToken.token,
         expiresAt: cachedToken.expiresAt,
         ...(baseUrl ? { baseUrl } : {}),
+        request: {
+          auth: { mode: "authorization-bearer" as const, token: cachedToken.token },
+        },
       };
     }
+    cachedTokens.delete(cacheKey);
     let refreshPromise = refreshPromises.get(cacheKey);
     if (!refreshPromise) {
       refreshPromise = refreshEntraToken({
+        scope: tokenScope,
         subscriptionId: metadata?.subscriptionId,
         tenantId: metadata?.tenantId,
       }).finally(() => {
@@ -92,6 +145,9 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
     return {
       ...token,
       ...(baseUrl ? { baseUrl } : {}),
+      request: {
+        auth: { mode: "authorization-bearer" as const, token: token.apiKey },
+      },
     };
   } catch (err) {
     const details = formatErrorMessage(err);

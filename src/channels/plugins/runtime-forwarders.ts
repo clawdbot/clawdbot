@@ -1,117 +1,139 @@
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.adapters.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
-type DirectoryListMethod = "listPeersLive" | "listGroupsLive" | "listGroupMembers";
-type OutboundMethod = "sendText" | "sendMedia" | "sendPoll";
+type DirectoryMethod = "self" | "listPeersLive" | "listGroupsLive" | "listGroupMembers";
+type OutboundMethod = "renderPresentation" | "sendPayload" | "sendText" | "sendMedia" | "sendPoll";
 
-type DirectoryListParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeersLive"]>>[0];
-type DirectoryGroupMembersParams = Parameters<
-  NonNullable<ChannelDirectoryAdapter["listGroupMembers"]>
->[0];
-type SendTextParams = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
-type SendMediaParams = Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0];
-type SendPollParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0];
-
-async function resolveForwardedMethod<Runtime, Fn>(params: {
+type RuntimeForwarderParams<Runtime, Fn> = {
   getRuntime: () => MaybePromise<Runtime>;
   resolve: (runtime: Runtime) => Fn | null | undefined;
+  notDispatched?: boolean;
   unavailableMessage?: string;
-}): Promise<Fn> {
-  const runtime = await params.getRuntime();
-  const method = params.resolve(runtime);
-  if (method) {
-    return method;
+};
+
+async function resolveForwardedMethod<Runtime, Fn>(
+  params: RuntimeForwarderParams<Runtime, Fn>,
+): Promise<Fn> {
+  try {
+    const runtime = await params.getRuntime();
+    const method = params.resolve(runtime);
+    if (method) {
+      return method;
+    }
+    // Fail at call time instead of registration time so optional runtime methods
+    // can stay absent until the caller actually invokes that capability.
+    throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
+  } catch (error) {
+    if (!params.notDispatched || error instanceof PlatformMessageNotDispatchedError) {
+      throw error;
+    }
+    const message =
+      params.unavailableMessage ??
+      (error instanceof Error && error.message.trim()
+        ? error.message
+        : "Runtime method is unavailable");
+    throw new PlatformMessageNotDispatchedError(message, { cause: error });
   }
-  throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
 }
 
-export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
-  getRuntime: () => MaybePromise<Runtime>;
-  listPeersLive?: (runtime: Runtime) => ChannelDirectoryAdapter["listPeersLive"] | null | undefined;
-  listGroupsLive?: (
-    runtime: Runtime,
-  ) => ChannelDirectoryAdapter["listGroupsLive"] | null | undefined;
-  listGroupMembers?: (
-    runtime: Runtime,
-  ) => ChannelDirectoryAdapter["listGroupMembers"] | null | undefined;
-}): Pick<ChannelDirectoryAdapter, DirectoryListMethod> {
-  return {
-    listPeersLive: params.listPeersLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listPeersLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupsLive: params.listGroupsLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupsLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupMembers: params.listGroupMembers
-      ? async (ctx: DirectoryGroupMembersParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupMembers!,
-            })
-          )(ctx)
-      : undefined,
-  };
+function createRuntimeForwarder<Runtime, Context, Result>(
+  resolveParams: () => RuntimeForwarderParams<Runtime, (ctx: Context) => MaybePromise<Result>>,
+) {
+  // Read current callbacks on every call. Sender failures stay outside the
+  // resolution catch because dispatch may already have begun.
+  return async (ctx: Context) => await (await resolveForwardedMethod(resolveParams()))(ctx);
 }
 
-export function createRuntimeOutboundDelegates<Runtime>(params: {
-  getRuntime: () => MaybePromise<Runtime>;
-  sendText?: {
-    resolve: (runtime: Runtime) => ChannelOutboundAdapter["sendText"] | null | undefined;
-    unavailableMessage?: string;
-  };
-  sendMedia?: {
-    resolve: (runtime: Runtime) => ChannelOutboundAdapter["sendMedia"] | null | undefined;
-    unavailableMessage?: string;
-  };
-  sendPoll?: {
-    resolve: (runtime: Runtime) => ChannelOutboundAdapter["sendPoll"] | null | undefined;
-    unavailableMessage?: string;
-  };
-}): Pick<ChannelOutboundAdapter, OutboundMethod> {
+/**
+ * Creates a directory adapter whose methods forward to a lazily resolved runtime.
+ */
+export function createRuntimeDirectoryLiveAdapter<Runtime>(
+  params: { getRuntime: () => MaybePromise<Runtime> } & {
+    [Method in DirectoryMethod]?: (
+      runtime: Runtime,
+    ) => ChannelDirectoryAdapter[Method] | null | undefined;
+  },
+): Pick<ChannelDirectoryAdapter, DirectoryMethod> {
+  const adapter: Pick<ChannelDirectoryAdapter, DirectoryMethod> = {};
+  if (params.self) {
+    adapter.self = createRuntimeForwarder(() => ({
+      getRuntime: params.getRuntime,
+      resolve: params.self!,
+    }));
+  }
+  if (params.listPeersLive) {
+    adapter.listPeersLive = createRuntimeForwarder(() => ({
+      getRuntime: params.getRuntime,
+      resolve: params.listPeersLive!,
+    }));
+  }
+  if (params.listGroupsLive) {
+    adapter.listGroupsLive = createRuntimeForwarder(() => ({
+      getRuntime: params.getRuntime,
+      resolve: params.listGroupsLive!,
+    }));
+  }
+  if (params.listGroupMembers) {
+    adapter.listGroupMembers = createRuntimeForwarder(() => ({
+      getRuntime: params.getRuntime,
+      resolve: params.listGroupMembers!,
+    }));
+  }
+  return adapter;
+}
+
+/**
+ * Creates outbound delegates whose methods forward to a lazily resolved runtime.
+ */
+export function createRuntimeOutboundDelegates<Runtime>(
+  params: { getRuntime: () => MaybePromise<Runtime> } & {
+    [Method in OutboundMethod]?: {
+      resolve: (runtime: Runtime) => ChannelOutboundAdapter[Method] | null | undefined;
+      unavailableMessage?: string;
+    };
+  },
+): Pick<ChannelOutboundAdapter, OutboundMethod> {
   return {
+    renderPresentation: params.renderPresentation
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          resolve: params.renderPresentation!.resolve,
+          unavailableMessage: params.renderPresentation!.unavailableMessage,
+        }))
+      : undefined,
+    sendPayload: params.sendPayload
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          notDispatched: true,
+          resolve: params.sendPayload!.resolve,
+          unavailableMessage: params.sendPayload!.unavailableMessage,
+        }))
+      : undefined,
     sendText: params.sendText
-      ? async (ctx: SendTextParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.sendText!.resolve,
-              unavailableMessage: params.sendText!.unavailableMessage,
-            })
-          )(ctx)
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          notDispatched: true,
+          resolve: params.sendText!.resolve,
+          unavailableMessage: params.sendText!.unavailableMessage,
+        }))
       : undefined,
     sendMedia: params.sendMedia
-      ? async (ctx: SendMediaParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.sendMedia!.resolve,
-              unavailableMessage: params.sendMedia!.unavailableMessage,
-            })
-          )(ctx)
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          notDispatched: true,
+          resolve: params.sendMedia!.resolve,
+          unavailableMessage: params.sendMedia!.unavailableMessage,
+        }))
       : undefined,
     sendPoll: params.sendPoll
-      ? async (ctx: SendPollParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.sendPoll!.resolve,
-              unavailableMessage: params.sendPoll!.unavailableMessage,
-            })
-          )(ctx)
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          notDispatched: true,
+          resolve: params.sendPoll!.resolve,
+          unavailableMessage: params.sendPoll!.unavailableMessage,
+        }))
       : undefined,
   };
 }

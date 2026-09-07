@@ -1,3 +1,4 @@
+// Device Pair API module exposes the plugin public contract.
 export {
   approveDevicePairing,
   clearDeviceBootstrapTokens,
@@ -10,11 +11,13 @@ export {
 export { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export {
   resolveGatewayBindUrl,
-  resolveGatewayPort,
   resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
 } from "openclaw/plugin-sdk/core";
+export { resolveAdvertisedLanHost } from "openclaw/plugin-sdk/gateway-runtime";
 export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,
 } from "openclaw/plugin-sdk/sandbox";
-export { renderQrPngBase64 } from "./qr-image.js";
+export { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+export { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "./qr-image.js";

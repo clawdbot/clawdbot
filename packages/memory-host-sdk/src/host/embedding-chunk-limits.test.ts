@@ -1,14 +1,15 @@
+// Memory Host SDK tests cover embedding chunk limits behavior.
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.types.js";
 
 function createProvider(maxInputTokens: number): EmbeddingProvider {
   return {
     id: "mock",
     model: "mock-embed",
     maxInputTokens,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }
@@ -20,9 +21,50 @@ function createProviderWithoutMaxInputTokens(params: {
   return {
     id: params.id,
     model: params.model,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
+}
+
+type EmbeddingChunks = ReturnType<typeof enforceEmbeddingMaxInputTokens>;
+
+function expectChunksWithinUtf8Bytes(chunks: EmbeddingChunks, maxBytes: number) {
+  const oversized: Array<{ index: number; bytes: number }> = [];
+  for (const [index, chunk] of chunks.entries()) {
+    const bytes = estimateUtf8Bytes(chunk.text);
+    if (bytes > maxBytes) {
+      oversized.push({ index, bytes });
+    }
+  }
+  expect(oversized).toStrictEqual([]);
+}
+
+function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLine: number) {
+  const unexpectedRanges: Array<{ index: number; startLine: number; endLine: number }> = [];
+  for (const [index, chunk] of chunks.entries()) {
+    if (chunk.startLine !== startLine || chunk.endLine !== endLine) {
+      unexpectedRanges.push({ index, startLine: chunk.startLine, endLine: chunk.endLine });
+    }
+  }
+  expect(unexpectedRanges).toStrictEqual([]);
+}
+
+function expectChunksHaveHashes(chunks: EmbeddingChunks) {
+  const invalidHashes: Array<{ index: number; hash: unknown }> = [];
+  for (const [index, chunk] of chunks.entries()) {
+    if (typeof chunk.hash !== "string" || chunk.hash.length === 0) {
+      invalidHashes.push({ index, hash: chunk.hash });
+    }
+  }
+  expect(invalidHashes).toStrictEqual([]);
+}
+
+function joinedChunkText(chunks: EmbeddingChunks): string {
+  let text = "";
+  for (const chunk of chunks) {
+    text += chunk.text;
+  }
+  return text;
 }
 
 describe("embedding chunk limits", () => {
@@ -31,18 +73,19 @@ describe("embedding chunk limits", () => {
     const input = {
       startLine: 1,
       endLine: 1,
+      entryStartLine: 1,
+      entryEndLine: 4,
       text: "x".repeat(9000),
       hash: "ignored",
     };
 
     const out = enforceEmbeddingMaxInputTokens(provider, [input]);
     expect(out.length).toBeGreaterThan(1);
-    expect(out.map((chunk) => chunk.text).join("")).toBe(input.text);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
-    expect(out.every((chunk) => chunk.startLine === 1 && chunk.endLine === 1)).toBe(true);
-    expect(out.every((chunk) => typeof chunk.hash === "string" && chunk.hash.length > 0)).toBe(
-      true,
-    );
+    expect(joinedChunkText(out)).toBe(input.text);
+    expectChunksWithinUtf8Bytes(out, 8192);
+    expectChunksLineRange(out, 1, 1);
+    expectChunksHaveHashes(out);
+    expect(out.every((chunk) => chunk.entryStartLine === 1 && chunk.entryEndLine === 4)).toBe(true);
   });
 
   it("does not split inside surrogate pairs (emoji)", () => {
@@ -55,11 +98,11 @@ describe("embedding chunk limits", () => {
     ]);
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.map((chunk) => chunk.text).join("")).toBe(inputText);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8192)).toBe(true);
+    expect(joinedChunkText(out)).toBe(inputText);
+    expectChunksWithinUtf8Bytes(out, 8192);
 
     // If we split inside surrogate pairs we'd likely end up with replacement chars.
-    expect(out.map((chunk) => chunk.text).join("")).not.toContain("\uFFFD");
+    expect(joinedChunkText(out)).not.toContain("\uFFFD");
   });
 
   it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {
@@ -78,7 +121,7 @@ describe("embedding chunk limits", () => {
     ]);
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 2048)).toBe(true);
+    expectChunksWithinUtf8Bytes(out, 2048);
   });
 
   it("honors hard safety caps lower than provider maxInputTokens", () => {
@@ -97,6 +140,6 @@ describe("embedding chunk limits", () => {
     );
 
     expect(out.length).toBeGreaterThan(1);
-    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
+    expectChunksWithinUtf8Bytes(out, 8000);
   });
 });

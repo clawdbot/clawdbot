@@ -1,7 +1,33 @@
+// Matrix plugin module implements storage paths behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MATRIX_TOKEN_HASH_DIRECTORY_PATTERN = /^[a-f0-9]{16}$/u;
+const MATRIX_SERVER_USER_DIRECTORY_PATTERN = /^.+__.+$/u;
+
+export function isMatrixActiveTokenRootDirectory(name: string): boolean {
+  return MATRIX_TOKEN_HASH_DIRECTORY_PATTERN.test(name);
+}
+
+// Layout position owns interpretation: account ids may resemble archives,
+// while only exact token hashes are active at the token-root depth.
+export function resolveMatrixStateLayoutChildDepth(depth: number, name: string): number | null {
+  if (depth === 0) {
+    return name === "accounts" ? 1 : null;
+  }
+  if (depth === 1) {
+    return 2;
+  }
+  if (depth === 2) {
+    return MATRIX_SERVER_USER_DIRECTORY_PATTERN.test(name) ? 3 : null;
+  }
+  if (depth === 3) {
+    return isMatrixActiveTokenRootDirectory(name) ? 4 : null;
+  }
+  return null;
+}
 
 export function sanitizeMatrixPathSegment(value: string): string {
   const cleaned = normalizeLowercaseStringOrEmpty(value)
@@ -43,23 +69,6 @@ export function resolveMatrixCredentialsPath(params: {
     resolveMatrixCredentialsDir(params.stateDir),
     resolveMatrixCredentialsFilename(params.accountId),
   );
-}
-
-export function resolveMatrixLegacyFlatStoreRoot(stateDir: string): string {
-  return path.join(stateDir, "matrix");
-}
-
-export function resolveMatrixLegacyFlatStoragePaths(stateDir: string): {
-  rootDir: string;
-  storagePath: string;
-  cryptoPath: string;
-} {
-  const rootDir = resolveMatrixLegacyFlatStoreRoot(stateDir);
-  return {
-    rootDir,
-    storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
-  };
 }
 
 export function resolveMatrixAccountStorageRoot(params: {

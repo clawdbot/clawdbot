@@ -1,24 +1,22 @@
-import crypto from "node:crypto";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+// Builds memory flush prompts when conversation context exceeds model budget.
+import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
+import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
+import {
+  resolveMergedModelProviderConfig,
+  resolveMergedModelProviderModels,
+} from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export function resolveMemoryFlushContextWindowTokens(params: {
-  modelId?: string;
-  agentCfgContextTokens?: number;
-  cfg?: OpenClawConfig;
-  provider?: string;
-}): number {
-  return (
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.modelId,
-      contextTokensOverride: params.agentCfgContextTokens,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS
+export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
+  const parsed = parseNonNegativeByteSize(
+    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
   );
+  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
@@ -27,14 +25,77 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
-function resolveMemoryFlushGateState<
-  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+/** Resolves the blocking threshold using the selected reserve and server floor. */
+export function resolveCompactionThreshold(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  minimumThresholdTokens?: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+}
+
+export function resolveResponsesServerCompactionThreshold(params: {
+  contextWindowTokens: number;
+  cfg?: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+}): number | undefined {
+  const provider = params.provider?.trim();
+  const modelId = params.modelId?.trim();
+  if (!provider || !modelId) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizeModelId = (value: string) =>
+    normalizeStaticProviderModelId(normalizedProvider, value).trim().toLowerCase();
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  const configuredModel = resolveMergedModelProviderModels({
+    models: providerConfig?.models,
+    normalizeModelId,
+  }).get(normalizeModelId(modelId));
+  const { defaultParams, modelParams } = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider,
+    modelId,
+  });
+  const extraParams = { ...defaultParams, ...modelParams };
+  if (normalizedProvider === "anthropic") {
+    return resolveAnthropicServerCompactionPlan(
+      {
+        provider,
+        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
+        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+        contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
+      },
+      extraParams,
+    ).threshold;
+  }
+  const defaultOpenAIBaseUrl =
+    normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
+  return resolveOpenAIResponsesServerCompactionPlan(
+    {
+      provider,
+      api:
+        configuredModel?.api ??
+        providerConfig?.api ??
+        (normalizedProvider === "openai" ? "openai-responses" : undefined),
+      baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
+      compat: configuredModel?.compat,
+      contextTokens: configuredModel?.contextTokens ?? params.contextWindowTokens,
+      contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
+    },
+    extraParams,
+  ).threshold;
+}
+
+function resolveMaintenanceGateState<
+  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 >(params: {
   entry?: TEntry;
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  threshold: number;
 }): { entry: TEntry; totalTokens: number; threshold: number } | null {
   if (!params.entry) {
     return null;
@@ -46,21 +107,14 @@ function resolveMemoryFlushGateState<
     return null;
   }
 
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
-  if (threshold <= 0) {
-    return null;
-  }
-
-  return { entry: params.entry, totalTokens, threshold };
+  const threshold = params.threshold;
+  return threshold > 0 ? { entry: params.entry, totalTokens, threshold } : null;
 }
 
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -68,11 +122,9 @@ export function shouldRunMemoryFlush(params: {
    * SessionEntry.totalTokens (which may be stale/unknown).
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
+  const state = resolveMaintenanceGateState(params);
   if (!state || state.totalTokens < state.threshold) {
     return false;
   }
@@ -85,18 +137,16 @@ export function shouldRunMemoryFlush(params: {
 }
 
 export function shouldRunPreflightCompaction(params: {
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">;
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">;
   /**
    * Optional projected token count override for pre-run compaction gating.
    * When provided, this value is treated as a fresh estimate and used instead
    * of any cached SessionEntry total.
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
+  const state = resolveMaintenanceGateState(params);
   return Boolean(state && state.totalTokens >= state.threshold);
 }
 
@@ -106,26 +156,9 @@ export function shouldRunPreflightCompaction(params: {
  * important for both the token-based and transcript-size–based trigger paths.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
-  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlushCompactionCount;
+  const lastFlushAt = entry.memoryFlush?.compactionCount;
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
-}
-
-/**
- * Compute a lightweight content hash from the tail of a session transcript.
- * Used for state-based flush deduplication — if the hash hasn't changed since
- * the last flush, the context is effectively the same and flushing again would
- * produce duplicate memory entries.
- *
- * Hash input: `messages.length` + content of the last 3 user/assistant messages.
- * Algorithm: SHA-256 truncated to 16 hex chars (collision-resistant enough for dedup).
- */
-export function computeContextHash(messages: Array<{ role?: string; content?: unknown }>): string {
-  const userAssistant = messages.filter((m) => m.role === "user" || m.role === "assistant");
-  const tail = userAssistant.slice(-3);
-  const payload = `${messages.length}:${tail.map((m, i) => `[${i}:${m.role ?? ""}]${typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")}`).join("\x00")}`;
-  const hash = crypto.createHash("sha256").update(payload).digest("hex");
-  return hash.slice(0, 16);
 }

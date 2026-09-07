@@ -1,7 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Duckduckgo helper module supports config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_DDG_SAFE_SEARCH = "moderate";
+const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
 export type DdgSafeSearch = "strict" | "moderate" | "off";
 
@@ -12,7 +16,7 @@ type DdgPluginConfig = {
   };
 };
 
-export function resolveDdgWebSearchConfig(
+function resolveDdgWebSearchConfig(
   config?: OpenClawConfig,
 ): DdgPluginConfig["webSearch"] | undefined {
   const pluginConfig = config?.plugins?.entries?.duckduckgo?.config as DdgPluginConfig | undefined;
@@ -24,12 +28,7 @@ export function resolveDdgWebSearchConfig(
 }
 
 export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {
-  const region = resolveDdgWebSearchConfig(config)?.region;
-  if (typeof region !== "string") {
-    return undefined;
-  }
-  const trimmed = region.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(resolveDdgWebSearchConfig(config)?.region);
 }
 
 export function resolveDdgSafeSearch(config?: OpenClawConfig): DdgSafeSearch {

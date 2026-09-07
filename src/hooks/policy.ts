@@ -1,15 +1,17 @@
+// Hook policy helpers decide when hooks may run for a configured event.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
-import type { HookEntry, HookSource } from "./types.js";
+import type { HookPolicyEntry, HookSource } from "./types.js";
 
+/** Human-readable reason for disabling a hook at policy resolution time. */
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
-export type HookEnableState = {
+type HookEnableState = {
   enabled: boolean;
   reason?: HookEnableStateReason;
 };
 
-export type HookSourcePolicy = {
+type HookSourcePolicy = {
   precedence: number;
   trustedLocalCode: boolean;
   defaultEnableMode: "default-on" | "explicit-opt-in";
@@ -17,10 +19,10 @@ export type HookSourcePolicy = {
   canBeOverriddenBy: HookSource[];
 };
 
-export type HookResolutionCollision = {
+type HookResolutionCollision<T> = {
   name: string;
-  kept: HookEntry;
-  ignored: HookEntry;
+  kept: T;
+  ignored: T;
 };
 
 const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
@@ -54,10 +56,12 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
   },
 };
 
-export function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
+/** Resolve source trust, precedence, default enablement, and override rules. */
+function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
   return HOOK_SOURCE_POLICIES[source];
 }
 
+/** Resolve explicit per-hook config by hook key. */
 export function resolveHookConfig(
   config: OpenClawConfig | undefined,
   hookKey: string,
@@ -73,8 +77,9 @@ export function resolveHookConfig(
   return entry;
 }
 
+/** Resolve whether a hook is enabled before runtime requirement checks. */
 export function resolveHookEnableState(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   hookConfig?: HookConfig;
 }): HookEnableState {
@@ -97,7 +102,7 @@ export function resolveHookEnableState(params: {
   return { enabled: true };
 }
 
-function canOverrideHook(candidate: HookEntry, existing: HookEntry): boolean {
+function canOverrideHook(candidate: HookPolicyEntry, existing: HookPolicyEntry): boolean {
   const candidatePolicy = getHookSourcePolicy(candidate.hook.source);
   const existingPolicy = getHookSourcePolicy(existing.hook.source);
   return (
@@ -106,12 +111,13 @@ function canOverrideHook(candidate: HookEntry, existing: HookEntry): boolean {
   );
 }
 
-export function resolveHookEntries(
-  entries: HookEntry[],
+/** Merge hook entries by name using source precedence and override policy. */
+export function resolveHookEntries<T extends HookPolicyEntry>(
+  entries: T[],
   opts?: {
-    onCollisionIgnored?: (collision: HookResolutionCollision) => void;
+    onCollisionIgnored?: (collision: HookResolutionCollision<T>) => void;
   },
-): HookEntry[] {
+): T[] {
   const ordered = entries
     .map((entry, index) => ({ entry, index }))
     .toSorted((a, b) => {
@@ -121,13 +127,15 @@ export function resolveHookEntries(
       return precedenceDelta !== 0 ? precedenceDelta : a.index - b.index;
     });
 
-  const merged = new Map<string, HookEntry>();
+  const merged = new Map<string, T>();
   for (const { entry } of ordered) {
     const existing = merged.get(entry.hook.name);
     if (!existing) {
       merged.set(entry.hook.name, entry);
       continue;
     }
+    // Source policy is asymmetric: higher precedence alone is not enough unless
+    // both source policies agree the candidate may replace the existing hook.
     if (canOverrideHook(entry, existing)) {
       merged.set(entry.hook.name, entry);
       continue;

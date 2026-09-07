@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$*" in
+  *show-user*) echo "Linger=yes" ;;
+  *enable-linger*) ;;
+esac

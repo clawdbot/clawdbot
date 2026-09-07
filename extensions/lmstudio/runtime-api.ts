@@ -1,3 +1,4 @@
+// Lmstudio API module exposes the plugin public contract.
 export {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_BASE_URL,

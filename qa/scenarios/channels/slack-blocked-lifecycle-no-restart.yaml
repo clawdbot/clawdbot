@@ -1,0 +1,72 @@
+title: Slack blocked lifecycle stays visible without auto-restart
+
+scenario:
+  id: slack-blocked-lifecycle-no-restart
+  surface: channels
+  coverage:
+    primary:
+      - channels.channels-status
+    secondary:
+      - observability.background-health-monitor-loop
+  objective: Prove a Slack identity failure is recorded as blocked, projected through channels.status, and skipped by the production health monitor.
+  gatewayConfigPatch:
+    channels:
+      slack:
+        accounts:
+          $selectedAccount:
+            botToken: xoxb-intentionally-invalid-lifecycle
+        healthMonitor:
+          enabled: true
+  gatewayRuntime:
+    allowUnhealthyStartup: true
+  successCriteria:
+    - channels.status exposes lifecycle and derived healthState as blocked.
+    - The account remains running without a pending restart.
+    - The health monitor does not change lastStartAt after its startup-grace check.
+  docsRefs:
+    - docs/gateway/health.md
+  codeRefs:
+    - extensions/slack/src/monitor/provider.ts
+    - src/gateway/channel-health-monitor.ts
+    - src/gateway/server-methods/channels.ts
+  execution:
+    kind: flow
+    channel: slack
+    suiteIsolation: isolated
+    isolationReason: Waits through the production health monitor startup grace with a deliberately blocked Slack identity.
+    summary: Start Slack against Crabline with an invalid identity token and prove blocked status remains stable.
+
+flow:
+  steps:
+    - name: reports blocked without restarting
+      actions:
+        - call: waitForCondition
+          saveAs: initialAccount
+          args:
+            - lambda:
+                async: true
+                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'blocked' && account?.healthState === 'blocked' ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
+            - 30000
+            - 250
+        - assert:
+            expr: "initialAccount?.lifecycle === 'blocked' && initialAccount?.healthState === 'blocked' && initialAccount?.running === true && initialAccount?.restartPending !== true && typeof initialAccount?.lastStartAt === 'number'"
+            message:
+              expr: "`Slack did not expose the blocked lifecycle through channels.status: ${JSON.stringify(initialAccount)}`"
+        - call: sleep
+          args:
+            - 65000
+        - call: env.gateway.call
+          saveAs: finalStatus
+          args:
+            - channels.status
+            - probe: false
+              timeoutMs: 10000
+            - timeoutMs: 15000
+        - set: finalAccount
+          value:
+            expr: "(finalStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === transport.accountId)"
+        - assert:
+            expr: "finalAccount?.lifecycle === 'blocked' && finalAccount?.healthState === 'blocked' && finalAccount?.running === true && finalAccount?.restartPending !== true && finalAccount?.lastStartAt === initialAccount.lastStartAt"
+            message:
+              expr: "`Health monitor restarted or obscured the blocked Slack account: ${JSON.stringify({ initialAccount, finalAccount })}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', channel: 'slack', accountId: finalAccount.accountId, lifecycle: finalAccount.lifecycle, healthState: finalAccount.healthState, running: finalAccount.running, restartPending: finalAccount.restartPending ?? false, lastStartAtUnchanged: finalAccount.lastStartAt === initialAccount.lastStartAt })"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Release CI"
+  short_description: "Verify and debug OpenClaw release validation runs"
+  default_prompt: "Use $release-openclaw-ci to validate one frozen release SHA with one active parent run, recover only the smallest failed lane, and stop on a precise external blocker."

@@ -1,5 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Normalizes SCP remote host and path values.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+// SCP host/path normalization rejects shell metacharacters before values are
+// embedded in remote-copy commands.
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
@@ -15,6 +18,7 @@ function hasControlOrWhitespace(value: string): boolean {
   return false;
 }
 
+/** Normalize an optional `[user@]host` SCP target or reject unsafe tokens. */
 export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -57,10 +61,12 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   return user ? `${user}@${host}` : host;
 }
 
+/** Return true when a value is safe for the SCP host position. */
 export function isSafeScpRemoteHost(value: string | null | undefined): boolean {
   return normalizeScpRemoteHost(value) !== undefined;
 }
 
+/** Normalize an absolute remote path that is safe for SCP command construction. */
 export function normalizeScpRemotePath(value: string | null | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed || !trimmed.startsWith("/")) {
@@ -77,6 +83,7 @@ export function normalizeScpRemotePath(value: string | null | undefined): string
   return trimmed;
 }
 
+/** Return true when a value is safe for the SCP remote path position. */
 export function isSafeScpRemotePath(value: string | null | undefined): boolean {
   return normalizeScpRemotePath(value) !== undefined;
 }

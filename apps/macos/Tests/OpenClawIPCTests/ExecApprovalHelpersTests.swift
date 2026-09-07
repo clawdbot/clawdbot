@@ -30,20 +30,12 @@ struct ExecApprovalHelpersTests {
     }
 
     @Test func `validate allowlist pattern returns reasons`() {
-        #expect(ExecApprovalHelpers.isPathPattern("/usr/bin/rg"))
-        #expect(ExecApprovalHelpers.isPathPattern(" ~/bin/rg "))
-        #expect(!ExecApprovalHelpers.isPathPattern("rg"))
+        #expect(ExecApprovalHelpers.validateAllowlistPattern("rg") == .valid("rg"))
 
         if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
             #expect(reason == .empty)
         } else {
             Issue.record("Expected empty pattern rejection")
-        }
-
-        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("echo") {
-            #expect(reason == .missingPathComponent)
-        } else {
-            Issue.record("Expected basename pattern rejection")
         }
     }
 

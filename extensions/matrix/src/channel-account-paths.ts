@@ -1,7 +1,8 @@
+// Matrix plugin module implements channel account paths behavior.
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { PinnedDispatcherPolicy, SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { formatMatrixErrorMessage } from "./matrix/errors.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { MatrixProbe } from "./matrix/probe.js";
 import type { CoreConfig } from "./types.js";
 
@@ -30,7 +31,7 @@ type ProbeMatrix = (params: {
 type SendMessageMatrix = (
   to: string,
   message: string,
-  options?: { accountId?: string },
+  options: { cfg: CoreConfig; accountId?: string },
 ) => Promise<unknown>;
 
 export function createMatrixProbeAccount(params: {
@@ -65,7 +66,7 @@ export function createMatrixProbeAccount(params: {
     } catch (err) {
       return {
         ok: false,
-        error: formatMatrixErrorMessage(err),
+        error: formatErrorMessage(err),
         elapsedMs: 0,
       };
     }
@@ -80,13 +81,18 @@ export function createMatrixPairingText(sendMessageMatrix: SendMessageMatrix) {
     notify: async ({
       id,
       message,
+      cfg,
       accountId,
     }: {
       id: string;
       message: string;
+      cfg: CoreConfig;
       accountId?: string;
     }) => {
-      await sendMessageMatrix(`user:${id}`, message, accountId ? { accountId } : {});
+      await sendMessageMatrix(`user:${id}`, message, {
+        cfg,
+        ...(accountId ? { accountId } : {}),
+      });
     },
   };
 }

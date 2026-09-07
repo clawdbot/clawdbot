@@ -76,7 +76,6 @@
         {
           "group": "消息平台",
           "pages": [
-            "zh-CN/channels/bluebubbles",
             "zh-CN/channels/discord",
             "zh-CN/channels/feishu",
             "zh-CN/channels/grammy",
@@ -116,21 +115,23 @@
       "tab": "代理",
       "groups": [
         {
-          "group": "基础",
+          "group": "代理运行时",
           "pages": [
             "zh-CN/pi",
             "zh-CN/concepts/architecture",
             "zh-CN/concepts/agent",
             "zh-CN/concepts/agent-loop",
             "zh-CN/concepts/system-prompt",
-            "zh-CN/concepts/context",
-            "zh-CN/concepts/agent-workspace",
-            "zh-CN/concepts/oauth"
+            "zh-CN/concepts/context"
           ]
         },
         {
-          "group": "引导",
-          "pages": ["zh-CN/start/bootstrapping"]
+          "group": "代理工作区",
+          "pages": [
+            "zh-CN/concepts/agent-workspace",
+            "zh-CN/concepts/oauth",
+            "zh-CN/start/bootstrapping"
+          ]
         },
         {
           "group": "会话与记忆",
@@ -138,7 +139,17 @@
             "zh-CN/concepts/session",
             "zh-CN/concepts/session-pruning",
             "zh-CN/concepts/session-tool",
-            "zh-CN/concepts/memory",
+            {
+              "group": "记忆",
+              "pages": [
+                "zh-CN/concepts/memory",
+                "zh-CN/concepts/memory-builtin",
+                "zh-CN/concepts/memory-honcho",
+                "zh-CN/concepts/memory-search",
+                "zh-CN/concepts/active-memory",
+                "zh-CN/concepts/dreaming"
+              ]
+            },
             "zh-CN/concepts/compaction"
           ]
         },
@@ -204,7 +215,6 @@
             "zh-CN/tools/slash-commands",
             "zh-CN/tools/skills",
             "zh-CN/tools/skills-config",
-            "zh-CN/tools/clawhub",
             "zh-CN/tools/plugin"
           ]
         },
@@ -262,7 +272,6 @@
             "zh-CN/providers/claude-max-api-proxy",
             "zh-CN/providers/deepgram",
             "zh-CN/providers/github-copilot",
-            "zh-CN/providers/glm",
             "zh-CN/providers/moonshot",
             "zh-CN/providers/minimax",
             "zh-CN/providers/opencode",
@@ -493,10 +502,35 @@
         {
           "group": "项目",
           "pages": ["zh-CN/reference/credits"]
+        }
+      ]
+    },
+    {
+      "tab": "发布与 CI",
+      "groups": [
+        {
+          "group": "发布说明",
+          "pages": [
+            "zh-CN/releases/index",
+            "zh-CN/releases/2026.7.1",
+            "zh-CN/releases/2026.6.11"
+          ]
         },
         {
-          "group": "发布策略",
-          "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+          "group": "成熟度",
+          "pages": ["zh-CN/maturity/scorecard", "zh-CN/maturity/taxonomy"]
+        },
+        {
+          "group": "发布流程",
+          "pages": [
+            "zh-CN/reference/RELEASING",
+            "zh-CN/reference/full-release-validation",
+            "zh-CN/reference/release-performance-sweep"
+          ]
+        },
+        {
+          "group": "测试与 CI",
+          "pages": ["zh-CN/reference/test", "zh-CN/ci", "zh-CN/help/scripts"]
         }
       ]
     },

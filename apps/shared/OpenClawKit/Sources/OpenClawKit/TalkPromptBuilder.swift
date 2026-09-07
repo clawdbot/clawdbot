@@ -2,16 +2,17 @@ public enum TalkPromptBuilder: Sendable {
     public static func build(
         transcript: String,
         interruptedAtSeconds: Double?,
-        includeVoiceDirectiveHint: Bool = true
-    ) -> String {
+        includeVoiceDirectiveHint: Bool = true) -> String
+    {
         var lines: [String] = [
             "Talk Mode active. Reply in a concise, spoken tone.",
         ]
 
         if includeVoiceDirectiveHint {
-            lines.append(
-                "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}."
-            )
+            let directiveHint =
+                "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice " +
+                "(id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}."
+            lines.append(directiveHint)
         }
 
         if let interruptedAtSeconds {

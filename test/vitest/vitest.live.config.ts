@@ -1,3 +1,4 @@
+// Vitest live config wires the live test shard.
 import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
@@ -26,7 +27,12 @@ export default defineConfig({
         [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(resolveRepoRootPath),
       ),
     ],
-    include: ["src/**/*.live.test.ts", "test/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
+    include: [
+      "src/**/*.live.test.ts",
+      "test/**/*.live.test.ts",
+      "packages/*/src/**/*.live.test.ts",
+      BUNDLED_PLUGIN_LIVE_TEST_GLOB,
+    ],
     exclude,
   },
 });

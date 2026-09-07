@@ -1,10 +1,15 @@
-import fs from "node:fs/promises";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { getResolvedLoggerSettings } from "../../logging.js";
-import { parseLogLine } from "../../logging/parse-log-line.js";
+// Implements channel-scoped tailing of the OpenClaw log file.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  normalizeChatChannelId as normalizeBundledChannelId,
+} from "../../channels/registry.js";
+import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
+import type { ParsedLogLine } from "../../logging/parse-log-line.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
   channel?: string;
@@ -12,95 +17,106 @@ export type ChannelsLogsOptions = {
   json?: boolean;
 };
 
-type LogLine = ReturnType<typeof parseLogLine>;
-
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
-const getChannelSet = () =>
-  new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
+type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
+type ManifestChannel = { id: string; pluginId: string };
 
-function parseChannelFilter(raw?: string) {
-  const trimmed = normalizeLowercaseStringOrEmpty(raw);
-  if (!trimmed) {
-    return "all";
-  }
-  return getChannelSet().has(trimmed) ? trimmed : "all";
+function listManifestChannels(): ManifestChannel[] {
+  return loadPluginManifestRegistryForPluginRegistry({
+    includeDisabled: true,
+    env: process.env,
+  }).plugins.flatMap((plugin) =>
+    plugin.channels.flatMap((rawChannel) => {
+      const id = normalizeLowercaseStringOrEmpty(rawChannel);
+      return id ? [{ id, pluginId: plugin.id }] : [];
+    }),
+  );
 }
 
-function matchesChannel(line: NonNullable<LogLine>, channel: string) {
+function parseChannelFilter(raw?: string): ChannelLogFilter {
+  if (raw === undefined) {
+    return { channel: "all", pluginIds: new Set() };
+  }
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
+  if (trimmed === "all") {
+    return { channel: "all", pluginIds: new Set() };
+  }
+  const manifestChannels = listManifestChannels();
+  const bundled = normalizeBundledChannelId(trimmed);
+  const channel = bundled ?? trimmed;
+  const pluginIds = new Set(
+    manifestChannels.filter((entry) => entry.id === channel).map((entry) => entry.pluginId),
+  );
+  if (bundled || pluginIds.size > 0) {
+    return { channel, pluginIds };
+  }
+  const manifestIds = [...new Set(manifestChannels.map((entry) => entry.id))].toSorted();
+  const validChannels = ["all", ...new Set([...CHAT_CHANNEL_ORDER, ...manifestIds])];
+  throw new Error(
+    `Unknown channel ${JSON.stringify(raw)}. Valid channels: ${validChannels.join(", ")}`,
+  );
+}
+
+function matchesChannelContext(value: string | undefined, channel: string) {
+  return [channel, `gateway/channels/${channel}`].some(
+    (root) => value === root || value?.startsWith(`${root}/`) === true,
+  );
+}
+
+function matchesChannel(
+  line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">,
+  filter: ChannelLogFilter,
+) {
+  const { channel } = filter;
   if (channel === "all") {
     return true;
   }
-  const needle = `gateway/channels/${channel}`;
-  if (line.subsystem?.includes(needle)) {
-    return true;
-  }
-  if (line.module?.includes(channel)) {
-    return true;
-  }
-  return false;
+  return (
+    [line.subsystem, line.module].some((value) => matchesChannelContext(value, channel)) ||
+    (line.plugin !== undefined && filter.pluginIds.has(line.plugin))
+  );
 }
 
-async function readTailLines(file: string, limit: number): Promise<string[]> {
-  const stat = await fs.stat(file).catch(() => null);
-  if (!stat) {
-    return [];
+function parseLinesOption(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_LIMIT;
   }
-  const size = stat.size;
-  const start = Math.max(0, size - MAX_BYTES);
-  const handle = await fs.open(file, "r");
-  try {
-    const length = Math.max(0, size - start);
-    if (length === 0) {
-      return [];
-    }
-    const buffer = Buffer.alloc(length);
-    const readResult = await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8", 0, readResult.bytesRead);
-    let lines = text.split("\n");
-    if (start > 0) {
-      lines = lines.slice(1);
-    }
-    if (lines.length && lines[lines.length - 1] === "") {
-      lines = lines.slice(0, -1);
-    }
-    if (lines.length > limit) {
-      lines = lines.slice(lines.length - limit);
-    }
-    return lines;
-  } finally {
-    await handle.close();
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("--lines must be a positive integer.");
   }
+  return parsed;
 }
 
+/** Print or serialize recent log lines matching one channel subsystem/module. */
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
-  const limit =
-    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
-      ? Math.floor(limitRaw)
-      : DEFAULT_LIMIT;
+  const filter = parseChannelFilter(opts.channel);
+  const { channel } = filter;
+  const limit = parseLinesOption(opts.lines);
 
-  const file = getResolvedLoggerSettings().file;
-  const rawLines = await readTailLines(file, limit * 4);
-  const parsed = rawLines
-    .map(parseLogLine)
-    .filter((line): line is NonNullable<LogLine> => Boolean(line));
-  const filtered = parsed.filter((line) => matchesChannel(line, channel));
-  const lines = filtered.slice(Math.max(0, filtered.length - limit));
+  const tail = await readConfiguredParsedLogTail({
+    limit,
+    maxBytes: MAX_BYTES,
+    filter: (line) => matchesChannel(line, filter),
+  });
+  const { lines, truncated } = tail;
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { file, channel, lines });
+    writeRuntimeJson(runtime, { file: tail.file, channel, truncated, lines });
     return;
   }
 
-  runtime.log(theme.info(`Log file: ${file}`));
+  runtime.log(theme.info(`Log file: ${tail.file}`));
   if (channel !== "all") {
     runtime.log(theme.info(`Channel: ${channel}`));
+  }
+  if (truncated) {
+    runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
   }
   if (lines.length === 0) {
     runtime.log(theme.muted("No matching log lines."));

@@ -1,0 +1,43 @@
+import * as cron from "./cron.js";
+import * as logsChat from "./logs-chat.js";
+import * as migrations from "./migrations.js";
+import * as terminal from "./terminal.js";
+
+export const SchedulerProtocolSchemas = {
+  CronJob: cron.CronJobSchema,
+  CronListParams: cron.CronListParamsSchema,
+  CronStatusParams: cron.CronStatusParamsSchema,
+  CronGetParams: cron.CronGetParamsSchema,
+  CronAddParams: cron.CronAddParamsSchema,
+  CronAddJobResult: cron.CronAddJobResultSchema,
+  CronAddResult: cron.CronAddResultSchema,
+  CronDeclarativeAddResult: cron.CronDeclarativeAddResultSchema,
+  CronDeliveryPreview: cron.CronDeliveryPreviewSchema,
+  CronUpdateParams: cron.CronUpdateParamsSchema,
+  CronRemoveParams: cron.CronRemoveParamsSchema,
+  CronRunParams: cron.CronRunParamsSchema,
+  CronRunsParams: cron.CronRunsParamsSchema,
+  CronScratchGetParams: cron.CronScratchGetParamsSchema,
+  CronScratchGetResult: cron.CronScratchGetResultSchema,
+  CronScratchSetParams: cron.CronScratchSetParamsSchema,
+  CronScratchSetResult: cron.CronScratchSetResultSchema,
+  CronRunLogEntry: cron.CronRunLogEntrySchema,
+  LogsTailParams: logsChat.LogsTailParamsSchema,
+  LogsTailResult: logsChat.LogsTailResultSchema,
+  ...migrations.MigrationProtocolSchemas,
+  TerminalOpenParams: terminal.TerminalOpenParamsSchema,
+  TerminalOpenResult: terminal.TerminalOpenResultSchema,
+  TerminalInputParams: terminal.TerminalInputParamsSchema,
+  TerminalResizeParams: terminal.TerminalResizeParamsSchema,
+  TerminalCloseParams: terminal.TerminalCloseParamsSchema,
+  TerminalAttachParams: terminal.TerminalAttachParamsSchema,
+  TerminalAttachResult: terminal.TerminalAttachResultSchema,
+  TerminalSessionInfo: terminal.TerminalSessionInfoSchema,
+  TerminalListResult: terminal.TerminalListResultSchema,
+  TerminalUploadParams: terminal.TerminalUploadParamsSchema,
+  TerminalUploadResult: terminal.TerminalUploadResultSchema,
+  TerminalAckResult: terminal.TerminalAckResultSchema,
+  TerminalDataEvent: terminal.TerminalDataEventSchema,
+  TerminalExitEvent: terminal.TerminalExitEventSchema,
+  TerminalEvent: terminal.TerminalEventSchema,
+} as const;

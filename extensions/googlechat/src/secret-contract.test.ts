@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.js";
-import { resolveSecretRefValues } from "../../../src/secrets/resolve.js";
+// Googlechat tests cover secret contract plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyResolvedAssignments,
   createResolverContext,
-} from "../../../src/secrets/runtime-shared.js";
+  resolveSecretRefValues,
+} from "openclaw/plugin-sdk/secret-ref-runtime";
+import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 describe("googlechat secret contract", () => {
@@ -16,7 +17,7 @@ describe("googlechat secret contract", () => {
           accounts: {
             work: {
               enabled: true,
-              serviceAccountRef: {
+              serviceAccount: {
                 source: "env",
                 provider: "default",
                 id: "GOOGLECHAT_SERVICE_ACCOUNT",
@@ -40,6 +41,15 @@ describe("googlechat secret contract", () => {
       context,
     });
 
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "account",
+        ownerId: "googlechat:work",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+
     const resolved = await resolveSecretRefValues(
       context.assignments.map((assignment) => assignment.ref),
       {
@@ -55,6 +65,6 @@ describe("googlechat secret contract", () => {
 
     const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
     expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
-    expect(context.warnings).toEqual([]);
+    expect(context.warnings).toStrictEqual([]);
   });
 });

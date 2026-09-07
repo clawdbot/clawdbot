@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ANDROID_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 RESULTS_DIR="$ANDROID_DIR/benchmark/results"
 
-PACKAGE="ai.openclaw.app"
-ACTIVITY=".MainActivity"
+PACKAGE="ai.openclaw.app.debug"
+ACTIVITY="ai.openclaw.app.MainActivity"
 DEVICE_SERIAL=""
 INSTALL_APP="1"
 LAUNCH_RUNS="4"
@@ -27,9 +27,9 @@ Assumes the app can reach a live gateway and will show "Connected" in the UI.
 
 Options:
   --device <serial>          adb device serial
-  --package <pkg>            package name (default: ai.openclaw.app)
-  --activity <activity>      launch activity (default: .MainActivity)
-  --skip-install             skip :app:installDebug
+  --package <pkg>            package name (default: ai.openclaw.app.debug)
+  --activity <activity>      launch activity (default: ai.openclaw.app.MainActivity)
+  --skip-install             skip :app:installPlayDebug
   --launch-runs <n>          launch-to-connected runs (default: 4)
   --screen-loops <n>         screen benchmark loops (default: 6)
   --chat-loops <n>           chat benchmark loops (default: 8)
@@ -145,7 +145,7 @@ trap cleanup EXIT
 if [[ "$INSTALL_APP" == "1" ]]; then
   (
     cd "$ANDROID_DIR"
-    ./gradlew :app:installDebug --console=plain >"$run_dir/install.log" 2>&1
+    ./gradlew :app:installPlayDebug --console=plain >"$run_dir/install.log" 2>&1
   )
 fi
 
@@ -165,7 +165,6 @@ pct_of() {
   awk -v total="$total" -v pct="$pct" 'BEGIN { printf "%d", total * pct }'
 }
 
-tab_connect_x="$(pct_of "$display_width" "0.11")"
 tab_chat_x="$(pct_of "$display_width" "0.31")"
 tab_screen_x="$(pct_of "$display_width" "0.69")"
 tab_y="$(pct_of "$display_height" "0.93")"

@@ -1,13 +1,12 @@
+// Nextcloud Talk plugin module implements signature behavior.
 import { createHmac, randomBytes } from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NextcloudTalkWebhookHeaders } from "./types.js";
 
 const SIGNATURE_HEADER = "x-nextcloud-talk-signature";
 const RANDOM_HEADER = "x-nextcloud-talk-random";
 const BACKEND_HEADER = "x-nextcloud-talk-backend";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 /**
  * Verify the HMAC-SHA256 signature of an incoming webhook request.
@@ -28,14 +27,7 @@ export function verifyNextcloudTalkSignature(params: {
     .update(random + body)
     .digest("hex");
 
-  if (signature.length !== expected.length) {
-    return false;
-  }
-  let result = 0;
-  for (let i = 0; i < signature.length; i++) {
-    result |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return result === 0;
+  return safeEqualSecret(signature, expected);
 }
 
 /**

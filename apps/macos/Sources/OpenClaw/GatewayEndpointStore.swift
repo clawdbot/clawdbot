@@ -3,9 +3,22 @@ import Foundation
 import OSLog
 
 enum GatewayEndpointState: Equatable {
-    case ready(mode: AppState.ConnectionMode, url: URL, token: String?, password: String?)
-    case connecting(mode: AppState.ConnectionMode, detail: String)
-    case unavailable(mode: AppState.ConnectionMode, reason: String)
+    case ready(
+        mode: AppState.ConnectionMode,
+        url: URL,
+        token: String?,
+        password: String?,
+        routeRevision: UInt64 = 0)
+    case connecting(mode: AppState.ConnectionMode, detail: String, routeRevision: UInt64 = 0)
+    case unavailable(mode: AppState.ConnectionMode, reason: String, routeRevision: UInt64 = 0)
+
+    var routeRevision: UInt64 {
+        switch self {
+        case let .ready(_, _, _, _, revision),
+             let .connecting(_, _, revision),
+             let .unavailable(_, _, revision): revision
+        }
+    }
 }
 
 /// Single place to resolve (and publish) the effective gateway control endpoint.
@@ -31,17 +44,65 @@ actor GatewayEndpointStore {
 
     private static let envOverrideWarnings = LockIsolated((token: false, password: false))
 
+    enum SourceMode: String, Sendable {
+        case unconfigured
+        case local
+        case remote
+
+        init(_ mode: AppState.ConnectionMode) {
+            self = SourceMode(rawValue: mode.rawValue) ?? .unconfigured
+        }
+    }
+
+    enum SourceTransport: String, Sendable {
+        case ssh
+        case direct
+
+        init(_ transport: AppState.RemoteTransport) {
+            self = transport == .direct ? .direct : .ssh
+        }
+    }
+
+    struct SSHRouteIdentity: Equatable, Sendable {
+        let target: String
+        let identity: String
+        let hostKeyPolicy: String
+        let configuredRemotePort: Int?
+        let configuredRemoteURL: String?
+    }
+
+    struct SourceSnapshot: Equatable, Sendable {
+        /// MainActor selection generation captured before reading canonical config.
+        let routingGeneration: UInt64?
+        let mode: SourceMode
+        let token: String?
+        let password: String?
+        /// Non-secret route owner for device-scoped credentials.
+        let deviceAuthGatewayID: String?
+        let localPort: Int
+        let localHost: String
+        let scheme: String
+        let bindMode: String?
+        let remoteTransport: SourceTransport
+        let directRemoteURL: URL?
+        let remoteTLSFingerprint: String?
+        /// Invalidates a suspended SSH lookup when its desired route changes.
+        let sshRouteIdentity: SSHRouteIdentity?
+    }
+
     struct Deps {
-        let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
         let password: @Sendable () -> String?
         let localPort: @Sendable () -> Int
-        let localHost: @Sendable () async -> String
-        let remotePortIfRunning: @Sendable () async -> UInt16?
-        let ensureRemoteTunnel: @Sendable () async throws -> UInt16
+        let localUnavailableReason: @Sendable () -> String?
+        let remoteRouteIfRunning: @Sendable () async -> RemoteTunnelManager.Route?
+        let remoteRouteIsCurrent: @Sendable (RemoteTunnelManager.Route) async -> Bool
+        let canStartRemoteTunnel: @Sendable () -> Bool
+        let ensureRemoteTunnel: @Sendable () async throws -> RemoteTunnelManager.Route
+        let liveSourceIsCurrent: @Sendable (SourceSnapshot) async -> Bool
+        let sourceSnapshot: @Sendable () async throws -> SourceSnapshot
 
         static let live = Deps(
-            mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
             token: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
@@ -61,21 +122,33 @@ actor GatewayEndpointStore {
                     launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
             },
             localPort: { GatewayEnvironment.gatewayPort() },
-            localHost: {
-                let root = OpenClawConfigFile.loadDict()
-                let bind = GatewayEndpointStore.resolveGatewayBindMode(
-                    root: root,
-                    env: ProcessInfo.processInfo.environment)
-                let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
-                let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
-                    ?? TailscaleService.fallbackTailnetIPv4()
-                return GatewayEndpointStore.resolveLocalGatewayHost(
-                    bindMode: bind,
-                    customBindHost: customBindHost,
-                    tailscaleIP: tailscaleIP)
+            localUnavailableReason: { GatewayEnvironment.profileGatewayPortConflict() },
+            remoteRouteIfRunning: { await RemoteTunnelManager.shared.controlTunnelRouteIfRunning() },
+            remoteRouteIsCurrent: { await RemoteTunnelManager.shared.isCurrentRoute($0) },
+            canStartRemoteTunnel: { GatewayEndpointStore.primaryAppLaunchAdmitted.withValue { $0 } },
+            ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnelRoute() },
+            liveSourceIsCurrent: { source in
+                await MainActor.run {
+                    let currentTailnetIP: String? = if source.mode == .local,
+                                                       source.bindMode == "tailnet"
+                    {
+                        TailscaleService.shared.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+                    } else {
+                        nil
+                    }
+                    return GatewayEndpointStore.liveSourceIsCurrent(
+                        source,
+                        currentRoutingGeneration: AppStateStore.shared.gatewayRoutingGeneration,
+                        currentTailnetIP: currentTailnetIP)
+                }
             },
-            remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
-            ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
+            sourceSnapshot: { try await GatewayEndpointStore.liveSourceSnapshot() })
+    }
+
+    private static let primaryAppLaunchAdmitted = LockIsolated(false)
+
+    static func admitPrimaryAppLaunch() {
+        self.primaryAppLaunchAdmitted.withValue { $0 = true }
     }
 
     private static func resolveGatewayPassword(
@@ -84,11 +157,16 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
-               !configPassword.isEmpty
+            if let configPassword = resolveConfigPassword(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configPassword.isEmpty
             {
                 self.warnEnvOverrideOnce(
                     kind: .password,
@@ -113,8 +191,11 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pw.isEmpty {
+            if let pw = resolveLocalConfigAuthString(
+                password,
+                env: env,
+                serviceEnv: serviceEnv)
+            {
                 return pw
             }
         }
@@ -126,7 +207,12 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigPassword(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
+    {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
                let remote = gateway["remote"] as? [String: Any],
@@ -141,7 +227,7 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(password, env: env, serviceEnv: serviceEnv)
         }
         return nil
     }
@@ -152,12 +238,17 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-               !configToken.isEmpty,
-               configToken != trimmed
+            if let configToken = resolveConfigToken(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configToken.isEmpty,
+                configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -167,8 +258,12 @@ actor GatewayEndpointStore {
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-           !configToken.isEmpty
+        if let configToken = resolveConfigToken(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            serviceEnv: serviceEnv),
+            !configToken.isEmpty
         {
             return configToken
         }
@@ -186,7 +281,12 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigToken(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
+    {
         if isRemote {
             return GatewayRemoteConfig.resolveTokenString(root: root)
         }
@@ -195,9 +295,50 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let token = auth["token"] as? String
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(token, env: env, serviceEnv: serviceEnv)
         }
         return nil
+    }
+
+    private static func resolveLocalConfigAuthString(
+        _ raw: String,
+        env: [String: String],
+        serviceEnv: [String: String]) -> String?
+    {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let envName = envSecretRefName(trimmed) else {
+            return trimmed
+        }
+        // Finder-launched apps cannot see gateway-service-only env values. Resolve
+        // local refs from app env first, then the gateway LaunchAgent snapshot.
+        for source in [env, serviceEnv] {
+            let value = source[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func envSecretRefName(_ value: String) -> String? {
+        let name: Substring
+        if value.hasPrefix("${"), value.hasSuffix("}") {
+            let nameStart = value.index(value.startIndex, offsetBy: 2)
+            let nameEnd = value.index(before: value.endIndex)
+            name = value[nameStart..<nameEnd]
+        } else if value.hasPrefix("$") {
+            let nameStart = value.index(after: value.startIndex)
+            name = value[nameStart..<value.endIndex]
+        } else {
+            return nil
+        }
+        let candidate = String(name)
+        return self.isValidEnvSecretRefID(candidate) ? candidate : nil
+    }
+
+    private static func isValidEnvSecretRefID(_ value: String) -> Bool {
+        value.range(of: #"^[A-Z][A-Z0-9_]{0,127}$"#, options: .regularExpression) != nil
     }
 
     private static func warnEnvOverrideOnce(
@@ -228,26 +369,37 @@ actor GatewayEndpointStore {
 
     private var state: GatewayEndpointState
     private var subscribers: [UUID: AsyncStream<GatewayEndpointState>.Continuation] = [:]
-    private var remoteEnsure: (token: UUID, task: Task<UInt16, Error>)?
+    private var remoteEnsure: (token: UUID, task: Task<GatewayConnection.EndpointSnapshot, Error>)?
+    private var resolvedEndpoint: GatewayConnection.EndpointSnapshot?
+    private nonisolated let endpointRevision = LockIsolated<UInt64>(1)
+    private var resolutionGeneration: UInt64 = 0
+    private var activeSource: SourceSnapshot?
+    private var localUnavailableReason: String?
+
+    nonisolated var routeRevision: UInt64 {
+        self.endpointRevision.value
+    }
 
     init(deps: Deps = .live) {
         self.deps = deps
-        let modeRaw = UserDefaults.standard.string(forKey: connectionModeKey)
+        let modeRaw = AppDefaults.standard.string(forKey: connectionModeKey)
         let initialMode: AppState.ConnectionMode
         if let modeRaw {
             initialMode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
         } else {
-            let seen = UserDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
+            let seen = AppDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
             initialMode = seen ? .local : .unconfigured
         }
 
         let port = deps.localPort()
+        self.localUnavailableReason = deps.localUnavailableReason()
+        let root = OpenClawConfigFile.loadDict()
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
-            root: OpenClawConfigFile.loadDict(),
+            root: root,
             env: ProcessInfo.processInfo.environment)
-        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: OpenClawConfigFile.loadDict())
+        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
         let scheme = GatewayEndpointStore.resolveGatewayScheme(
-            root: OpenClawConfigFile.loadDict(),
+            root: root,
             env: ProcessInfo.processInfo.environment)
         let host = GatewayEndpointStore.resolveLocalGatewayHost(
             bindMode: bind,
@@ -255,18 +407,40 @@ actor GatewayEndpointStore {
             tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: initialMode,
+            remoteTransport: .ssh,
+            remoteURL: "",
+            remoteTarget: "")
         switch initialMode {
         case .local:
+            if let reason = self.localUnavailableReason {
+                self.state = .unavailable(mode: .local, reason: reason, routeRevision: self.endpointRevision.value)
+                return
+            }
+            let url = URL(string: "\(scheme)://\(host):\(port)")!
             self.state = .ready(
                 mode: .local,
-                url: URL(string: "\(scheme)://\(host):\(port)")!,
+                url: url,
                 token: token,
-                password: password)
+                password: password,
+                routeRevision: self.endpointRevision.value)
+            self.resolvedEndpoint = GatewayConnection.EndpointSnapshot(
+                config: (url, token, password),
+                tls: GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .local,
+                    configuredFingerprint: nil),
+                routeAuthority: nil,
+                deviceAuthGatewayID: deviceAuthGatewayID,
+                revision: self.endpointRevision.value)
         case .remote:
-            self.state = .connecting(mode: .remote, detail: Self.remoteConnectingDetail)
-            Task { await self.setMode(.remote) }
+            self.state = .connecting(
+                mode: .remote, detail: Self.remoteConnectingDetail, routeRevision: self.endpointRevision.value)
+            Task { await self.refresh() }
         case .unconfigured:
-            self.state = .unavailable(mode: .unconfigured, reason: "Gateway not configured")
+            self.state = .unavailable(
+                mode: .unconfigured, reason: "Gateway not configured", routeRevision: self.endpointRevision.value)
         }
     }
 
@@ -283,31 +457,89 @@ actor GatewayEndpointStore {
         }
     }
 
-    func refresh() async {
-        let mode = await self.deps.mode()
-        await self.setMode(mode)
+    func currentState() async -> GatewayEndpointState {
+        self.state
     }
 
-    func setMode(_ mode: AppState.ConnectionMode) async {
-        let token = self.deps.token()
-        let password = self.deps.password()
-        switch mode {
+    func setLocalUnavailableReason(_ reason: String?) async {
+        self.localUnavailableReason = reason
+        await self.refresh()
+    }
+
+    func refresh() async {
+        _ = await self.refreshIfCurrent()
+    }
+
+    private func refreshIfCurrent() async -> (source: SourceSnapshot, generation: UInt64)? {
+        do {
+            let source = try await currentSourceSnapshot()
+            let generation = self.adoptSource(source)
+            await self.resolveSource(source, generation: generation)
+            guard await self.sourceIsCurrent(source, generation: generation),
+                  !Task.isCancelled,
+                  generation == self.resolutionGeneration,
+                  self.activeSource == source
+            else { return nil }
+            return (source, generation)
+        } catch {
+            return nil
+        }
+    }
+
+    private func adoptSource(_ source: SourceSnapshot) -> UInt64 {
+        if self.activeSource != source {
+            self.cancelRemoteEnsure()
+            if let activeSource, !activeSource.hasSameConnectionIdentity(as: source) {
+                // Retire authority before resolution suspends, even when the new
+                // route never becomes ready. Config bookkeeping alone is not a route change.
+                self.endpointRevision.withValue { $0 &+= 1 }
+                self.resolvedEndpoint = nil
+            }
+            self.activeSource = source
+            self.resolutionGeneration &+= 1
+        }
+        return self.resolutionGeneration
+    }
+
+    private func sourceIsCurrent(_ source: SourceSnapshot, generation: UInt64) async -> Bool {
+        guard !Task.isCancelled,
+              generation == self.resolutionGeneration,
+              self.activeSource == source
+        else { return false }
+        if source.routingGeneration != nil {
+            // Live snapshots are anchored to the MainActor routing generation plus
+            // volatile route facts. Re-reading config here would multiply disk work.
+            let liveSourceIsCurrent = await deps.liveSourceIsCurrent(source)
+            return liveSourceIsCurrent &&
+                !Task.isCancelled &&
+                generation == self.resolutionGeneration &&
+                self.activeSource == source
+        }
+        guard let current = try? await deps.sourceSnapshot() else { return false }
+        return current == source &&
+            !Task.isCancelled &&
+            generation == self.resolutionGeneration &&
+            self.activeSource == source
+    }
+
+    private func resolveSource(_ source: SourceSnapshot, generation: UInt64) async {
+        guard !Task.isCancelled,
+              generation == self.resolutionGeneration,
+              self.activeSource == source
+        else { return }
+        switch source.mode {
         case .local:
             self.cancelRemoteEnsure()
-            let port = self.deps.localPort()
-            let host = await self.deps.localHost()
-            let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
-                env: ProcessInfo.processInfo.environment)
-            self.setState(.ready(
-                mode: .local,
-                url: URL(string: "\(scheme)://\(host):\(port)")!,
-                token: token,
-                password: password))
+            guard await self.sourceIsCurrent(source, generation: generation) else { return }
+            if let reason = self.localUnavailableReason {
+                self.setState(.unavailable(mode: .local, reason: reason))
+                return
+            }
+            let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
+            self.publishReadyEndpoint(source: source, url: url)
         case .remote:
-            let root = OpenClawConfigFile.loadDict()
-            if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
-                guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+            if source.remoteTransport == .direct {
+                guard let url = source.directRemoteURL else {
                     self.cancelRemoteEnsure()
                     self.setState(.unavailable(
                         mode: .remote,
@@ -315,24 +547,25 @@ actor GatewayEndpointStore {
                     return
                 }
                 self.cancelRemoteEnsure()
-                self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+                guard await self.sourceIsCurrent(source, generation: generation) else { return }
+                self.publishReadyEndpoint(source: source, url: url)
                 return
             }
-            let port = await self.deps.remotePortIfRunning()
-            guard let port else {
-                self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
-                self.kickRemoteEnsureIfNeeded(detail: Self.remoteConnectingDetail)
+            let endpointBeforeLookup = self.resolvedEndpoint
+            let route = await deps.remoteRouteIfRunning()
+            guard await self.sourceIsCurrent(source, generation: generation) else { return }
+            // An overlapping ensure owns completion. Its new endpoint also wins
+            // over a lookup that captured the previous tunnel before suspending.
+            guard self.remoteEnsure == nil,
+                  self.resolvedEndpoint?.revision == endpointBeforeLookup?.revision,
+                  self.resolvedEndpoint?.routeAuthority == endpointBeforeLookup?.routeAuthority
+            else { return }
+            guard let route else {
+                self.kickRemoteEnsureIfNeeded(source: source, generation: generation)
                 return
             }
-            self.cancelRemoteEnsure()
-            let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
-                env: ProcessInfo.processInfo.environment)
-            self.setState(.ready(
-                mode: .remote,
-                url: URL(string: "\(scheme)://127.0.0.1:\(Int(port))")!,
-                token: token,
-                password: password))
+            let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
+            self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
         case .unconfigured:
             self.cancelRemoteEnsure()
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
@@ -341,8 +574,23 @@ actor GatewayEndpointStore {
 
     /// Explicit action: ensure the remote control tunnel is established and publish the resolved endpoint.
     func ensureRemoteControlTunnel() async throws -> UInt16 {
-        try await self.requireRemoteMode()
-        if let url = try self.resolveDirectRemoteURL() {
+        guard let context = await refreshIfCurrent() else { throw CancellationError() }
+        guard context.source.mode == .remote else {
+            throw NSError(
+                domain: "RemoteTunnel",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+        }
+        if context.source.remoteTransport == .direct {
+            guard await self.sourceIsCurrent(context.source, generation: context.generation) else {
+                throw CancellationError()
+            }
+            guard let url = context.source.directRemoteURL else {
+                throw NSError(
+                    domain: "GatewayEndpoint",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+            }
             guard let port = GatewayRemoteConfig.defaultPort(for: url),
                   let portInt = UInt16(exactly: port)
             else {
@@ -354,8 +602,19 @@ actor GatewayEndpointStore {
             self.logger.info("remote transport direct; skipping SSH tunnel")
             return portInt
         }
-        let config = try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
-        guard let portInt = config.0.port, let port = UInt16(exactly: portInt) else {
+        // Refresh already validated a running route. Re-ensuring it would publish
+        // a false endpoint loss and retire otherwise unchanged connection authority.
+        let endpoint: GatewayConnection.EndpointSnapshot = if context.generation == self.resolutionGeneration,
+                                                              context.source == self.activeSource,
+                                                              case .ready = self.state, let resolvedEndpoint
+        {
+            resolvedEndpoint
+        } else {
+            try await self.ensureRemoteEndpoint(
+                source: context.source,
+                generation: context.generation)
+        }
+        guard let portInt = endpoint.config.url.port, let port = UInt16(exactly: portInt) else {
             throw NSError(
                 domain: "GatewayEndpoint",
                 code: 1,
@@ -364,17 +623,38 @@ actor GatewayEndpointStore {
         return port
     }
 
-    func requireConfig() async throws -> GatewayConnection.Config {
-        await self.refresh()
+    /// Returns endpoint credentials and tunnel authority from the same actor
+    /// snapshot. Callers must never stitch these values together across awaits.
+    func requireEndpoint() async throws -> GatewayConnection.EndpointSnapshot {
+        // A newer resolution owns the endpoint after it increments the generation.
+        // Never let this request fall through to the previously-ready route.
+        guard let context = await refreshIfCurrent(),
+              !Task.isCancelled,
+              context.generation == self.resolutionGeneration,
+              context.source == self.activeSource
+        else {
+            throw CancellationError()
+        }
         switch self.state {
-        case let .ready(_, url, token, password):
-            return (url, token, password)
-        case let .connecting(mode, _):
+        case .ready:
+            guard await self.sourceIsCurrent(context.source, generation: context.generation) else {
+                throw CancellationError()
+            }
+            guard let resolvedEndpoint else {
+                throw NSError(
+                    domain: "GatewayEndpoint",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Gateway endpoint changed while resolving"])
+            }
+            return resolvedEndpoint
+        case let .connecting(mode, _, _):
             guard mode == .remote else {
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
             }
-            return try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
-        case let .unavailable(mode, reason):
+            return try await self.ensureRemoteEndpoint(
+                source: context.source,
+                generation: context.generation)
+        case let .unavailable(mode, reason, _):
             guard mode == .remote else {
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
             }
@@ -383,7 +663,9 @@ actor GatewayEndpointStore {
             // recreate it on demand so callers can recover without a manual reconnect.
             self.logger.info(
                 "endpoint unavailable; ensuring remote control tunnel reason=\(reason, privacy: .public)")
-            return try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
+            return try await self.ensureRemoteEndpoint(
+                source: context.source,
+                generation: context.generation)
         }
     }
 
@@ -392,117 +674,136 @@ actor GatewayEndpointStore {
         self.remoteEnsure = nil
     }
 
-    private func kickRemoteEnsureIfNeeded(detail: String) {
-        if self.remoteEnsure != nil {
-            self.setState(.connecting(mode: .remote, detail: detail))
-            return
-        }
+    @discardableResult
+    private func kickRemoteEnsureIfNeeded(
+        source: SourceSnapshot,
+        generation: UInt64) -> Task<GatewayConnection.EndpointSnapshot, Error>?
+    {
+        if let ensure = self.remoteEnsure { return ensure.task }
+        self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
+        guard self.deps.canStartRemoteTunnel() else { return nil }
 
-        let deps = self.deps
         let token = UUID()
-        let task = Task.detached(priority: .utility) { try await deps.ensureRemoteTunnel() }
+        // The endpoint owner publishes completion even if every requester leaves.
+        // Canceling a waiter must not strand a successfully recreated SSH tunnel.
+        let task = Task(priority: .utility) {
+            try await self.runRemoteEnsure(source: source, generation: generation, token: token)
+        }
         self.remoteEnsure = (token: token, task: task)
-        self.setState(.connecting(mode: .remote, detail: detail))
+        return task
     }
 
-    private func ensureRemoteConfig(detail: String) async throws -> GatewayConnection.Config {
-        try await self.requireRemoteMode()
+    private func ensureRemoteEndpoint(
+        source: SourceSnapshot,
+        generation: UInt64) async throws -> GatewayConnection.EndpointSnapshot
+    {
+        try Task.checkCancellation()
+        guard source.mode == .remote,
+              generation == self.resolutionGeneration,
+              self.activeSource == source
+        else { throw CancellationError() }
 
-        if let url = try self.resolveDirectRemoteURL() {
-            let token = self.deps.token()
-            let password = self.deps.password()
-            self.cancelRemoteEnsure()
-            self.setState(.ready(mode: .remote, url: url, token: token, password: password))
-            return (url, token, password)
-        }
-
-        self.kickRemoteEnsureIfNeeded(detail: detail)
-        guard let ensure = self.remoteEnsure else {
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
-        }
-
-        do {
-            let forwarded = try await ensure.task.value
-            let stillRemote = await self.deps.mode() == .remote
-            guard stillRemote else {
+        if source.remoteTransport == .direct {
+            guard await self.sourceIsCurrent(source, generation: generation) else {
+                throw CancellationError()
+            }
+            guard let url = source.directRemoteURL else {
                 throw NSError(
-                    domain: "RemoteTunnel",
+                    domain: "GatewayEndpoint",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
             }
+            self.cancelRemoteEnsure()
+            return self.publishReadyEndpoint(source: source, url: url)
+        }
 
-            if self.remoteEnsure?.token == ensure.token {
-                self.remoteEnsure = nil
-            }
-
-            let token = self.deps.token()
-            let password = self.deps.password()
-            let scheme = GatewayEndpointStore.resolveGatewayScheme(
-                root: OpenClawConfigFile.loadDict(),
-                env: ProcessInfo.processInfo.environment)
-            let url = URL(string: "\(scheme)://127.0.0.1:\(Int(forwarded))")!
-            self.setState(.ready(mode: .remote, url: url, token: token, password: password))
-            return (url, token, password)
-        } catch let err as CancellationError {
-            if self.remoteEnsure?.token == ensure.token {
-                self.remoteEnsure = nil
-            }
-            throw err
+        guard let task = self.kickRemoteEnsureIfNeeded(source: source, generation: generation) else {
+            throw CancellationError()
+        }
+        do {
+            let endpoint = try await task.value
+            guard await self.sourceIsCurrent(source, generation: generation),
+                  self.resolvedEndpoint?.revision == endpoint.revision
+            else { throw CancellationError() }
+            return endpoint
         } catch {
-            if self.remoteEnsure?.token == ensure.token {
-                self.remoteEnsure = nil
+            guard await self.sourceIsCurrent(source, generation: generation) else { throw CancellationError() }
+            throw error
+        }
+    }
+
+    private func runRemoteEnsure(
+        source: SourceSnapshot,
+        generation: UInt64,
+        token: UUID) async throws -> GatewayConnection.EndpointSnapshot
+    {
+        defer {
+            if self.remoteEnsure?.token == token { self.remoteEnsure = nil }
+        }
+        do {
+            while true {
+                guard self.remoteEnsure?.token == token,
+                      await self.sourceIsCurrent(source, generation: generation)
+                else { throw CancellationError() }
+                let route = try await self.deps.ensureRemoteTunnel()
+                try Task.checkCancellation()
+                let routeIsCurrent = await self.deps.remoteRouteIsCurrent(route)
+                guard await self.sourceIsCurrent(source, generation: generation),
+                      self.remoteEnsure?.token == token
+                else { throw CancellationError() }
+                guard routeIsCurrent else { continue }
+
+                let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
+                return self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
             }
-            let msg = "Remote control tunnel failed (\(error.localizedDescription))"
-            self.setState(.unavailable(mode: .remote, reason: msg))
-            self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        } catch {
+            guard await self.sourceIsCurrent(source, generation: generation),
+                  self.remoteEnsure?.token == token
+            else { throw CancellationError() }
+            if error is CancellationError { throw error }
+            let message = "Remote control tunnel failed (\(error.localizedDescription))"
+            self.setState(.unavailable(mode: .remote, reason: message))
+            self.logger.error("remote control tunnel ensure failed \(message, privacy: .public)")
+            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
         }
-    }
-
-    private func requireRemoteMode() async throws {
-        guard await self.deps.mode() == .remote else {
-            throw NSError(
-                domain: "RemoteTunnel",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
-        }
-    }
-
-    private func resolveDirectRemoteURL() throws -> URL? {
-        let root = OpenClawConfigFile.loadDict()
-        guard GatewayRemoteConfig.resolveTransport(root: root) == .direct else { return nil }
-        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
-            throw NSError(
-                domain: "GatewayEndpoint",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
-        }
-        return url
     }
 
     private func removeSubscriber(_ id: UUID) {
         self.subscribers[id] = nil
     }
 
-    private func setState(_ next: GatewayEndpointState) {
+    private func setState(_ candidate: GatewayEndpointState) {
+        if case .ready = candidate {
+            // Ready state and its route authority are published by setReady.
+        } else if self.resolvedEndpoint != nil {
+            self.endpointRevision.withValue { $0 &+= 1 }
+            self.resolvedEndpoint = nil
+        }
+        let next: GatewayEndpointState = switch candidate {
+        case let .connecting(mode, detail, _):
+            .connecting(mode: mode, detail: detail, routeRevision: self.routeRevision)
+        case let .unavailable(mode, reason, _):
+            .unavailable(mode: mode, reason: reason, routeRevision: self.routeRevision)
+        case .ready: candidate
+        }
         guard next != self.state else { return }
         self.state = next
         for (_, continuation) in self.subscribers {
             continuation.yield(next)
         }
         switch next {
-        case let .ready(mode, url, _, _):
+        case let .ready(mode, url, _, _, _):
             let modeDesc = String(describing: mode)
-            let urlDesc = url.absoluteString
+            let urlDesc = Self.diagnosticURLString(for: url)
             self.logger
                 .debug(
                     "resolved endpoint mode=\(modeDesc, privacy: .public) url=\(urlDesc, privacy: .public)")
-        case let .connecting(mode, detail):
+        case let .connecting(mode, detail, _):
             let modeDesc = String(describing: mode)
             self.logger
                 .debug(
                     "endpoint connecting mode=\(modeDesc, privacy: .public) detail=\(detail, privacy: .public)")
-        case let .unavailable(mode, reason):
+        case let .unavailable(mode, reason, _):
             let modeDesc = String(describing: mode)
             self.logger
                 .debug(
@@ -510,34 +811,291 @@ actor GatewayEndpointStore {
         }
     }
 
-    func maybeFallbackToTailnet(from currentURL: URL) async -> GatewayConnection.Config? {
-        let mode = await self.deps.mode()
-        guard mode == .local else { return nil }
+    @discardableResult
+    private func publishReadyEndpoint(
+        source: SourceSnapshot,
+        url: URL,
+        routeAuthority: UInt64? = nil) -> GatewayConnection.EndpointSnapshot
+    {
+        // SourceSnapshot owns route credentials and identity. Publish every ready
+        // path through one derivation so local, direct, and tunnel routes cannot drift.
+        let mode: AppState.ConnectionMode = source.mode == .local ? .local : .remote
+        return self.setReady(
+            mode: mode,
+            url: url,
+            token: source.token,
+            password: source.password,
+            tls: GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: mode,
+                configuredFingerprint: mode == .remote ? source.remoteTLSFingerprint : nil),
+            deviceAuthGatewayID: source.deviceAuthGatewayID,
+            routeAuthority: routeAuthority)
+    }
 
-        let root = OpenClawConfigFile.loadDict()
-        let bind = GatewayEndpointStore.resolveGatewayBindMode(
-            root: root,
-            env: ProcessInfo.processInfo.environment)
-        guard bind == "tailnet" else { return nil }
+    @discardableResult
+    private func setReady(
+        mode: AppState.ConnectionMode,
+        url: URL,
+        token: String?,
+        password: String?,
+        tls: GatewayTLSRoute?,
+        deviceAuthGatewayID: String?,
+        routeAuthority: UInt64?) -> GatewayConnection.EndpointSnapshot
+    {
+        let changed = self.resolvedEndpoint.map { endpoint in
+            endpoint.config.url != url ||
+                endpoint.config.token != token ||
+                endpoint.config.password != password ||
+                !GatewayTLSRoute.hasSameConnectionIdentity(endpoint.tls, tls) ||
+                endpoint.deviceAuthGatewayID != deviceAuthGatewayID ||
+                endpoint.routeAuthority != routeAuthority
+        } ?? false
+        if changed {
+            self.endpointRevision.withValue { $0 &+= 1 }
+        }
+        // First readiness keeps its admitted authority; source replacement and
+        // endpoint loss already retired it. Do not discard the first handshake result.
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url, token, password),
+            tls: tls,
+            routeAuthority: routeAuthority,
+            deviceAuthGatewayID: deviceAuthGatewayID,
+            revision: self.routeRevision)
+        self.resolvedEndpoint = endpoint
+        self.setState(.ready(
+            mode: mode,
+            url: url,
+            token: token,
+            password: password,
+            routeRevision: self.routeRevision))
+        return endpoint
+    }
+}
 
+extension GatewayEndpointStore.SourceSnapshot {
+    func hasSameConnectionIdentity(as other: Self) -> Bool {
+        guard self.mode == other.mode else { return false }
+        if self.mode == .unconfigured { return true }
+        guard self.token == other.token, self.password == other.password,
+              self.deviceAuthGatewayID == other.deviceAuthGatewayID
+        else { return false }
+        if self.mode == .local {
+            return self.localHost == other.localHost && self.localPort == other.localPort &&
+                self.scheme == other.scheme
+        }
+        guard self.remoteTransport == other.remoteTransport,
+              self.remoteTLSFingerprint == other.remoteTLSFingerprint
+        else { return false }
+        return self.remoteTransport == .direct
+            ? self.directRemoteURL == other.directRemoteURL
+            : self.sshRouteIdentity == other.sshRouteIdentity && self.scheme == other.scheme
+    }
+}
+
+extension GatewayEndpointStore {
+    private func currentSourceSnapshot() async throws -> SourceSnapshot {
+        try Task.checkCancellation()
+        var generation = self.resolutionGeneration
+        let source = try await deps.sourceSnapshot()
+        try Task.checkCancellation()
+        // An overlapping adoption may be older or newer than this read. Revalidate
+        // the original source without retargeting it; identical reads share authority.
+        while self.resolutionGeneration != generation, self.activeSource != source {
+            generation = self.resolutionGeneration
+            let current = try await deps.sourceSnapshot()
+            try Task.checkCancellation()
+            guard current == source else { throw CancellationError() }
+        }
+        return source
+    }
+
+    func maybeFallbackToTailnet(from currentURL: URL) async -> GatewayConnection.EndpointSnapshot? {
+        guard let expectedEndpoint = resolvedEndpoint,
+              expectedEndpoint.config.url == currentURL
+        else { return nil }
         let currentHost = currentURL.host?.lowercased() ?? ""
         guard currentHost == "127.0.0.1" || currentHost == "localhost" else { return nil }
 
-        let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
-            ?? TailscaleService.fallbackTailnetIPv4()
-        guard let tailscaleIP, !tailscaleIP.isEmpty else { return nil }
+        let source: SourceSnapshot
+        do {
+            source = try await self.currentSourceSnapshot()
+        } catch {
+            return nil
+        }
+        let fallbackHost = source.localHost.lowercased()
+        guard !Task.isCancelled,
+              source.mode == .local,
+              source.bindMode == "tailnet",
+              fallbackHost != "127.0.0.1",
+              fallbackHost != "localhost",
+              self.resolvedEndpoint?.revision == expectedEndpoint.revision,
+              self.resolvedEndpoint?.config.url == currentURL
+        else { return nil }
+        // Validate the captured endpoint before adopting its intentional replacement.
+        let generation = self.adoptSource(source)
+        let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
 
-        let scheme = GatewayEndpointStore.resolveGatewayScheme(
-            root: root,
-            env: ProcessInfo.processInfo.environment)
-        let port = self.deps.localPort()
-        let token = self.deps.token()
-        let password = self.deps.password()
-        let url = URL(string: "\(scheme)://\(tailscaleIP):\(port)")!
+        guard await self.sourceIsCurrent(source, generation: generation) else { return nil }
+        self.logger.info("auto bind fallback to tailnet host=\(source.localHost, privacy: .public)")
+        return self.publishReadyEndpoint(source: source, url: url)
+    }
+}
 
-        self.logger.info("auto bind fallback to tailnet host=\(tailscaleIP, privacy: .public)")
-        self.setState(.ready(mode: .local, url: url, token: token, password: password))
-        return (url, token, password)
+extension GatewayEndpointStore {
+    private struct LiveAppSnapshot: Sendable {
+        let mode: AppState.ConnectionMode
+        let configIsCurrent: Bool
+        let generation: UInt64
+        let tailscaleIP: String?
+    }
+
+    private static func liveSourceSnapshot() async throws -> SourceSnapshot {
+        try await self.liveSourceSnapshot(
+            appSnapshot: {
+                LiveAppSnapshot(
+                    mode: AppStateStore.shared.connectionMode,
+                    configIsCurrent: AppStateStore.shared.gatewayConfigIsCurrentForRouting,
+                    generation: AppStateStore.shared.gatewayRoutingGeneration,
+                    tailscaleIP: TailscaleService.shared.tailscaleIP)
+            },
+            acceptSource: { source in
+                guard AppStateStore.shared.gatewayRoutingGeneration == source.routingGeneration else { return false }
+                // Close the old native transcript owner before a new route can reach
+                // RPC, including disk edits that beat the config watcher.
+                WebChatManager.shared.preparePrimaryGateway(gatewayID: source.deviceAuthGatewayID)
+                return true
+            },
+            profile: .current,
+            beforeConfigRead: {})
+    }
+
+    private static func liveSourceIsCurrent(
+        _ source: SourceSnapshot,
+        currentRoutingGeneration: UInt64,
+        currentTailnetIP: String?) -> Bool
+    {
+        guard source.routingGeneration == currentRoutingGeneration else { return false }
+        guard source.mode == .local, source.bindMode == "tailnet" else { return true }
+        return source.localHost == self.resolveLocalGatewayHost(
+            bindMode: source.bindMode,
+            customBindHost: nil,
+            tailscaleIP: currentTailnetIP)
+    }
+
+    private static func liveSourceSnapshot(
+        appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
+        acceptSource: @escaping @MainActor @Sendable (SourceSnapshot) -> Bool,
+        profile: AppProfile,
+        beforeConfigRead: @escaping @Sendable () async -> Void) async throws -> SourceSnapshot
+    {
+        // Capture MainActor-owned selection facts before reading config. The
+        // post-build generation check rejects any interleaving route edit.
+        let app = await appSnapshot()
+        await beforeConfigRead()
+        let root = OpenClawConfigFile.loadDict()
+        let env = ProcessInfo.processInfo.environment
+        let configMode = ConnectionModeResolver.resolve(root: root).mode
+        // App selection is persisted asynchronously. Refuse to resolve either
+        // side while the MainActor selection and canonical config disagree.
+        let mode = self.effectiveSourceMode(
+            appMode: app.mode,
+            configMode: configMode,
+            configIsCurrent: app.configIsCurrent)
+        let isRemote = mode == .remote
+        let launchdSnapshot = mode == .local ? GatewayLaunchAgentManager.launchdConfigSnapshot() : nil
+        let bindMode = self.resolveGatewayBindMode(root: root, env: env)
+        let customBindHost = self.resolveGatewayCustomBindHost(root: root)
+        let tailscaleIP = bindMode == "tailnet"
+            ? app.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+            : nil
+        let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        let sshRouteIdentity: SSHRouteIdentity?
+        if mode == .remote, remoteResolution.transport == .ssh {
+            let sshSettings = CommandResolver.connectionSettings(configRoot: root)
+            sshRouteIdentity = SSHRouteIdentity(
+                target: sshSettings.target,
+                identity: sshSettings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
+                hostKeyPolicy: sshSettings.sshHostKeyPolicy.rawValue,
+                configuredRemotePort: GatewayRemoteConfig.resolveRemotePort(root: root),
+                configuredRemoteURL: GatewayRemoteConfig.resolveUrlString(root: root))
+        } else {
+            sshRouteIdentity = nil
+        }
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: mode)
+
+        let source = SourceSnapshot(
+            routingGeneration: app.generation,
+            mode: SourceMode(mode),
+            token: mode == .unconfigured
+                ? nil
+                : self.resolveGatewayToken(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
+            password: mode == .unconfigured
+                ? nil
+                : self.resolveGatewayPassword(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
+            deviceAuthGatewayID: deviceAuthGatewayID,
+            localPort: self.resolveGatewayPort(root: root, env: env, profile: profile),
+            localHost: self.resolveLocalGatewayHost(
+                bindMode: bindMode,
+                customBindHost: customBindHost,
+                tailscaleIP: tailscaleIP),
+            scheme: self.resolveGatewayScheme(root: root, env: env),
+            bindMode: bindMode,
+            remoteTransport: SourceTransport(remoteResolution.transport),
+            directRemoteURL: remoteResolution.directURL,
+            remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
+            sshRouteIdentity: sshRouteIdentity)
+        let selectionIsCurrent = await acceptSource(source)
+        guard selectionIsCurrent, !Task.isCancelled else {
+            // An obsolete read is not an unconfigured selection. Do not publish
+            // a fabricated route that can retire the newer selection's authority.
+            throw CancellationError()
+        }
+        return source
+    }
+
+    private static func effectiveSourceMode(
+        appMode: AppState.ConnectionMode,
+        configMode: AppState.ConnectionMode,
+        configIsCurrent: Bool) -> AppState.ConnectionMode
+    {
+        guard configIsCurrent, configMode == appMode else { return .unconfigured }
+        return appMode
+    }
+
+    private static func resolveGatewayPort(
+        root: [String: Any],
+        env: [String: String],
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile) -> Int
+    {
+        let configPort: Int? = if let gateway = root["gateway"] as? [String: Any] {
+            switch gateway["port"] {
+            case let value as Int:
+                value
+            case let value as NSNumber:
+                value.intValue
+            case let value as String:
+                Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            default:
+                nil
+            }
+        } else {
+            nil
+        }
+        return GatewayEnvironment.resolvedGatewayPort(
+            environment: env,
+            configPort: configPort,
+            storedPort: defaults.integer(forKey: "gatewayPort"),
+            profile: profile)
     }
 
     private static func resolveGatewayBindMode(
@@ -664,10 +1222,23 @@ extension GatewayEndpointStore {
         return self.normalizeDashboardPath(controlUi["basePath"] as? String)
     }
 
+    /// Dashboard fragments and Gateway URL userinfo can contain credentials.
+    /// Redact diagnostic output without changing the endpoint used for navigation.
+    static func diagnosticURLString(for url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "<unparseable-url>"
+        }
+        components.user = nil
+        components.password = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? "<unparseable-url>"
+    }
+
     static func dashboardURL(
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
-        localBasePath: String? = nil) throws -> URL
+        localBasePath: String? = nil,
+        authToken: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [
@@ -694,7 +1265,8 @@ extension GatewayEndpointStore {
         }
 
         var fragmentItems: [URLQueryItem] = []
-        if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+        let tokenCandidate = authToken ?? config.token
+        if let token = tokenCandidate?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
             fragmentItems.append(URLQueryItem(name: "token", value: token))
@@ -718,6 +1290,49 @@ extension GatewayEndpointStore {
 
 #if DEBUG
 extension GatewayEndpointStore {
+    @MainActor
+    static func _testLiveSourceSnapshot(
+        state: AppState,
+        profile: AppProfile = .current,
+        beforeConfigRead: @escaping @Sendable () async -> Void) async throws -> SourceSnapshot
+    {
+        try await self.liveSourceSnapshot(
+            appSnapshot: {
+                LiveAppSnapshot(
+                    mode: state.connectionMode,
+                    configIsCurrent: state.gatewayConfigIsCurrentForRouting,
+                    generation: state.gatewayRoutingGeneration,
+                    tailscaleIP: nil)
+            },
+            acceptSource: { source in
+                state.gatewayRoutingGeneration == source.routingGeneration
+            },
+            profile: profile,
+            beforeConfigRead: beforeConfigRead)
+    }
+
+    static func _testEffectiveSourceMode(
+        appMode: AppState.ConnectionMode,
+        configMode: AppState.ConnectionMode,
+        configIsCurrent: Bool) -> AppState.ConnectionMode
+    {
+        self.effectiveSourceMode(
+            appMode: appMode,
+            configMode: configMode,
+            configIsCurrent: configIsCurrent)
+    }
+
+    static func _testLiveSourceIsCurrent(
+        _ source: SourceSnapshot,
+        currentRoutingGeneration: UInt64,
+        currentTailnetIP: String?) -> Bool
+    {
+        self.liveSourceIsCurrent(
+            source,
+            currentRoutingGeneration: currentRoutingGeneration,
+            currentTailnetIP: currentTailnetIP)
+    }
+
     static func _testResolveGatewayPassword(
         isRemote: Bool,
         root: [String: Any],
@@ -734,13 +1349,6 @@ extension GatewayEndpointStore {
         launchdSnapshot: LaunchAgentPlistSnapshot? = nil) -> String?
     {
         self.resolveGatewayToken(isRemote: isRemote, root: root, env: env, launchdSnapshot: launchdSnapshot)
-    }
-
-    static func _testResolveGatewayBindMode(
-        root: [String: Any],
-        env: [String: String]) -> String?
-    {
-        self.resolveGatewayBindMode(root: root, env: env)
     }
 
     static func _testResolveLocalGatewayHost(

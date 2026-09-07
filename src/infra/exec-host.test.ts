@@ -1,3 +1,5 @@
+// Covers exec host socket request signing and response handling.
+import crypto from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -7,6 +9,22 @@ vi.mock("./jsonl-socket.js", () => ({
 }));
 
 import { requestExecHostViaSocket } from "./exec-host.js";
+
+type JsonlSocketCall = {
+  socketPath: string;
+  requestLine: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  accept: (msg: unknown) => unknown;
+};
+
+function requireJsonlSocketCall(): JsonlSocketCall {
+  const call = requestJsonlSocketMock.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected requestJsonlSocket call");
+  }
+  return call as JsonlSocketCall;
+}
 
 describe("requestExecHostViaSocket", () => {
   beforeEach(() => {
@@ -31,13 +49,15 @@ describe("requestExecHostViaSocket", () => {
     expect(requestJsonlSocketMock).not.toHaveBeenCalled();
   });
 
-  it("builds an exec payload and forwards the default timeout", async () => {
+  it("signs only the exec request and forwards cancellation outside the envelope", async () => {
     requestJsonlSocketMock.mockResolvedValueOnce({ ok: true, payload: { success: true } });
+    const controller = new AbortController();
 
     await expect(
       requestExecHostViaSocket({
         socketPath: "/tmp/socket",
         token: "secret",
+        signal: controller.signal,
         request: {
           command: ["echo", "hi"],
           cwd: "/tmp",
@@ -45,20 +65,11 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toEqual({ ok: true, payload: { success: true } });
 
-    const call = requestJsonlSocketMock.mock.calls[0]?.[0] as
-      | {
-          socketPath: string;
-          requestLine: string;
-          timeoutMs: number;
-          accept: (msg: unknown) => unknown;
-        }
-      | undefined;
-    if (!call) {
-      throw new Error("expected requestJsonlSocket call");
-    }
+    const call = requireJsonlSocketCall();
 
     expect(call.socketPath).toBe("/tmp/socket");
     expect(call.timeoutMs).toBe(20_000);
+    expect(call.signal).toBe(controller.signal);
     const payload = JSON.parse(call.requestLine) as {
       type: string;
       id: string;
@@ -71,7 +82,20 @@ describe("requestExecHostViaSocket", () => {
     expect(payload.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(payload.nonce).toMatch(/^[0-9a-f]{32}$/);
     expect(typeof payload.ts).toBe("number");
-    expect(payload.hmac).toMatch(/^[0-9a-f]{64}$/);
+    expect(Object.keys(payload).toSorted()).toEqual([
+      "hmac",
+      "id",
+      "nonce",
+      "requestJson",
+      "ts",
+      "type",
+    ]);
+    expect(payload.hmac).toBe(
+      crypto
+        .createHmac("sha256", "secret")
+        .update(`${payload.nonce}:${payload.ts}:${payload.requestJson}`)
+        .digest("hex"),
+    );
     expect(JSON.parse(payload.requestJson)).toEqual({
       command: ["echo", "hi"],
       cwd: "/tmp",
@@ -102,8 +126,6 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toBeNull();
 
-    expect(
-      (requestJsonlSocketMock.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined)?.timeoutMs,
-    ).toBe(123);
+    expect(requireJsonlSocketCall().timeoutMs).toBe(123);
   });
 });

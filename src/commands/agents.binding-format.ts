@@ -1,5 +1,7 @@
+// Human-readable formatting for agent routing binding match criteria.
 import type { AgentRouteBinding } from "../config/types.js";
 
+/** Render one route binding as a compact CLI line fragment. */
 export function describeBinding(binding: AgentRouteBinding): string {
   const match = binding.match;
   const parts = [match.channel];
@@ -14,6 +16,9 @@ export function describeBinding(binding: AgentRouteBinding): string {
   }
   if (match.teamId) {
     parts.push(`team=${match.teamId}`);
+  }
+  if (match.roles?.length) {
+    parts.push(`roles=${match.roles.join(",")}`);
   }
   return parts.join(" ");
 }

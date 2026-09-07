@@ -1,24 +1,65 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+// Synology Chat plugin module implements channel mocks behavior.
+import type { IncomingMessage } from "node:http";
+import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { ResolvedSynologyChatAccount } from "./types.js";
 
-export type RegisteredRoute = {
-  path: string;
-  accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-};
-
-export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () => void> = vi.fn(
-  () => vi.fn(),
+export const registerPluginHttpRouteMock: Mock<typeof registerPluginHttpRoute> = vi.fn(() =>
+  vi.fn(),
 );
+export const synologyIngressStartMock: Mock = vi.fn();
+export const synologyIngressStopMock = vi.fn(async () => undefined);
+export const tryHandleSynologyHostedMediaRequestMock = vi.fn(async () => false);
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
-  () => Promise<{ counts: Record<string, number> }>
+  (_params: unknown) => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
+export const buildChannelInboundEventContextMock: Mock<
+  (params: {
+    channel: string;
+    accountId?: string;
+    timestamp?: number;
+    from: string;
+    sender: { id: string; name?: string };
+    conversation: { kind: string; label?: string };
+    route: {
+      accountId?: string;
+      routeSessionKey: string;
+      dispatchSessionKey?: string;
+    };
+    reply: { to: string; originatingTo: string };
+    message: {
+      rawBody: string;
+      bodyForAgent?: string;
+      commandBody?: string;
+    };
+    extra?: Record<string, unknown>;
+  }) => Record<string, unknown>
+> = vi.fn((params) =>
+  finalizeInboundContextMock({
+    Body: params.message.rawBody,
+    BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+    RawBody: params.message.rawBody,
+    CommandBody: params.message.commandBody ?? params.message.rawBody,
+    From: params.from,
+    To: params.reply.to,
+    SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+    AccountId: params.route.accountId ?? params.accountId,
+    OriginatingChannel: params.channel,
+    OriginatingTo: params.reply.originatingTo,
+    ChatType: params.conversation.kind,
+    SenderName: params.sender.name,
+    SenderId: params.sender.id,
+    Provider: params.channel,
+    Surface: params.channel,
+    ConversationLabel: params.conversation.label,
+    Timestamp: params.timestamp,
+    ...params.extra,
+  }),
+);
 export const resolveAgentRouteMock: Mock<
   (params: { accountId?: string }) => { agentId: string; sessionKey: string; accountId: string }
 > = vi.fn((params) => {
@@ -27,6 +68,38 @@ export const resolveAgentRouteMock: Mock<
     agentId: `agent-${accountId}`,
     sessionKey: `agent:agent-${accountId}:main`,
     accountId,
+  };
+});
+let mockRuntimeConfig: unknown = {};
+
+export function setSynologyRuntimeConfigForTest(cfg: unknown): void {
+  mockRuntimeConfig = cfg;
+}
+
+export const channelInboundRunMock = vi.fn(async (params) => {
+  const input = await params.adapter.ingest(params.raw);
+  if (!input) {
+    return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
+  }
+  const resolved = await params.adapter.resolveTurn(input, {
+    kind: "message",
+    canStartAgentTurn: true,
+  });
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: resolved.ctxPayload,
+    cfg: mockRuntimeConfig,
+    dispatcherOptions: {
+      ...resolved.dispatcherOptions,
+      deliver: resolved.delivery.deliver,
+      onError: resolved.delivery.onError,
+    },
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    dispatchResult,
+    ctxPayload: resolved.ctxPayload,
+    routeSessionKey: resolved.route.sessionKey,
   };
 });
 
@@ -74,14 +147,53 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 });
 
 vi.mock("./client.js", () => ({
+  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT: 2_000,
   sendMessage: vi.fn().mockResolvedValue(true),
-  sendFileUrl: vi.fn().mockResolvedValue(true),
+  sendHostedFileUrl: vi.fn().mockResolvedValue({ status: "accepted" }),
   resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./outbound-media.js", async () => {
+  const actual = await vi.importActual<typeof import("./outbound-media.js")>("./outbound-media.js");
+  return {
+    ...actual,
+    prepareSynologyHostedMedia: vi.fn(async () => ({
+      url: "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_test=value",
+      cleanup: vi.fn(async () => undefined),
+    })),
+    tryHandleSynologyHostedMediaRequest: tryHandleSynologyHostedMediaRequestMock,
+  };
+});
+
+vi.mock("./webhook-ingress.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./webhook-ingress.js")>("./webhook-ingress.js");
+  return {
+    ...actual,
+    createSynologyIngressMonitor: vi.fn(
+      (options: Parameters<typeof actual.createSynologyIngressMonitor>[0]) => ({
+        start: synologyIngressStartMock,
+        stop: synologyIngressStopMock,
+        waitForIdle: vi.fn(async () => undefined),
+        receive: vi.fn(async (rawEvent: import("./webhook-ingress.js").SynologyWebhookRawEvent) => {
+          const lifecycle: import("./webhook-ingress.js").SynologyIngressLifecycle = {
+            admission: "exclusive",
+            abortSignal: options.abortSignal ?? new AbortController().signal,
+            onAdopted: vi.fn(async () => undefined),
+            onDeferred: vi.fn(),
+            onAbandoned: vi.fn(async () => undefined),
+          };
+          await options.dispatch(rawEvent, lifecycle);
+          return { kind: "durable" as const };
+        }),
+      }),
+    ),
+  };
+});
+
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
-    config: { loadConfig: vi.fn().mockResolvedValue({}) },
+    config: { current: vi.fn(() => mockRuntimeConfig) },
     channel: {
       routing: {
         resolveAgentRoute: resolveAgentRouteMock,
@@ -90,29 +202,15 @@ vi.mock("./runtime.js", () => ({
         finalizeInboundContext: finalizeInboundContextMock,
         dispatchReplyWithBufferedBlockDispatcher,
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      inbound: {
+        run: channelInboundRunMock,
+        buildContext: buildChannelInboundEventContextMock,
+      },
     },
   })),
   setSynologyRuntime: vi.fn(),
 }));
-
-export function makeSecurityAccount(
-  overrides: Partial<ResolvedSynologyChatAccount> = {},
-): ResolvedSynologyChatAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    token: "t",
-    incomingUrl: "https://nas/incoming",
-    nasHost: "h",
-    webhookPath: "/w",
-    webhookPathSource: "default",
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "allowlist" as const,
-    allowedUserIds: [],
-    rateLimitPerMinute: 30,
-    botName: "Bot",
-    allowInsecureSsl: false,
-    ...overrides,
-  };
-}

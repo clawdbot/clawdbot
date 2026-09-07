@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord plugin module implements audit behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   auditDiscordChannelPermissionsWithFetcher,
-  collectDiscordAuditChannelIdsForGuilds,
+  collectDiscordAuditChannelIdsForAccount,
   type DiscordChannelPermissionsAudit,
 } from "./audit-core.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
@@ -15,10 +16,11 @@ export function collectDiscordAuditChannelIds(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  return collectDiscordAuditChannelIdsForGuilds(account.config.guilds);
+  return collectDiscordAuditChannelIdsForAccount(account.config);
 }
 
 export async function auditDiscordChannelPermissions(params: {
+  cfg: OpenClawConfig;
   token: string;
   accountId?: string | null;
   channelIds: string[];

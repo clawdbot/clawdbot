@@ -1,5 +1,13 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { withEnv } from "../test-utils/env.js";
+import {
+  isFastTestRuntimeEnv,
+  isTruthyEnvValue,
+  logAcceptedEnvOption,
+  normalizeEnv,
+  normalizeZaiEnv,
+} from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -11,22 +19,15 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-type EnvModule = typeof import("./env.js");
-
-let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
-let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
-let normalizeEnv: EnvModule["normalizeEnv"];
-let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
-    await import("./env.js"));
-});
-
 beforeEach(() => {
-  loggerMocks.info.mockClear();
+  loggerMocks.info.mockReset();
 });
+
+function waitForNextLog(): Promise<void> {
+  const logged = createDeferred();
+  loggerMocks.info.mockImplementationOnce(() => logged.resolve());
+  return logged.promise;
+}
 
 describe("normalizeZaiEnv", () => {
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
@@ -74,9 +75,30 @@ describe("isTruthyEnvValue", () => {
   });
 });
 
+describe("isFastTestRuntimeEnv", () => {
+  it("ignores OPENCLAW_TEST_FAST outside a test runtime", () => {
+    withEnv(
+      {
+        NODE_ENV: "production",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        OPENCLAW_TEST_FAST: "1",
+      },
+      () => {
+        expect(isFastTestRuntimeEnv()).toBe(false);
+      },
+    );
+  });
+
+  it("honors OPENCLAW_TEST_FAST inside a detected test runtime", () => {
+    expect(isFastTestRuntimeEnv({ VITEST: "1", OPENCLAW_TEST_FAST: "1" })).toBe(true);
+  });
+});
+
 describe("logAcceptedEnvOption", () => {
-  it("logs accepted env options once with redaction and formatting", () => {
-    loggerMocks.info.mockClear();
+  it("logs accepted env options once with redaction and formatting", async () => {
+    const logged = waitForNextLog();
 
     withEnv(
       {
@@ -98,6 +120,7 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
+    await withTestTimeout(logged, 1_000, "redacted accepted env option did not log");
     expect(loggerMocks.info).toHaveBeenCalledTimes(1);
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
@@ -105,8 +128,6 @@ describe("logAcceptedEnvOption", () => {
   });
 
   it("skips blank values and test-mode logging", () => {
-    loggerMocks.info.mockClear();
-
     withEnv(
       {
         VITEST: "1",
@@ -136,6 +157,29 @@ describe("logAcceptedEnvOption", () => {
     );
 
     expect(loggerMocks.info).not.toHaveBeenCalled();
+  });
+
+  it("keeps bounded non-secret values UTF-16 well-formed", async () => {
+    const logged = waitForNextLog();
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_UTF16_TEST_ENV: `${"x".repeat(159)}🚀tail`,
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_UTF16_TEST_ENV",
+          description: "UTF-16 test",
+        });
+      },
+    );
+
+    await withTestTimeout(logged, 1_000, "UTF-16 accepted env option did not log");
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      `env: OPENCLAW_UTF16_TEST_ENV=${"x".repeat(159)}… (UTF-16 test)`,
+    );
   });
 });
 

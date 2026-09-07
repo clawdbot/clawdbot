@@ -1,0 +1,856 @@
+// Coverage for Google prompt-cache creation, reuse, and request rewriting.
+import crypto from "node:crypto";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
+import { describe, expect, it, vi } from "vitest";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { Context } from "../../llm/types.js";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
+import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
+import {
+  callArg,
+  createCacheFetchMock,
+  createCapturingStreamFn,
+  createOversizedJsonResponse,
+  fetchInit,
+  fetchUrl,
+  makeGoogleModel,
+  makeSessionManager,
+  preparePromptCacheStream,
+  type SessionCustomEntry,
+  streamContext,
+  streamOptions,
+} from "./google-prompt-cache.test-support.js";
+import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
+
+describe("google prompt cache", () => {
+  it("keeps one stable resource across suffix changes, tool loops, and reload", async () => {
+    const entries: SessionCustomEntry[] = [];
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            name: `cachedContents/stable-${fetchMock.mock.calls.length}`,
+            expireTime: new Date(4_600_000).toISOString(),
+          }),
+        ),
+    );
+    const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+    const prepare = (sessionEntries = entries) =>
+      preparePromptCacheStream({
+        fetchMock,
+        now: 1_000_000,
+        sessionManager: makeSessionManager(sessionEntries),
+        streamFn,
+      });
+    const wrapped = expectDefined(await prepare(), "cache wrapper");
+    const carrier = expectDefined(buildRuntimeContextCustomMessage("Current facts"), "carrier");
+    const messages: Context["messages"] = [
+      { role: "user", content: "Question", timestamp: 1 },
+      { role: "user", content: carrier.content, runtimeContextCarrier: true, timestamp: 2 },
+    ];
+    const tools = [{ name: "lookup", description: "Lookup", parameters: Type.Object({}) }];
+    for (const suffix of ["Date A", "Date B", "Date B"]) {
+      await wrapped(
+        makeGoogleModel(),
+        {
+          systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+          messages,
+          tools,
+        },
+        {},
+      );
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/stable-1");
+      expect(streamFn.mock.lastCall?.[1].messages).toEqual([
+        messages[0],
+        {
+          ...messages[1],
+          content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${suffix}\n\nCurrent facts\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+        },
+      ]);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = fetchInit(fetchMock).body;
+    if (typeof body !== "string") {
+      throw new Error("Expected a JSON cache request body");
+    }
+    expect(JSON.parse(body).systemInstruction).toEqual({
+      parts: [{ text: "Stable policy" }],
+    });
+    expect(messages[1]?.content).toBe(carrier.content);
+    const restarted = expectDefined(await prepare(structuredClone(entries)), "reloaded wrapper");
+    const nextContext = {
+      systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Date C`,
+      messages,
+      tools,
+    };
+    await restarted(makeGoogleModel(), nextContext, {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/stable-1");
+    await restarted(
+      makeGoogleModel(),
+      { ...nextContext, tools: [{ ...tools[0]!, description: "New lookup" }] },
+      {},
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/stable-2");
+  });
+
+  it("keeps the full inline prompt during stable-prefix failure backoff", async () => {
+    const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+    const wrapped = expectDefined(
+      await preparePromptCacheStream({
+        fetchMock,
+        now: 1_000_000,
+        sessionManager: makeSessionManager(),
+        streamFn,
+      }),
+      "cache wrapper",
+    );
+    for (const suffix of ["Date A", "Date B"]) {
+      const context = {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+        messages: [],
+      };
+      await wrapped(makeGoogleModel(), context, {});
+      expect(streamFn.mock.lastCall?.[1]).toBe(context);
+      expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps boundary-free prompts inline", async () => {
+    const fetchMock = vi.fn();
+    const { streamFn } = createCapturingStreamFn();
+    const wrapped = expectDefined(
+      await preparePromptCacheStream({
+        fetchMock,
+        now: 1_000_000,
+        sessionManager: makeSessionManager(),
+        streamFn,
+      }),
+      "cache wrapper",
+    );
+    const context = { systemPrompt: "Complete inline policy", messages: [] };
+    await wrapped(makeGoogleModel(), context, {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(streamFn.mock.lastCall?.[1]).toBe(context);
+  });
+
+  it.each([200, 503])(
+    "preserves the final assembled prompt when cache creation returns %s",
+    async (statusCode) => {
+      const stablePrompt = "hook-before\nbase";
+      const systemPrompt = `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              name: "cachedContents/final-prompt",
+              expireTime: new Date(4_600_000).toISOString(),
+            }),
+            { status: statusCode },
+          ),
+      );
+      const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+      const wrapped = expectDefined(
+        await preparePromptCacheStream({
+          fetchMock,
+          now: 1_000_000,
+          sessionManager: makeSessionManager(),
+          streamFn,
+        }),
+        "managed cache wrapper",
+      );
+      const context = { systemPrompt, messages: [] };
+
+      await wrapped(makeGoogleModel(), context, {});
+
+      const body = fetchInit(fetchMock).body;
+      if (typeof body !== "string") {
+        throw new Error("Expected a JSON cache request body");
+      }
+      expect(JSON.parse(body).systemInstruction).toEqual({
+        parts: [{ text: stablePrompt }],
+      });
+      if (statusCode === 200) {
+        expect(streamContext(streamFn).systemPrompt).toBeUndefined();
+        expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-prompt");
+      } else {
+        expect(streamContext(streamFn)).toBe(context);
+        expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
+      }
+    },
+  );
+
+  it.each(["prompt", "tools"])(
+    "rebuilds the cache when final %s changes and reuses it after restart",
+    async (changed) => {
+      const entries: SessionCustomEntry[] = [];
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              name: `cachedContents/final-${fetchMock.mock.calls.length}`,
+              expireTime: new Date(4_600_000).toISOString(),
+            }),
+          ),
+      );
+      const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+      const prepare = () =>
+        preparePromptCacheStream({
+          fetchMock,
+          now: 1_000_000,
+          sessionManager: makeSessionManager(entries),
+          streamFn,
+        });
+      const wrapped = expectDefined(await prepare(), "managed cache wrapper");
+      const tool = {
+        name: "lookup",
+        description: "Look up a value",
+        parameters: Type.Object({}),
+      };
+      const context = {
+        systemPrompt: `hook-before\nbase\nhook-after${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+        messages: [],
+        tools: [tool],
+      };
+      await wrapped(makeGoogleModel(), context, {});
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-1");
+
+      const changedContext = {
+        ...context,
+        ...(changed === "prompt"
+          ? { systemPrompt: `new-hook-instruction\n${context.systemPrompt}` }
+          : { tools: [{ ...tool, description: "Look up the updated value" }] }),
+      };
+      await wrapped(makeGoogleModel(), changedContext, {});
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-2");
+
+      const restarted = expectDefined(await prepare(), "restarted managed cache wrapper");
+      await restarted(makeGoogleModel(), changedContext, {});
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-2");
+    },
+  );
+
+  it("parses sentinel-backed OAuth JSON before guarded cache egress", async () => {
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/oauth-cache",
+      expireTime: new Date(2_000_000).toISOString(),
+    });
+    const { streamFn } = createCapturingStreamFn();
+    const oauthJson = JSON.stringify({ token: "google-oauth-token", projectId: "demo" });
+    const sentinel = mintSecretSentinel(oauthJson, { label: "model-auth:google" });
+    const wrapped = await preparePromptCacheStream({
+      apiKey: sentinel,
+      fetchMock,
+      now: 1_000_000,
+      sessionManager: makeSessionManager([]),
+      streamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    const headers = fetchInit(fetchMock).headers as Record<string, string>;
+    expect(
+      resolveSecretSentinel(
+        expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+      ),
+    ).toBe("Bearer google-oauth-token");
+    expect(headers["x-goog-api-key"]).toBeUndefined();
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("registers parsed OAuth headers when sentinels are disabled", async () => {
+    vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/oauth-cache",
+      expireTime: new Date(2_000_000).toISOString(),
+    });
+    const { streamFn } = createCapturingStreamFn();
+    const oauthJson = JSON.stringify({ token: "google-kill-switch-token", projectId: "demo" });
+    const apiKey = mintSecretSentinel(oauthJson, { label: "model-auth:google" });
+
+    try {
+      const wrapped = await preparePromptCacheStream({
+        apiKey,
+        fetchMock,
+        now: 1_000_000,
+        sessionManager: makeSessionManager([]),
+        streamFn,
+      });
+      await Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+          {} as never,
+        ),
+      );
+
+      const headers = fetchInit(fetchMock).headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer google-kill-switch-token");
+      expect(
+        isSecretValueRegisteredForRedaction(
+          expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+        ),
+      ).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
+    // Cached system prompts should move out of live request context and into the
+    // cachedContent option to avoid paying prompt tokens repeatedly.
+    const now = 1_000_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-1",
+      expireTime,
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    expect(wrapped).toBeTypeOf("function");
+    expect(fetchMock).not.toHaveBeenCalled();
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        {
+          systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+          messages: [],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object" },
+            },
+          ],
+        } as never,
+        { temperature: 0.2, toolChoice: "auto" } as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(callArg(fetchMock, 0, 0)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/cachedContents",
+    );
+    const createInit = fetchInit(fetchMock);
+    expect(createInit.method).toBe("POST");
+    const createHeaders = createInit.headers as Record<string, string>;
+    expect(createHeaders["x-goog-api-key"]).toBe("gemini-api-key");
+    expect(createHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
+    expect(createHeaders["X-Provider"]).toBe("google");
+    expect(typeof createInit.body).toBe("string");
+    const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;
+    expect(createBody).toEqual({
+      model: "models/gemini-3.1-pro-preview",
+      ttl: "3600s",
+      systemInstruction: {
+        parts: [{ text: "Follow policy." }],
+      },
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parametersJsonSchema: { type: "object" },
+            },
+          ],
+        },
+      ],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: "AUTO",
+        },
+      },
+    });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
+    expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
+    expect(entries).toEqual([
+      {
+        type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(1_000).toISOString(),
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheConfigDigest: expect.any(String),
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-1",
+          expireTime,
+        },
+      },
+    ]);
+  });
+
+  it("reuses managed cached content when tool discovery order changes", async () => {
+    const now = 1_000_000;
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/stable-tool-order",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn,
+    });
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      await Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          {
+            systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+            messages: [],
+            tools: orderedTools,
+          } as never,
+          { toolChoice: "auto" } as never,
+        ),
+      );
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/stable-tool-order");
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(entries).toHaveLength(1);
+    const createBody = JSON.parse(fetchInit(fetchMock).body as string) as {
+      tools: Array<{ functionDeclarations: Array<{ name: string }> }>;
+    };
+    expect(createBody.tools[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+      "alpha_lookup",
+      "zeta_lookup",
+    ]);
+  });
+
+  it("cancels failed cache creation response bodies", async () => {
+    const now = 1_500_000;
+    const response = new Response("permission denied", { status: 403 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => response);
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBe(
+      `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+    );
+    expect(entries[0]?.data).toMatchObject({
+      status: "failed",
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    });
+  });
+
+  it("reuses a persisted cache entry without creating a second cache", async () => {
+    const now = 2_000_000;
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-2",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+
+    const firstWrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: vi.fn(() => "first" as never),
+    });
+    await Promise.resolve(
+      firstWrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    fetchMock.mockClear();
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn("second");
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now: now + 30_000,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(typeof streamOptions(innerStreamFn)).toBe("object");
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-2");
+  });
+
+  it("propagates writer-claim rebound from cache entry persistence", async () => {
+    const now = 2_500_000;
+    const takeoverError = new SessionTranscriptWriterClaimReboundError();
+    const sessionManager = {
+      appendCustomEntry: vi.fn(async () => {
+        throw takeoverError;
+      }),
+      getEntries: vi.fn(() => []),
+    };
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-takeover",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await expect(
+      Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+          {} as never,
+        ),
+      ),
+    ).rejects.toBe(takeoverError);
+    expect(innerStreamFn).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an about-to-expire cache entry instead of creating a new one", async () => {
+    const now = 3_000_000;
+    const expireSoon = new Date(now + 60_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const sessionManager = makeSessionManager([
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(now - 5_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now - 5_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-3",
+          expireTime: expireSoon,
+        },
+      },
+    ]);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-3",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchUrl(fetchMock)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-3?updateMask=ttl",
+    );
+    expect(fetchInit(fetchMock).method).toBe("PATCH");
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(typeof streamOptions(innerStreamFn)).toBe("object");
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
+  });
+
+  it("cancels failed cache refresh response bodies", async () => {
+    const now = 3_500_000;
+    const expireSoon = new Date(now + 60_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const entries: SessionCustomEntry[] = [
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(now - 5_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now - 5_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-4",
+          expireTime: expireSoon,
+        },
+      },
+    ];
+    const response = new Response("refresh denied", { status: 403 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => response);
+    const sessionManager = makeSessionManager(entries);
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(entries).toHaveLength(1);
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-4");
+  });
+
+  it("does not bypass failed-cache backoff when the process clock is invalid", async () => {
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const sessionManager = makeSessionManager([
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(1_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "failed",
+          timestamp: 1_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          retryAfter: Date.parse("2030-01-01T00:00:00.000Z"),
+        },
+      },
+    ]);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-invalid-clock",
+      expireTime: "2030-01-01T00:00:00.000Z",
+    });
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now: Number.NaN,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses automatic validation for explicit cachedContent", async () => {
+    const fetchMock = vi.fn();
+
+    const wrapped = await prepareGooglePromptCacheStreamFn(
+      {
+        apiKey: "gemini-api-key",
+        extraParams: {
+          cacheRetention: "long",
+          cachedContent: "cachedContents/operator?supplied#verbatim",
+        },
+        model: makeGoogleModel(),
+        modelId: "gemini-3.1-pro-preview",
+        provider: "google",
+        sessionManager: makeSessionManager(),
+        streamFn: vi.fn(() => "stream" as never),
+      },
+      {
+        buildGuardedFetch: () => fetchMock as typeof fetch,
+        now: () => 0,
+      },
+    );
+
+    expect(wrapped).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds an oversized cache-creation response body instead of buffering it", async () => {
+    const now = 4_000_000;
+    const { response, cancel } = createOversizedJsonResponse();
+    const fetchMock = vi.fn(async () => response);
+    const sessionManager = makeSessionManager();
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(callArg(fetchMock, 0, 0)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/cachedContents",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(innerStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an oversized cache-refresh response body instead of buffering it", async () => {
+    const now = 4_500_000;
+    const expireSoon = new Date(now + 60_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const sessionManager = makeSessionManager([
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(now - 5_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now - 5_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-overflow",
+          expireTime: expireSoon,
+        },
+      },
+    ]);
+    const { response, cancel } = createOversizedJsonResponse();
+    const fetchMock = vi.fn(async () => response);
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    // The TTL-refresh read swallows errors (.catch(() => null)) and falls back
+    // to the still-valid cached content, so the oversized body must be cancelled
+    // by the byte cap rather than fully buffered.
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchUrl(fetchMock)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-overflow?updateMask=ttl",
+    );
+    expect(fetchInit(fetchMock).method).toBe("PATCH");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-overflow");
+  });
+});

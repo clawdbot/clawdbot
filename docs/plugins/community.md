@@ -1,149 +1,78 @@
 ---
-summary: "Community-maintained OpenClaw plugins: browse, install, and submit your own"
+summary: "Find and publish community-maintained OpenClaw plugins"
 read_when:
   - You want to find third-party OpenClaw plugins
-  - You want to publish or list your own plugin
-title: "Community Plugins"
+  - You want to publish or list your own plugin on ClawHub
+title: "Community plugins"
+doc-schema-version: 1
 ---
 
-# Community Plugins
+Community plugins are third-party packages that extend OpenClaw with
+channels, tools, providers, hooks, or other capabilities. Use
+[ClawHub](/clawhub) as the primary discovery surface for public community
+plugins.
 
-Community plugins are third-party packages that extend OpenClaw with new
-channels, tools, providers, or other capabilities. They are built and maintained
-by the community, published on [ClawHub](/tools/clawhub) or npm, and
-installable with a single command.
+## Find plugins
 
-ClawHub is the canonical discovery surface for community plugins. Do not open
-docs-only PRs just to add your plugin here for discoverability; publish it on
-ClawHub instead.
+Search ClawHub from the CLI:
 
 ```bash
-openclaw plugins install <package-name>
+openclaw plugins search "calendar"
 ```
 
-OpenClaw checks ClawHub first and falls back to npm automatically.
-
-## Listed plugins
-
-### Codex App Server Bridge
-
-Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
-a Codex thread, talk to it with plain text, and control it with chat-native
-commands for resume, planning, review, model selection, compaction, and more.
-
-- **npm:** `openclaw-codex-app-server`
-- **repo:** [github.com/pwrdrvr/openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server)
+Install a ClawHub plugin with an explicit source prefix:
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+openclaw plugins install clawhub:<package-name>
 ```
 
-### DingTalk
-
-Enterprise robot integration using Stream mode. Supports text, images, and
-file messages via any DingTalk client.
-
-- **npm:** `@largezhou/ddingtalk`
-- **repo:** [github.com/largezhou/openclaw-dingtalk](https://github.com/largezhou/openclaw-dingtalk)
+npm remains a supported direct-install path during the launch cutover:
 
 ```bash
-openclaw plugins install @largezhou/ddingtalk
+openclaw plugins install npm:<package-name>
 ```
 
-### Lossless Claw (LCM)
+Use [Manage plugins](/plugins/manage-plugins) for common install, update,
+inspect, and uninstall examples. Use [`openclaw plugins`](/cli/plugins) for
+the full command reference and source-selection rules.
 
-Lossless Context Management plugin for OpenClaw. DAG-based conversation
-summarization with incremental compaction — preserves full context fidelity
-while reducing token usage.
+## Publish plugins
 
-- **npm:** `@martian-engineering/lossless-claw`
-- **repo:** [github.com/Martian-Engineering/lossless-claw](https://github.com/Martian-Engineering/lossless-claw)
+Publish public community plugins on ClawHub so OpenClaw users can discover
+and install them. ClawHub owns the live package listing, release history,
+scan status, and install hints; the docs do not maintain a static
+third-party plugin catalog.
 
 ```bash
-openclaw plugins install @martian-engineering/lossless-claw
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
 ```
 
-### Opik
+Before publishing, make sure the plugin has package metadata, a plugin
+manifest, setup docs, and a clear maintenance owner. ClawHub validates owner
+scope, package name, version, file limits, and source metadata before
+creating a release, then keeps new releases hidden from normal install and
+download surfaces until review and verification finish.
 
-Official plugin that exports agent traces to Opik. Monitor agent behavior,
-cost, tokens, errors, and more.
+Checklist before you publish:
 
-- **npm:** `@opik/opik-openclaw`
-- **repo:** [github.com/comet-ml/opik-openclaw](https://github.com/comet-ml/opik-openclaw)
+| Requirement          | Why                                                 |
+| -------------------- | --------------------------------------------------- |
+| Published on ClawHub | Users need `openclaw plugins install` hints to work |
+| Public GitHub repo   | Source review, issue tracking, transparency         |
+| Setup and usage docs | Users need to know how to configure it              |
+| Active maintenance   | Recent updates or responsive issue handling         |
 
-```bash
-openclaw plugins install @opik/opik-openclaw
-```
+Full publishing contract:
 
-### QQbot
-
-Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
-mentions, channel messages, and rich media including voice, images, videos,
-and files.
-
-- **npm:** `@tencent-connect/openclaw-qqbot`
-- **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
-
-```bash
-openclaw plugins install @tencent-connect/openclaw-qqbot
-```
-
-### wecom
-
-WeCom channel plugin for OpenClaw by the Tencent WeCom team. Powered by
-WeCom Bot WebSocket persistent connections, it supports direct messages & group
-chats, streaming replies, proactive messaging, image/file processing, Markdown
-formatting, built-in access control, and document/meeting/messaging skills.
-
-- **npm:** `@wecom/wecom-openclaw-plugin`
-- **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
-
-```bash
-openclaw plugins install @wecom/wecom-openclaw-plugin
-```
-
-## Submit your plugin
-
-We welcome community plugins that are useful, documented, and safe to operate.
-
-<Steps>
-  <Step title="Publish to ClawHub or npm">
-    Your plugin must be installable via `openclaw plugins install \<package-name\>`.
-    Publish to [ClawHub](/tools/clawhub) (preferred) or npm.
-    See [Building Plugins](/plugins/building-plugins) for the full guide.
-
-  </Step>
-
-  <Step title="Host on GitHub">
-    Source code must be in a public repository with setup docs and an issue
-    tracker.
-
-  </Step>
-
-  <Step title="Use docs PRs only for source-doc changes">
-    You do not need a docs PR just to make your plugin discoverable. Publish it
-    on ClawHub instead.
-
-    Open a docs PR only when OpenClaw's source docs need an actual content
-    change, such as correcting install guidance or adding cross-repo
-    documentation that belongs in the main docs set.
-
-  </Step>
-</Steps>
-
-## Quality bar
-
-| Requirement                 | Why                                           |
-| --------------------------- | --------------------------------------------- |
-| Published on ClawHub or npm | Users need `openclaw plugins install` to work |
-| Public GitHub repo          | Source review, issue tracking, transparency   |
-| Setup and usage docs        | Users need to know how to configure it        |
-| Active maintenance          | Recent updates or responsive issue handling   |
-
-Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
+- [ClawHub publishing](/clawhub/publishing) - owners, scopes, releases,
+  review, package validation, and package transfer
+- [Building plugins](/plugins/building-plugins) - the plugin package shape
+  and first publish workflow
+- [Plugin manifest](/plugins/manifest) - native plugin manifest fields
 
 ## Related
 
-- [Install and Configure Plugins](/tools/plugin) — how to install any plugin
-- [Building Plugins](/plugins/building-plugins) — create your own
-- [Plugin Manifest](/plugins/manifest) — manifest schema
+- [Plugins](/tools/plugin) - install, configure, restart, and troubleshoot
+- [Manage plugins](/plugins/manage-plugins) - command examples
+- [ClawHub publishing](/clawhub/publishing) - publish and release rules

@@ -1,27 +1,58 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Telegram tests cover bot.helpers plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
+import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramStreamMode", () => {
-  it("defaults to partial when telegram streaming is unset", () => {
-    expect(resolveTelegramStreamMode(undefined)).toBe("partial");
-    expect(resolveTelegramStreamMode({})).toBe("partial");
+  it("defaults to progress when telegram streaming is unset", () => {
+    expect(resolveTelegramStreamMode(undefined)).toBe("progress");
+    expect(resolveTelegramStreamMode({})).toBe("progress");
+    // An explicit mode still wins, including the previous default.
+    expect(resolveTelegramStreamMode({ streaming: { mode: "partial" } })).toBe("partial");
   });
 
-  it("prefers explicit streaming boolean", () => {
-    expect(resolveTelegramStreamMode({ streaming: true })).toBe("partial");
-    expect(resolveTelegramStreamMode({ streaming: false })).toBe("off");
+  it("resolves nested streaming.mode values", () => {
+    expect(resolveTelegramStreamMode({ streaming: { mode: "off" } })).toBe("off");
+    expect(resolveTelegramStreamMode({ streaming: { mode: "partial" } })).toBe("partial");
+    expect(resolveTelegramStreamMode({ streaming: { mode: "block" } })).toBe("block");
   });
 
-  it("maps legacy streamMode values", () => {
-    expect(resolveTelegramStreamMode({ streamMode: "off" })).toBe("off");
-    expect(resolveTelegramStreamMode({ streamMode: "partial" })).toBe("partial");
-    expect(resolveTelegramStreamMode({ streamMode: "block" })).toBe("block");
+  it("preserves unified progress mode on Telegram", () => {
+    expect(
+      resolveTelegramStreamMode({
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+      }),
+    ).toBe("progress");
   });
+});
 
-  it("maps unified progress mode to partial on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
+describe("resolveTelegramGroupAllowFromContext", () => {
+  it("expands Telegram access groups before normalizing allowFrom entries", async () => {
+    const cfg: OpenClawConfig = {
+      accessGroups: {
+        maintainers: {
+          type: "message.senders",
+          members: {
+            telegram: ["12345"],
+          },
+        },
+      },
+    };
+
+    const context = await resolveTelegramGroupAllowFromContext({
+      cfg,
+      chatId: -100123,
+      accountId: "default",
+      senderId: "12345",
+      isGroup: true,
+      groupAllowFrom: ["accessGroup:maintainers"],
+      readChannelAllowFromStore: async () => [],
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(context.effectiveGroupAllow.entries).toEqual(["12345"]);
+    expect(context.effectiveGroupAllow.invalidEntries).toStrictEqual([]);
   });
 });
 
@@ -32,48 +63,6 @@ describe("resolveTelegramDraftStreamingChunking", () => {
       minChars: 200,
       maxChars: 800,
       breakPreference: "paragraph",
-    });
-  });
-
-  it("clamps to telegram.textChunkLimit", () => {
-    const cfg: OpenClawConfig = {
-      channels: { telegram: { allowFrom: ["*"], textChunkLimit: 150 } },
-    };
-    const chunking = resolveTelegramDraftStreamingChunking(cfg, "default");
-    expect(chunking).toEqual({
-      minChars: 150,
-      maxChars: 150,
-      breakPreference: "paragraph",
-    });
-  });
-
-  it("supports per-account overrides", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          accounts: {
-            default: {
-              allowFrom: ["*"],
-              streaming: {
-                preview: {
-                  chunk: {
-                    minChars: 10,
-                    maxChars: 20,
-                    breakPreference: "sentence",
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const chunking = resolveTelegramDraftStreamingChunking(cfg, "default");
-    expect(chunking).toEqual({
-      minChars: 10,
-      maxChars: 20,
-      breakPreference: "sentence",
     });
   });
 });

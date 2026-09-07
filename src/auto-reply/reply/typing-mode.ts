@@ -1,20 +1,26 @@
+// Normalizes typing indicator modes from config and directives.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
-export type TypingModeContext = {
+/** Inputs that decide when a channel typing indicator should be shown. */
+type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;
   isHeartbeat: boolean;
   typingPolicy?: TypingPolicy;
   suppressTyping?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
-export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
+/** Group chats default to message-triggered typing to avoid noisy indicators. */
+const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
+/** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
   configured,
   isGroupChat,
@@ -22,6 +28,7 @@ export function resolveTypingMode({
   isHeartbeat,
   typingPolicy,
   suppressTyping,
+  sourceReplyDeliveryMode,
 }: TypingModeContext): TypingMode {
   if (
     isHeartbeat ||
@@ -35,12 +42,16 @@ export function resolveTypingMode({
   if (configured) {
     return configured;
   }
+  if (sourceReplyDeliveryMode === "message_tool_only") {
+    return "instant";
+  }
   if (!isGroupChat || wasMentioned) {
     return "instant";
   }
   return DEFAULT_GROUP_TYPING_MODE;
 }
 
+/** Event-driven typing signaler used by streaming reply dispatch. */
 export type TypingSignaler = {
   mode: TypingMode;
   shouldStartImmediately: boolean;
@@ -52,8 +63,10 @@ export type TypingSignaler = {
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
+  signalExecutionActivity?: () => Promise<void>;
 };
 
+/** Creates a typing signaler that starts or refreshes typing from stream events. */
 export function createTypingSignaler(params: {
   typing: TypingController;
   mode: TypingMode;
@@ -96,14 +109,10 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    const renderable = isRenderableText(text);
-    if (renderable) {
-      hasRenderableText = true;
-    } else if (normalizeOptionalString(text)) {
-      return;
-    } else {
+    if (!isRenderableText(text)) {
       return;
     }
+    hasRenderableText = true;
     if (shouldStartOnText) {
       await typing.startTypingOnText(text);
       return;
@@ -120,9 +129,8 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    if (!hasRenderableText) {
-      return;
-    }
+    // Reasoning deltas are the signal to show typing in thinking mode,
+    // even before any visible assistant text has arrived.
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };
@@ -131,13 +139,27 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    // Start typing as soon as tools begin executing, even before the first text delta.
     if (!typing.isActive()) {
+      // In message mode, only start typing on tool calls after renderable text
+      // has been confirmed.
+      if (shouldStartOnMessageStart && !hasRenderableText) {
+        return;
+      }
       await typing.startTypingLoop();
       typing.refreshTypingTtl();
       return;
     }
     // Keep typing indicator alive during tool execution.
+    typing.refreshTypingTtl();
+  };
+
+  const signalExecutionActivity = async () => {
+    if (disabled) {
+      return;
+    }
+    if (!typing.isActive()) {
+      await typing.startTypingLoop();
+    }
     typing.refreshTypingTtl();
   };
 
@@ -152,5 +174,6 @@ export function createTypingSignaler(params: {
     signalTextDelta,
     signalReasoningDelta,
     signalToolStart,
+    signalExecutionActivity,
   };
 }

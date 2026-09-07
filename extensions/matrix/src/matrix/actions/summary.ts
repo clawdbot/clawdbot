@@ -1,5 +1,7 @@
+// Matrix plugin module implements summary behavior.
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMatrixNotFoundError } from "../errors.js";
-import { resolveMatrixMessageAttachment, resolveMatrixMessageBody } from "../media-text.js";
+import { resolveMatrixReplacementContent, resolveMatrixMessageAttachment } from "../media-text.js";
 import { fetchMatrixPollMessageSummary } from "../poll-summary.js";
 import type { MatrixClient } from "../sdk.js";
 import {
@@ -10,9 +12,49 @@ import {
   type RoomPinnedEventsEventContent,
 } from "./types.js";
 
+function parseMatrixRawEvent(value: unknown): MatrixRawEvent | null {
+  const event = asNullableObjectRecord(value);
+  const content = asNullableObjectRecord(event?.content);
+  if (
+    !event ||
+    typeof event.event_id !== "string" ||
+    typeof event.sender !== "string" ||
+    typeof event.type !== "string" ||
+    typeof event.origin_server_ts !== "number" ||
+    !content
+  ) {
+    return null;
+  }
+  const unsigned = asNullableObjectRecord(event.unsigned);
+  const relations = asNullableObjectRecord(unsigned?.["m.relations"]);
+  return {
+    event_id: event.event_id,
+    sender: event.sender,
+    type: event.type,
+    origin_server_ts: event.origin_server_ts,
+    content,
+    ...(unsigned
+      ? {
+          unsigned: {
+            ...(typeof unsigned.age === "number" ? { age: unsigned.age } : {}),
+            ...(relations ? { "m.relations": relations } : {}),
+            ...(unsigned.redacted_because !== undefined
+              ? { redacted_because: unsigned.redacted_because }
+              : {}),
+          },
+        }
+      : {}),
+    ...(typeof event.state_key === "string" ? { state_key: event.state_key } : {}),
+  };
+}
+
 export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSummary {
   const content = event.content as RoomMessageEventContent;
   const relates = content["m.relates_to"];
+  const displayContent =
+    relates?.rel_type === "m.replace"
+      ? (content["m.new_content"] ?? content)
+      : (resolveMatrixReplacementContent(event) ?? content);
   let relType: string | undefined;
   let eventId: string | undefined;
   if (relates) {
@@ -30,20 +72,17 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
           eventId,
         }
       : undefined;
+  const attachment = resolveMatrixMessageAttachment({
+    body: displayContent.body,
+    filename: displayContent.filename,
+    msgtype: displayContent.msgtype,
+  });
   return {
     eventId: event.event_id,
     sender: event.sender,
-    body: resolveMatrixMessageBody({
-      body: content.body,
-      filename: content.filename,
-      msgtype: content.msgtype,
-    }),
-    msgtype: content.msgtype,
-    attachment: resolveMatrixMessageAttachment({
-      body: content.body,
-      filename: content.filename,
-      msgtype: content.msgtype,
-    }),
+    body: attachment ? attachment.caption : displayContent.body?.trim() || undefined,
+    msgtype: displayContent.msgtype,
+    attachment,
     timestamp: event.origin_server_ts,
     relatesTo,
   };
@@ -72,7 +111,10 @@ export async function fetchEventSummary(
   eventId: string,
 ): Promise<MatrixMessageSummary | null> {
   try {
-    const raw = (await client.getEvent(roomId, eventId)) as unknown as MatrixRawEvent;
+    const raw = parseMatrixRawEvent(await client.getEvent(roomId, eventId));
+    if (!raw) {
+      return null;
+    }
     if (raw.unsigned?.redacted_because) {
       return null;
     }

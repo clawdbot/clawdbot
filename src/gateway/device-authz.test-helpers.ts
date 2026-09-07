@@ -1,23 +1,23 @@
+// Device auth test helpers create paired operator/node identities and tracked
+// WebSocket clients for gateway authorization suites.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-  rotateDeviceToken,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { trackConnectChallengeNonce } from "./test-helpers.js";
 
 export function resolveDeviceIdentityPath(name: string): string {
   const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.json`);
+  return path.join(root, "test-device-identities", `${name}.sqlite`);
 }
 
 export function loadDeviceIdentity(name: string): {
@@ -26,7 +26,7 @@ export function loadDeviceIdentity(name: string): {
   publicKey: string;
 } {
   const identityPath = resolveDeviceIdentityPath(name);
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,
     identity,
@@ -40,6 +40,8 @@ export async function pairDeviceIdentity(params: {
   scopes: string[];
   clientId?: string;
   clientMode?: string;
+  platform?: string;
+  deviceFamily?: string;
 }): Promise<{
   identityPath: string;
   identity: DeviceIdentity;
@@ -53,6 +55,8 @@ export async function pairDeviceIdentity(params: {
     scopes: params.scopes,
     clientId: params.clientId,
     clientMode: params.clientMode,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
   });
   await approveDevicePairing(request.request.requestId, {
     callerScopes: params.scopes,
@@ -86,7 +90,9 @@ export async function issueOperatorToken(params: {
     });
     expect(rotated.ok).toBe(true);
     const token = rotated.ok ? rotated.entry.token : "";
-    expect(token).toBeTruthy();
+    if (!token) {
+      throw new Error(`expected rotated operator token for device ${paired.identity.deviceId}`);
+    }
     return {
       deviceId: paired.identity.deviceId,
       identityPath: paired.identityPath,
@@ -96,7 +102,9 @@ export async function issueOperatorToken(params: {
 
   const device = await getPairedDevice(paired.identity.deviceId);
   const token = device?.tokens?.operator?.token ?? "";
-  expect(token).toBeTruthy();
+  if (!token) {
+    throw new Error(`expected operator token for paired device ${paired.identity.deviceId}`);
+  }
   expect(device?.approvedScopes).toEqual(params.approvedScopes);
   return {
     deviceId: paired.identity.deviceId,
@@ -105,19 +113,11 @@ export async function issueOperatorToken(params: {
   };
 }
 
-export async function openTrackedWs(port: number): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+export async function openTrackedWs(
+  port: number,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 5_000);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, 5_000);
 }

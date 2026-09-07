@@ -1,129 +1,43 @@
+// Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
-import type { CommandGroupEntry } from "./register-command-groups.js";
+import type { MachineOutputResolver } from "../machine-output-argv.js";
 
+/** Descriptor for one root command placeholder. */
 export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  machineOutput?: MachineOutputResolver;
+  hidden?: boolean;
+  parentDefaultHelp?: boolean;
 };
 
-export type CommandGroupDescriptorSpec<TRegister> = {
-  commandNames: readonly string[];
-  register: TRegister;
+/** Command names owned by one lazy registrar. */
+export type CommandGroupDescriptorSpec<TArgs extends unknown[] = []> = readonly [
+  commandNames: readonly string[],
+  register: (program: Command, ...args: TArgs) => Promise<void> | void,
+];
+
+type CommandGroupEntryLike = {
+  placeholders: NamedCommandDescriptor[];
+  register: (program: Command) => Promise<void> | void;
 };
 
-export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  register: (module: TModule, args: TRegisterArgs) => Promise<void> | void;
-};
-
-export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
-  placeholders: TDescriptor[];
-  register: TRegister;
-};
-
-function buildDescriptorIndex<TDescriptor extends NamedCommandDescriptor>(
-  descriptors: readonly TDescriptor[],
-): Map<string, TDescriptor> {
-  return new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
-}
-
-export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
-  descriptors: readonly TDescriptor[],
-  specs: readonly CommandGroupDescriptorSpec<TRegister>[],
-): ResolvedCommandGroupEntry<TDescriptor, TRegister>[] {
-  const descriptorsByName = buildDescriptorIndex(descriptors);
-  return specs.map((spec) => ({
-    placeholders: spec.commandNames.map((name) => {
+/** Bind descriptors and registration arguments without importing the command modules. */
+export function buildCommandGroupEntries<TArgs extends unknown[]>(
+  descriptors: readonly NamedCommandDescriptor[],
+  specs: readonly CommandGroupDescriptorSpec<TArgs>[],
+  ...args: TArgs
+): CommandGroupEntryLike[] {
+  const descriptorsByName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
+  return specs.map(([commandNames, register]) => ({
+    placeholders: commandNames.map((name) => {
       const descriptor = descriptorsByName.get(name);
       if (!descriptor) {
         throw new Error(`Unknown command descriptor: ${name}`);
       }
       return descriptor;
     }),
-    register: spec.register,
-  }));
-}
-
-export function buildCommandGroupEntries<TRegister>(
-  descriptors: readonly NamedCommandDescriptor[],
-  specs: readonly CommandGroupDescriptorSpec<TRegister>[],
-  mapRegister: (register: TRegister) => CommandGroupEntry["register"],
-): CommandGroupEntry[] {
-  return resolveCommandGroupEntries(descriptors, specs).map((entry) => ({
-    placeholders: entry.placeholders,
-    register: mapRegister(entry.register),
-  }));
-}
-
-export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
-  commandNames: readonly string[],
-  loadModule: () => Promise<TModule>,
-  register: (module: TModule, args: TRegisterArgs) => Promise<void> | void,
-): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>> {
-  return {
-    commandNames,
-    register: async (args: TRegisterArgs) => {
-      const module = await loadModule();
-      await register(module, args);
-    },
-  };
-}
-
-export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
-  definitions: readonly ImportedCommandGroupDefinition<TRegisterArgs, TModule>[],
-): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>>[] {
-  return definitions.map((definition) =>
-    defineImportedCommandGroupSpec(
-      definition.commandNames,
-      definition.loadModule,
-      definition.register,
-    ),
-  );
-}
-
-type ProgramCommandRegistrar = (program: Command) => Promise<void> | void;
-type AnyImportedProgramCommandGroupDefinition = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<Record<string, unknown>>;
-  exportName: string;
-};
-
-export type ImportedProgramCommandGroupDefinition<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
-> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  exportName: TKey;
-};
-
-export function defineImportedProgramCommandGroupSpec<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
->(
-  definition: ImportedProgramCommandGroupDefinition<TModule, TKey>,
-): CommandGroupDescriptorSpec<(program: Command) => Promise<void>> {
-  return defineImportedCommandGroupSpec(
-    definition.commandNames,
-    definition.loadModule,
-    (module, program: Command) => module[definition.exportName](program),
-  );
-}
-
-export function defineImportedProgramCommandGroupSpecs(
-  definitions: readonly AnyImportedProgramCommandGroupDefinition[],
-): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {
-  return definitions.map((definition) => ({
-    commandNames: definition.commandNames,
-    register: async (program: Command) => {
-      const module = await definition.loadModule();
-      const register = module[definition.exportName];
-      if (typeof register !== "function") {
-        throw new Error(`Missing program command registrar: ${definition.exportName}`);
-      }
-      await register(program);
-    },
+    register: (program) => register(program, ...args),
   }));
 }

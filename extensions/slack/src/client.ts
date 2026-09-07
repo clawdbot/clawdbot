@@ -1,103 +1,159 @@
-import { type RetryOptions, type WebClientOptions, WebClient } from "@slack/web-api";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/infra-runtime";
+// Slack plugin module implements client behavior.
+import { createHash } from "node:crypto";
+import { type WebClientOptions, WebClient } from "@slack/web-api";
+import type { SlackLookupClientOptions } from "./client-options.js";
+import {
+  resolveSlackLookupClientOptions,
+  resolveSlackReadClientOptions,
+  resolveSlackWebClientOptions,
+  resolveSlackWriteClientOptions,
+  SLACK_DEFAULT_RETRY_OPTIONS,
+  SLACK_WRITE_RETRY_OPTIONS,
+} from "./client-options.js";
 
-export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
-  retries: 2,
-  factor: 2,
-  minTimeout: 500,
-  maxTimeout: 3000,
-  randomize: true,
-};
+const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
+const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
+const SLACK_STARTUP_AUTH_RETRY_BUDGET_MS = 35_000;
+const slackWriteClientCache = new Map<string, WebClient>();
+const slackListenerWriteClientCache = new WeakMap<
+  WebClient,
+  { teamId: string | undefined; client: WebClient }
+>();
 
-export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
-  retries: 0,
-};
+type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl" | "teamId">;
+type SlackFetch = NonNullable<WebClientOptions["fetch"]>;
 
-/**
- * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
- * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
- */
-function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env.no_proxy ?? env.NO_PROXY;
-  if (!raw) {
-    return false;
-  }
-  const entries = raw
-    .split(/[,\s]+/)
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  const lower = hostname.toLowerCase();
-  for (const entry of entries) {
-    if (entry === "*") {
-      return true;
-    }
-    // Strip optional wildcard/leading dot so `*.slack.com` and `.slack.com`
-    // match both `slack.com` (apex) and Slack subdomains.
-    const bare = entry.startsWith("*.")
-      ? entry.slice(2)
-      : entry.startsWith(".")
-        ? entry.slice(1)
-        : entry;
-    if (lower === bare || lower.endsWith(`.${bare}`)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
- * for use as the `agent` option in Slack WebClient and Socket Mode connections.
- *
- * When set, this agent is forwarded through @slack/bolt → @slack/socket-mode →
- * SlackWebSocket as the `httpAgent`, which the `ws` library uses to tunnel the
- * WebSocket upgrade request through the proxy.  This fixes Socket Mode in
- * environments where outbound traffic must go through an HTTP CONNECT proxy.
- *
- * Respects `NO_PROXY` / `no_proxy` — if `*.slack.com` (or a matching pattern)
- * appears in the exclusion list, returns `undefined` so the connection is direct.
- *
- * Returns `undefined` when no proxy env var is configured or when Slack hosts
- * are excluded by `NO_PROXY`.
- */
-function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
-  // Slack Socket Mode connects to these hosts; skip proxy if excluded.
-  if (isHostExcludedByNoProxy("slack.com")) {
-    return undefined;
-  }
-  try {
-    return new HttpsProxyAgent(proxyUrl);
-  } catch {
-    // Malformed proxy URL — degrade gracefully to direct connection.
-    return undefined;
-  }
-}
-
-export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
-  };
-}
-
-export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-  };
-}
+export {
+  resolveSlackWebClientOptions,
+  resolveSlackWriteClientOptions,
+  SLACK_DEFAULT_RETRY_OPTIONS,
+  SLACK_WRITE_RETRY_OPTIONS,
+} from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
+  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackReadClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackReadClientOptions(options));
+}
+
+function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
+  const deadline = Date.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
+  return async (input, init) => {
+    const response = await baseFetch(input, init);
+    if (response.status !== 429) {
+      return response;
+    }
+    const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
+    const remainingMs = Math.max(0, deadline - Date.now());
+    if (!Number.isFinite(retryAfter) || retryAfter * 1000 <= remainingMs) {
+      return response;
+    }
+    // Slack sleeps through Retry-After outside its per-attempt timeout. Wait only
+    // within the startup budget, then let the retry policy terminate the call.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, remainingMs);
+    });
+    throw new Error("Slack startup auth retry budget exhausted after rate limit");
+  };
+}
+
+export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
+  const resolvedOptions = resolveSlackWebClientOptions(options);
+  const baseFetch = resolvedOptions.fetch;
+  if (!baseFetch) {
+    throw new Error("Slack startup auth fetch is unavailable");
+  }
+  return new WebClient(token, {
+    ...resolvedOptions,
+    fetch: createSlackStartupAuthFetch(baseFetch),
+    retryConfig: {
+      ...SLACK_DEFAULT_RETRY_OPTIONS,
+      maxRetryTime: SLACK_STARTUP_AUTH_RETRY_BUDGET_MS,
+    },
+    timeout: SLACK_STARTUP_AUTH_TIMEOUT_MS,
+  });
+}
+
+export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
+  return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
 export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWriteClientOptions(options));
+}
+
+export function createSlackTokenCacheKey(token: string): string {
+  return `sha256:${createHash("sha256").update(token).digest("base64url")}`;
+}
+
+function slackWriteClientCacheKey(token: string, options: SlackWriteClientCacheOptions): string {
+  const tokenKey = createSlackTokenCacheKey(token);
+  const apiScope = options.slackApiUrl ? `:api:${options.slackApiUrl}` : "";
+  const teamScope = options.teamId ? `:team:${options.teamId.trim().toLowerCase()}` : "";
+  return `${tokenKey}${apiScope}${teamScope}`;
+}
+
+export function getSlackWriteClient(
+  token: string,
+  options: SlackWriteClientCacheOptions = {},
+): WebClient {
+  const resolvedOptions = resolveSlackWriteClientOptions(options);
+  const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
+  const cached = slackWriteClientCache.get(tokenKey);
+  if (cached) {
+    slackWriteClientCache.delete(tokenKey);
+    slackWriteClientCache.set(tokenKey, cached);
+    return cached;
+  }
+  const client = new WebClient(token, resolvedOptions);
+  if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
+    const oldestTokenKey = slackWriteClientCache.keys().next().value;
+    if (oldestTokenKey) {
+      slackWriteClientCache.delete(oldestTokenKey);
+    }
+  }
+  slackWriteClientCache.set(tokenKey, client);
+  return client;
+}
+
+export function getSlackListenerWriteClient(params: {
+  listenerClient: WebClient;
+  teamId?: string;
+  clientOptions?: WebClientOptions;
+}): WebClient | undefined {
+  const token = params.listenerClient.token?.trim();
+  const teamId = params.teamId?.trim().toUpperCase();
+  if (!token) {
+    return undefined;
+  }
+  const cached = slackListenerWriteClientCache.get(params.listenerClient);
+  if (cached) {
+    // Bolt pools listener clients by authorized team. Reusing one for a
+    // different team is invalid scope, not another write-client key.
+    return cached.teamId === teamId ? cached.client : undefined;
+  }
+  const headers = Object.fromEntries(
+    Object.entries(params.clientOptions?.headers ?? {}).filter(
+      ([name]) => name.toLowerCase() !== "authorization",
+    ),
+  );
+  // Stream writes and upload completion are one-shot. Preserve transport and team
+  // scope, but never inherit its retry policy or request deadline.
+  const client = new WebClient(
+    token,
+    resolveSlackWriteClientOptions({
+      ...params.clientOptions,
+      headers,
+      slackApiUrl: params.listenerClient.slackApiUrl,
+      teamId,
+      retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+      timeout: 0,
+    }),
+  );
+  slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });
+  return client;
 }

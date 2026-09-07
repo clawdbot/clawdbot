@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements access control harness behavior.
 import { beforeEach, vi } from "vitest";
 import {
   type AsyncMock,
@@ -15,6 +16,10 @@ let config: Record<string, unknown> = {};
 export function setAccessControlTestConfig(next: Record<string, unknown>): void {
   config = next;
   loadConfigMock.mockReturnValue(config);
+}
+
+export function getAccessControlTestConfig(): Record<string, unknown> {
+  return config;
 }
 
 export function setupAccessControlTestHarness(): void {

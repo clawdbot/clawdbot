@@ -1,3 +1,4 @@
+// Matrix plugin module implements target ids behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
@@ -48,6 +49,17 @@ export function isMatrixQualifiedUserId(raw: string): boolean {
   return trimmed.startsWith("@") && trimmed.includes(":");
 }
 
+/**
+ * Whether `raw` is already a literal room ID rather than a name/query to resolve.
+ * Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
+ * now a hash of the create event — so this must not require a colon the way user
+ * IDs and aliases still do.
+ */
+export function isMatrixRoomId(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("!") && trimmed.length > 1;
+}
+
 export function normalizeMatrixResolvableTarget(raw: string): string {
   return stripKnownPrefixes(raw, [MATRIX_PREFIX, ROOM_PREFIX, CHANNEL_PREFIX]);
 }
@@ -60,29 +72,6 @@ export function normalizeMatrixMessagingTarget(raw: string): string | undefined 
     USER_PREFIX,
   ]);
   return normalized || undefined;
-}
-
-export function normalizeMatrixDirectoryUserId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX, USER_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  return isMatrixQualifiedUserId(normalized) ? `user:${normalized}` : normalized;
-}
-
-export function normalizeMatrixDirectoryGroupId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered.startsWith(ROOM_PREFIX) || lowered.startsWith(CHANNEL_PREFIX)) {
-    return normalized;
-  }
-  if (normalized.startsWith("!")) {
-    return `room:${normalized}`;
-  }
-  return normalized;
 }
 
 export function resolveMatrixDirectUserId(params: {

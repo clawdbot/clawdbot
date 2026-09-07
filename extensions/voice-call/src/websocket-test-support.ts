@@ -1,6 +1,7 @@
+// Voice Call plugin module implements websocket test support behavior.
 import { once } from "node:events";
 import http from "node:http";
-import { WebSocket } from "ws";
+import { WebSocket } from "./websocket.js";
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | null = null;

@@ -1,24 +1,27 @@
+// Msteams tests cover monitor handler.file consent plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import {
-  type MSTeamsActivityHandler,
-  type MSTeamsMessageHandlerDeps,
-  registerMSTeamsHandlers,
-} from "./monitor-handler.js";
-import {
-  createActivityHandler,
-  createMSTeamsMessageHandlerDeps,
-} from "./monitor-handler.test-helpers.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { getPendingUploadFs, storePendingUploadFs } from "./pending-uploads-fs.js";
-import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
+import { getPendingUpload, removePendingUpload, storePendingUpload } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const fileConsentMockState = vi.hoisted(() => ({
   uploadToConsentUrl: vi.fn(),
+}));
+
+vi.mock("./monitor-handler/message-handler.js", () => ({
+  createMSTeamsMessageHandler: () => async () => {},
+}));
+
+vi.mock("./monitor-handler/reaction-handler.js", () => ({
+  createMSTeamsReactionHandler: () => async () => {},
 }));
 
 vi.mock("./file-consent.js", async () => {
@@ -39,10 +42,15 @@ function createRuntimeStub(stateDir?: string): PluginRuntime {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
           enqueue: async () => {},
+          flushKey: async () => {},
+          cancelKey: () => false,
+          drain: async () => {},
         }),
       },
     },
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("msteams", options),
       resolveStateDir: (env?: NodeJS.ProcessEnv) => {
         const override = env?.OPENCLAW_STATE_DIR?.trim();
         if (override) {
@@ -56,14 +64,20 @@ function createRuntimeStub(stateDir?: string): PluginRuntime {
 
 const runtimeStub: PluginRuntime = createRuntimeStub();
 
-function createDeps(): MSTeamsMessageHandlerDeps {
-  return createMSTeamsMessageHandlerDeps({
-    cfg: {} as OpenClawConfig,
-    runtime: {
-      error: vi.fn(),
-    } as unknown as RuntimeEnv,
-  });
-}
+const log = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+};
+
+const createdUploadIds = new Set<string>();
+
+afterEach(() => {
+  for (const id of createdUploadIds) {
+    removePendingUpload(id);
+  }
+  createdUploadIds.clear();
+});
 
 function createInvokeContext(params: {
   conversationId: string;
@@ -121,18 +135,13 @@ function createConsentInvokeHarness(params: {
     conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
     consentCardActivityId: params.consentCardActivityId,
   });
-  const handler = registerMSTeamsHandlers(
-    createActivityHandler(),
-    createDeps(),
-  ) as MSTeamsActivityHandler & {
-    run: NonNullable<MSTeamsActivityHandler["run"]>;
-  };
+  createdUploadIds.add(uploadId);
   const { context, sendActivity, updateActivity } = createInvokeContext({
     conversationId: params.invokeConversationId,
     uploadId,
     action: params.action,
   });
-  return { uploadId, handler, context, sendActivity, updateActivity };
+  return { uploadId, context, sendActivity, updateActivity };
 }
 
 function requirePendingUpload(uploadId: string) {
@@ -142,117 +151,140 @@ function requirePendingUpload(uploadId: string) {
   }
   return upload;
 }
+function expectPendingUploadFields(uploadId: string): void {
+  const upload = requirePendingUpload(uploadId);
+  expect(upload.conversationId).toBe("19:victim@thread.v2");
+  expect(upload.filename).toBe("secret.txt");
+  expect(upload.contentType).toBe("text/plain");
+}
+
+function expectUploadUrlCall(url: string): void {
+  const [call] = fileConsentMockState.uploadToConsentUrl.mock.calls;
+  if (!call) {
+    throw new Error("expected uploadToConsentUrl call");
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object" || !("url" in payload)) {
+    throw new Error("expected uploadToConsentUrl payload");
+  }
+  expect(payload.url).toBe(url);
+}
+
+function readUpdatedActivity(updateActivity: ReturnType<typeof vi.fn>): {
+  id?: unknown;
+  type?: unknown;
+  attachments?: Array<{ contentType?: unknown }>;
+} {
+  const [call] = updateActivity.mock.calls;
+  if (!call) {
+    throw new Error("expected updateActivity call");
+  }
+  const [activity] = call;
+  if (!activity || typeof activity !== "object") {
+    throw new Error("expected updated activity payload");
+  }
+  return activity as {
+    id?: unknown;
+    type?: unknown;
+    attachments?: Array<{ contentType?: unknown }>;
+  };
+}
 
 describe("msteams file consent invoke authz", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
-    clearPendingUploads();
+    vi.clearAllMocks();
     fileConsentMockState.uploadToConsentUrl.mockReset();
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
   });
 
   it("uploads when invoke conversation matches pending upload conversation", async () => {
-    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
     });
 
-    await handler.run(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
-    // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
+    // The HTTP 200 InvokeResponse is now written by the SDK from the typed
+    // app.on("file.consent.accept") return value — this handler must not ack
+    // via ctx.sendActivity (which would post an outbound BF activity instead
+    // of an HTTP response on the new SDK).
+    for (const call of sendActivity.mock.calls) {
+      const arg = call[0] as Record<string, unknown> | string;
+      if (typeof arg === "object" && arg !== null && "type" in arg) {
+        expect(arg.type).not.toBe("invokeResponse");
+      }
+    }
 
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://upload.example.com/put",
-      }),
-    );
+    expectUploadUrlCall("https://upload.example.com/put");
     expect(getPendingUpload(uploadId)).toBeUndefined();
   });
 
   it("calls updateActivity to replace the consent card when consentCardActivityId is set", async () => {
-    const { handler, context, sendActivity, updateActivity } = createConsentInvokeHarness({
+    const { context, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       consentCardActivityId: "consent-card-activity-id-123",
     });
 
-    await handler.run?.(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
-    expect(sendActivity).toHaveBeenCalledWith(expect.objectContaining({ type: "invokeResponse" }));
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
 
     // Should replace the original consent card with the file info card
     expect(updateActivity).toHaveBeenCalledTimes(1);
-    expect(updateActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "consent-card-activity-id-123",
-        type: "message",
-        attachments: expect.arrayContaining([
-          expect.objectContaining({
-            contentType: "application/vnd.microsoft.teams.card.file.info",
-          }),
-        ]),
-      }),
-    );
+    const updatedActivity = readUpdatedActivity(updateActivity);
+    expect(updatedActivity.id).toBe("consent-card-activity-id-123");
+    expect(updatedActivity.type).toBe("message");
+    expect(
+      updatedActivity.attachments?.some(
+        (attachment) => attachment.contentType === "application/vnd.microsoft.teams.card.file.info",
+      ),
+    ).toBe(true);
   });
 
   it("does not send file info card via sendActivity when updateActivity succeeds", async () => {
-    const { handler, context, sendActivity, updateActivity } = createConsentInvokeHarness({
+    const { context, sendActivity, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       consentCardActivityId: "consent-card-activity-id-happy",
     });
 
-    await handler.run?.(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
     // updateActivity should replace the consent card in-place
     expect(updateActivity).toHaveBeenCalledTimes(1);
 
-    // sendActivity should only be called once for the invokeResponse, NOT for the file info card
-    expect(sendActivity).toHaveBeenCalledTimes(1);
-    expect(sendActivity).toHaveBeenCalledWith(expect.objectContaining({ type: "invokeResponse" }));
-
-    // Explicitly verify no file info card was sent via sendActivity
-    for (const call of sendActivity.mock.calls) {
-      const arg = call[0] as Record<string, unknown>;
-      if (typeof arg === "object" && arg !== null && "attachments" in arg) {
-        const attachments = arg.attachments as Array<{ contentType?: string }>;
-        for (const att of attachments) {
-          expect(att.contentType).not.toBe("application/vnd.microsoft.teams.card.file.info");
-        }
-      }
-    }
+    // sendActivity must NOT be called at all on the happy path now: the SDK
+    // writes the HTTP 200 InvokeResponse on its own, and the file-info card
+    // is delivered via updateActivity.
+    expect(sendActivity).not.toHaveBeenCalled();
   });
 
   it("does not call updateActivity when no consentCardActivityId is stored", async () => {
-    const { handler, context, updateActivity } = createConsentInvokeHarness({
+    const { context, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       // no consentCardActivityId
     });
 
-    await handler.run?.(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
     expect(updateActivity).not.toHaveBeenCalled();
   });
 
   it("still completes upload if updateActivity throws", async () => {
-    const { uploadId, handler, context, updateActivity } = createConsentInvokeHarness({
+    const { uploadId, context, updateActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       consentCardActivityId: "consent-card-activity-id-fail",
     });
     updateActivity.mockRejectedValueOnce(new Error("Teams API error"));
 
-    await handler.run?.(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
     // Upload should have completed despite updateActivity failure
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
@@ -261,46 +293,34 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
-    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:attacker@thread.v2",
       action: "accept",
     });
 
-    await handler.run(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
-    // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
-
+    // The expiry message is the only sendActivity call now — the HTTP 200
+    // InvokeResponse comes from the SDK's typed-route default.
     expect(sendActivity).toHaveBeenCalledWith(
       "The file upload request has expired. Please try sending the file again.",
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(requirePendingUpload(uploadId)).toMatchObject({
-      conversationId: "19:victim@thread.v2",
-      filename: "secret.txt",
-      contentType: "text/plain",
-    });
+    expectPendingUploadFields(uploadId);
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
-    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:attacker@thread.v2",
       action: "decline",
     });
 
-    await handler.run(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
-    // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
+    // Decline path: nothing is sent (no expiry message, no manual ack — the
+    // SDK ack happens via the typed-route return value).
+    expect(sendActivity).not.toHaveBeenCalled();
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(requirePendingUpload(uploadId)).toMatchObject({
@@ -308,7 +328,6 @@ describe("msteams file consent invoke authz", () => {
       filename: "secret.txt",
       contentType: "text/plain",
     });
-    expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -321,7 +340,7 @@ describe("msteams file consent invoke FS fallback", () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-invoke-"));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     setMSTeamsRuntime(createRuntimeStub(tmpDir));
-    clearPendingUploads();
+    vi.clearAllMocks();
     fileConsentMockState.uploadToConsentUrl.mockReset();
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
   });
@@ -379,22 +398,11 @@ describe("msteams file consent invoke FS fallback", () => {
       updateActivity,
     } as unknown as MSTeamsTurnContext;
 
-    const handler = registerMSTeamsHandlers(
-      createActivityHandler(),
-      createDeps(),
-    ) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
-
-    await handler.run(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
     // The upload should have run using the FS-loaded buffer
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://upload.example.com/put",
-      }),
-    );
+    expectUploadUrlCall("https://upload.example.com/put");
 
     // FS entry should have been cleaned up after successful upload
     expect(await getPendingUploadFs(uploadId)).toBeUndefined();
@@ -429,14 +437,7 @@ describe("msteams file consent invoke FS fallback", () => {
       updateActivity,
     } as unknown as MSTeamsTurnContext;
 
-    const handler = registerMSTeamsHandlers(
-      createActivityHandler(),
-      createDeps(),
-    ) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
-
-    await handler.run(context);
+    await runMSTeamsFileConsentInvokeHandler(context, log);
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(await getPendingUploadFs(uploadId)).toBeUndefined();

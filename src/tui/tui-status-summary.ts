@@ -1,8 +1,10 @@
+// Formats status summaries shown in the TUI header and overlays.
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { formatTokenCount } from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 
+/** Formats Gateway/session health into compact status lines for the TUI. */
 export function formatStatusSummary(summary: GatewayStatusSummary) {
   const lines: string[] = [];
   lines.push("Gateway status");
@@ -22,11 +24,11 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
   }
 
-  const providerSummary = Array.isArray(summary.providerSummary) ? summary.providerSummary : [];
-  if (providerSummary.length > 0) {
+  const channelSummary = Array.isArray(summary.channelSummary) ? summary.channelSummary : [];
+  if (channelSummary.length > 0) {
     lines.push("");
     lines.push("System:");
-    for (const line of providerSummary) {
+    for (const line of channelSummary) {
       lines.push(`  ${line}`);
     }
   }
@@ -66,6 +68,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   if (recent.length > 0) {
     lines.push("Recent sessions:");
     for (const entry of recent) {
+      // Keep each recent session on one scan-friendly line for narrow terminal output.
       const ageLabel = typeof entry.age === "number" ? formatTimeAgo(entry.age) : "no activity";
       const model = entry.model ?? "unknown";
       const usage = formatContextUsageLine({

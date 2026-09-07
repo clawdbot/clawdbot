@@ -1,9 +1,22 @@
-import fs from "node:fs";
+/**
+ * Bundled channel catalog reader.
+ *
+ * Loads channel metadata from generated package catalogs and bundled plugin package manifests.
+ */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES } from "../plugins/official-external-plugin-bundled-catalogs.js";
+import {
+  readPluginCacheDirectory,
+  readPluginCacheJsonFile,
+} from "../plugins/plugin-cache-files.js";
+import { getPluginCache } from "../plugins/plugin-cache.js";
+import type { BundledChannelCatalogEntry } from "./bundled-channel-catalog.types.js";
 
 type ChannelCatalogEntryLike = {
   openclaw?: {
@@ -11,81 +24,70 @@ type ChannelCatalogEntryLike = {
   };
 };
 
-export type BundledChannelCatalogEntry = {
-  id: string;
-  channel: PluginPackageChannel;
-  aliases: readonly string[];
-  order: number;
-};
-
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
 
 function listPackageRoots(): string[] {
-  return [
-    resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-  ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
+  // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both
+  // once so channel metadata works in dev, linked packages, and published CLI layouts.
+  return uniqueStrings(
+    [
+      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+    ].filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
-function listBundledExtensionPackageJsonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
-  // Delegate to the plugin loader's resolver so channel metadata stays in lock
-  // step with whichever bundled plugin tree is actually loaded at runtime
-  // (source extensions/ in dev/test, dist/extensions in published installs,
-  // dist-runtime/extensions when paired with dist, etc.). See
-  // src/plugins/bundled-dir.ts for the full candidate-order policy and
-  // src/plugins/bundled-dir.test.ts for the precedence coverage. Reusing the
-  // resolver also picks up OPENCLAW_BUNDLED_PLUGINS_DIR overrides and the
-  // bun --compile sibling layout for free.
-  const extensionsRoot = resolveBundledPluginsDir(env);
-  if (!extensionsRoot) {
+function readBundledExtensionCatalogEntriesSync(
+  pluginsDir: string | undefined,
+): ChannelCatalogEntryLike[] {
+  if (!pluginsDir) {
     return [];
   }
   try {
-    return fs
-      .readdirSync(extensionsRoot, { withFileTypes: true })
+    return readPluginCacheDirectory(pluginsDir)
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
-      .filter((entry) => fs.existsSync(entry));
+      .flatMap((entry): ChannelCatalogEntryLike[] => {
+        const packageJsonPath = path.join(pluginsDir, entry.name, "package.json");
+        const parsed = readPluginCacheJsonFile(packageJsonPath);
+        return parsed.ok && isRecord(parsed.value) ? [parsed.value] : [];
+      });
   } catch {
     return [];
   }
 }
 
-function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
-  const entries: ChannelCatalogEntryLike[] = [];
-  for (const packageJsonPath of listBundledExtensionPackageJsonPaths()) {
-    try {
-      const payload = JSON.parse(
-        fs.readFileSync(packageJsonPath, "utf8"),
-      ) as ChannelCatalogEntryLike;
-      entries.push(payload);
-    } catch {
-      continue;
-    }
-  }
-  return entries;
-}
-
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
+  const bundledExternalEntries = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.filter(
+    (entry): entry is ChannelCatalogEntryLike => typeof entry === "object" && entry !== null,
+  );
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    try {
-      const payload = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
-        entries?: unknown;
-      };
-      return Array.isArray(payload.entries) ? (payload.entries as ChannelCatalogEntryLike[]) : [];
-    } catch {
-      continue;
+    const payload = readPluginCacheJsonFile(candidate);
+    if (payload.ok && isRecord(payload.value)) {
+      const entries = Array.isArray(payload.value.entries)
+        ? payload.value.entries.filter((entry): entry is ChannelCatalogEntryLike => isRecord(entry))
+        : [];
+      // The source catalog is available before dist/channel-catalog.json exists and carries
+      // promotion metadata for external channels. Keep it first so a stale local dist artifact
+      // cannot hide current metadata; the generated dist catalog still contributes bundled rows.
+      return [...bundledExternalEntries, ...entries];
     }
   }
-  return [];
+  return bundledExternalEntries;
 }
 
-function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
-  const channel = entry.openclaw?.channel;
+function isChannelCatalogEntryLike(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): entry is ChannelCatalogEntryLike {
+  return "openclaw" in entry;
+}
+
+function toBundledChannelEntry(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): BundledChannelCatalogEntry | null {
+  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
+    ? entry.openclaw?.channel
+    : entry;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;
@@ -107,14 +109,47 @@ function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCa
   };
 }
 
+/**
+ * Lists bundled channel catalog entries from package manifests and generated catalog files.
+ */
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
-  const bundledEntries = readBundledExtensionCatalogEntriesSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
-  if (bundledEntries.length > 0) {
-    return bundledEntries;
+  const pluginsDir = resolveBundledPluginsDir();
+  const catalogs = getPluginCache().metadata.bundledChannelCatalogs;
+  const key = JSON.stringify([process.cwd(), pluginsDir]);
+  const cached = catalogs.get(key);
+  if (cached) {
+    return cached;
   }
-  return readOfficialCatalogFileSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+  const entries = new Map<string, BundledChannelCatalogEntry>();
+  for (const entry of readBundledExtensionCatalogEntriesSync(pluginsDir)) {
+    const channelEntry = toBundledChannelEntry(entry);
+    if (channelEntry) {
+      entries.set(channelEntry.id, channelEntry);
+    }
+  }
+  for (const entry of readOfficialCatalogFileSync()) {
+    const channelEntry = toBundledChannelEntry(entry);
+    if (channelEntry) {
+      // Package manifests win over the generated catalog when both describe the same id.
+      entries.set(channelEntry.id, entries.get(channelEntry.id) ?? channelEntry);
+    }
+  }
+  const catalog = Array.from(entries.values()).toSorted(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
+  catalogs.set(key, catalog);
+  return catalog;
+}
+
+/** Finds bundled or generated channel metadata by id or alias. */
+export function findBundledChannelCatalogMetadata(
+  channelId: string,
+): PluginPackageChannel | undefined {
+  const normalized = normalizeOptionalLowercaseString(channelId);
+  if (!normalized) {
+    return undefined;
+  }
+  return listBundledChannelCatalogEntries().find(
+    (entry) => entry.id === normalized || entry.aliases.includes(normalized),
+  )?.channel;
 }

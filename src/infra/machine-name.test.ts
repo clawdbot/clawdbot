@@ -1,23 +1,11 @@
+// Covers machine name resolution fallback behavior.
 import os from "node:os";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
-  );
-});
-
-const originalVitest = process.env.VITEST;
-const originalNodeEnv = process.env.NODE_ENV;
+vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));
 
 async function importMachineName(scope: string) {
   return await importFreshModule<typeof import("./machine-name.js")>(
@@ -27,18 +15,8 @@ async function importMachineName(scope: string) {
 }
 
 afterEach(() => {
-  execFileMock.mockReset();
+  runExecMock.mockReset();
   vi.restoreAllMocks();
-  if (originalVitest === undefined) {
-    delete process.env.VITEST;
-  } else {
-    process.env.VITEST = originalVitest;
-  }
-  if (originalNodeEnv === undefined) {
-    delete process.env.NODE_ENV;
-  } else {
-    process.env.NODE_ENV = originalNodeEnv;
-  }
 });
 
 describe("getMachineDisplayName", () => {
@@ -68,6 +46,6 @@ describe("getMachineDisplayName", () => {
       await expect(machineName.getMachineDisplayName()).resolves.toBe(expected);
     }
     expect(hostnameSpy).toHaveBeenCalledTimes(expectedCalls);
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(runExecMock).not.toHaveBeenCalled();
   });
 });

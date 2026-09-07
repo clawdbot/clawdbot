@@ -1,9 +1,24 @@
+// Status JSON runtime tests cover runtime status payload construction and command dependencies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { createStatusScanResultFixture } from "./status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
+  readBackupFreshness: vi.fn(() => ({
+    latest: {
+      id: "backup-1",
+      createdAt: 123,
+      archivePath: "/backups/git",
+      status: "ok" as const,
+      kind: "git" as const,
+    },
+  })),
   resolveStatusRuntimeSnapshot: vi.fn(),
+}));
+
+vi.mock("./backup-health.js", () => ({
+  readBackupFreshness: mocks.readBackupFreshness,
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -15,37 +30,46 @@ vi.mock("./status-runtime-shared.ts", () => ({
 }));
 
 function createScan() {
-  return {
+  return createStatusScanResultFixture({
+    env: { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" },
     cfg: { update: { channel: "stable" }, gateway: {} },
     sourceConfig: { gateway: {} },
-    summary: { ok: true },
-    update: {
-      root: "/tmp/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    },
-    osSummary: { platform: "linux" },
+    summary: { ok: true } as never,
+    osSummary: { platform: "linux" } as never,
     memory: null,
-    memoryPlugin: { enabled: true },
+    memoryPlugin: { enabled: true, slot: "memory" },
     gatewayMode: "local" as const,
-    gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "config" },
+    gatewayConnection: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
     remoteUrlMissing: false,
     gatewayReachable: true,
-    gatewayProbe: { connectLatencyMs: 42, error: null },
     gatewayProbeAuth: { token: "tok" },
     gatewaySelf: { host: "gateway" },
-    gatewayProbeAuthWarning: null,
-    agentStatus: { agents: [{ id: "main" }], defaultId: "main" },
+    gatewayProbeAuthWarning: undefined,
+    agentStatus: { agents: [{ id: "main" }], defaultId: "main" } as never,
     secretDiagnostics: [],
     pluginCompatibility: [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start",
-        severity: "warn",
+        code: "hook-only",
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
         message: "warn",
       },
     ],
-  } satisfies Parameters<typeof resolveStatusJsonOutput>[0]["scan"];
+  });
+}
+
+function requireStatusPayloadInput() {
+  const call = mocks.buildStatusJsonPayload.mock.calls[0];
+  if (!call) {
+    throw new Error("expected status json payload call");
+  }
+  const [payloadInput] = call;
+  return payloadInput;
 }
 
 describe("status-json-runtime", () => {
@@ -62,9 +86,10 @@ describe("status-json-runtime", () => {
   });
 
   it("builds the full json output for status --json", async () => {
+    const scan = createScan();
     const result = await resolveStatusJsonOutput({
-      scan: createScan(),
-      opts: { deep: true, usage: true, timeoutMs: 1234 },
+      scan,
+      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234 },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -73,35 +98,42 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 1234,
+      agentId: "beta",
       usage: true,
       deep: true,
       gatewayReachable: true,
       includeSecurityAudit: true,
       suppressHealthErrors: undefined,
     });
-    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        surface: expect.objectContaining({
-          gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "config" },
-          gatewayProbeAuth: { token: "tok" },
-          gatewayService: { label: "LaunchAgent" },
-          nodeService: { label: "node" },
-        }),
-        securityAudit: { summary: { critical: 1 } },
-        usage: { providers: [] },
-        health: { ok: true },
-        lastHeartbeat: { status: "ok" },
-        pluginCompatibility: [
-          {
-            pluginId: "legacy",
-            code: "legacy-before-agent-start",
-            severity: "warn",
-            message: "warn",
-          },
-        ],
-      }),
-    );
-    expect(result).toEqual({ built: true, input: expect.any(Object) });
+    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(scan.env);
+    const payloadInput = requireStatusPayloadInput();
+    expect(payloadInput.surface.gatewayConnection).toStrictEqual({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    });
+    expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
+    expect(payloadInput.surface.gatewayService).toStrictEqual({ label: "LaunchAgent" });
+    expect(payloadInput.surface.nodeService).toStrictEqual({ label: "node" });
+    expect(payloadInput.securityAudit).toStrictEqual({ summary: { critical: 1 } });
+    expect(payloadInput.usage).toStrictEqual({ providers: [] });
+    expect(payloadInput.health).toStrictEqual({ ok: true });
+    expect(payloadInput.lastHeartbeat).toStrictEqual({ status: "ok" });
+    expect(payloadInput.pluginCompatibility).toStrictEqual([
+      {
+        pluginId: "legacy",
+        code: "hook-only",
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
+        message: "warn",
+      },
+    ]);
+    expect(result).toEqual({
+      built: true,
+      input: payloadInput,
+      backups: mocks.readBackupFreshness(),
+    });
   });
 
   it("skips optional sections when flags are off", async () => {
@@ -114,8 +146,9 @@ describe("status-json-runtime", () => {
       nodeService: { label: "node" },
     });
 
+    const { env: _env, ...scanWithoutEnv } = createScan();
     await resolveStatusJsonOutput({
-      scan: createScan(),
+      scan: scanWithoutEnv,
       opts: { deep: false, usage: false, timeoutMs: 500 },
       includeSecurityAudit: false,
       includePluginCompatibility: false,
@@ -131,25 +164,22 @@ describe("status-json-runtime", () => {
       includeSecurityAudit: false,
       suppressHealthErrors: undefined,
     });
-    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        surface: expect.objectContaining({
-          gatewayProbeAuth: { token: "tok" },
-        }),
-        securityAudit: undefined,
-        usage: undefined,
-        health: undefined,
-        lastHeartbeat: null,
-        pluginCompatibility: undefined,
-      }),
-    );
+    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith({});
+    const payloadInput = requireStatusPayloadInput();
+    expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
+    expect(payloadInput.securityAudit).toBeUndefined();
+    expect(payloadInput.usage).toBeUndefined();
+    expect(payloadInput.health).toBeUndefined();
+    expect(payloadInput.lastHeartbeat).toBeNull();
+    expect(payloadInput.pluginCompatibility).toBeUndefined();
   });
 
-  it("suppresses health errors when requested", async () => {
+  it("preserves failed deep health probes in nonthrowing JSON output", async () => {
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
       securityAudit: undefined,
       usage: undefined,
-      health: undefined,
+      health: { error: "gateway health probe timed out" },
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -162,14 +192,10 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: true,
     });
 
-    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        surface: expect.objectContaining({
-          gatewayProbeAuth: { token: "tok" },
-        }),
-        health: undefined,
-      }),
-    );
+    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    const payloadInput = requireStatusPayloadInput();
+    expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
+    expect(payloadInput.health).toEqual({ error: "gateway health probe timed out" });
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },

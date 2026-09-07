@@ -1,21 +1,35 @@
-import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+// Builds structured context reports for context command responses.
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+} from "../../agents/bootstrap-budget.js";
+import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../../agents/pi-embedded-helpers/bootstrap.js";
+} from "../../agents/embedded-agent-helpers/bootstrap.js";
+import {
+  createMessageCharEstimateCache,
+  estimateMessageCharsCached,
+} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   resolveFreshSessionTotalTokens,
+  type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { renderContextTreemapPng } from "./context-treemap.js";
 
-function formatInt(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
@@ -35,28 +49,104 @@ function formatListTop(
   entries: Array<{ name: string; value: number }>,
   cap: number,
 ): { lines: string[]; omitted: number } {
-  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
+  const sorted = entries.toSorted((a, b) => b.value - a.value);
   const top = sorted.slice(0, cap);
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
   return { lines, omitted };
 }
 
+function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const existing = targetSessionEntry?.systemPromptReport;
+  return existing?.source === "run" ? existing : null;
+}
+
+function resolveContextReportAgentId(params: HandleCommandsParams): string {
+  return resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  }).sessionAgentId;
+}
+
+type TranscriptCompactabilityReport =
+  | {
+      available: true;
+      totalMessages: number;
+      realConversationMessages: number;
+    }
+  | {
+      available: false;
+      reason: string;
+    };
+
+async function readContextTranscriptMessages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<AgentMessage[]> {
+  const sessionId = targetSessionEntry?.sessionId?.trim();
+  if (!sessionId) {
+    return [];
+  }
+  const agentId = resolveContextReportAgentId(params);
+  return (await readSessionMessagesAsync(
+    {
+      agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: resolveSessionStorePathForScope({
+        agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }),
+    },
+    { mode: "full", reason: "context-report" },
+  )) as AgentMessage[];
+}
+
+async function resolveTranscriptCompactabilityReport(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<TranscriptCompactabilityReport> {
+  if (!targetSessionEntry?.sessionId?.trim()) {
+    return { available: false, reason: "no active transcript session" };
+  }
+
+  const messages = await readContextTranscriptMessages(params, targetSessionEntry);
+  if (!messages.length) {
+    return { available: false, reason: "no transcript messages found" };
+  }
+
+  const realConversationMessages = messages.reduce(
+    (count, message, index) =>
+      count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
+    0,
+  );
+  return {
+    available: true,
+    totalMessages: messages.length,
+    realConversationMessages,
+  };
+}
+
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const existing = targetSessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") {
-    return existing;
+  const runReport = resolveRunContextReport(params);
+  if (runReport) {
+    return runReport;
   }
 
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const sessionAgentId = resolveContextReportAgentId(params);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
@@ -69,8 +159,7 @@ async function resolveContextReport(
     bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
-    injectedFiles,
+    injectedWorkspaceFiles,
     skillsPrompt,
     tools,
   });
@@ -90,7 +179,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "",
         "Try:",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+        "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
@@ -98,15 +188,78 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
-  const report = await resolveContextReport(params);
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
-    totalTokens: targetSessionEntry?.totalTokens ?? null,
-    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
+    totalTokens: cachedContextUsageTokens ?? null,
+    totalTokensFresh: targetSessionEntry ? cachedContextUsageTokens !== undefined : null,
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
   } as const;
+
+  if (sub === "map") {
+    const report = resolveRunContextReport(params);
+    if (!report) {
+      return {
+        text: [
+          "Context treemap unavailable.",
+          "No actual run context is cached for this session yet.",
+          "Send a normal message, then run /context map again.",
+        ].join("\n"),
+      };
+    }
+    const messages = await readContextTranscriptMessages(params, targetSessionEntry);
+    const estimateCache = createMessageCharEstimateCache();
+    const conversationTotals = messages.reduce(
+      (totals, message) => {
+        const chars = estimateMessageCharsCached(message, estimateCache);
+        if (chars === 0) {
+          return totals;
+        }
+        if (message.role === "user") {
+          totals.user += chars;
+        } else if (message.role === "assistant") {
+          totals.assistant += chars;
+        } else if (message.role === "toolResult") {
+          totals.toolResults += chars;
+        } else if (message.role === "branchSummary" || message.role === "compactionSummary") {
+          totals.summaries += chars;
+        } else {
+          totals.other += chars;
+        }
+        return totals;
+      },
+      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
+    );
+    const conversation = [
+      { name: "User", value: conversationTotals.user },
+      { name: "Assistant", value: conversationTotals.assistant },
+      { name: "Tool results", value: conversationTotals.toolResults },
+      { name: "Summaries", value: conversationTotals.summaries },
+      { name: "Other", value: conversationTotals.other },
+      // Runtime context and hook prompt additions reach only the model, never
+      // the transcript; without these leaves the map undercounts model-visible
+      // context. The persisted turn prompt is already counted above.
+      { name: "Runtime context", value: report.currentTurn?.runtimeContextChars ?? 0 },
+      { name: "Model-only prompt", value: report.currentTurn?.modelOnlyPromptChars ?? 0 },
+    ].filter((leaf) => leaf.value > 0);
+    const treemap = await renderContextTreemapPng({
+      report,
+      session: {
+        cachedContextTokens: cachedContextUsageTokens ?? null,
+        contextWindowTokens: session.contextTokens,
+      },
+      conversation,
+    });
+    return {
+      text: treemap.caption,
+      mediaUrl: treemap.path,
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    };
+  }
+
+  const report = await resolveContextReport(params);
 
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
@@ -116,16 +269,27 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, or /context json",
+        "Use: /context, /context list, /context detail, /context map, or /context json",
       ].join("\n"),
     };
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
-    const status = f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK";
+    const nativeUnverified = f.injectionStatus === "native_unverified";
+    const status = nativeUnverified
+      ? "NATIVE/UNVERIFIED"
+      : f.missing
+        ? "MISSING"
+        : f.truncated
+          ? "TRUNCATED"
+          : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
-    const injected = f.missing ? "0" : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw ${raw} | injected ${injected}`;
+    const injected = nativeUnverified
+      ? "unknown"
+      : f.missing
+        ? "0"
+        : formatCharsAndTokens(f.injectedChars);
+    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
@@ -147,22 +311,25 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
+  const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
     typeof report.bootstrapMaxChars === "number" &&
     Number.isFinite(report.bootstrapMaxChars) &&
     report.bootstrapMaxChars > 0
       ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg);
+      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
     typeof report.bootstrapTotalMaxChars === "number" &&
     Number.isFinite(report.bootstrapTotalMaxChars) &&
     report.bootstrapTotalMaxChars > 0
       ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg);
+      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: report.injectedWorkspaceFiles,
+    files: report.injectedWorkspaceFiles.filter(
+      (file) => file.injectionStatus !== "native_unverified",
+    ),
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
@@ -191,9 +358,18 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
+          "Tip: increase this agent's `agents.entries.*.bootstrapMaxChars` / `agents.entries.*.bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
         ]
       : [];
+  const hasNativeUnverifiedFiles = report.injectedWorkspaceFiles.some(
+    (file) => file.injectionStatus === "native_unverified",
+  );
+  const nativeUnverifiedWarningLines = hasNativeUnverifiedFiles
+    ? [
+        "⚠ Native Codex project instructions are unverified: Codex applies one aggregate root-to-CWD byte budget, and app-server does not report exact per-file retained bytes, so later AGENTS.md files can be partial.",
+        "Keep earlier/root files concise and read the relevant scoped file directly if guidance appears missing.",
+      ]
+    : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
@@ -207,6 +383,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sandboxLine,
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
     "",
     "Injected workspace files:",
     ...fileLines,
@@ -236,7 +413,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
     // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
     // Add only tool schemas here so the tracked estimate stays disjoint.
-    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
+    const currentTurnChars = report.currentTurn
+      ? report.currentTurn.promptChars + report.currentTurn.runtimeContextChars
+      : 0;
+    const trackedPromptChars =
+      report.systemPrompt.chars + report.tools.schemaChars + currentTurnChars;
     const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
       cachedContextUsageTokens != null
@@ -252,6 +433,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
+    const transcriptCompactability = await resolveTranscriptCompactabilityReport(
+      params,
+      targetSessionEntry,
+    );
+    const transcriptCompactabilityLines = transcriptCompactability.available
+      ? [
+          `Compactable transcript: ${formatInt(transcriptCompactability.realConversationMessages)} real conversation message(s) / ${formatInt(transcriptCompactability.totalMessages)} transcript message(s)`,
+          ...(transcriptCompactability.realConversationMessages === 0
+            ? [
+                "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+              ]
+            : []),
+        ]
+      : [`Compactable transcript: unavailable (${transcriptCompactability.reason})`];
 
     return {
       text: [
@@ -275,6 +470,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         trackedPromptLine,
         actualContextLine,
         ...(overheadLine ? [overheadLine] : []),
+        ...transcriptCompactabilityLines,
         "",
         totalsLine,
         "",

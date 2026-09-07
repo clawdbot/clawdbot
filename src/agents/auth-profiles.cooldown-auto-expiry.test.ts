@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Cooldown auto-expiry regression tests for auth profile ordering.
+ * Profiles with expired cooldowns should become available. Ordinary stale
+ * counters clear, while rate-limit counters persist until a successful probe.
+ */
+import { describe, expect, it, vi } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage.js";
+import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 
-/**
- * Integration tests for cooldown auto-expiry through resolveAuthProfileOrder.
- * Verifies that profiles with expired cooldowns are treated as available and
- * have their error state reset, preventing the escalation loop described in
- * #3604, #13623, #15851, and #11972.
- */
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
 
 function makeStoreWithProfiles(): AuthProfileStore {
   return {
@@ -28,6 +30,7 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     store.usageStats = {
       "anthropic:default": {
         cooldownUntil: Date.now() - 10_000,
+        cooldownReason: "rate_limit",
         errorCount: 4,
         failureCounts: { rate_limit: 4 },
         lastFailureAt: Date.now() - 70_000,
@@ -42,8 +45,9 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     // Should no longer report as in cooldown
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
 
-    // Error state should have been reset
+    // Only rate-limit backoff persists until the half-open probe succeeds.
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
+    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toEqual({ rate_limit: 4 });
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
   });
 
@@ -86,26 +90,6 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     // Should still be in cooldown
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(3);
-  });
-
-  it("expired cooldown resets error count — prevents escalation on next failure", () => {
-    const store = makeStoreWithProfiles();
-    store.usageStats = {
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 1_000,
-        errorCount: 4, // Would cause 1-hour cooldown on next failure
-        failureCounts: { rate_limit: 4 },
-        lastFailureAt: Date.now() - 3_700_000,
-      },
-    };
-
-    resolveAuthProfileOrder({ store, provider: "anthropic" });
-
-    // After clearing, errorCount is 0. If the profile fails again,
-    // the next cooldown will be 60 seconds (errorCount 1) instead of
-    // 1 hour (errorCount 5). This is the core fix for #3604.
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toBeUndefined();
   });
 
   it("mixed active and expired cooldowns across profiles", () => {

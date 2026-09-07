@@ -1,52 +1,32 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+// Whatsapp plugin module implements setup core behavior.
 import {
-  applyAccountNameToChannelSection,
+  createPatchedAccountSetupAdapter,
   type ChannelSetupAdapter,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
+  type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 
 const channel = "whatsapp" as const;
 
-export const whatsappSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-      alwaysUseAccounts: true,
-    }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-      alwaysUseAccounts: true,
-    });
-    const next = migrateBaseNameToDefaultAccount({
-      cfg: namedConfig,
-      channelKey: channel,
-      alwaysUseAccounts: true,
-    });
-    const entry = {
-      ...next.channels?.whatsapp?.accounts?.[accountId],
-      ...(input.authDir ? { authDir: input.authDir } : {}),
-      enabled: true,
-    };
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        whatsapp: {
-          ...next.channels?.whatsapp,
-          accounts: {
-            ...next.channels?.whatsapp?.accounts,
-            [accountId]: entry,
-          },
-        },
-      },
-    };
-  },
+type WhatsAppSetupInput = ChannelSetupInput & {
+  authDir?: string;
 };
+
+export const whatsappSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter<WhatsAppSetupInput>({
+    channelKey: channel,
+    alwaysUseAccounts: true,
+    buildPatch: (input) => (input.authDir ? { authDir: input.authDir } : {}),
+  }),
+  singleAccountKeysToMove: ["authDir"],
+};
+
+export const whatsappSetupContract = defineChannelSetupContract({
+  fields: {
+    authDir: {
+      kind: "string",
+      cli: { flags: "--auth-dir <path>", description: "WhatsApp auth directory override" },
+    },
+  },
+  legacyAdapter: whatsappSetupAdapter,
+});

@@ -1,3 +1,4 @@
+// Tests queue policy parsing and admission decisions.
 import { describe, expect, it } from "vitest";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 
@@ -35,14 +36,41 @@ describe("resolveActiveRunQueueAction", () => {
     ).toBe("enqueue-followup");
   });
 
-  it("enqueues steer mode runs while active", () => {
+  it("runs reset-triggered turns immediately while another run is active", () => {
+    for (const queueMode of ["collect", "followup"] as const) {
+      expect(
+        resolveActiveRunQueueAction({
+          isActive: true,
+          isHeartbeat: false,
+          shouldFollowup: true,
+          queueMode,
+          resetTriggered: true,
+        }),
+      ).toBe("run-now");
+    }
+  });
+
+  it("keeps heartbeat drops ahead of reset-triggered turns", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
-        isHeartbeat: false,
-        shouldFollowup: false,
-        queueMode: "steer",
+        isHeartbeat: true,
+        shouldFollowup: true,
+        queueMode: "followup",
+        resetTriggered: true,
       }),
-    ).toBe("enqueue-followup");
+    ).toBe("drop");
+  });
+
+  it("ignores reset-triggered policy when there is no active run", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: false,
+        isHeartbeat: false,
+        shouldFollowup: true,
+        queueMode: "collect",
+        resetTriggered: true,
+      }),
+    ).toBe("run-now");
   });
 });

@@ -1,125 +1,112 @@
 ---
-summary: "Agent-controlled Canvas panel embedded via WKWebView + custom URL scheme"
+summary: "Present hosted widgets in the macOS panel"
 read_when:
-  - Implementing the macOS Canvas panel
-  - Adding agent controls for visual workspace
-  - Debugging WKWebView canvas loads
-title: "Canvas"
+  - Showing an agent-created widget on a Mac
+  - Controlling the macOS widget panel from a paired node
+  - Debugging hosted widget navigation
+title: "Widget panel"
+doc-schema-version: 1
 ---
 
-# Canvas (macOS app)
+The macOS app includes a native panel for presenting hosted widget documents.
+The Canvas plugin owns this presentation path; it is not a standalone visual
+workspace or an A2UI push target.
 
-The macOS app embeds an agent‑controlled **Canvas panel** using `WKWebView`. It
-is a lightweight visual workspace for HTML/CSS/JS, A2UI, and small interactive
-UI surfaces.
+The recommended agent path is [`show_widget`](/tools/show-widget) with
+`presentation.target: "node_panel"`. OpenClaw stores the widget as a hosted
+document, selects a connected macOS node, opens the panel, and navigates it to
+that document. If no eligible Mac is connected or presentation fails, the
+widget still appears inline in chat and the tool result explains how to retry.
 
-## Where Canvas lives
-
-Canvas state is stored under Application Support:
-
-- `~/Library/Application Support/OpenClaw/canvas/<session>/...`
-
-The Canvas panel serves those files via a **custom URL scheme**:
-
-- `openclaw-canvas://<session>/<path>`
-
-Examples:
-
-- `openclaw-canvas://main/` → `<canvasRoot>/main/index.html`
-- `openclaw-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
-- `openclaw-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
-
-If no `index.html` exists at the root, the app shows a **built‑in scaffold page**.
+Widgets in the native panel are render-only. Host-integrated widget actions
+remain available in Control UI chat and [session dashboard](/web/dashboards)
+surfaces, not in the panel.
 
 ## Panel behavior
 
-- Borderless, resizable panel anchored near the menu bar (or mouse cursor).
-- Remembers size/position per session.
-- Auto‑reloads when local canvas files change.
-- Only one Canvas panel is visible at a time (session is switched as needed).
+- The panel is borderless, resizable, and anchored near the menu bar or mouse
+  cursor.
+- Presenting a widget does not switch apps or take keyboard focus.
+- Only one widget panel is visible at a time.
+- The app remembers the panel's size and position per session.
 
-Canvas can be disabled from Settings → **Allow Canvas**. When disabled, canvas
-node commands return `CANVAS_DISABLED`.
+Canvas can be disabled from **Dashboard → Settings → This Mac → Capabilities**. When it is disabled,
+panel commands return `CANVAS_DISABLED`.
 
-## Agent API surface
+## Agent path
 
-Canvas is exposed via the **Gateway WebSocket**, so the agent can:
+Ask the agent to use `show_widget` and target the node panel. The tool exposes
+`node_panel` only while a widget presenter plugin is active.
 
-- show/hide the panel
-- navigate to a path or URL
-- evaluate JavaScript
-- capture a snapshot image
+```json
+{
+  "title": "Build status",
+  "widget_code": "<main><h1>Build passed</h1></main>",
+  "presentation": { "target": "node_panel" }
+}
+```
 
-CLI examples:
+The result identifies the selected Mac when presentation succeeds. OpenClaw
+currently selects only a connected macOS node that declares `canvas.present`.
+
+## Node commands
+
+The paired-node command surface contains three commands:
 
 ```bash
 openclaw nodes canvas present --node <id>
-openclaw nodes canvas navigate --node <id> --url "/"
-openclaw nodes canvas eval --node <id> --js "document.title"
-openclaw nodes canvas snapshot --node <id>
+openclaw nodes canvas navigate --node <id> "/__openclaw__/canvas/documents/<document-id>/index.html"
+openclaw nodes canvas hide --node <id>
 ```
 
-Notes:
+- `canvas.present` shows the panel. It also accepts the existing optional
+  target and placement arguments.
+- `canvas.navigate` loads a hosted widget-document path or an app-local Canvas
+  URL.
+- `canvas.hide` hides the panel without changing its current document.
 
-- `canvas.navigate` accepts **local canvas paths**, `http(s)` URLs, and `file://` URLs.
-- If you pass `"/"`, the Canvas shows the local scaffold or `index.html`.
+Hosted paths under `/__openclaw__/canvas/` are resolved through the node
+session's current scoped `pluginSurfaceUrls.canvas` URL. The app refreshes that
+short-lived capability before navigation; callers should pass the document
+path, not construct or copy a capability URL.
 
-## A2UI in Canvas
+The app-local scheme remains available for app-owned content:
 
-A2UI is hosted by the Gateway canvas host and rendered inside the Canvas panel.
-When the Gateway advertises a Canvas host, the macOS app auto‑navigates to the
-A2UI host page on first open.
-
-Default A2UI host URL:
-
-```
-http://<gateway-host>:18789/__openclaw__/a2ui/
-```
-
-### A2UI commands (v0.8)
-
-Canvas currently accepts **A2UI v0.8** server→client messages:
-
-- `beginRendering`
-- `surfaceUpdate`
-- `dataModelUpdate`
-- `deleteSurface`
-
-`createSurface` (v0.9) is not supported.
-
-CLI example:
-
-```bash
-cat > /tmp/a2ui-v0.8.jsonl <<'EOFA2'
-{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","content"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Canvas (A2UI v0.8)"},"usageHint":"h1"}}},{"id":"content","component":{"Text":{"text":{"literalString":"If you can read this, A2UI push works."},"usageHint":"body"}}}]}}
-{"beginRendering":{"surfaceId":"main","root":"root"}}
-EOFA2
-
-openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
+```text
+openclaw-canvas://<session>/<path>
 ```
 
-Quick smoke:
+Files addressed by that scheme must remain inside the session's Canvas root in
+Application Support. Directory traversal is blocked.
 
-```bash
-openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"
-```
+## A2UI belongs on session dashboards
 
-## Triggering agent runs from Canvas
+A2UI widgets render on [session dashboards](/web/dashboards), where they share
+the same pinning, layout, approval, and interaction model as other dashboard
+widgets. Their renderer bundles continue to load from the Gateway's
+`/__openclaw__/a2ui/` asset route.
 
-Canvas can trigger new agent runs via deep links:
+The macOS panel does not accept A2UI push/reset commands and does not
+automatically navigate to an A2UI page.
 
-- `openclaw://agent?...`
+## Migrating documents from a custom root
 
-Example (in JS):
+Run `openclaw doctor --fix` to move documents from the retired
+`plugins.entries.canvas.config.host.root` (or the older `canvasHost.root`) into
+the state directory's `canvas/documents` folder. An explicit plugin root takes
+precedence over the older setting. Doctor removes the root setting only after no
+legacy documents remain. If directory access or a document copy fails, doctor
+warns and retains the source locator for retry. It may move the older setting
+into the plugin config while preserving the path. A root that already points to
+canonical storage, including through a symlink, needs no copy.
 
-```js
-window.location.href = "openclaw://agent?message=Review%20this%20design";
-```
+Fix the reported permissions or target conflict, then rerun the command; do not
+remove the root setting yourself. Hosted routes serve only the canonical folder,
+so remaining legacy documents are unavailable until migration completes.
 
-The app prompts for confirmation unless a valid key is provided.
+## Related
 
-## Security notes
-
-- Canvas scheme blocks directory traversal; files must live under the session root.
-- Local Canvas content uses a custom scheme (no loopback server required).
-- External `http(s)` URLs are allowed only when explicitly navigated.
+- [Show widget](/tools/show-widget)
+- [Session dashboards](/web/dashboards)
+- [macOS app](/platforms/macos)
+- [Nodes](/nodes)
