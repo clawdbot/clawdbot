@@ -118,6 +118,7 @@ async function withFixture(
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
     transcript?: { display?: false; excludeFromContext?: true };
+    keylessAdmission?: boolean;
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
   } = {},
 ) {
@@ -171,7 +172,9 @@ async function withFixture(
             ...options.transcript,
             text: prompt,
             timestamp: 123,
-            idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
+            idempotencyKey: options.keylessAdmission
+              ? undefined
+              : buildRunUserTurnIdempotencyKey(runId),
             senderIsOwner,
             sender: { id: senderId ?? "operator", name: "Operator" },
             transport: { channel: "webchat", messageId: "incoming" },
@@ -828,58 +831,65 @@ describe("canonical descendant lifecycle through real owners", () => {
     );
   }, 180_000);
 
-  it("annotates the pre-admitted Gateway user without replacing its event or read fence", async () => {
-    await withFixture(async (fixture, fork, _revoke, admissions) => {
-      const source = await fixture.adopt();
-      for (const text of ["repeat", "repeat"]) {
-        await fixture.turn(source.sessionKey, text);
-        const { recorder, before } = admissions.at(-1)!;
-        const admission = expectDefined(recorder.getAdmissionReceipt(), "current admission");
-        const target = {
-          ...fixture.identity(source.sessionKey),
-          sessionKey: source.sessionKey,
-          storePath: fixture.storePath,
-        };
-        const after = await loadTranscriptEvents(target);
-        const added = after.at(-1) as {
-          id: string;
-          message: { __openclaw?: Record<string, unknown> };
-        };
-        expect(added.id).toBe(admission.entryId);
-        expect(added.message["__openclaw"]).toMatchObject({
-          mirrorOrigin: "codex-app-server",
-          mirrorIdentity: expect.stringMatching(/:prompt$/),
-          upstreamUserText: text,
-          mirrorSourceFingerprint: expect.any(String),
-        });
-        const original = before.at(-1) as typeof added;
-        const meta = { ...added.message["__openclaw"] };
-        for (const key of [
-          "mirrorIdentity",
-          "upstreamUserText",
-          "mirrorOrigin",
-          "mirrorSourceFingerprint",
-          "runId",
-        ]) {
-          delete meta[key];
-        }
-        expect({ ...added, message: { ...added.message, __openclaw: meta } }).toEqual(original);
-        expect(after.slice(0, -1)).toEqual(before.slice(0, -1));
-        expect(recorder.getPersistedMessage?.()).toEqual(added.message);
-        expect(await readCodexSessionTranscriptEventsBeforeAdmission(target, admission)).toEqual(
-          before.slice(0, -1),
-        );
-        expect(
-          readClosedTranscriptTurn({
-            boundary: { admission, terminal: admission },
-            maxEvents: 100,
-            maxBytes: 100_000,
-          }),
-        ).toMatchObject({ kind: "ok", messages: [added.message] });
-        expect(await fork(source.sessionKey, admission.entryId)).toMatchObject({ ok: true });
-      }
-    });
-  }, 180_000);
+  it.each([false, true])(
+    "annotates the pre-admitted user without replacing its event or read fence (keyless=%s)",
+    async (keylessAdmission) => {
+      await withFixture(
+        async (fixture, fork, _revoke, admissions) => {
+          const source = await fixture.adopt();
+          for (const text of ["repeat", "repeat"]) {
+            await fixture.turn(source.sessionKey, text);
+            const { recorder, before } = admissions.at(-1)!;
+            const admission = expectDefined(recorder.getAdmissionReceipt(), "current admission");
+            const target = {
+              ...fixture.identity(source.sessionKey),
+              sessionKey: source.sessionKey,
+              storePath: fixture.storePath,
+            };
+            const after = await loadTranscriptEvents(target);
+            const added = after.at(-1) as {
+              id: string;
+              message: { __openclaw?: Record<string, unknown> };
+            };
+            expect(added.id).toBe(admission.entryId);
+            expect(added.message["__openclaw"]).toMatchObject({
+              mirrorOrigin: "codex-app-server",
+              mirrorIdentity: expect.stringMatching(/:prompt$/),
+              upstreamUserText: text,
+              mirrorSourceFingerprint: expect.any(String),
+            });
+            const original = before.at(-1) as typeof added;
+            const meta = { ...added.message["__openclaw"] };
+            for (const key of [
+              "mirrorIdentity",
+              "upstreamUserText",
+              "mirrorOrigin",
+              "mirrorSourceFingerprint",
+              "runId",
+            ]) {
+              delete meta[key];
+            }
+            expect({ ...added, message: { ...added.message, __openclaw: meta } }).toEqual(original);
+            expect(after.slice(0, -1)).toEqual(before.slice(0, -1));
+            expect(recorder.getPersistedMessage?.()).toEqual(added.message);
+            expect(
+              await readCodexSessionTranscriptEventsBeforeAdmission(target, admission),
+            ).toEqual(before.slice(0, -1));
+            expect(
+              readClosedTranscriptTurn({
+                boundary: { admission, terminal: admission },
+                maxEvents: 100,
+                maxBytes: 100_000,
+              }),
+            ).toMatchObject({ kind: "ok", messages: [added.message] });
+            expect(await fork(source.sessionKey, admission.entryId)).toMatchObject({ ok: true });
+          }
+        },
+        { keylessAdmission },
+      );
+    },
+    180_000,
+  );
   it.each(["source", "child", "registry"] as const)(
     "fences physical fork writes after %s revocation during configuration wait",
     async (target) => {

@@ -131,6 +131,17 @@ async function mirrorBestEffort(params: {
       turnId: params.turnId,
     });
     params.assertWriteCurrent?.();
+    const recorder = params.params.userTurnTranscriptRecorder;
+    const admission = recorder?.getAdmissionReceipt();
+    const admittedMessage = recorder?.getPersistedMessage?.();
+    const promptIdentity = `${params.turnId}:prompt`;
+    // The host already owns this admission, even when ingress supplied no dedupe key.
+    // Only mirror runtime-owned rows; reuse the annotated admission as recovery evidence.
+    const mirrorMessages = admission
+      ? messages.filter(
+          (message) => message.role !== "user" || readMirrorIdentity(message) !== promptIdentity,
+        )
+      : messages;
     const mirrorResult = await mirror({
       assertWriteCurrent: params.assertWriteCurrent,
       agentId: params.agentId,
@@ -138,7 +149,7 @@ async function mirrorBestEffort(params: {
       sessionId: params.params.sessionId,
       storePath: params.params.sessionTarget?.storePath,
       cwd: params.cwd,
-      messages,
+      messages: mirrorMessages,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
       // with a per-turn `attachCodexMirrorIdentity` value carrying its own
       // turnId, so distinct turns produce distinct dedupe keys via the
@@ -160,6 +171,15 @@ async function mirrorBestEffort(params: {
       prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
     });
+    if (admission && admittedMessage && readMirrorIdentity(admittedMessage) === promptIdentity) {
+      mirrorResult.messagesPresent.unshift(admittedMessage);
+      mirrorResult.anchorsByMirrorIdentity.set(promptIdentity, admission);
+      mirrorResult.userMessageReceipts.push({
+        anchor: admission,
+        message: admittedMessage,
+        appended: false,
+      });
+    }
     for (const receipt of mirrorResult.userMessageReceipts) {
       try {
         params.notifyUserMessagePersisted(receipt);
@@ -285,6 +305,18 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           mirrorOrigin: "codex-app-server",
           mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
         });
+      }
+      const admission = recorder?.getAdmissionReceipt();
+      if (admission) {
+        // Annotation enriches the host's row; appending a provider-keyed copy here
+        // would create duplicate provenance when the original has no idempotency key.
+        params.params.hostCapabilities.assertActive();
+        const message = recorder?.getPersistedMessage?.();
+        if (!message) {
+          throw new Error("current host admission message is unavailable");
+        }
+        params.notifyUserMessagePersisted({ anchor: admission, message, appended: false });
+        return;
       }
       const mirrorResult = await mirror({
         assertCurrent: params.params.hostCapabilities.assertActive,
