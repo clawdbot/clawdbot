@@ -508,6 +508,7 @@ export abstract class MatrixClientBase {
       timeoutMs: opts.readyTimeoutMs,
     });
     throwIfMatrixStartupAborted(opts.abortSignal);
+    await this.configureEncryptorsForJoinedRooms();
     if (opts.bootstrapCrypto && this.autoBootstrapCrypto) {
       await this.bootstrapCryptoIfNeeded(opts.abortSignal);
     }
@@ -515,6 +516,56 @@ export abstract class MatrixClientBase {
     this.started = true;
     this.emitOutstandingInviteEvents();
     await this.refreshDmCache().catch(noop);
+  }
+
+  /**
+   * Retroactively configure encryptors for already-joined encrypted rooms.
+   *
+   * After crypto is initialized, rooms that were joined before
+   * encryption was enabled (or during a previous session) do not
+   * have their encryptors configured because incremental sync
+   * does not re-send `m.room.encryption` state events.
+   *
+   * This scans all joined rooms and calls `onCryptoEvent` for
+   * any room that has an encryption state event on the server.
+   */
+  private async configureEncryptorsForJoinedRooms(): Promise<void> {
+    if (!this.encryptionEnabled) return;
+    try {
+      const crypto = this.client.getCrypto();
+      const rooms = this.client.getRooms();
+      if (!crypto || rooms.length === 0) return;
+      for (const room of rooms) {
+        try {
+          const encContent = await this.client.getStateEvent(
+            room.roomId, "m.room.encryption", "",
+          );
+          if (!encContent) continue;
+          await (
+            crypto as unknown as {
+              onCryptoEvent(
+                room: unknown,
+                event: {
+                  getContent(): unknown;
+                  getType(): string;
+                  getStateKey(): string;
+                  isState(): boolean;
+                },
+              ): Promise<void>;
+            }
+          ).onCryptoEvent(room, {
+            getContent: () => encContent,
+            getType: () => "m.room.encryption",
+            getStateKey: () => "",
+            isState: () => true,
+          });
+        } catch {
+          // Best-effort: skip rooms that fail state fetch or crypto config
+        }
+      }
+    } catch {
+      // Best-effort: don't block startup if something goes wrong
+    }
   }
 
   async prepareForOneOff(): Promise<void> {
