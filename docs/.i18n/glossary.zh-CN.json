@@ -2482,5 +2482,29 @@
   {
     "source": "Codex harness troubleshooting",
     "target": "Codex harness 故障排查"
+  },
+  {
+    "source": "Run tests locally",
+    "target": "本地运行测试"
+  },
+  {
+    "source": "Control UI, TUI, and E2E lanes",
+    "target": "控制 UI、TUI 与 E2E 通道"
+  },
+  {
+    "source": "Docker test suites",
+    "target": "Docker 测试套件"
+  },
+  {
+    "source": "Test performance and benchmarks",
+    "target": "测试性能与基准"
+  },
+  {
+    "source": "Test runner internals",
+    "target": "测试运行器内部机制"
+  },
+  {
+    "source": "Remote test proof",
+    "target": "远程测试验证"
   }
 ]

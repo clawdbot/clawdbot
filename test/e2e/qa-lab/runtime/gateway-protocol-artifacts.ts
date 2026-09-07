@@ -474,7 +474,9 @@ async function runGatewayProtocolArtifactsProducer(
         "scripts/protocol-gen-swift.ts",
         "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayProtocolGeneratedModelsTests.swift",
       ],
-      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test.md"],
+      // The testing reference is an index over docs/reference/test/*; point at
+      // the page that owns the commands this proof runs, not the index.
+      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test/local.md"],
       id: "gateway-protocol-artifacts",
       sourcePath: SOURCE_PATH,
       title: "Gateway published protocol artifacts",
