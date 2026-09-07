@@ -691,6 +691,56 @@ describe("terminal resolution", () => {
     });
   });
 
+  it("settles a heartbeat reasoning-only stop from the prepared silence contract", async () => {
+    // Reply preparation resolves this exact contract for heartbeat triggers
+    // (get-reply-run-context). The declared contract is what keeps the
+    // reasoning-only stop out of the visible-answer retry family; the legacy
+    // undeclared shape must keep retrying so the flip stays attributable to
+    // the contract and not to unrelated policy.
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_heartbeat", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const prepared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: {
+        trigger: "heartbeat",
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+      },
+    });
+    const settled = await resolveEmbeddedRunTerminal(prepared);
+    // The settled producer normalizes the silence into the explicit silent
+    // reply token; downstream heartbeat delivery classifies it as silent.
+    expect(settled).toMatchObject({
+      action: "complete",
+      result: { payloads: [{ text: SILENT_REPLY_TOKEN }] },
+    });
+    if (settled.action === "complete") {
+      expect(settled.result.meta.error).toBeUndefined();
+    }
+
+    const undeclared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "heartbeat", allowEmptyAssistantReplyAsSilent: false },
+    });
+    await expect(resolveEmbeddedRunTerminal(undeclared)).resolves.toEqual({ action: "retry" });
+  });
+
   it("does not surface a read-only presentation after a sibling side effect", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",

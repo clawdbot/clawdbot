@@ -898,6 +898,36 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
   });
 
+  it("declares the heartbeat silence contract into the runner run params", async () => {
+    // The wake stage passes isHeartbeat straight into this preparation layer.
+    // The contract must survive into the run params the embedded runner reads:
+    // an undeclared heartbeat contract classifies a reasoning-only stop as a
+    // provider failure and the visible-answer retry force-delivers an
+    // unsolicited channel message.
+    await runPrepared({
+      opts: { isHeartbeat: true } as never,
+      ctx: {
+        ...createInboundBody("Heartbeat check-in"),
+        ThreadHistoryBody: "Earlier direct message",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        ChatType: "direct",
+      },
+      sessionCtx: {
+        ...createSessionBody("Heartbeat check-in"),
+        ThreadHistoryBody: "Earlier direct message",
+        Provider: "slack",
+        ChatType: "direct",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+      },
+    });
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("optional");
+  });
+
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
     await runPrepared({
       ctx: {
