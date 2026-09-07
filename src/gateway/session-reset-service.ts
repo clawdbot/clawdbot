@@ -58,7 +58,10 @@ import {
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  resolveResetPreservedDisplayState,
+  resolveResetPreservedSelection,
+} from "../config/sessions/reset-preserved-selection.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -1753,12 +1756,7 @@ export async function performGatewaySessionReset(params: {
             spawnDepth: currentEntry?.spawnDepth,
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
-            label: currentEntry?.label,
-            icon: currentEntry?.icon,
-            category: currentEntry?.category,
-            boardFace: currentEntry?.boardFace,
-            visibility: currentEntry?.visibility,
-            displayName: currentEntry?.displayName,
+            ...resolveResetPreservedDisplayState({ entry: currentEntry }),
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
             groupId: currentEntry?.groupId,

@@ -818,6 +818,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         sessionId: "existing-fast-reset-usage",
         updatedAt: Date.now(),
         responseUsage: "full",
+        icon: "🛠️",
+        color: "green",
       },
     });
 
@@ -836,6 +838,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionEntry.responseUsage).toBe("full");
+    expect(result.sessionEntry).toMatchObject({ icon: "🛠️", color: "green" });
   });
 
   it("preserves the exact multiline reset payload during fast bootstrap", () => {

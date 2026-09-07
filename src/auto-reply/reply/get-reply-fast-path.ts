@@ -5,7 +5,10 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
+import {
+  resolveResetPreservedDisplayState,
+  resolveResetPreservedSelection,
+} from "../../config/sessions/reset-preserved-selection.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
@@ -170,6 +173,10 @@ export function initFastReplySessionState(params: {
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
     : {};
+  const resetPreservedDisplayState =
+    resetTriggered && existingEntry
+      ? resolveResetPreservedDisplayState({ entry: existingEntry })
+      : {};
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -196,6 +203,7 @@ export function initFastReplySessionState(params: {
         }
       : {}),
     ...resetPreservedSelection,
+    ...resetPreservedDisplayState,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,

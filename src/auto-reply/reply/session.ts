@@ -23,7 +23,10 @@ import {
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
+import {
+  resolveResetPreservedDisplayState,
+  resolveResetPreservedSelection,
+} from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
@@ -416,9 +419,16 @@ function resolveReplySessionRolloverState(
   sessionKey: string,
 ): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
+  const preservedDisplayState = resolveResetPreservedDisplayState({ entry });
   // Stable ACP rows predate durable creation stamps. Preserve their restrictions
   // fail-closed so rollover cannot turn an existing child into a root session.
   const preserveSpawnLineage = isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
+  log.debug("preserving session reset display state", {
+    sessionKey,
+    preservedDisplayFields: Object.entries(preservedDisplayState)
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
+  });
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,
@@ -430,8 +440,7 @@ function resolveReplySessionRolloverState(
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
-    label: entry.label,
-    displayName: entry.displayName,
+    ...preservedDisplayState,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
