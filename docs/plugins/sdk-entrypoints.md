@@ -22,6 +22,23 @@ plugin supports.
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
+## Tool policy vocabulary
+
+`openclaw/plugin-sdk/tool-policy` exposes core's synchronous policy primitives:
+
+- `expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
+  core groups, and returns unique tool ids in catalog order.
+- `createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
+  matcher for tool names. Deny entries win, an empty allow list is unrestricted,
+  and `*` patterns and aliases use core normalization. Set the second argument
+  to `false` to disable the runtime compatibility where allowing `write` also
+  allows `apply_patch`.
+
+For conformance coverage, negate a matcher built with `{ deny: entries }`;
+this keeps an empty coverage list false and avoids allow-side compatibility.
+Prepare matchers for one synchronous operation; do not retain an authorization
+decision across awaited work.
+
 ## Package entries
 
 Installed plugins point `package.json` `openclaw` fields at both source and

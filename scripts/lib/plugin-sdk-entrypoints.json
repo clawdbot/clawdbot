@@ -2,6 +2,7 @@
   "core",
   "provider-setup",
   "sandbox",
+  "tool-policy",
   "routing",
   "runtime",
   "health",
