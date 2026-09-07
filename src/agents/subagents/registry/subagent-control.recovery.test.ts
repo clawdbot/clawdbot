@@ -23,6 +23,7 @@ import {
   registerAgentRunContext,
   clearAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionLifecycle from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
@@ -227,9 +228,6 @@ it.each(
     const recoveryRuntime: GatewayRecoveryRuntime = {
       dispatchAgent: dispatchRecovery as GatewayRecoveryRuntime["dispatchAgent"],
       waitForAgent: async () => await new Promise<never>(() => {}),
-      abortAgent: async () => {
-        throw new Error("unexpected recovery abort");
-      },
       sendRecoveryNotice: async () => {
         throw new Error("unexpected recovery notice");
       },
@@ -238,6 +236,7 @@ it.each(
       recoveryRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
+    bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
     // Await the scheduled empty sweep before adding live rows. Process-wide
     // timer counts also include independently owned worker idle timers.
     const startupSweep = createDeferred();

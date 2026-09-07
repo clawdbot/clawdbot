@@ -86,10 +86,29 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+After a Gateway restart, the first ordinary `models.list` or `/models` browse
+initializes provider inventory. A bounded request may show configured models while
+discovery finishes; later reads reuse the completed inventory. Startup, turn-path
+reads, and `models.list` with `preparedOnly: true` do not start discovery.
+For models configured to use a CLI runtime, channel picker availability follows that
+runtime's prepared authentication; a provider API key does not substitute for its
+native login.
+
 Once the Gateway has discovered a provider inventory, model-selection hot reloads
 retain it without running discovery again. Aliases, policy, and runtime capabilities
-use the new configuration. Explicit catalog refresh replaces that inventory;
-changes to its provider, plugin, auth, environment, or workspace scope invalidate it.
+use the new configuration. A successful catalog refresh replaces that inventory,
+including a successful empty account list. Metadata alone cannot refill that list;
+explicitly configured models and independent native runtime catalogs remain.
+When a provider reports failed discovery, the Gateway retains its last compatible
+inventory and reports the failed outcome while healthy providers update. Without
+compatible inventory, the Gateway publishes the provider's prepared starter rows
+with the failed outcome, even when strict discovery returns no rows.
+They cannot widen a retained successful list, including an empty list. Changes to
+provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
+
+A successful provider result takes precedence over retained rows, even when
+another credential reports failure. Catalog results describe one provider's model
+list; OpenClaw does not guess which old models belonged to each credential.
 
 Full mechanics: [Model failover](/concepts/model-failover).
 
@@ -315,7 +334,7 @@ The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
 At publish time, it also hydrates model ids and metadata from models.dev for
 providers whose owning plugin explicitly opts in with
-[`modelCatalog.modelsDev`](/plugins/manifest#modelcatalog-reference). Each mapping
+[`modelCatalog.modelsDev`](/plugins/manifest/models#modelcatalog-reference). Each mapping
 names the upstream provider once, rather than mapping individual models; there
 is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
@@ -344,7 +363,7 @@ disable every hosted catalog request with `models.catalogRefresh.enabled:
 false`. When disabled, pricing stays at bundled and explicitly configured
 values. A self-hosted mirror can be selected with an HTTPS
 `models.catalogRefresh.url` (or localhost HTTP for testing); see
-[configuration reference](/gateway/configuration-reference#models).
+[configuration reference](/gateway/config-runtime#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 

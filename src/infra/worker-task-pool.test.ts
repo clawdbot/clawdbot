@@ -1,18 +1,29 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { channel } from "node:diagnostics_channel";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
 const pools: WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>[] = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const trackWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
+const workers = vi.hoisted(() => [] as Worker[]);
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        // Observe real workers even on runtimes without worker diagnostics events.
+        workers.push(this);
+      }
+    },
+  };
+});
 
 function createPool(
   options: ConstructorParameters<typeof WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>>[0] = {
@@ -27,10 +38,8 @@ function createPool(
   return pool;
 }
 
-beforeEach(() => workerChannel.subscribe(trackWorker));
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
-  workerChannel.unsubscribe(trackWorker);
   for (const worker of workers.splice(0)) {
     expect(worker.threadId).toBe(-1);
   }
@@ -262,16 +271,24 @@ describe("worker task pool", () => {
     expect(stdout.trim()).toBe("finished");
   }, 20_000);
 
-  it("releases parent inputs while their worker copies are still executing", async () => {
-    await promisify(execFile)(
-      process.execPath,
-      [
-        "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./worker-task-pool.retention.test-support.ts", import.meta.url)),
-      ],
-      { timeout: 20_000 },
-    );
-  }, 25_000);
+  it.each([
+    {
+      name: "releases parent inputs while their worker copies are still executing",
+      entrypoint: new URL("./worker-task-pool.retention.test-support.ts", import.meta.url),
+    },
+    {
+      name: "releases delivered replies while their worker remains warm",
+      entrypoint: new URL("./worker-task-pool.reply-retention.test-support.ts", import.meta.url),
+    },
+  ])(
+    "$name",
+    async ({ entrypoint }) => {
+      await promisify(execFile)(
+        process.execPath,
+        ["--expose-gc", "--import", "tsx", fileURLToPath(entrypoint)],
+        { timeout: 20_000 },
+      );
+    },
+    25_000,
+  );
 });

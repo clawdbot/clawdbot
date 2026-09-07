@@ -1,6 +1,7 @@
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
 
+import { validateToolArguments } from "@openclaw/ai/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -256,7 +257,15 @@ describe("Tool Search", () => {
         ],
       }),
     ).toBe(true);
-    expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
+    // Argument validation runs before execute; the parser owns empty/null handling.
+    for (const input of [
+      { queries: [] },
+      { query: null, queries: [{ query: "calendar" }] },
+      { query: "calendar", queries: [] },
+      { query: "calendar", queries: null },
+    ]) {
+      expect(Value.Check(limitSearchTool.parameters, input)).toBe(true);
+    }
     expect(
       Value.Check(limitSearchTool.parameters, {
         queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
@@ -274,16 +283,21 @@ describe("Tool Search", () => {
     {
       label: "missing request",
       input: {},
-      error: "provide exactly one of query or queries",
+      error: "provide query or queries",
     },
     {
-      label: "mixed single and batch request",
-      input: { query: "calendar", queries: [{ query: "Slack" }] },
-      error: "provide exactly one of query or queries",
+      label: "null request",
+      input: { query: null, queries: null },
+      error: "provide query or queries",
     },
     {
       label: "empty batch",
       input: { queries: [] },
+      error: "queries must be a non-empty array",
+    },
+    {
+      label: "empty batch beside an empty query",
+      input: { query: "", queries: [] },
       error: "queries must be a non-empty array",
     },
     {
@@ -391,6 +405,132 @@ describe("Tool Search", () => {
     );
 
     await expect(searchTool.execute("call-unicode-query", { query })).resolves.toBeDefined();
+  });
+
+  function validatedSearchFixture() {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        pluginTool("fake_calendar", "calendar events surface"),
+        pluginTool("fake_slack_messages", "Slack messages surface"),
+        pluginTool("fake_slack_channels", "Slack channels surface"),
+        pluginTool("fake_slack_users", "Slack users surface"),
+      ],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({
+        catalogRef,
+        config: {
+          tools: { toolSearch: { mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 50 } },
+        },
+      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "validated search tool",
+    );
+    const execute = async (input: Record<string, unknown>) => {
+      const args = validateToolArguments(searchTool, {
+        type: "toolCall",
+        id: "call-validated-search",
+        name: searchTool.name,
+        arguments: input,
+      });
+      return searchTool.execute("call-validated-search", args);
+    };
+    return { catalogRef, execute };
+  }
+
+  it("preserves scalar-first order and distinct limits for duplicate mixed queries", async () => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    const scalar = await execute({ query: "Slack", limit: 1 });
+    const result = await execute({
+      query: " Slack ",
+      limit: 1,
+      queries: [
+        { query: "calendar", limit: 1 },
+        { query: "Slack", limit: 2 },
+        { query: "Slack", limit: 3 },
+      ],
+    });
+    expect(result.details).toEqual({
+      results: [
+        { query: "Slack", candidates: scalar.details },
+        { query: "calendar", candidates: [expect.objectContaining({ name: "fake_calendar" })] },
+        { query: "Slack", candidates: expect.any(Array) },
+        { query: "Slack", candidates: expect.any(Array) },
+      ],
+    });
+    const groups = resultDetails(result).results as Array<{ candidates: unknown[] }>;
+    expect(groups.map((group) => group.candidates.length)).toEqual([1, 1, 2, 3]);
+    expect(catalogRef.current?.searchCount).toBe(5);
+  });
+
+  it.each([undefined, null, "", "  "])(
+    "serves batch placeholders with scalar query %j through argument validation",
+    async (query) => {
+      const { execute } = validatedSearchFixture();
+      const expected = await execute({ queries: [{ query: "Slack", limit: 1 }] });
+      for (const limit of [undefined, null]) {
+        const result = await execute({ query, limit, queries: [{ query: "Slack", limit: 1 }] });
+        expect(result).toEqual(expected);
+      }
+    },
+  );
+
+  it.each([{ queries: undefined }, { queries: null }, { queries: [] }])(
+    "preserves scalar results beside batch placeholder $queries",
+    async ({ queries }) => {
+      const { execute } = validatedSearchFixture();
+      const expected = await execute({ query: "Slack" });
+      expect(Array.isArray(expected.details)).toBe(true);
+      expect(expected.details).toHaveLength(2);
+      expect(await execute({ query: "Slack", limit: null, queries })).toEqual(expected);
+    },
+  );
+
+  it.each([
+    {},
+    { query: null, limit: null, queries: null },
+    { query: null, limit: null, queries: [] },
+    { query: "", limit: null, queries: [] },
+    { query: "  ", limit: null, queries: [] },
+  ])("rejects missing searches after argument validation: %j", async (input) => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    await expect(execute(input)).rejects.toThrow(/provide query or queries|non-empty array/);
+    expect(catalogRef.current?.searchCount).toBe(0);
+  });
+
+  it.each([1, 0, false, "", -1, 1.5, "invalid"])(
+    "does not discard non-null top-level batch limit %j",
+    async (limit) => {
+      const { catalogRef, execute } = validatedSearchFixture();
+      await expect(execute({ query: null, limit, queries: [{ query: "Slack" }] })).rejects.toThrow(
+        /Validation failed|set limit on each batch query/,
+      );
+      expect(catalogRef.current?.searchCount).toBe(0);
+    },
+  );
+
+  it.each([
+    {
+      input: { query: "Slack", limit: 25, queries: [{ query: "Slack", limit: 26 }] },
+      error: "resolve to 51 results",
+    },
+    {
+      input: {
+        query: "Slack",
+        limit: 1,
+        queries: Array.from({ length: 16 }, () => ({ query: "Slack", limit: 1 })),
+      },
+      error: "at most 16 entries",
+    },
+    {
+      input: { query: "é".repeat(127), limit: 1, queries: [{ query: "é".repeat(127), limit: 1 }] },
+      error: "at most 512 UTF-8 bytes",
+    },
+  ])("counts the scalar duplicate toward batch budgets: $error", async ({ input, error }) => {
+    const { catalogRef, execute } = validatedSearchFixture();
+    await expect(execute(input)).rejects.toThrow(error);
+    expect(catalogRef.current?.searchCount).toBe(0);
   });
 
   it("accepts the documented batch boundaries without deduplicating queries", async () => {

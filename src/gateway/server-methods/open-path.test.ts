@@ -11,7 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
-import { execOpenPath, resolveOpenPathCommand } from "./open-path.js";
+import { execOpenPath, isHeadlessOpenPathError, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
   const unref = vi.fn();
@@ -160,5 +160,41 @@ describe("execOpenPath", () => {
     const expectedMessage = `Command failed with exit code 3: xdg-open: ${"x".repeat(4_095)}`;
     expect(message).toBe(expectedMessage);
     expect(message).toHaveLength(expectedMessage.length);
+  });
+});
+
+describe("isHeadlessOpenPathError", () => {
+  it.each([
+    { platform: "linux", command: "xdg-open", code: "ENOENT", expected: true },
+    { platform: "linux", command: "xdg-open", code: "EACCES", expected: false },
+    { platform: "linux", command: "other-opener", code: "ENOENT", expected: false },
+    { platform: "darwin", command: "open", code: "ENOENT", expected: false },
+    { platform: "win32", command: "powershell.exe", code: "ENOENT", expected: false },
+    { platform: "freebsd", command: "xdg-open", code: "ENOENT", expected: false },
+  ] as const)("classifies $platform $command $code", ({ platform, command, code, expected }) => {
+    const error = Object.assign(new Error("Launcher failed"), { code });
+    expect(isHeadlessOpenPathError(error, { command, args: ["/tmp/workspace"] }, platform)).toBe(
+      expected,
+    );
+  });
+
+  it("preserves the installed xdg-open handlerless diagnostic", () => {
+    expect(
+      isHeadlessOpenPathError(
+        new Error("xdg-open: no method available for opening '/tmp/workspace'"),
+        resolveOpenPathCommand("/tmp/workspace", "linux"),
+        "linux",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not classify a handler diagnostic containing ENOENT as a missing launcher", () => {
+    expect(
+      isHeadlessOpenPathError(
+        new Error("Command failed with exit code 1: xdg-open /tmp/ENOENT-workspace"),
+        resolveOpenPathCommand("/tmp/ENOENT-workspace", "linux"),
+        "linux",
+      ),
+    ).toBe(false);
   });
 });

@@ -96,7 +96,9 @@ Routing picks **one agent** for each inbound message:
 6. **Team match** (Slack) via `teamId`.
 7. **Account match** (`accountId` on the channel).
 8. **Channel match** (any account on that channel, `accountId: "*"`).
-9. **Default agent** (`agents.entries.*.default`, else first list entry, fallback to `main`).
+9. **Fallback owner**: an owner supplied by the caller, otherwise the sole configured agent or a retained legacy owner. Multiple agents without an owner require a matching binding; routing does not pick the first roster entry.
+
+Raw legacy default markers and the `main` fallback for raw configurations without an agent roster remain supported for compatibility.
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 

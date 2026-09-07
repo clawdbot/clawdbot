@@ -1,5 +1,11 @@
 function historyMessage(role: "assistant" | "user", text: string, timestamp: number) {
-  return { content: [{ type: "text", text }], role, timestamp };
+  return {
+    content: [{ type: "text", text }],
+    role,
+    timestamp,
+    __openclaw:
+      role === "user" ? { senderId: "mock-operator", senderName: "Riley Example" } : undefined,
+  };
 }
 
 function finishedTask(n: number, now: number) {

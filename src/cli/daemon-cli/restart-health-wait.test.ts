@@ -614,4 +614,25 @@ describe("restart health", () => {
     expect(snapshot.elapsedMs).toBe(4_000);
     expect(sleep).toHaveBeenCalledTimes(4);
   });
+
+  it("cancels a migration-extended wait before another health inspection", async () => {
+    const controller = new AbortController();
+    const aborted = new Error("repair-budget");
+    inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
+    sleep.mockImplementationOnce(async () => {
+      controller.abort(aborted);
+    });
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    await expect(
+      waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        attempts: 1,
+        delayMs: 60_000,
+        isStartupMigrationActive: () => true,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(aborted);
+    expect(inspectPortUsage).toHaveBeenCalledOnce();
+  });
 });

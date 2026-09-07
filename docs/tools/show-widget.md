@@ -36,6 +36,8 @@ OpenClaw exposes `show_widget` only when the originating Gateway client declares
 
 An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
+When the Gateway automatically resumes an interrupted Control UI turn after a restart, the recovered turn can also create or update pinned dashboard widgets without a connected browser. Recovery uses the same pinned-only surface: set `pin: true` and omit `presentation.target`. Inline previews still require a new turn from a client that declares `inline-widgets`; the resumed turn does not inherit a browser connection or device presentation rights.
+
 Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` remain fail closed unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
 
 ## Design system
@@ -281,7 +283,7 @@ Widget documents use restrictive Content Security Policies. Inline style and scr
 
 The Control UI's widget content iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. With scripts enabled, the outer proxy runs on a dedicated origin and relays messages across the frame boundary. In `strict` mode, the Control UI still reads the document through its authenticated Gateway connection, but renders it without scripts or scripted interactions. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 
-The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
+The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui/chat#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
 
 The accepted WebRTC data-channel egress residual is documented in [Dashboard Architecture](/web/dashboard-architecture#modeled-residual-webrtc-data-channels).
 
@@ -289,7 +291,7 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 ## Related
 
-- [Control UI hosted embeds](/web/control-ui#hosted-embeds)
+- [Control UI hosted embeds](/web/control-ui/chat#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
 - [macOS widget panel](/platforms/mac/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)

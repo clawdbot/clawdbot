@@ -44,7 +44,8 @@ describe("Windows Gateway task supervisor", () => {
       expect.objectContaining({
         mode: "anchored-shell",
         command: expect.stringContaining("gateway"),
-        sessionId: "gateway-task-supervisor",
+        scopeKey: `gateway-task-supervisor:${process.pid}`,
+        captureOutput: false,
       }),
     );
     expect(spawn.mock.calls[0]?.[0].command).not.toMatch(/"--task-supervisor"(?:\s|$)/u);

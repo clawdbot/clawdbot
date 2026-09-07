@@ -54,6 +54,7 @@ vi.mock("ws", () => ({
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 
 async function waitForFakeSocket(index = 0): Promise<FakeWebSocketInstance> {
+  await vi.dynamicImportSettled();
   let socket: FakeWebSocketInstance | undefined;
   await vi.waitFor(() => {
     socket = FakeWebSocket.instances[index];

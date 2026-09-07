@@ -8,6 +8,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
@@ -1465,46 +1466,62 @@ describe("package-mac-app plist stamping", () => {
     expect(dev.stdout).toContain("reached-build");
   });
 
-  it("falls back to corepack pnpm when the pnpm shim is absent", () => {
-    const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
-    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    const logPath = path.join(tempRoot, "corepack.log");
+  for (const { name, runner, expectedCommands } of [
+    {
+      name: "uses pnpm when Corepack is absent",
+      runner: "pnpm",
+      expectedCommands: ["install --frozen-lockfile --config.node-linker=hoisted", "build"],
+    },
+    {
+      name: "falls back to corepack pnpm when the pnpm shim is absent",
+      runner: "corepack",
+      expectedCommands: [
+        "pnpm --version",
+        "pnpm install --frozen-lockfile --config.node-linker=hoisted",
+        "pnpm build",
+      ],
+    },
+  ] as const) {
+    it(name, () => {
+      const helperBlock = getPackageManagerHelperBlock();
+      const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+      const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+      const logPath = path.join(tempRoot, "corepack.log");
 
-    const corepackPath = path.join(toolsDir, "corepack");
-    writeFileSync(
-      corepackPath,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        "  echo '11.2.2'",
-        "fi",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(corepackPath, 0o755);
+      symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+      const runnerPath = path.join(toolsDir, runner);
+      writeFileSync(
+        runnerPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+          'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+          "  echo '11.2.2'",
+          "fi",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(runnerPath, 0o755);
 
-    const result = runHelper(`
+      const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm install --frozen-lockfile --config.node-linker=hoisted
       run_pnpm build
     `);
 
-    expect(result.status).toBe(0);
-    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-      `${tempRoot}|pnpm --version`,
-      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
-      `${tempRoot}|pnpm build`,
-    ]);
-  });
+      expect(result.status).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+        expectedCommands.map((command) => `${tempRoot}|${command}`),
+      );
+    });
+  }
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
@@ -1512,6 +1529,8 @@ describe("package-mac-app plist stamping", () => {
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
+    symlinkSync("/bin/bash", path.join(toolsDir, "bash"));
+    symlinkSync("/usr/bin/grep", path.join(toolsDir, "grep"));
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -1553,7 +1572,7 @@ describe("package-mac-app plist stamping", () => {
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
       run_pnpm --version
@@ -1571,17 +1590,10 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
-    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
-    // the detection this test needs to fail; an empty cache with network disabled
-    // keeps "corepack pnpm is unavailable" true everywhere.
-    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
-
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      export COREPACK_HOME=${JSON.stringify(corepackHome)}
-      export COREPACK_ENABLE_NETWORK=0
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);
@@ -2295,9 +2307,9 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6",
+      "0bc95dab9543eec416b1c840754eea8bc8a53a7ffcae93dfef7f1825a7938b84",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

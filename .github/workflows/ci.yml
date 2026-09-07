@@ -1307,6 +1307,8 @@ jobs:
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+          const fullNativeValidation =
+            eventName === "workflow_dispatch" && !releaseGate && releaseScope === "full";
           if (releaseScope !== "full" && !npmQualification) {
             throw new Error("release_scope must be full, npm-beta, or npm-stable");
           }
@@ -1439,6 +1441,16 @@ jobs:
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
           const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
+          const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+          // Unit tests do not compile the benchmark. Keep its build when inputs
+          // change, or when the existing changed-path manifest cannot narrow scope.
+          const androidBenchmarkChanged = !changedPaths?.length || changedPaths.some((path) =>
+            !path.trim() ||
+            matchesGlob(path, "apps/android/{benchmark,buildSrc,build-logic,gradle,Config}/**") ||
+            matchesGlob(path, "apps/android/**/*.gradle{,.kts}") ||
+            matchesGlob(path, "apps/android/**/gradle.properties") ||
+            matchesGlob(path, "apps/android/gradlew{,.bat}"),
+          );
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
@@ -1585,6 +1597,28 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          // Grouped rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets retain the same projection
+          // as legacy JSON because their shard runner predates the codec.
+          const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
+          const nodeTestGroupsCodec =
+            rawNodeTestShards.some((shard) => shard.groups) &&
+            existsSync(nodeTestGroupsCodecPath)
+              ? await importTargetPlan(nodeTestGroupsCodecPath)
+              : null;
+          const encodeNodeTestGroups = (groups) => {
+            if (typeof nodeTestGroupsCodec?.encodeNodeTestGroups !== "function") {
+              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
+            }
+            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
+          };
+          const projectNodeTestGroup = ({
+            configs,
+            env,
+            includePatterns,
+            shard_name,
+            timing_key,
+          }) => ({ configs, env, includePatterns, shard_name, timing_key });
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1594,12 +1628,16 @@ jobs:
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
-            .map((shard) => ({
+            .map((shard) => {
+              const groups = shard.groups?.map(projectNodeTestGroup);
+              return {
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
-                groups: shard.groups,
+                groups_gzip_base64:
+                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups: groups && !nodeTestGroupsCodec ? groups : undefined,
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
@@ -1634,8 +1672,9 @@ jobs:
                       ) ||
                       (group.shard_name === "agentic-agents-support" &&
                         !group.includePatterns),
-                  ),
-              }));
+                   ),
+              };
+            });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
           const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
@@ -1783,19 +1822,34 @@ jobs:
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
-                    { check_name: "android-test-third-party", task: "test-third-party" },
-                    ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
-                      : []),
                     {
-                      check_name: "android-build-play",
-                      task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                      check_name: "android-test-third-party",
+                      task: "test-third-party",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
+                    ...(!useCompatibleAndroidCi
+                      ? [{
+                          check_name: "android-test-wear",
+                          task: "test-wear",
+                          ...(androidTestTier ? { lint: true } : {}),
+                        }]
+                      : []),
+                    ...(!androidTestTier
+                      ? [{
+                          check_name: "android-build-play",
+                          task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                        }]
+                      : []),
                     ...(!useCompatibleAndroidCi
                       ? [
-                          { check_name: "android-build-wear", task: "build-wear" },
-                          { check_name: "android-ktlint", task: "ktlint" },
+                          ...(!androidTestTier ? [{ check_name: "android-build-wear", task: "build-wear" }] : []),
+                          {
+                            check_name: "android-ktlint",
+                            task: "ktlint",
+                            ...(androidTestTier && androidBenchmarkChanged ? { build_benchmark: true } : {}),
+                          },
                         ]
                       : []),
                   ]
@@ -2763,11 +2817,14 @@ jobs:
             ui/src/e2e/mcp-app-conformance.e2e.test.ts \
             ui/src/e2e/control-ui-auth-transports.e2e.test.ts \
             ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts \
+            ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
+            ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
@@ -3400,6 +3457,7 @@ jobs:
           path: .ci-workflow
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
+            scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
@@ -3430,7 +3488,8 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
@@ -3451,7 +3510,7 @@ jobs:
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node --import tsx "$runner"
+          time -p node --import tsx "$runner"
 
       - &runner_memory_peak_step
         name: Record runner memory peak
@@ -4507,19 +4566,20 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    # Release products are not inputs to the debug/coverage test graph. Keep
-    # both cold builds mandatory without charging one worker their combined time.
+    # Debug/coverage tests remain required; full validation adds an independent
+    # optimized build whose products are not inputs to the test graph.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: [release, tests]
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
@@ -4555,7 +4615,7 @@ jobs:
           fi
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
@@ -4661,7 +4721,7 @@ jobs:
           swift --version
 
       - name: Native state schema version contract
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
             node scripts/check-native-state-schema-version.mjs
@@ -4673,7 +4733,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh macos
@@ -4738,6 +4798,14 @@ jobs:
           fi
           swift test "${openclawkit_test_args[@]}"
 
+      - name: Swabble tests
+        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
+          trap 'rm -rf "$swabble_scratch"' EXIT
+          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --no-parallel
+
       - name: Swift test
         id: swift-test
         if: matrix.phase == 'tests'
@@ -4773,7 +4841,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -4791,7 +4859,7 @@ jobs:
           retention-days: 7
 
       - name: Save SwiftPM cache
-        if: matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
@@ -4816,14 +4884,15 @@ jobs:
     name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    # Release device products are not inputs to the simulator test graph.
+    # Automatic CI compiles and lints; full manual validation adds independent
+    # Release device and simulator test phases.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
     # Blacksmith macOS 26 admission stalled while hosted retries completed.
-    # Start both phases on the verified hosted image instead of waiting to retry.
+    # Start each phase on the verified hosted image instead of waiting to retry.
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -4932,7 +5001,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh ios
@@ -4943,7 +5012,7 @@ jobs:
           fi
 
       - name: Build iOS app
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: pnpm ios:build
 
       # Debug's incremental compilation can miss actor-isolation diagnostics
@@ -4998,6 +5067,8 @@ jobs:
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
+            -only-testing:OpenClawTests/LocationServiceCallbackTests \
+            -only-testing:OpenClawTests/LocationServiceOrderingTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
@@ -5089,11 +5160,10 @@ jobs:
       contents: read
     name: "ios-screenshots-${{ matrix.device_family }}"
     # Each shard builds its own simulator app; ios-build produces no input here.
-    # The final CI gate still requires both build and screenshot evidence.
+    # Full manual validation requires both build and screenshot evidence.
     needs: [preflight]
-    # Full manual/release validation always captures. PRs and their exact-head
-    # release-gate substitutes use the same conservative screenshot-risk scope.
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    # PRs and their exact-head release-gate substitutes retain only the build smoke.
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
     runs-on: macos-26
     timeout-minutes: 90
@@ -5237,7 +5307,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -5439,6 +5509,8 @@ jobs:
         env:
           CI_RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
           TASK: ${{ matrix.task }}
+          RUN_LINT: ${{ matrix.lint && 'true' || 'false' }}
+          BUILD_BENCHMARK: ${{ matrix.build_benchmark && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -5447,6 +5519,9 @@ jobs:
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+              fi
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
@@ -5457,10 +5532,16 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintThirdPartyDebug
+              fi
               ;;
             test-wear)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :wear:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :wear:lintDebug
+              fi
               ;;
             build-play)
               if [ "$CI_RUNNER_BACKEND" = "github" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -5504,6 +5585,9 @@ jobs:
                 :benchmark:ktlintCheck \
                 :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
+              if [ "$BUILD_BENCHMARK" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :benchmark:assembleDebug
+              fi
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2
@@ -5549,6 +5633,15 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
+
+      - name: Upload Fleet Docker proof
+        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' fleet-cache ')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fleet-cache-docker-proof
+          path: .artifacts/docker-tests/**/fleet-cache.log
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - *runner_memory_peak_step
 
@@ -5624,8 +5717,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |

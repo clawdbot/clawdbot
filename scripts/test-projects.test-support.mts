@@ -31,7 +31,6 @@ import {
 import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -64,7 +63,6 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
-  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -139,7 +137,16 @@ type ChangedTestTargetPlan = {
 };
 
 type ImportGraphOptions = { tooling?: boolean };
-type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
+type VitestSpecShape = Pick<VitestRunSpec, "config" | "env"> & {
+  cacheAssignment?: VitestCacheAssignment;
+};
+export type VitestCacheAssignment =
+  | { kind: "scheduler"; root: string; leased?: true }
+  | { kind: "caller" };
+type CacheAssignedSpec<T> = Omit<T, "env"> & {
+  env: NodeJS.ProcessEnv;
+  cacheAssignment?: VitestCacheAssignment;
+};
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
@@ -571,7 +578,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
@@ -1219,10 +1225,7 @@ function listExplicitTestTargetFilesFromGit(cwd: string) {
   if (result.status !== 0) {
     return null;
   }
-  return result.stdout
-    .split("\0")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+  return result.stdout.split("\0").filter((line) => line.length > 0 && isImportableGraphFile(line));
 }
 
 function listExplicitTestTargetFilesForCwd(cwd: string) {
@@ -1688,7 +1691,7 @@ function listImportGraphGrepMatches(
   };
   const result = spawnSync(
     "git",
-    ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
   for (const term of missing) {
@@ -1699,10 +1702,7 @@ function listImportGraphGrepMatches(
     // Source archives use the same filesystem inventory and native reader as the full graph.
     const candidates = (
       result.status === 0
-        ? result.stdout
-            .split("\n")
-            .map((line) => normalizePathPattern(line.trim()))
-            .filter((file) => trackedFiles.has(file))
+        ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
@@ -1765,18 +1765,17 @@ function resolveAffectedTestsFromTargetedImportScan(
   cwd: string,
   options: ImportGraphOptions & { direct?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   const tooling = options.tooling === true;
   const files = listImportGraphFilesForCwd(cwd, { tooling });
   const fileSet = new Set(files);
-  if (!fileSet.has(normalized)) {
+  if (!fileSet.has(changedPath)) {
     return [];
   }
 
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
-  let frontier = [normalized];
+  let frontier = [changedPath];
   const seen = new Set(frontier);
   const targets = [];
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
@@ -1844,14 +1843,12 @@ export function hasImportGraphImpactOnTargets(
   cwd = process.cwd(),
   options: ImportGraphOptions = {},
 ) {
-  const changed = new Set(changedPaths.map(normalizePathPattern));
+  const changed = new Set(changedPaths);
   if (changed.size === 0) {
     return false;
   }
   const files = listImportGraphFilesForCwd(cwd, options);
-  const targets = Array.isArray(targetPaths)
-    ? targetPaths.map(normalizePathPattern)
-    : files.filter(targetPaths);
+  const targets = Array.isArray(targetPaths) ? targetPaths : files.filter(targetPaths);
   if (targets.some((file) => changed.has(file))) {
     return true;
   }
@@ -1892,16 +1889,15 @@ function resolveAffectedTestsFromImportGraph(
   cwd: string,
   options: { forceFull?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   if (options.forceFull !== true) {
-    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd);
     if (targetedTargets !== null) {
       return targetedTargets;
     }
   }
 
   const { reverseImports, testFiles } = getImportGraph(cwd);
-  const queue = [normalized];
+  const queue = [changedPath];
   const seen = new Set(queue);
   const targets = [];
 
@@ -3112,10 +3108,9 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 }
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
-  const normalized = normalizePathPattern(changedPath);
   return (
-    listImportGraphGrepMatches(cwd, [normalized], { tooling: true, testFilesOnly: true }).get(
-      normalized,
+    listImportGraphGrepMatches(cwd, [changedPath], { tooling: true, testFilesOnly: true }).get(
+      changedPath,
     ) ?? []
   )
     .filter(
@@ -3123,7 +3118,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
         file !== "test/scripts/test-projects.test.ts" &&
         !file.endsWith(".live.test.ts") &&
         isTestFileTarget(file) &&
-        references.has(normalized),
+        references.has(changedPath),
     )
     .map(({ file }) => file);
 }
@@ -4010,20 +4005,14 @@ export function buildVitestRunPlans(
       kind === "default" &&
       useCliTargetArgs &&
       !watchMode &&
-      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
-        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
-            "node",
-            "vitest",
-            ...forwardedPlanArgs,
-          ])
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim() &&
+      grouped.every((targetArg) => !path.isAbsolute(targetArg))
+        ? uniqueOrdered(grouped.map((targetArg) => toRepoRelativeTarget(targetArg, cwd)))
         : null;
     // CI needs explicit selection metadata. Keep the CLI filters too: the unit
     // config and runner use them for exclude and empty-selection policy.
     const scopedUnitIncludes =
       unitCliIncludes?.length &&
-      grouped.every((targetArg) =>
-        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
-      ) &&
       unitCliIncludes.every(
         (file) =>
           !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
@@ -4301,7 +4290,7 @@ function sanitizeVitestCachePathSegment(value: string) {
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
@@ -4311,11 +4300,12 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {
-      return spec;
+      return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
     return {
       ...spec,
+      cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
         [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
@@ -4327,7 +4317,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
 export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
+): Array<CacheAssignedSpec<T>> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
     return specs;
   }
@@ -4475,7 +4465,7 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
   const candidateFiles = includePatterns.some(isGlobTarget)
-    ? listExplicitTestTargetFilesForCwd(cwd)
+    ? listExplicitTestTargetFilesForCwd(cwd).toSorted()
     : [];
   return uniqueOrdered(
     includePatterns.flatMap((pattern) => {

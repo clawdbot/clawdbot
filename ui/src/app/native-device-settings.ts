@@ -122,7 +122,14 @@ type NativeDeviceSettingsMessage =
   | { type: "request-permission"; id: PermissionId }
   | { type: "open-system-settings"; id: PermissionId }
   | { type: "open"; panel: NativePanel }
-  | { type: "check-for-updates" };
+  | { type: "check-for-updates" }
+  | { type: "install-chrome-extension" };
+
+export type NativeChromeExtensionSetupResult = {
+  nativeHostRegistered: boolean;
+  installRequested: boolean;
+  discoveredProfiles: number;
+};
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
@@ -132,6 +139,7 @@ export type NativeDeviceSettingsCapability = {
   openSystemSettings(id: PermissionId): void;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
+  installChromeExtension(): Promise<NativeChromeExtensionSetupResult>;
   refresh(): void;
   dispose(): void;
 };
@@ -337,6 +345,28 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
     openPanel: (panel) => void send({ type: "open", panel }),
     checkForUpdates: () => void send({ type: "check-for-updates" }),
+    async installChromeExtension() {
+      if (disposed) {
+        throw new Error("Native device settings is unavailable");
+      }
+      const reply = await post({ type: "install-chrome-extension" });
+      if (
+        disposed ||
+        !isRecord(reply) ||
+        typeof reply.nativeHostRegistered !== "boolean" ||
+        typeof reply.installRequested !== "boolean" ||
+        typeof reply.discoveredProfiles !== "number" ||
+        !Number.isSafeInteger(reply.discoveredProfiles) ||
+        reply.discoveredProfiles < 0
+      ) {
+        throw new Error("Native Chrome setup returned an invalid result");
+      }
+      return {
+        nativeHostRegistered: reply.nativeHostRegistered,
+        installRequested: reply.installRequested,
+        discoveredProfiles: reply.discoveredProfiles,
+      };
+    },
     refresh,
     dispose() {
       disposed = true;

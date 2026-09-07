@@ -302,6 +302,13 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+Parallel project runs on macOS and Linux reuse filesystem transforms within
+exclusive worker slots, with separate directories for each Vitest configuration.
+A slot stays owned through preflight, retries, and verified child/group completion;
+uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
+and Windows retain their existing cache ownership. Concurrent invocations still
+need separate cache roots.
+
 Control UI builds report size budgets without enforcing them. Run
 `pnpm ui:check-performance` after a build to enforce absolute budgets, or
 `pnpm ui:check-performance:base <base-commit-sha>` to build and compare both
@@ -338,6 +345,8 @@ The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
+
+Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -464,13 +473,29 @@ package manifests. Local pnpm links remain supported when their targets stay
 inside the checkout. The tsgo wrapper does not create or reuse a shared external
 install; invocations from subdirectories still use the containing checkout as
 the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Native resolution
-itself is not sandboxed: an ancestor install can still enter a successful compiler
-receipt. The owner then fails with `Declaration input escapes checkout`, without
-publishing a success record or pruning obsolete declarations. Warm records use
-the same input check. Use a standalone checkout outside ancestor installs with
-its own `pnpm install` when this occurs; do not remove the ancestor installation
-or weaken input checks.
+to the same native root for validation and actual snapshot reads. Local declaration
+preparation also aligns the compiler's `PWD` with its working directory so shell
+aliases do not change emitted inventory paths. Native resolution itself is not
+sandboxed: an ancestor install can still enter a successful compiler
+receipt. Resolution can read an ancestor's candidate `package.json` while searching
+for declarations, then resolve the import to checkout-local JavaScript. This can
+happen with a complete local frozen install and no external source files in the
+compiler Program; it does not by itself prove an undeclared dependency. Those
+manifests still affect resolution and must remain in the receipt. The owner fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. Warm records use the same input check.
+
+Repair this at checkout provisioning: use a separate physical checkout whose
+ancestor directories do not contain `node_modules`, with the same candidate source
+(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
+Run declaration preparation and dependent lint or package-boundary checks in that
+checkout, so the checks consume its freshly sealed receipts. A symlink to the
+nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
+native ancestor lookup. Do not alter the ancestor installation, add incidental
+dependencies, filter compiler receipts, or transplant declarations to bypass the
+checks. The pinned native compiler's filesystem callback API supports analysis,
+not declaration and build-info emission; native validation does not automatically
+create an isolated checkout.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
@@ -621,12 +646,21 @@ automatically track arbitrary detached work or replace native test-timeout owner
 Other Gateway subsystems can retain documented bounded shutdown behavior, so close
 is not a guarantee of universal subsystem or descendant-process quiescence.
 
-### Retained mocked Control UI proof
+<a id="retained-mocked-control-ui-proof" />
+
+### Retained Control UI proof
 
 For startup ownership changes, exercise authenticated hello before browser recovery migration finishes. Project and environment discovery can start from hello; migration completion must not refetch those catalogs or invalidate an admitted start. Keep changed-owner, process-restart, and late-result fences covered separately. Count storage reads by key around rerenders, typing, and streaming without recording credential values. Compare route payload bytes and loaded module closures separately from timings; CSS ownership changes also need retained screenshots and computed-style or geometry checks across New session and Chat.
 
-Ordinary mocked browser screenshots, recordings, and reports use fresh directories
-for each test attempt or standalone capture invocation. The Node-only
+Migrated mocked and real-Gateway browser proof uses fresh retained directories.
+Scenario captures using `suite.artifactDir`, including Logs and Usage, allocate
+lazily per test attempt; standalone captures allocate per invocation. MCP
+conformance and auth transports each allocate one suite-owned directory after the
+browser-availability check, even when media capture is disabled. Auth transport
+screenshots wait for meaningful content and the presentation owner's finite
+entrance or resize animations, while perpetual descendant activity continues.
+The shared agent-file capture helper allocates once per module evaluation when
+capture is enabled, sharing that directory across the module's scenarios. The Node-only
 `createControlUiE2eArtifactDir(scope, parentDir?)` helper in
 `ui/src/test-helpers/control-ui-e2e-artifacts.ts` prints the actual allocated path.
 An explicit parent wins; otherwise it uses the trimmed existing
@@ -637,9 +671,10 @@ controls preserve the basename and print the relocated path.
 
 Keep capture gates independent from allocation: `OPENCLAW_CAPTURE_UI_PROOF`,
 `OPENCLAW_UI_E2E_RECORD`, and output-presence gates retain their existing meanings.
-Allocate during scenario execution or `beforeEach`, and pass the same owner to
-shared capture helpers so screenshots, reports, and video stay together. Distinguish
-stage names within an attempt. Close the browser context before finalizing video.
+For per-attempt captures, allocate during scenario execution or `beforeEach`.
+Pass the same owner to shared capture helpers so screenshots, reports, and video
+stay together. Distinguish stage names within an attempt. Close the browser context
+before finalizing video.
 
 Successful and failed evidence is retained. Cleanup is manual: remove only exact
 directories that you own and have finished reviewing. Never recursively delete
@@ -658,14 +693,8 @@ Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 
-The real-Gateway auth transport suite also allocates one fresh directory per
-suite invocation. Its screenshots wait for meaningful content and the presentation
-owner's finite entrance or resize animations, while perpetual descendant activity
-continues.
-
-Separate output owners remain: other real-Gateway suites, `chat-outbox-*`, and
-`chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
-mocked proof retention guarantee.
+Separate output owners remain, including `chat-attachment-read-lifecycle`.
+Do not assume unmigrated owners share this retention guarantee.
 
 ### Screenshots during Chromium recordings
 

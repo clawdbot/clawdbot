@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
   stageSessionPendingInput,
+  patchSessionEntryCore,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -174,6 +175,117 @@ describe("chat history model selection defaults", () => {
 
         const response = expectDefined(asOptionalRecord(result), "history response");
         expect(response.defaults).toMatchObject({ modelSelectionTarget: "session" });
+      });
+    },
+  );
+});
+
+describe("chat history sharing projection", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s carries current caller sharing controls on sessionInfo",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "sharing-history",
+          updatedAt: Date.now(),
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        for (const role of ["owner", "admin", "viewer"] as const) {
+          const client = identifiedClient(role);
+          if (role === "admin") {
+            client.connect.scopes = ["operator.admin"];
+          }
+          const respond = vi.fn<RespondFn>();
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: scope,
+            client,
+            context: createDirectChatContext(),
+            respond,
+            req: { type: "req", id: "sharing-history", method },
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: "sharing-history",
+                sharingRole: role,
+                visibility: "read-only",
+              }),
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s refreshes sharing after startup work and rejects a replaced session",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "sharing-history-race",
+          updatedAt: Date.now(),
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        const client = identifiedClient("viewer");
+        client.connect.scopes = ["operator.admin"];
+        const readChatStartupProjection = vi.fn(async () => {
+          client.connect.scopes = ["operator.read", "operator.write"];
+          await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+          return undefined;
+        });
+        const context = createDirectChatContext({ readChatStartupProjection });
+        const call = async () => {
+          const respond = vi.fn<RespondFn>();
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: scope,
+            client,
+            context,
+            respond,
+            req: { type: "req", id: "sharing-history-race", method },
+            isWebchatConnect: () => false,
+          });
+          return respond;
+        };
+        expect(await call()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            sessionInfo: expect.objectContaining({
+              sharingRole: "viewer",
+              visibility: "read-only",
+            }),
+          }),
+        );
+        readChatStartupProjection.mockImplementationOnce(async () => {
+          await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+          return undefined;
+        });
+        expect(await call()).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+        readChatStartupProjection.mockImplementationOnce(async () => {
+          await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
+          return undefined;
+        });
+        expect(await call()).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+        );
       });
     },
   );

@@ -8,8 +8,6 @@ import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 
-type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
-
 export function createGatewayNodeWorkerBundleInstaller(options: {
   gatewayNamespace: string;
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
@@ -17,7 +15,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
 }) {
   return async (params: {
     deviceId: string;
-    artifact: WorkerBundleArtifact;
+    artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
     prewarm: boolean;
     signal?: AbortSignal;
   }) => {
@@ -34,7 +32,11 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       throw new Error("Device worker node is not connected with the installer dialect");
     }
     const { artifact } = params;
-    const isAuthorized = () => !params.signal?.aborted && transport.isCurrent(node);
+    const isAuthorized = () =>
+      !params.signal?.aborted && options.getTransport() === transport && transport.isCurrent(node);
+    if (!isAuthorized()) {
+      throw new Error("Device worker installation connection is no longer current");
+    }
     const bundlePrewarm =
       params.prewarm && (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
         ? WORKER_BUNDLE_PREWARM_VERSION
@@ -57,6 +59,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         isDispatchAuthorized: isAuthorized,
         ...(params.signal ? { signal: params.signal } : {}),
       });
+      if (!isAuthorized()) {
+        throw new Error("Device worker installation connection is no longer current");
+      }
       if (!result.ok) {
         throw new Error(
           result.error?.message

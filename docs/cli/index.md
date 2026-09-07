@@ -48,6 +48,8 @@ Setup commands by intent:
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
+Place command-specific options after their command name, for example `openclaw status --json`. Global options such as `--profile` can precede the command.
+
 A named `--profile` replaces canonical state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.

@@ -29,7 +29,6 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { resolveComposerAvailability } from "./chat-composer-availability.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
@@ -77,8 +76,8 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const swarmTarget = this.resolveChatReadTarget();
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -305,7 +304,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(placement?.state) &&
+          (!isCloudWorkerPlacementState(placement?.state) ||
+            (Boolean(publicationRow.repositoryWorkspaceId) && placement?.state === "active")) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
@@ -324,23 +324,36 @@ export class ChatPane extends ChatPaneLayoutRender {
       restartRecoveryTombstoned,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
+      selectedSession,
       sessionKey: state.sessionKey,
       unarchiveAccess: mutationAccess.unarchive,
     });
-    const composerAvailability = resolveComposerAvailability({
-      catalog: Boolean(catalogKey),
-      catalogCanSend: this.catalogSession?.canContinue === true,
-      catalogDisabledReason,
-      modelSetupRequired,
-      baseDisabledReason: disabledReason,
-      baseDisabledReasonTone: sessionParticipationBlocked && !suggestionViewer ? "info" : "danger",
-      selectedSessionArchived,
-      restartRecoveryTombstoned,
-      placement: placementComposer,
-      sendHoldReason,
-      placementStartupPending: placementStartup !== null,
-      sessionDisabledBanner,
-    });
+    const composerAvailability = {
+      canSend:
+        sessionDisabledBanner?.kind !== "composer-replacement" &&
+        (catalogKey
+          ? this.catalogSession?.canContinue === true
+          : !modelSetupRequired &&
+            !disabledReason &&
+            !selectedSessionArchived &&
+            !restartRecoveryTombstoned &&
+            !placementComposer.blocksSend &&
+            !sendHoldReason),
+      disabledReason:
+        catalogDisabledReason ??
+        disabledReason ??
+        placementComposer.busyMessage ??
+        (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
+          ? placementComposer.failedUnavailableMessage
+          : null) ??
+        (placementStartup ? null : sendHoldReason),
+      disabledReasonTone:
+        placementComposer.busyMessage || (sessionParticipationBlocked && !suggestionViewer)
+          ? ("info" as const)
+          : ("danger" as const),
+      disabledReasonBusy: placementComposer.busyMessage !== null,
+      disabledBanner: sessionDisabledBanner ?? placementComposer.disabledBanner,
+    };
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = Boolean(
       catalogKey || suggestionViewer || selectedSession?.incognito || !selfProfileId,
@@ -494,7 +507,7 @@ export class ChatPane extends ChatPaneLayoutRender {
               (composerState.capabilityMenuView === "skills" ||
                 composerState.capabilityMenuView.startsWith("library:")),
           ),
-      swarmSessions: this.swarmHydrator?.rows ?? [],
+      swarm: swarmTarget ? { ...swarmTarget, sessions: this.swarmHydrator?.rows ?? [] } : undefined,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,
@@ -566,15 +579,17 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: (followUpModeOverride, submissionAction) =>
-        catalogKey
-          ? this.continueCatalogSession(catalogKey)
-          : suggestionViewer
-            ? this.addCurrentSessionSuggestion()
-            : state.handleSendChat(
-                undefined,
-                followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
-                submissionAction,
-              ),
+        !composerAvailability.canSend
+          ? undefined
+          : catalogKey
+            ? this.continueCatalogSession(catalogKey)
+            : suggestionViewer
+              ? this.addCurrentSessionSuggestion()
+              : state.handleSendChat(
+                  undefined,
+                  followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+                  submissionAction,
+                ),
       // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
         const status = selectedSessionArchived ? "&status=archived" : "";
@@ -628,7 +643,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: selectedSessionArchived ? undefined : setReply,
+      onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
@@ -637,8 +652,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       ...chatProps,
       onAgentChange: (agentId) => {
-        const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.onPaneSessionChange?.(this.paneId, nextSessionKey);
+        this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId }));
       },
       onSessionSelect: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);

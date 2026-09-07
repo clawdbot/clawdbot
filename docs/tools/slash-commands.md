@@ -152,7 +152,8 @@ Channel plugins can enforce owner-only command access through their
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
-  global default; provider-specific keys override it.
+  global default; provider-specific keys override it. Discord sender entries
+  accept bare user IDs or `user:<id>` and `discord:<id>` aliases.
 </ParamField>
 
 When `commands.allowFrom` is not configured, command authorization follows
@@ -466,9 +467,10 @@ updates persist across restarts.
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
 `/mcp show` redacts credential-bearing fields, recognized credential flag
 values, and known secret-shaped arguments. When run from a group, the
-configuration is sent to the owner privately; if no private owner route is
-available, the command fails closed and asks the owner to retry from a direct
-chat.
+configuration is routed privately to the owner. The group notice distinguishes
+confirmed, pending, and suppressed delivery. An unconfirmed send stays pending
+without trying another private recipient. If no private owner route is available,
+the command asks the owner to retry from a direct chat.
 
 ## `/debug`: runtime-only overrides
 
@@ -619,5 +621,8 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Card>
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
+  </Card>
+  <Card title="OpenProse migration" href="/prose" icon="pen-nib">
+    Where the removed `/prose` command went.
   </Card>
 </CardGroup>

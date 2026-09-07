@@ -118,7 +118,7 @@ When a stream job also has `trigger.script`, the gate runs once per closed batch
 
 Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `automations add|edit` (`--clear-pacing` removes both bounds).
 
-During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds. A future paced deadline remains the next scheduled check after a Gateway restart.
 
 Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
@@ -419,6 +419,8 @@ If the bound conversation is an external channel, OpenClaw also performs its nor
 
 When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
 
+For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -480,6 +482,8 @@ A required completion-delivery failure is distinct from an execution failure: a 
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
 The scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
@@ -611,6 +615,8 @@ openclaw automations edit <jobId> --clear-agent
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
+
+Run-now delivery measures lateness from when the manual request was accepted. An old pending scheduled slot does not make its fresh output stale; automatic and `--due` runs keep the original scheduled time for that check. A manual run still preserves the job's recurring cadence or future one-shot occurrence.
 
 Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
 
@@ -766,7 +772,7 @@ Every request must include the hook token via one of these headers:
 
 Query-string `?token=...` authentication is rejected. Send JSON with
 `Content-Type: application/json`. All hook endpoints accept `POST` only. The
-[Hooks reference](/gateway/configuration-reference#hooks) lists payload fields,
+[Hooks reference](/gateway/config-hooks#hooks) lists payload fields,
 limits, routing policy, and error responses.
 
 <AccordionGroup>
@@ -788,7 +794,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="POST /hooks/agent">
-    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/configuration-reference#hook-agent-payload).
+    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
@@ -798,7 +804,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
-    Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/configuration-reference#mapping-details).
+    Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/config-hooks#mapping-details).
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
@@ -829,7 +835,7 @@ message-tool delivery can already satisfy the runner's delivery handling;
 missing delivery flags remain unknown.
 
 For retried agent requests, reuse an `Idempotency-Key` and the same payload. The
-[reference](/gateway/configuration-reference#hook-retries-and-fan-out) explains its
+[reference](/gateway/config-hooks#hook-retries-and-fan-out) explains its
 scope and lifetime. Use a new key for a new test; a replayed `200` does not run the
 agent again.
 
@@ -968,7 +974,7 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 
-With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/configuration-reference#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/configuration-reference#hook-retries-and-fan-out).
+With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/config-hooks#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/config-hooks#hook-retries-and-fan-out).
 
 Do not run `openclaw webhooks gmail run` or another `gog gmail watch serve` on the same listener while the Gateway-managed watcher is running. Check logs for watch-registration failures, forwarding failures, and bind conflicts; starting the serve process alone does not prove Gmail registration succeeded.
 

@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import { Agent, type AgentMessage } from "../../runtime/index.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   installRuntimeContextMessageForPrompt,
@@ -12,6 +17,59 @@ import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-c
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("active prompt steering context", () => {
+  it.each([false, true])(
+    "keeps keyless context on the original prompt with initial steering (rebuild=%s)",
+    async (rebuild) => {
+      const manager = SessionManager.inMemory();
+      const kept = manager.appendMessage({ role: "user", content: "older request", timestamp: 1 });
+      const requests: string[] = [];
+      const agent = new Agent({
+        initialState: { model: testModel, messages: manager.buildSessionContext().messages },
+        streamFn: (model, context) => {
+          requests.push(JSON.stringify(context.messages));
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        },
+      });
+      const session = {
+        agent,
+        get messages() {
+          return agent.state.messages;
+        },
+      };
+      const originalPrompt = agent.prompt.bind(agent);
+      agent.prompt = originalPrompt;
+      const cleanupPrompt = installModelPromptTransform({
+        session,
+        transcriptPrompt: "original",
+        prependContext: "before",
+        shouldCapturePrompt: () => true,
+      });
+      const message = buildRuntimeContextCustomMessage("original context");
+      const cleanupCarrier = installRuntimeContextMessageForPrompt({ session, message });
+      const retainedPrompt = agent.prompt.bind(agent);
+      if (rebuild) {
+        manager.appendCompaction("Older history summarized.", kept, 100);
+        agent.state.messages = manager.buildSessionContext().messages;
+      }
+      agent.steer({ role: "user", content: "steering", timestamp: 2 });
+
+      await agent.prompt({ role: "user", content: "original", timestamp: 2 });
+
+      const activeMessages = agent.state.messages;
+      cleanupCarrier();
+      cleanupPrompt();
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toContain("before\\n\\noriginal");
+      expect(requests[0]).not.toContain("before\\n\\nsteering");
+      expect(activeMessages).toContain(message);
+      expect(agent).toHaveProperty("prompt", originalPrompt);
+      await retainedPrompt("later");
+      expect(agent.state.messages).not.toContain(message);
+    },
+  );
+
   it.each([
     ["replacement", true],
     ["context", true],

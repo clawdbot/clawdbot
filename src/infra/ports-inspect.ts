@@ -53,8 +53,7 @@ type UnixListenerSnapshot = {
   lsofUnavailable: boolean;
 };
 
-// Each Unix mapper starts three child processes; cap mapper slots so port
-// diagnostics cannot fan out one process batch per socket record.
+// Each enrichment batch bounds its native process-metadata subprocesses.
 const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
@@ -218,29 +217,17 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
 }
 
 async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise<void> {
-  await pMap(
-    listeners,
-    async (listener) => {
-      if (!listener.pid) {
-        return;
-      }
-      const [commandLine, user, parentPid] = await Promise.all([
-        resolveUnixCommandLine(listener.pid),
-        resolveUnixUser(listener.pid),
-        resolveUnixParentPid(listener.pid),
-      ]);
-      if (commandLine) {
-        listener.commandLine = commandLine;
-      }
-      if (user) {
-        listener.user = user;
-      }
-      if (parentPid !== undefined) {
-        listener.ppid = parentPid;
-      }
-    },
-    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
+  const pids = [...new Set(listeners.flatMap(({ pid }) => (pid ? [pid] : [])))];
+  const metadata = new Map(
+    await pMap(pids, async (pid) => [pid, await resolveUnixProcessInfo(pid)] as const, {
+      concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY,
+    }),
   );
+  for (const listener of listeners) {
+    if (listener.pid) {
+      Object.assign(listener, metadata.get(listener.pid));
+    }
+  }
 }
 
 async function readUnixEstablishedConnectionsFromSs(
@@ -257,7 +244,6 @@ async function readUnixEstablishedConnectionsFromSs(
   ]);
   if (res.code === 0) {
     const connections = parseSsConnections(res.stdout, port);
-    await enrichUnixListenerProcessInfo(connections);
     return { connections, detail: res.stdout.trim() || undefined, errors };
   }
   const stderr = res.stderr.trim();
@@ -281,7 +267,6 @@ async function readUnixEstablishedConnections(
   const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:ESTABLISHED", "-FpFcn"]);
   if (res.code === 0) {
     const connections = parseLsofConnectionFieldOutput(res.stdout, port);
-    await enrichUnixListenerProcessInfo(connections);
     return { connections, detail: res.stdout.trim() || undefined, errors: [] };
   }
   const stderr = res.stderr.trim();
@@ -308,32 +293,31 @@ async function readUnixEstablishedConnections(
   };
 }
 
-async function resolveUnixCommandLine(pid: number): Promise<string | undefined> {
-  const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "command="]);
-  if (res.code !== 0) {
-    return undefined;
-  }
-  const line = res.stdout.trim();
-  return line || undefined;
-}
-
-async function resolveUnixUser(pid: number): Promise<string | undefined> {
-  const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "user="]);
-  if (res.code !== 0) {
-    return undefined;
-  }
-  const line = res.stdout.trim();
-  return line || undefined;
-}
-
-async function resolveUnixParentPid(pid: number): Promise<number | undefined> {
-  const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "ppid="]);
-  if (res.code !== 0) {
-    return undefined;
-  }
-  const line = res.stdout.trim();
-  const parentPid = Number.parseInt(line, 10);
-  return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : undefined;
+async function resolveUnixProcessInfo(
+  pid: number,
+): Promise<Pick<PortListener, "commandLine" | "user" | "ppid">> {
+  // Keep usernames separate: native ps pads them by bytes on macOS and display
+  // columns on Linux, and directory-service names can themselves contain spaces.
+  const res = await runCommandSafe([
+    "ps",
+    "-p",
+    String(pid),
+    "-ww",
+    "-o",
+    "ppid=",
+    "-o",
+    "command=",
+  ]);
+  const userResult = await runCommandSafe(["ps", "-p", String(pid), "-o", "user="]);
+  const fields = res.code === 0 ? /^\s*(\S+)(?:\s+([\s\S]*))?$/.exec(res.stdout) : null;
+  const parentPid = Number.parseInt(fields?.[1] ?? "", 10);
+  const commandLine = fields?.[2]?.trim();
+  const user = userResult.code === 0 ? userResult.stdout.trim() : "";
+  return {
+    ...(user ? { user } : {}),
+    ...(commandLine ? { commandLine } : {}),
+    ...(Number.isFinite(parentPid) && parentPid > 0 ? { ppid: parentPid } : {}),
+  };
 }
 
 function parseSsListeners(output: string, port: number): PortListener[] {
@@ -372,7 +356,6 @@ async function readUnixListenersFromSs(port: number): Promise<ListenerReadResult
   const res = await runCommandSafe(["ss", "-H", "-ltnp", `sport = :${port}`]);
   if (res.code === 0) {
     const listeners = parseSsListeners(res.stdout, port);
-    await enrichUnixListenerProcessInfo(listeners);
     return { listeners, detail: res.stdout.trim() || undefined, errors };
   }
   const stderr = res.stderr.trim();
@@ -423,7 +406,6 @@ async function readUnixListeners(
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port));
   if (!listenerSnapshot.lsofUnavailable) {
     const result = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
-    await enrichUnixListenerProcessInfo(result.listeners);
     return { ...result, errors: listenerSnapshot.errors };
   }
   const ssFallback = await readUnixListenersFromSs(port);
@@ -592,6 +574,9 @@ export async function inspectPortUsage(
 ): Promise<PortUsage> {
   const result =
     process.platform === "win32" ? await readWindowsListeners(port) : await readUnixListeners(port);
+  if (process.platform !== "win32") {
+    await enrichUnixListenerProcessInfo(result.listeners);
+  }
   return buildPortUsage(port, result, options?.probeHosts);
 }
 
@@ -682,16 +667,14 @@ export async function inspectPortUsages(
   }
 
   const snapshot = await readUnixListenerSnapshot();
+  const results = await Promise.all(uniquePorts.map((port) => readUnixListeners(port, snapshot)));
+  await enrichUnixListenerProcessInfo(results.flatMap(({ listeners }) => listeners));
   const entries = await Promise.all(
     uniquePorts.map(
-      async (port) =>
+      async (port, index) =>
         [
           port,
-          await buildPortUsage(
-            port,
-            await readUnixListeners(port, snapshot),
-            options?.probeHostsByPort?.get(port),
-          ),
+          await buildPortUsage(port, results[index]!, options?.probeHostsByPort?.get(port)),
         ] as const,
     ),
   );
@@ -703,6 +686,9 @@ export async function inspectPortConnections(port: number): Promise<PortConnecti
     process.platform === "win32"
       ? await readWindowsEstablishedConnections(port)
       : await readUnixEstablishedConnections(port);
+  if (process.platform !== "win32") {
+    await enrichUnixListenerProcessInfo(result.connections);
+  }
   return {
     port,
     connections: result.connections,

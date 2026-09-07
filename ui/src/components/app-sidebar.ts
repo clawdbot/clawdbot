@@ -211,10 +211,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
     // Admit new geometry only between interactions; once shown it stays put.
+    // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
     if (
       this.communityInvitePresentation === "pending" &&
-      !this.matches(":hover, :focus-within") &&
+      !this.matches(":hover") &&
+      !this.contains(this.ownerDocument.activeElement) &&
       this.sessionOrganizer.draggingSessionKey === null &&
       this.sessionOrganizer.draggingSidebarSection === null &&
       this.sessionOrganizer.draggingSidebarEntry === null

@@ -57,6 +57,7 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     )
     .addOption(new Option(WINDOWS_TASK_SUPERVISOR_FLAG).hideHelp())
     .addOption(new Option(WINDOWS_TASK_SUPERVISOR_CHILD_FLAG).hideHelp())
+    .addOption(new Option("--update-canary").hideHelp())
     .option("--force", "Kill any existing listener on the target port before starting", false)
     .option("--verbose", "Verbose logging to stdout/stderr", false)
     .option(

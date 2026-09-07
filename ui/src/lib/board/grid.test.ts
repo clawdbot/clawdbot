@@ -106,13 +106,16 @@ describe("board grid layout", () => {
     }
   });
 
-  it("clamps invalid dimensions without mutating source items", () => {
+  it.each([
+    { maxHeight: undefined, expectedHeight: 20 },
+    { maxHeight: 240, expectedHeight: 99 },
+  ])("clamps invalid dimensions with height limit $maxHeight", ({ maxHeight, expectedHeight }) => {
     const items = [item("wide", 99, 0, 0), item("tall", -3, 99, 1)];
     const before = structuredClone(items);
-    const rects = layout(items);
+    const rects = layout(items, maxHeight);
     expect(rects).toEqual([
       { name: "wide", x: 0, y: 0, w: 12, h: 1 },
-      { name: "tall", x: 0, y: 1, w: 1, h: 20 },
+      { name: "tall", x: 0, y: 1, w: 1, h: expectedHeight },
     ]);
     expect(items).toEqual(before);
   });
@@ -121,31 +124,35 @@ describe("board grid layout", () => {
 describe("board grid drag preview", () => {
   const items = [item("a", 4, 2, 0), item("b", 4, 2, 1), item("c", 4, 2, 2)];
 
-  it("pushes an occupied target and its followers aside", () => {
-    const preview = previewDrag(items, "c", { x: 1, y: 0 });
-    expect(preview.items.map((entry) => [entry.name, entry.order])).toEqual([
+  it.each([
+    { name: undefined, x: 1, y: 0 },
+    { name: "missing", x: 1, y: 0 },
+    { name: "a", x: 100, y: 100 },
+  ])("pushes the named or fallback occupied target aside: %j", (target) => {
+    const preview = previewDrag(items, "c", target);
+    expect(preview.map((entry) => [entry.name, entry.order])).toEqual([
       ["c", 0],
       ["a", 1],
       ["b", 2],
     ]);
-    expect(preview.rects.map((rect) => rect.name)).toEqual(["c", "a", "b"]);
-    expectValid(preview.rects);
+    const rects = layout(preview);
+    expect(rects.map((rect) => rect.name)).toEqual(["c", "a", "b"]);
+    expectValid(rects);
   });
 
   it("keeps the order while the pointer remains inside the dragged rect", () => {
-    expect(previewDrag(items, "b", { x: 6, y: 1 }).items.map((entry) => entry.name)).toEqual([
-      "a",
-      "b",
-      "c",
-    ]);
+    expect(
+      previewDrag(items, "b", { name: undefined, x: 6, y: 1 }).map((entry) => entry.name),
+    ).toEqual(["a", "b", "c"]);
   });
 
   it("resolves occupied targets before removing and compacting the moving item", () => {
     const preview = previewDrag([item("a", 6, 1, 0), item("b", 6, 1, 1), item("c", 3, 1, 2)], "a", {
+      name: undefined,
       x: 6,
       y: 0,
     });
-    expect(preview.items.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
+    expect(preview.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
   });
 
   it("chooses the next empty-cell target by rendered row-major geometry", () => {
@@ -160,28 +167,24 @@ describe("board grid drag preview", () => {
       item("h", 11, 2, 7),
     ];
     expect(
-      previewDrag(heterogeneous, "a", { x: 10, y: 0 }).items.map((entry) => entry.name),
+      previewDrag(heterogeneous, "a", { name: undefined, x: 10, y: 0 }).map((entry) => entry.name),
     ).toEqual(["b", "c", "d", "e", "a", "f", "g", "h"]);
   });
 
   it("appends from an empty row tail or below the board", () => {
     const tailItems = [item("a", 3, 2, 0), item("b", 3, 2, 1), item("c", 3, 2, 2)];
-    expect(previewDrag(tailItems, "a", { x: 10, y: 0 }).items.map((entry) => entry.name)).toEqual([
-      "b",
-      "c",
-      "a",
-    ]);
-    expect(previewDrag(items, "a", { x: 100, y: 100 }).items.map((entry) => entry.name)).toEqual([
-      "b",
-      "c",
-      "a",
-    ]);
+    expect(
+      previewDrag(tailItems, "a", { name: undefined, x: 10, y: 0 }).map((entry) => entry.name),
+    ).toEqual(["b", "c", "a"]);
+    expect(
+      previewDrag(items, "a", { name: undefined, x: 100, y: 100 }).map((entry) => entry.name),
+    ).toEqual(["b", "c", "a"]);
   });
 
   it("is deterministic and leaves inputs unchanged", () => {
     const before = structuredClone(items);
-    expect(previewDrag(items, "c", { x: 0, y: 0 })).toEqual(
-      previewDrag(items, "c", { x: 0, y: 0 }),
+    expect(previewDrag(items, "c", { name: undefined, x: 0, y: 0 })).toEqual(
+      previewDrag(items, "c", { name: undefined, x: 0, y: 0 }),
     );
     expect(items).toEqual(before);
   });
@@ -191,12 +194,14 @@ describe("board grid drag preview", () => {
       const generated = propertyItems(seed, 24);
       const moving = generated[(seed * 7) % generated.length]!;
       const preview = previewDrag(generated, moving.name, {
+        name: undefined,
         x: (seed * 5) % BOARD_GRID_COLUMNS,
         y: (seed * 3) % 18,
       });
-      expectValid(preview.rects);
-      expectGravityTight(preview.rects);
-      expect(preview.items.map((entry) => entry.order)).toEqual(
+      const rects = layout(preview);
+      expectValid(rects);
+      expectGravityTight(rects);
+      expect(preview.map((entry) => entry.order)).toEqual(
         Array.from({ length: generated.length }, (_entry, order) => order),
       );
     }
@@ -204,14 +209,45 @@ describe("board grid drag preview", () => {
 
   it("returns a compact canonical board for an unknown item", () => {
     const preview = previewDrag([item("b", 3, 1, 5), item("a", 3, 1, 2)], "missing", {
+      name: "a",
       x: 0,
       y: 0,
     });
-    expect(preview.items.map((entry) => [entry.name, entry.order])).toEqual([
+    expect(preview.map((entry) => [entry.name, entry.order])).toEqual([
       ["a", 0],
       ["b", 1],
     ]);
-    expectValid(preview.rects);
+    expectValid(layout(preview));
+  });
+
+  it("preserves empty widget names in moving and target positions", () => {
+    const emptyNameItems = [item("", 6, 1, 0), item("b", 6, 1, 1)];
+    const preview = previewDrag(emptyNameItems, "b", {
+      name: "",
+      x: 100,
+      y: 100,
+    });
+    expect(preview.map((entry) => entry.name)).toEqual(["b", ""]);
+    expectValid(layout(preview));
+    expect(
+      previewDrag(emptyNameItems, "", { name: undefined, x: 100, y: 100 }).map(
+        (entry) => entry.name,
+      ),
+    ).toEqual(["b", ""]);
+  });
+
+  it("resolves successive named targets from the latest preview through pointerup", () => {
+    const before = structuredClone(items);
+    const first = previewDrag(items, "c", { name: "a", x: 100, y: 100 });
+    expect(first.map((entry) => entry.name)).toEqual(["c", "a", "b"]);
+    const firstSnapshot = structuredClone(first);
+    const second = previewDrag(first, "c", { name: "b", x: 100, y: 100 });
+    expect(second.map((entry) => entry.name)).toEqual(["a", "c", "b"]);
+    expect(first).toEqual(firstSnapshot);
+    expect(previewDrag(second, "c", { name: "b", x: 100, y: 100 })).toEqual(second);
+    expectValid(layout(second));
+    expectGravityTight(layout(second));
+    expect(items).toEqual(before);
   });
 });
 

@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withFileLock } from "./file-lock.js";
@@ -173,20 +174,6 @@ function parseLegacyLedger(raw: string): LegacyAcpReplaySession[] {
   );
 }
 
-function estimateSessionBytes(session: LegacyAcpReplaySession): number {
-  return session.sessionId.length + session.sessionKey.length + session.cwd.length + 32;
-}
-
-function estimateEventBytes(event: LegacyAcpReplayEvent, updateJson: string): number {
-  return (
-    event.sessionId.length +
-    event.sessionKey.length +
-    updateJson.length +
-    (event.runId?.length ?? 0) +
-    32
-  );
-}
-
 function sourceIdentity(
   stat: Awaited<ReturnType<typeof fs.lstat>>,
   raw: string,
@@ -272,7 +259,9 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     ) {
       return false;
     }
-    expectedEventBytes.push(estimateEventBytes(event, JSON.stringify(event.update)));
+    expectedEventBytes.push(
+      estimateAcpEventRowBytes({ ...event, updateJson: storedEvent.update_json }),
+    );
   }
 
   for (const [index, event] of session.events.entries()) {
@@ -289,7 +278,7 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     }
   }
   const expectedSessionBytes =
-    estimateSessionBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
+    estimateAcpSessionRowBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
   if (stored.estimated_bytes !== expectedSessionBytes) {
     executeSqliteQuerySync(
       db,
@@ -369,7 +358,7 @@ export async function migrateLegacyAcpReplayLedger(params: {
               }
 
               for (const session of missingSessions) {
-                let estimatedBytes = estimateSessionBytes(session);
+                let estimatedBytes = estimateAcpSessionRowBytes(session);
                 executeSqliteQuerySync(
                   db,
                   replayDb.insertInto("acp_replay_sessions").values({
@@ -385,7 +374,7 @@ export async function migrateLegacyAcpReplayLedger(params: {
                 );
                 for (const event of session.events) {
                   const updateJson = JSON.stringify(event.update);
-                  const eventBytes = estimateEventBytes(event, updateJson);
+                  const eventBytes = estimateAcpEventRowBytes({ ...event, updateJson });
                   executeSqliteQuerySync(
                     db,
                     replayDb.insertInto("acp_replay_events").values({

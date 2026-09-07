@@ -72,7 +72,6 @@ function makeInput(
     failover: {
       resolveAuthProfileFailureReason: vi.fn(() => null),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-      maybeRetryTransient: vi.fn(async () => false),
       advanceAuthProfile: vi.fn(async () => false),
       advanceRateLimitAuthProfile: vi.fn(async () => false),
       transientRetryCount: 0,
@@ -141,64 +140,14 @@ describe("assistant failure recovery", () => {
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 
-  it.each([
-    ["HTTP 429 Too Many Requests: requests per minute exceeded", true],
-    ["You exceeded your current quota, please check your plan and billing details.", false],
-    ["Provider API error (429): Quota exceeded [code=quota_exceeded]", false],
-    ["rate limit exceeded", false],
-    ["429 Provider returned error", true],
-    ["429 rate_limit_exceeded; Retry-After: 3600", false],
-    ["429 rate_limit_exceeded; Retry-After: 30 seconds", true],
-    ["429 RESOURCE_EXHAUSTED: tokens per minute limit exceeded", true],
-    [
-      "Quota exceeded for quota metric 'Generate requests per minute' and limit 'Generate requests per minute per project'.",
-      true,
-    ],
-    ["429 insufficient_quota: You exceeded your current quota", false],
-    ["429 usage limit reached for this billing period", false],
-    ["Provider API error (429): Provider returned error", false],
-  ])("respects the rate window before profile rotation: %s", async (message, shortWindow) => {
-    const input = makeInput(message);
-    input.failover.maybeRetryTransient = vi.fn(async ({ reason }) => reason === "rate_limit");
-    input.failover.advanceAuthProfile = vi.fn(async () => true);
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
-    const outcome = await handleEmbeddedAssistantFailure(input);
-    expect(outcome).toMatchObject({ action: "retry", thinkLevel: shortWindow ? "high" : "low" });
-    if (shortWindow) {
-      expect(input.failover.maybeRetryTransient).toHaveBeenCalledOnce();
-    } else {
-      expect(input.failover.maybeRetryTransient).not.toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "rate_limit" }),
-      );
-    }
-    expect(input.traceAttempts[0]?.result).toBe(
-      shortWindow ? "same_model_transient" : "rotate_profile",
-    );
-    if (shortWindow) {
-      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
-    }
-  });
-
-  it("rotates after the shared transient budget denies a short-window retry", async () => {
+  it("rotates after transient recovery is exhausted", async () => {
     const input = makeInput("429 rate_limit_exceeded: too many requests per minute");
+    input.failover = { ...input.failover, transientRetryCount: 8 };
     input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
     const outcome = await handleEmbeddedAssistantFailure(input);
     expect(outcome.action).toBe("retry");
-    expect(input.failover.maybeRetryTransient).toHaveBeenCalledOnce();
     expect(input.failover.advanceRateLimitAuthProfile).toHaveBeenCalledOnce();
     expect(input.traceAttempts[0]?.result).toBe("rotate_profile");
-  });
-
-  it("does not retry within a Retry-After date beyond the transient budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-11T00:00:00.000Z"));
-    const input = makeInput("429 rate_limit_exceeded; Retry-After: Thu, 11 Jun 2026 01:05:00 GMT");
-    input.failover.maybeRetryTransient = vi.fn(async () => true);
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
-    expect((await handleEmbeddedAssistantFailure(input)).action).toBe("retry");
-    expect(input.failover.maybeRetryTransient).not.toHaveBeenCalled();
-    expect(input.failover.advanceRateLimitAuthProfile).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, "anthropic:p1"])(
@@ -354,21 +303,6 @@ describe("assistant failure recovery", () => {
     },
   );
 
-  it("records the incremented shared retry count on successful transient recovery", async () => {
-    const input = makeInput("500 provider returned HTTP 500");
-    const failover = { ...input.failover, transientRetryCount: 0 };
-    input.failover = failover;
-    input.failover.maybeRetryTransient = vi.fn(async () => {
-      failover.transientRetryCount += 1;
-      return true;
-    });
-    expect((await handleEmbeddedAssistantFailure(input)).action).toBe("retry");
-    expect(log.warn).toHaveBeenCalledWith(
-      "embedded run failover decision",
-      expect.objectContaining({ decision: "retry_same_model", retryCount: 1 }),
-    );
-  });
-
   it.each([
     { terminal: { kind: "ok" }, expected: {} },
     { terminal: { kind: "timeout", phase: "compaction", source: "observation" }, expected: {} },
@@ -412,7 +346,6 @@ describe("assistant failure recovery", () => {
       });
       expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
       expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(input.failover.maybeRetryTransient).not.toHaveBeenCalled();
     },
   );
 
@@ -421,7 +354,6 @@ describe("assistant failure recovery", () => {
     input.pluginHarnessOwnsTransport = true;
     expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
     expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(input.failover.maybeRetryTransient).not.toHaveBeenCalled();
   });
 
   it("surfaces provider-owned stalled streams with their owning provider", async () => {

@@ -7,6 +7,7 @@ import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
@@ -36,9 +37,11 @@ export function extractText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
-  const m = message as Record<string, unknown>;
+  const projected = projectImportedMessageForDisplay(message);
+  const m = projected as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw = role === "assistant" ? extractAssistantPhaseText(message) : extractRawText(message);
+  const raw =
+    role === "assistant" ? extractAssistantPhaseText(projected) : extractRawText(projected);
   if (!raw) {
     return null;
   }

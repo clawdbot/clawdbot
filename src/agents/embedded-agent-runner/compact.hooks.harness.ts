@@ -10,6 +10,10 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLeaseOptions,
+} from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
 import {
   agentSessionAutomaticCompaction,
@@ -193,12 +197,12 @@ function createMockCompactionSession() {
     },
     compact: vi.fn(async () => {
       sessionManualCompactionMock();
-      return await completeCompaction();
+      return (await completeCompaction()).result;
     }),
     [agentSessionAutomaticCompaction]: vi.fn(
       async (customInstructions, requestState, summaryOutputPolicy) => {
         sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
-        return await completeCompaction();
+        return { status: "completed" as const, ...(await completeCompaction()) };
       },
     ),
     [agentSessionSetContextReplacementHook]: (
@@ -216,10 +220,12 @@ function createMockCompactionSession() {
   async function completeCompaction() {
     const result = await sessionCompactImpl();
     session.messages.splice(1);
-    onContextReplaced?.(
-      session.messages.reduce<number>((tokens, message) => tokens + estimateTokensMock(message), 0),
+    const tokensAfter = session.messages.reduce<number>(
+      (tokens, message) => tokens + estimateTokensMock(message),
+      0,
     );
-    return result;
+    onContextReplaced?.(tokensAfter);
+    return { result, tokensAfter };
   }
   return session;
 }
@@ -452,7 +458,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
 };
 
 export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
-  async (input: Record<string, unknown>) => ({
+  async (input: PreparedModelRuntimeInput, _options?: PreparedModelRuntimeLeaseOptions) => ({
     snapshot: {
       agentId: input.agentId,
       agentDir: input.agentDir,
@@ -466,7 +472,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
     release: vi.fn(),
   }),
 );
-export const getCurrentPluginMetadataSnapshotMock: Mock<
+const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
 > = vi.fn(() => emptyPluginMetadataSnapshot);
 

@@ -10,6 +10,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -380,10 +381,7 @@ export async function recordCliCompactionInStore(params: {
   next.updatedAt = Date.now();
   const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
-  next.inputTokens = undefined;
-  next.outputTokens = undefined;
-  next.cacheRead = undefined;
-  next.cacheWrite = undefined;
+  Object.assign(next, COMPACTION_RUN_USAGE_CLEAR_PATCH);
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;

@@ -45,7 +45,7 @@ For example:
 
 Every call is a replacement, not a patch. Omitting `markdown` removes the previous note; omitting `plan` removes the previous checklist.
 
-The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and either completed/total step counts or `null` when no plan is present. OpenClaw also emits plan events for native apps and channel renderers during their migration, but the durable card remains the authoritative state.
+The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place. Active channel previews retain a safe failure notice.
 
 ## Format the note
 
@@ -81,9 +81,13 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 {}
 ```
 
-An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`.
+An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
+
+A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 
 ## Where the card appears
+
+Channels with progress drafts show the latest checklist in active `partial`, `block`, and `progress` previews, subject to their preview settings and line limits. Card updates supply a completion count, or `Progress updated` for a note without steps; they do not copy the note's Markdown or HTML into tool summaries. Telegram uses native checkboxes with `channels.telegram.richMessages: true` and readable HTML checklists otherwise. See [Streaming and chunking](/concepts/streaming#progress-draft-rendering).
 
 The current chat keeps exactly one live card in the main conversation:
 
@@ -94,6 +98,8 @@ Opening a side panel does not move the card out of the conversation. The placeme
 Transient refresh failures retain the last loaded card. The dashboard widget shows a retry notice until a refresh succeeds. If the Gateway reports that the connection no longer participates in the session, clients hide the card until access is restored and a refresh succeeds.
 
 The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
+
+Without a matching terminal outcome, unfinished steps appear paused when the Gateway reports no active run or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
 
 ## Gateway requests
 

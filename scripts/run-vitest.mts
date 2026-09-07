@@ -19,7 +19,6 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   prepareE2eVitestRuntime,
   resolveVitestCliEntry,
-  resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
 import {
@@ -47,6 +46,7 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
+import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
@@ -887,13 +887,13 @@ export function spawnWatchedVitestProcess({
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
-    .then(async ([{ code, signal }]) => {
+    .then(async ([{ code, signal, groupJoined }]) => {
       await diagnosticsCompletion;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
-      return { code, signal: normalizeNodeSignal(signal) };
+      return { code, signal: normalizeNodeSignal(signal), groupJoined };
     })
     .finally(teardown);
 

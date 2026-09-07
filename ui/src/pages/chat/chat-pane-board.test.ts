@@ -98,7 +98,9 @@ let theme: ReturnType<typeof createApplicationTheme>;
 
 function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
-  const client = {} as GatewayBrowserClient;
+  const client = {
+    request: vi.fn(async () => ({ session: { key: "agent:main:current", kind: "direct" } })),
+  } as unknown as GatewayBrowserClient;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     theme,
