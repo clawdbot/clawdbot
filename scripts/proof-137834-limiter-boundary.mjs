@@ -7,12 +7,12 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createSentMessageCache } from "../extensions/imessage/src/monitor/echo-cache.js";
-import { createLoopRateLimiter } from "../extensions/imessage/src/monitor/loop-rate-limiter.js";
-import { resolveIMessageInboundDecision } from "../extensions/imessage/src/monitor/inbound-processing.js";
-import { setIMessageRuntime } from "../extensions/imessage/src/runtime.js";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createSentMessageCache } from "../extensions/imessage/src/monitor/echo-cache.js";
+import { resolveIMessageInboundDecision } from "../extensions/imessage/src/monitor/inbound-processing.js";
+import { createLoopRateLimiter } from "../extensions/imessage/src/monitor/loop-rate-limiter.js";
 import { createSelfChatCache } from "../extensions/imessage/src/monitor/self-chat-cache.js";
+import { setIMessageRuntime } from "../extensions/imessage/src/runtime.js";
 
 const headSha = execSync("git rev-parse --short HEAD").toString().trim();
 const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-"));
@@ -149,7 +149,10 @@ const results = [];
       scenario: `self-chat mirror #${i + 1}: reason=${result.decision.reason}, limiterTripped=${result.limiterTripped}`,
       expected: "drop (self-chat echo), limiter not tripped",
       actual: `reason=${result.decision.reason}, limiterTripped=${result.limiterTripped}`,
-      pass: result.decision.kind === "drop" && result.decision.reason === "self-chat echo" && !result.limiterTripped,
+      pass:
+        result.decision.kind === "drop" &&
+        result.decision.reason === "self-chat echo" &&
+        !result.limiterTripped,
     });
   }
 
@@ -277,7 +280,10 @@ const results = [];
       scenario: `mirror without destination_caller_id #${i + 1}: reason=${result.decision.reason}`,
       expected: "drop (self-chat echo), limiter not tripped",
       actual: `reason=${result.decision.reason}, limiterTripped=${result.limiterTripped}`,
-      pass: result.decision.kind === "drop" && result.decision.reason === "self-chat echo" && !result.limiterTripped,
+      pass:
+        result.decision.kind === "drop" &&
+        result.decision.reason === "self-chat echo" &&
+        !result.limiterTripped,
     });
   }
 
@@ -310,7 +316,8 @@ const verdict = {
   channel: "imessage",
   head: headSha,
   status: allPass ? "pass" : "fail",
-  function: "resolveIMessageInboundDecision + createLoopRateLimiter (monitor-provider.ts limiter contract)",
+  function:
+    "resolveIMessageInboundDecision + createLoopRateLimiter (monitor-provider.ts limiter contract)",
   results,
 };
 
