@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   nextProposalVersion,
   prepareSkillProposalDraft,
@@ -10,6 +11,7 @@ describe("Skill Workshop proposal draft preparation", () => {
     const prepared = prepareSkillProposalDraft({
       name: "release-check",
       description: "Check a release",
+      skillDescription: "Check a release",
       content: "# Release Check\n",
       date: "2026-07-29T00:00:00.000Z",
       maxSkillBytes: 1024,
@@ -45,6 +47,7 @@ describe("Skill Workshop proposal draft preparation", () => {
     const oversized = prepareSkillProposalDraft({
       name: "release-check",
       description: "Check a release",
+      skillDescription: "Check a release",
       content: "x".repeat(5),
       date: "2026-07-29T00:00:00.000Z",
       maxSkillBytes: 4,
@@ -59,6 +62,7 @@ describe("Skill Workshop proposal draft preparation", () => {
     const secret = prepareSkillProposalDraft({
       name: "release-check",
       description: "Check a release",
+      skillDescription: "Check a release",
       content: "# Release Check\n",
       date: "2026-07-29T00:00:00.000Z",
       maxSkillBytes: 1024,
@@ -75,6 +79,30 @@ describe("Skill Workshop proposal draft preparation", () => {
         message: expect.stringContaining("recognized literal credential in skill-name"),
       },
     });
+  });
+
+  it("separates the bounded listing label from the rendered skill description", () => {
+    const richDescription =
+      "Full routing description with trigger phrases, keywords, and example invocations beyond the label budget";
+    const prepared = prepareSkillProposalDraft({
+      name: "rich-skill",
+      description: "Short listing label",
+      skillDescription: richDescription,
+      content: "# Rich Skill\n",
+      date: "2026-07-29T00:00:00.000Z",
+      maxSkillBytes: 4096,
+    });
+
+    expect(prepared).toMatchObject({
+      ok: true,
+      value: { description: "Short listing label" },
+    });
+    if (!prepared.ok) {
+      throw prepared.error.cause;
+    }
+    expect(prepared.value.content).toContain(richDescription);
+    expect(prepared.value.content).not.toContain("Short listing label");
+    expect(stripProposalFrontmatterForSkill(prepared.value.content)).toContain(richDescription);
   });
 
   it("preserves version and UTF-8 description behavior", () => {

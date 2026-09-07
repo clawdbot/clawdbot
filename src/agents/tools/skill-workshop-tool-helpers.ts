@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
+  resolveDraftedSkillDescription,
   resolveSkillProposalName,
   stripProposalFrontmatterForSkill,
 } from "../../skills/workshop/frontmatter.js";
@@ -28,9 +29,15 @@ export function assertAutonomousSkillSize(
   currentContent: string | undefined,
   maxSkillBytes: number,
 ): void {
+  const label = description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name;
   const draft = prepareSkillProposalDraft({
     name,
-    description: description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name,
+    description: label,
+    skillDescription: resolveDraftedSkillDescription({
+      content,
+      ...(currentContent ? { fallbackContent: currentContent } : {}),
+      label,
+    }),
     content,
     fallbackFrontmatterContent: currentContent,
     date: new Date().toISOString(),

@@ -1484,6 +1484,58 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("proposal description is too large");
   });
 
+  it("preserves the live skill description when update proposals are applied", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"y".repeat(200)} plus trigger phrases and keywords`;
+    const skillDir = await createOwnedSkill({
+      workspaceDir,
+      name: "rich-description-skill",
+      description: "Initial description",
+      body: "# Rich Description Skill\n\nExisting body.\n",
+    });
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      `---\nname: rich-description-skill\ndescription: ${richDescription}\n---\n\n# Rich Description Skill\n\nExisting body.\n`,
+      "utf8",
+    );
+
+    const updateWithDerivedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      content: "# Rich Description Skill\n\nUpdated body.\n",
+    });
+    expect(
+      Buffer.byteLength(updateWithDerivedLabel.record.description, "utf8"),
+    ).toBeLessThanOrEqual(160);
+    expect(updateWithDerivedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithDerivedLabel.record.id,
+    });
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(richDescription);
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Updated body.");
+
+    const updateWithSuppliedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      description: "Concise listing label",
+      content: "# Rich Description Skill\n\nSecond updated body.\n",
+    });
+    expect(updateWithSuppliedLabel.record.description).toBe("Concise listing label");
+    expect(updateWithSuppliedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithSuppliedLabel.record.id,
+    });
+
+    const applied = await fs.readFile(skillFile, "utf8");
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Second updated body.");
+    expect(applied).not.toContain("Concise listing label");
+  });
+
   it("quarantines unsafe proposals during apply", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({

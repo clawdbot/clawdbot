@@ -14,7 +14,7 @@ import {
   type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { resolveSkillProposalName } from "./frontmatter.js";
+import { resolveDraftedSkillDescription, resolveSkillProposalName } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
@@ -148,6 +148,14 @@ export async function reviseSkillProposal(
     const prepared = prepareSkillProposalDraft({
       name: resolveSkillProposalName(record.kind, record.target),
       description,
+      // The listing label is the skill description only for create proposals whose
+      // content never carried one; updates keep the description from the drafted or
+      // previously rendered content instead of the label.
+      skillDescription: resolveDraftedSkillDescription({
+        content: requestedContent,
+        ...(record.kind === "update" ? { fallbackContent: read.content } : {}),
+        label: description,
+      }),
       content: requestedContent,
       fallbackFrontmatterContent: read.content,
       version: nextVersion,

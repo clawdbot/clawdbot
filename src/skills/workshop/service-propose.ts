@@ -5,7 +5,7 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { resolveDraftedSkillDescription, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { prepareSkillProposalDraft, resolveUpdateProposalDescription } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
@@ -100,6 +100,10 @@ export async function proposeCreateSkill(
     draft: {
       name: target.skillKey,
       description,
+      skillDescription: resolveDraftedSkillDescription({
+        content: input.content,
+        label: description,
+      }),
       content: input.content,
       secretScanMetadata: [{ file: "skill-name", content: name }],
     },
@@ -183,6 +187,11 @@ export async function proposeUpdateSkill(
     draft: {
       name: target.skillName,
       description,
+      skillDescription: resolveDraftedSkillDescription({
+        content: draftContent,
+        fallbackContent: currentContent,
+        label: description,
+      }),
       content: draftContent,
       fallbackFrontmatterContent: currentContent,
     },
@@ -206,7 +215,12 @@ async function createPendingSkillProposal(
     target: SkillProposalRecord["target"];
     draft: Pick<
       Parameters<typeof prepareSkillProposalDraft>[0],
-      "name" | "description" | "content" | "fallbackFrontmatterContent" | "secretScanMetadata"
+      | "name"
+      | "description"
+      | "skillDescription"
+      | "content"
+      | "fallbackFrontmatterContent"
+      | "secretScanMetadata"
     >;
   },
 ): Promise<SkillProposalReadResult> {

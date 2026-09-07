@@ -25,6 +25,7 @@ function yamlScalar(value: string): string {
 /** Renders proposal markdown while preserving allowed original frontmatter fields. */
 export function renderProposalMarkdown(params: {
   name: string;
+  /** Description apply writes into SKILL.md frontmatter — not the listing label. */
   description: string;
   content: string;
   fallbackFrontmatterContent?: string;
@@ -112,6 +113,38 @@ function filterFrontmatterBlock(block: string, keysToDrop: readonly string[]): s
   }
 
   return kept.join("\n").trim();
+}
+
+function extractFrontmatterDescription(content: string | undefined): string | undefined {
+  if (!content) {
+    return undefined;
+  }
+  try {
+    const description = parseSkillFrontmatter(content).description;
+    const trimmed = description?.trim();
+    return trimmed ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolves the description that apply writes into SKILL.md frontmatter.
+ *
+ * The proposal listing label never replaces the skill description: the drafted
+ * content (or the current live skill, when the draft is body-only) stays
+ * authoritative, and the label is only proposal listing metadata.
+ */
+export function resolveDraftedSkillDescription(params: {
+  content: string;
+  fallbackContent?: string;
+  label: string;
+}): string {
+  return (
+    extractFrontmatterDescription(params.content) ??
+    extractFrontmatterDescription(params.fallbackContent) ??
+    params.label
+  );
 }
 
 function normalizeNewlines(content: string): string {
