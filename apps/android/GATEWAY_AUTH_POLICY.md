@@ -1,9 +1,9 @@
 # Fresh-bootstrap authentication policy
 
-Draft implementation reference for adopting the shared Swift policy on Android.
-The precedence change requires a durable bootstrap handoff before it can ship.
-This document describes the existing implementations and the remaining decision;
-it does not claim Android already implements the Swift policy.
+Android honors newly supplied bootstrap credentials before stored device tokens.
+A durable handoff retires the consumed bootstrap only after both replacement role
+tokens are saved. The shared Swift selector remains the precedence reference;
+the platform differences listed below are retained.
 
 ## Swift decision table
 
@@ -63,35 +63,54 @@ The lifecycle owners are `completeSuccessfulGatewayAuthHandoff` in
 `completeGatewayCredentialHandoff` in
 [`GatewaySettingsStore.swift`](../ios/Sources/Gateway/GatewaySettingsStore.swift).
 
-## Android handoff decision
+## Android durable handoff
 
-Android's [`GatewaySession.kt`](app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt)
-currently reuses a stored device token even when a bootstrap token is supplied.
-The existing `connect_prefersStoredDeviceTokenOverBootstrapToken` test in
-[`GatewaySessionInvokeTest.kt`](app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt)
-explicitly protects that behavior.
+[`GatewaySession.kt`](app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt)
+selects fresh bootstrap before a stored device token. The wire regression is
+`connect_prefersFreshBootstrapTokenOverStoredDeviceToken` in
+[`GatewaySessionInvokeTest.kt`](app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt).
 
-That precedence also compensates for a lifecycle difference:
-[`MainViewModel.kt`](app/src/main/java/ai/openclaw/app/MainViewModel.kt) saves the
-bootstrap credential, [`NodeRuntime.kt`](app/src/main/java/ai/openclaw/app/NodeRuntime.kt)
-reloads it for later connection intents, and the session retains it in
-`DesiredConnection`. Successful hello handling saves issued device tokens but
-does not retire bootstrap auth. Replacing the selector condition alone would
-therefore make later connections submit the spent bootstrap token.
-
-The proposed repair needs an explicit decision to change persisted credential
-handoff and recovery: retire only the consumed bootstrap credential after both
-replacement role tokens are durably stored, update the current connection
-intent, and fence completion against a newer setup/reset intent. Android's
 [`DeviceAuthStore.kt`](app/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt)
-currently exposes `saveToken` without a durable-success result. A successful
-hello or a preexisting token is insufficient proof of that handoff.
+commits each role token and its metadata together and returns the actual durable
+write result. The session records the final write result for each role in this
+hello; receipt alone and preexisting tokens do not establish fresh handoff.
+Both node and operator writes must succeed before bootstrap retirement.
 
-Existing installations can already contain a spent bootstrap alongside usable
-device tokens. The repair must define their upgrade behavior without treating
-an unrelated old device token as evidence that a freshly supplied setup token
-has been consumed. The fresh-bootstrap preference is decided; this durable
-handoff and upgrade behavior remains the implementation decision.
+[`SecurePrefs.kt`](app/src/main/java/ai/openclaw/app/SecurePrefs.kt) then commits
+the existing credential bundle with only the consumed bootstrap removed. Token
+and password fields are preserved. A failed commit restores the previous
+in-memory values, because Android can publish a failed disk write in memory.
+Missing roles or failed writes retain bootstrap in saved credentials and in the
+session intent; the current socket can remain connected, but a later rejected
+bootstrap requires setup repair.
+
+[`GatewayBootstrapHandoff.kt`](app/src/main/java/ai/openclaw/app/gateway/GatewayBootstrapHandoff.kt)
+owns retirement authority for one connection intent. Every new runtime intent
+invalidates that authority before socket cleanup. A preference revision also
+fences every setup save/reset, including replacement with identical token bytes.
+Successful retirement clears the session's reconnect bootstrap and the active
+[`NodeRuntime.kt`](app/src/main/java/ai/openclaw/app/NodeRuntime.kt) auth view.
+Reconnect and relaunch then select the stored role tokens. Revision and handoff
+state are in memory only; encrypted preference keys and serialized formats do
+not change.
+
+### Existing-install recovery
+
+An implicitly loaded saved bootstrap is submitted first. After the Gateway
+returns `AUTH_BOOTSTRAP_TOKEN_INVALID`, a trusted endpoint may get one recovery
+attempt using stored device auth, provided both node and operator token slots
+are nonempty for the same Gateway and device. A successful stored-node hello
+and durable writes of both role entries permit retirement of the rejected saved
+bootstrap. The existing operator connection authenticates its own stored token.
+The Gateway does not distinguish spent, expired, and invalid bootstrap tokens,
+so this recovery applies to that saved-credential rejection, not an inferred age.
+
+Explicit setup input never receives this recovery permission, even if its bytes
+match a saved token. It follows bootstrap auth and surfaces rejection instead of
+falling back to old device access. The normal setup owner,
+[`MainViewModel.kt`](app/src/main/java/ai/openclaw/app/MainViewModel.kt), drains and
+resets old role credentials before saving replacement setup input; this also
+preserves the distinction across process death during setup.
 
 ## Other differences retained
 
