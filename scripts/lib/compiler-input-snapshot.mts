@@ -288,13 +288,28 @@ export class CompilerInputSnapshot {
     outputRoot?: string,
   ) {
     const signature = this.signature(config, args, inputs, outputRoot);
-    if (
-      before.namespace(outputRoot) !== this.namespace(outputRoot) ||
-      before.toolchain() !== this.toolchain() ||
-      JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)) ||
-      before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
-    ) {
-      throw new Error("Boundary configuration or resolution topology changed during compilation");
+    // Same comparisons, same order, same short-circuit; `find` only records which
+    // one flipped so the failure names the moving part instead of the whole fence.
+    const comparisons: [string, () => boolean][] = [
+      [
+        "package resolution topology",
+        () => before.namespace(outputRoot) !== this.namespace(outputRoot),
+      ],
+      ["toolchain inputs", () => before.toolchain() !== this.toolchain()],
+      [
+        `parsed configuration of ${config}`,
+        () => JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)),
+      ],
+      [
+        `config file bytes of ${config}`,
+        () => before.config(config).files.some((file) => before.hash(file) !== this.hash(file)),
+      ],
+    ];
+    const changed = comparisons.find(([, differs]) => differs())?.[0];
+    if (changed) {
+      throw new Error(
+        `Boundary ${changed} changed during compilation. Another build, lint, or typecheck usually wrote into this checkout's inputs while this one ran; run those serially and retry.`,
+      );
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);
