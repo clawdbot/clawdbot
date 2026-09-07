@@ -114,7 +114,13 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    `export const readPostCorePreUpdateSourceConfig = async () => {
+      ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
+      return undefined;
+    };
+    export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
+    export const persistValidatedDowngradeConfig = async () => {};
+    export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});`,
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
@@ -125,6 +131,23 @@ const stubs = new Map<string, string>([
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
+const blockedPhase =
+  scenario === "phase-hang"
+    ? "configSnapshot"
+    : scenario === "completion-hang"
+      ? "completionCache"
+      : undefined;
+if (blockedPhase) {
+  const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
+  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+  stubs.set(
+    lifecycleUrl,
+    `import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+export class UpdateFinalizationLifecycle extends RealLifecycle {
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+}`,
+  );
+}
 if (scenario === "human-recovery-plugin-error") {
   stubs.set(
     sourceUrl("./update-cli/update-command-report.ts"),
