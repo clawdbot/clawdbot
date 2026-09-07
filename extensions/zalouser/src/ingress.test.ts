@@ -231,7 +231,7 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
-  it("releases deferred bookkeeping for retry when the adoption watchdog aborts a claim", async () => {
+  it("holds a timed-out claim until deferred bookkeeping settles", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       let deferredLifecycle: ZalouserIngressLifecycle | undefined;
       const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
@@ -248,6 +248,9 @@ describe("Zalouser durable ingress", () => {
         adoptionStallTimeoutMs: 10,
       });
       await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(await queue.listClaims()).toHaveLength(1);
+      await deferredLifecycle?.onAbandoned();
       await vi.waitFor(async () => {
         expect(await queue.listClaims()).toEqual([]);
         expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
@@ -259,7 +262,6 @@ describe("Zalouser durable ingress", () => {
           },
         ]);
       });
-      expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
 
       await ingress.stop();
     });

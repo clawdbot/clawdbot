@@ -11,6 +11,7 @@ import {
   type ChannelIngressDrain,
   type CreateChannelIngressDrainOptions,
 } from "./ingress-drain.js";
+import { createIngressDrainWakeScheduler } from "./ingress-monitor-wake.js";
 import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -181,8 +182,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let stopped = false;
   let requested = false;
   let pumping: Promise<void> | undefined;
-  let drainIdleWake: Promise<void> | undefined;
-  let drainIdleWakeRequested = false;
   let restartFenceWake: Promise<void> | undefined;
   let releaseRestartFenceWake = () => {};
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -449,36 +448,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     lastPrunedAt = currentTime;
   };
 
-  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
-    if (drainIdleWake) {
-      drainIdleWakeRequested = true;
-      return;
-    }
-    drainIdleWakeRequested = false;
-    const wake = activeDrain.waitForIdle();
-    drainIdleWake = wake;
-    void wake.then(
-      () => {
-        if (drainIdleWake !== wake) {
-          return;
-        }
-        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
-        drainIdleWake = undefined;
-        drainIdleWakeRequested = false;
-        if (shouldRearm) {
-          scheduleDrainIdleWake(activeDrain);
-        }
-        requestDrain();
-      },
-      (error: unknown) => {
-        if (drainIdleWake === wake) {
-          drainIdleWake = undefined;
-          drainIdleWakeRequested = false;
-        }
-        reportError(error);
-      },
-    );
-  };
+  const drainWakeScheduler = createIngressDrainWakeScheduler({
+    isRunning: () => running && !isAborted(),
+    requestDrain: () => requestDrain(),
+    reportError,
+  });
 
   const runPump = async (): Promise<void> => {
     try {
@@ -507,7 +481,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         } else if (started > 0) {
           // Failed-retryable delivery settles after the channel callback returns.
           // Wake once the drain has released or failed those claims.
-          scheduleDrainIdleWake(activeDrain);
+          drainWakeScheduler.schedule(activeDrain);
         }
         if (
           !running ||

@@ -3497,6 +3497,50 @@ describe("createTelegramBot", () => {
     expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([701]);
   });
 
+  it("retries a deferred spooled update that finishes after its owner aborts", async () => {
+    const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
+      lastUpdateId: 710,
+    });
+    const owner = new AbortController();
+    const update = { update_id: 711 };
+    const replay = await runWithTelegramSpooledReplayUpdate(
+      update,
+      async () => {
+        await runMiddlewareChain({ update }, async () => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            "test:watchdog-owner-abort",
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+        });
+      },
+      {
+        abortSignal: owner.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    );
+    const deferredWork = requireValue(replay.deferredWork, "deferred spooled work");
+
+    owner.abort(new Error("claim adoption watchdog fired"));
+    deferredWork.settle({ kind: "completed" });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).not.toHaveBeenCalled();
+
+    const retryHandler = vi.fn();
+    await runWithTelegramSpooledReplayUpdate(update, async () => {
+      await runMiddlewareChain({ update }, async () => {
+        retryHandler();
+      });
+    });
+    await flushTelegramTestMicrotasks();
+    expect(retryHandler).toHaveBeenCalledTimes(1);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([711]);
+  });
+
   it("retries a deferred spooled update after its queued turn is abandoned", async () => {
     configureOpenDm();
     let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
