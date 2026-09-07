@@ -6999,6 +6999,70 @@ describe("update-cli", () => {
     );
   });
 
+  it.each(["descriptor", "activation"] as const)(
+    "honors durable package %s refusal before live replacement",
+    async (boundary) => {
+      const tempDir = tempDirs.make("openclaw-update-durable-hooks-");
+      const { nodeModules, pkgRoot } = await setupInstalledPackageAtNodeModules(
+        path.join(tempDir, "lib", "node_modules"),
+      );
+      const original = await fs.readFile(path.join(pkgRoot, "package.json"), "utf8");
+      const candidateVersion = "2026.5.14";
+      mockFileBackedPathExists();
+      readPackageVersion.mockImplementation(async (packageRoot: string) => {
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ) as { version?: string };
+        return manifest.version ?? null;
+      });
+      mockNpmGlobalCommands(nodeModules, async (argv) => {
+        if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+          const prefix = requireValue(argv[argv.indexOf("--prefix") + 1], "stage prefix");
+          await writeOpenClawPackageFixture(
+            path.join(prefix, "lib", "node_modules", "openclaw"),
+            candidateVersion,
+            { inventory: true },
+          );
+        }
+        return undefined;
+      });
+      const beforeActivate = vi.fn(async () => {});
+      const assertCurrent = () => {};
+      const persistDescriptor = vi.fn(async () => {
+        if (boundary === "descriptor") {
+          throw new Error("durable descriptor refused");
+        }
+        return { assertCurrent };
+      });
+      const beforeEffect = vi.fn(async () => {
+        throw new Error("durable activation refused");
+      });
+      const { runPackageInstallUpdate } = await import("./update-cli/update-command-package.js");
+      const result = await runPackageInstallUpdate({
+        root: pkgRoot,
+        installKind: "package",
+        tag: candidateVersion,
+        timeoutMs: 30_000,
+        startedAt: Date.now(),
+        progress: {},
+        jsonMode: true,
+        validateCandidate: async () => [],
+        beforeActivate,
+        onTransaction: () => {},
+        recovery: {
+          transactionId: "55341df9-61de-4505-854a-110bdf5878a0",
+          persistDescriptor,
+          beforeEffect,
+        },
+      });
+      expect(result.status).toBe("error");
+      expect(persistDescriptor).toHaveBeenCalledTimes(1);
+      expect(beforeActivate).toHaveBeenCalledTimes(boundary === "activation" ? 1 : 0);
+      expect(beforeEffect).toHaveBeenCalledTimes(boundary === "activation" ? 1 : 0);
+      expect(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).toBe(original);
+    },
+  );
+
   it("retains the exact package and launchers for explicit rollback after managed Doctor fails", async () => {
     const tempDir = tempDirs.make("openclaw-update-managed-backup-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(

@@ -18,6 +18,7 @@ import {
 } from "../../infra/update-global.js";
 import { activateManagedServiceUpdateHandoff } from "../../infra/update-managed-service-handoff.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -53,6 +54,7 @@ import {
   withOwnedManagedUpdateEnv,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
+import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import {
   GatewayServiceUpdateOwnershipError,
@@ -112,6 +114,7 @@ export async function executeMutableUpdate(params: {
   prepareMutableUpdate: (env?: NodeJS.ProcessEnv) => Promise<void>;
   onActivation?: () => void;
 }): Promise<MutableUpdateExecutionResult | null> {
+  assertUpdateCommandRecovery(params.opts);
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   let admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined;
@@ -520,6 +523,12 @@ export async function executeMutableUpdate(params: {
       installTarget: params.packageInstallTarget,
       validateCandidate,
       beforeActivate,
+      recovery: params.opts.recovery
+        ? createUpdateRecoveryPackageHooks({
+            ...params.opts.recovery,
+            options: { env: params.opts.run!.env },
+          })
+        : undefined,
       onTransaction: (transaction) => {
         packageTransaction = transaction;
       },
