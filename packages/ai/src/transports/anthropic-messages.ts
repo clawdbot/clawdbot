@@ -137,9 +137,10 @@ export async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
-    /** Param indexes for transient runtime-context carriers — excluded from
-     * cache_control breakpoint selection so the deepest breakpoint anchors on the
-     * last stable user turn, not the volatile carrier appended after it. */
+    /** Param indexes for *relocated* runtime-context carriers — excluded from
+     * cache_control breakpoint selection. Append-only carriers that still sit
+     * before assistant/tool turns remain eligible cache anchors; carriers moved
+     * after those turns must not win the deepest breakpoint. */
     cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<AnthropicWireMessage[]> {
@@ -161,7 +162,7 @@ export async function convertAnthropicMessages(
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
           const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
-          if (isRuntimeContextCarrier) {
+          if (isRuntimeContextCarrier && shouldOptOutRelocatedRuntimeContextCarrier(params)) {
             cacheBreakpointOptOutMessageIndexes?.add(params.length);
           }
           const userParam: AnthropicWireMessage = {
@@ -206,7 +207,7 @@ export async function convertAnthropicMessages(
         continue;
       }
       const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
-      if (isRuntimeContextCarrier) {
+      if (isRuntimeContextCarrier && shouldOptOutRelocatedRuntimeContextCarrier(params)) {
         cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
@@ -451,6 +452,32 @@ export function buildAnthropicGenerationParams({
   }
 
   return params;
+}
+
+function wireMessageHasToolResult(message: AnthropicWireMessage): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (block) =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      "type" in block &&
+      (block as { type?: unknown }).type === "tool_result",
+  );
+}
+
+/** Relocated carriers trail assistant/tool turns and must not own cache_control. */
+function shouldOptOutRelocatedRuntimeContextCarrier(params: AnthropicWireMessage[]): boolean {
+  for (const message of params) {
+    if (message.role === "assistant") {
+      return true;
+    }
+    if (message.role === "user" && wireMessageHasToolResult(message)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function convertAnthropicTools(

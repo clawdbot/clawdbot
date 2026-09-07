@@ -2415,7 +2415,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2425,7 +2425,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "volatile current-turn metadata",
+            content: "retained current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2435,13 +2435,56 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    // Deepest breakpoint anchors on the stable user turn (converted to a block
-    // array with cache_control) so it stays a cacheable prefix next turn...
-    expect(messages[0]?.content).toEqual([
-      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    expect(messages[0]?.content).toBe("stable question");
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "text",
+        text: "retained current-turn metadata",
+        cache_control: { type: "ephemeral" },
+      },
     ]);
-    // ...and NOT on the trailing volatile carrier, which is left uncached.
-    expect(messages[1]?.content).toBe("volatile current-turn metadata");
+  });
+
+  it("skips a relocated runtime-context carrier after tool turns so the prior user/tool prefix stays the cache anchor", async () => {
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 0 },
+          makeAnthropicAssistantMessage(
+            [
+              { type: "thinking", thinking: "Think", thinkingSignature: "sig" },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "q" } },
+            ],
+            { stopReason: "toolUse", timestamp: 1 },
+          ),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            timestamp: 2,
+            content: [{ type: "text", text: "Answer" }],
+            isError: false,
+          },
+          {
+            role: "user",
+            content: "relocated runtime context",
+            timestamp: 3,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
+    const carrier = messages.at(-1);
+    expect(carrier?.content).toBe("relocated runtime context");
+    const markerJson = JSON.stringify(messages);
+    expect(markerJson).toContain('"cache_control":{"type":"ephemeral"}');
+    expect(markerJson).not.toContain('"text":"relocated runtime context","cache_control"');
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
