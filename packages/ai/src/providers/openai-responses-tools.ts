@@ -1,6 +1,6 @@
 // OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import { createHash } from "node:crypto";
-import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
+import type { FunctionTool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import type { Model, Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
@@ -29,7 +29,7 @@ type ResponsesFunctionTool = {
 
 type ConvertedResponsesTools = {
   projection: OpenAIToolProjection;
-  tools: OpenAITool[];
+  tools: FunctionTool[];
 };
 
 // Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
@@ -69,7 +69,8 @@ export function convertResponsesToolPayload(
     if (strict !== undefined) {
       result.strict = strict;
     }
-    return result as OpenAITool;
+    // Compatible endpoints can require strict to be absent; the SDK declares it required.
+    return result as FunctionTool;
   });
   return { projection, tools: convertedTools };
 }
