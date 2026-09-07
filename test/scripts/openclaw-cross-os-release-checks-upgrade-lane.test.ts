@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runExternalPackageTransition: vi.fn(),
   ensureLocalNpmShim: vi.fn(),
   ensureDevUpdateGitInstall: vi.fn(),
   installPackageSpec: vi.fn(),
@@ -25,10 +24,6 @@ const mocks = vi.hoisted(() => ({
   stopGateway: vi.fn(),
   waitForGateway: vi.fn(),
   verifyFreshShellCommand: vi.fn(),
-}));
-
-vi.mock("../../scripts/lib/cross-os-release-checks/external-package-transition.ts", () => ({
-  runExternalPackageTransition: mocks.runExternalPackageTransition,
 }));
 
 vi.mock("../../scripts/lib/cross-os-release-checks/install.ts", async (importOriginal) => ({
@@ -231,41 +226,94 @@ describe("cross-OS manual gateway lane evidence", () => {
     );
   });
 
-  it.each(["pass", "refusal-proof-failed"])(
-    "selects the explicit 9.2 to 9.3 transition before updater execution: %s",
-    async (outcome) => {
+  it.each([
+    ["pass", 15],
+    ["pass", 16],
+    ["update refused", 15],
+    ["skipped", 15],
+  ] as const)(
+    "proves stateful 9.2 packaged self-update without direct-install fallback: %s, publication %i",
+    async (outcome, publishedVersion) => {
       arrangeSuccessfulLane();
       mocks.readInstalledVersion.mockReset().mockReturnValue("2026.9.2");
       mocks.readInstalledMetadata.mockReturnValue({
         version: "2026.9.3",
         commit: candidate.sourceSha,
       });
-      const receipt = {
-        status: "pass",
-        method: "external-package-manager-and-fresh-doctor",
-        selfUpdatePassed: false,
-      };
-      if (outcome === "pass") {
-        mocks.runExternalPackageTransition.mockResolvedValue(receipt);
-      } else {
-        mocks.runExternalPackageTransition.mockRejectedValue(new Error("refusal proof failed"));
-      }
-      const promise = runUpgradeLane({
+      mocks.stopGateway.mockImplementation(async (gateway) => {
+        if (gateway) {
+          gateway.child.exitCode = 0;
+        }
+      });
+      mocks.runCommand.mockImplementation(async (_command, args: string[]) => {
+        const schemaIndex = args.indexOf("schema");
+        if (schemaIndex !== -1) {
+          const contentVersion = Number(args[schemaIndex + 1]);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              publishedVersion: contentVersion === 15 ? 15 : publishedVersion,
+              contentVersion,
+            }),
+            stderr: "",
+          };
+        }
+        if (args.includes("refusal") || args.includes("receipt")) {
+          throw new Error("obsolete external transition assertion");
+        }
+        return {
+          exitCode: 0,
+          stdout: args.includes("session-key") ? "agent:main:retained" : "{}",
+          stderr: "",
+        };
+      });
+      mocks.runOpenClaw.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "update") {
+          return {
+            exitCode: outcome === "update refused" ? 1 : 0,
+            stdout: JSON.stringify({
+              status: outcome === "pass" ? "ok" : outcome === "skipped" ? "skipped" : "error",
+            }),
+            stderr: "",
+          };
+        }
+        return {
+          exitCode: 0,
+          stdout: args.includes("system-presence")
+            ? JSON.stringify([{ mode: "gateway", reason: "self", version: "2026.9.3" }])
+            : "{}",
+          stderr: "",
+        };
+      });
+      const result = await runUpgradeLane({
         ...upgradeParams(),
         build: { ...candidate, candidateVersion: "2026.9.3" },
       });
       if (outcome === "pass") {
-        await expect(promise).resolves.toEqual(receipt);
+        expect(result).toMatchObject({
+          status: "pass",
+          method: "packaged-self-update",
+          selfUpdatePassed: true,
+          retainedSessionPassed: true,
+          persistedCandidateTurnPassed: true,
+          schemaAfterUpdate: { publishedVersion, contentVersion: 16 },
+          schemaAfterServing: { publishedVersion, contentVersion: 16 },
+        });
+        expect(mocks.startGateway).toHaveBeenCalledTimes(2);
+        expect(
+          mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "agent"),
+        ).toHaveLength(2);
       } else {
-        await expect(promise).resolves.toMatchObject({
+        expect(result).toMatchObject({
           status: "fail",
-          error: expect.stringContaining("refusal proof failed"),
+          error: expect.stringContaining("packaged self-update"),
         });
       }
-      expect(mocks.runOpenClaw).not.toHaveBeenCalled();
-      expect(mocks.runExternalPackageTransition).toHaveBeenCalledOnce();
-      // A failed transition must never become the existing Windows install fallback.
-      expect(mocks.installPackageSpec).toHaveBeenCalledTimes(1);
+      expect(
+        mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "update"),
+      ).toHaveLength(1);
+      expect(mocks.runOpenClaw.mock.calls.some(([call]) => call.args[0] === "doctor")).toBe(false);
+      expect(mocks.installTarballPackage).not.toHaveBeenCalled();
     },
   );
 

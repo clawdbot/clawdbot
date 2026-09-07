@@ -28,7 +28,6 @@ import {
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
 } from "./config.ts";
-import { runExternalPackageTransition } from "./external-package-transition.ts";
 import {
   binDirForPrefix,
   ensureLocalNpmShim,
@@ -62,6 +61,7 @@ import {
 } from "./installed.ts";
 import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
+import { runPackagedSelfUpdateTransition } from "./packaged-self-update.ts";
 import {
   reserveGatewayPortForLane,
   runCleanup,
@@ -253,7 +253,7 @@ export async function runUpgradeLane(
     };
 
     if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
-      return await runExternalPackageTransition({
+      return await runPackagedSelfUpdateTransition({
         ...params,
         lane,
         env,

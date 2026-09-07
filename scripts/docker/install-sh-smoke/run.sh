@@ -406,42 +406,15 @@ run_update_smoke() {
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
   assert_update_smoke_offline
-  if [[ "$UPDATE_EXPECT_VERSION" == "2026.9.3" ]] && \
-      [[ "$UPDATE_BASELINE_VERSION" == "2026.8.2" || "$UPDATE_BASELINE_VERSION" == "2026.9.2" ]]; then
-    run_historical_external_transition
-  else
-    # Older baselines cannot distinguish absent service managers from failed inspection.
-    run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
-  fi
+  # The idle container owns no Gateway service; exercise the baseline updater
+  # before checking the candidate's default restart policy independently.
+  run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
   echo "==> Verify candidate default update without a Gateway service"
   run_update_candidate "$UPDATE_EXPECT_VERSION"
   verify_candidate_ai_runtime
   echo "OK"
 }
 
-
-run_historical_external_transition() (
-  export OPENCLAW_STATE_DIR="$HOME/.openclaw"
-  export OPENCLAW_ALLOW_ROOT=1
-  export npm_config_omit=optional NPM_CONFIG_OMIT=optional
-  : "${OPENCLAW_CURRENT_PACKAGE_TGZ:?sealed candidate tarball required}"
-  cd /opt/openclaw-transition
-  source scripts/e2e/lib/external-package-transition.sh
-
-  # This idle installer container owns no service; initialize the baseline's real
-  # state before proving refusal and the separate fresh-process migration.
-  openclaw doctor --fix --non-interactive || return "$?"
-  local evidence_dir
-  evidence_dir="$(mktemp -d)"
-  trap 'rm -rf "$evidence_dir"' EXIT
-  openclaw_e2e_install_package() {
-    npm_install_global "$2" "$OPENCLAW_CURRENT_PACKAGE_TGZ" >"$1" 2>&1 || return "$?"
-    verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
-  }
-  openclaw_e2e_external_package_transition \
-    "$UPDATE_BASELINE_VERSION" "$UPDATE_EXPECT_VERSION" "$evidence_dir" || return "$?"
-  cat "$evidence_dir/transition.json"
-)
 
 run_update_candidate() {
   local UPDATE_BASELINE_VERSION="$1"

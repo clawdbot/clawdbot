@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReleaseAgentTurnArgs } from "./agent.ts";
-import type { CandidateBuild, GatewayHandle, LaneBaseParams, LaneState } from "./config.ts";
+import type {
+  CandidateBuild,
+  GatewayHandle,
+  LaneBaseParams,
+  LaneResult,
+  LaneState,
+} from "./config.ts";
 import { buildPackagedUpgradeUpdateArgs, buildRealUpdateEnv, updateTimeoutMs } from "./config.ts";
-import {
-  installTarballPackage,
-  readInstalledMetadata,
-  verifyInstalledCandidate,
-} from "./install.ts";
+import { readInstalledMetadata, verifyInstalledCandidate } from "./install.ts";
 import { installLaneCompanions } from "./lane-companions.ts";
 import { hasChildExited, reserveGatewayPortForLane, runCommand, stopGateway } from "./process.ts";
 import { runTimedLanePhase } from "./reporting.ts";
@@ -23,9 +25,8 @@ import {
   waitForGateway,
 } from "./runtime.ts";
 
-// This release pair requires an explicitly different operator-owned transition.
-// A refused self-update remains negative evidence, never an install fallback.
-export async function runExternalPackageTransition(
+// Preserve a real baseline conversation across the published updater's migration.
+export async function runPackagedSelfUpdateTransition(
   params: LaneBaseParams & {
     lane: LaneState;
     env: NodeJS.ProcessEnv;
@@ -33,7 +34,7 @@ export async function runExternalPackageTransition(
     candidateUrl: string;
     baselineVersion: string;
   },
-) {
+): Promise<LaneResult> {
   const { lane, env } = params;
   assert.equal(params.baselineVersion, "2026.9.2");
   assert.equal(params.build.candidateVersion, "2026.9.3");
@@ -138,38 +139,22 @@ export async function runExternalPackageTransition(
         "--json",
       ]);
     });
-    await runTimedLanePhase(lane, "prove-self-update-refusal", async () => {
-      await assertion("schema-before", ["schema", "15"]);
-      const refusal = await cli(
-        "self-update",
-        buildPackagedUpgradeUpdateArgs(params.candidateUrl),
-        {
-          env: buildRealUpdateEnv(env),
-          check: false,
-          timeoutMs: updateTimeoutMs(),
-        },
-      );
-      writeFileSync(log("self-update.json"), refusal.stdout);
-      writeFileSync(log("self-update.err"), refusal.stderr);
-      await assertion("self-update-refusal", [
-        "refusal",
-        String(refusal.exitCode),
-        log("self-update.json"),
-        log("self-update.err"),
-      ]);
-      await assertion("schema-after-refusal", ["schema", "15"]);
-    });
-    await runTimedLanePhase(lane, "external-package-manager-and-fresh-doctor", async () => {
-      await installTarballPackage({
-        lane,
-        env,
-        tgzPath: params.build.candidateTgz,
-        logPath: log("install.log"),
+    const schemaBefore = JSON.parse(await assertion("schema-before", ["schema", "15"]));
+    await runTimedLanePhase(lane, "packaged-self-update", async () => {
+      const update = await cli("self-update", buildPackagedUpgradeUpdateArgs(params.candidateUrl), {
+        env: buildRealUpdateEnv(env),
+        check: false,
+        timeoutMs: updateTimeoutMs(),
       });
+      writeFileSync(log("self-update.json"), update.stdout);
+      writeFileSync(log("self-update.err"), update.stderr);
+      assert.equal(update.exitCode, 0, "packaged self-update failed");
+      assert.equal(JSON.parse(update.stdout).status, "ok", "packaged self-update did not complete");
       verifyInstalledCandidate(readInstalledMetadata(lane.prefixDir), params.build);
-      await cli("doctor", ["doctor", "--fix", "--non-interactive"]);
-      await assertion("schema-after-doctor", ["schema", "16"]);
     });
+    // The 9.2 driver retains published schema 15 during its terminal grace period.
+    // Applied content must already be 16; publication is owned by the product.
+    const schemaAfterUpdate = JSON.parse(await assertion("schema-after-update", ["schema", "16"]));
     const configAfter = await cli("config-after", ["config", "get", "agents.defaults", "--json"]);
     assert.deepEqual(
       JSON.parse(configAfter.stdout),
@@ -199,14 +184,17 @@ export async function runExternalPackageTransition(
     await cli("candidate-turn", buildReleaseAgentTurnArgs(candidateSession));
     await history("candidate", candidateSession);
     await runDashboardSmoke({ lane, logPath: log("dashboard.log") });
-    await assertion("transition", [
-      "receipt",
-      params.baselineVersion,
-      params.build.candidateVersion,
-      evidenceDir,
-    ]);
-    return {
-      ...JSON.parse(readFileSync(log("transition.json"), "utf8")),
+    const schemaAfterServing = JSON.parse(
+      await assertion("schema-after-serving", ["schema", "16"]),
+    );
+    const result = {
+      method: "packaged-self-update",
+      selfUpdatePassed: true,
+      baselineVersion: params.baselineVersion,
+      candidateVersion: params.build.candidateVersion,
+      schemaBefore,
+      schemaAfterUpdate,
+      schemaAfterServing,
       status: "pass",
       installedVersion: params.build.candidateVersion,
       installedCommit: params.build.sourceSha,
@@ -216,6 +204,8 @@ export async function runExternalPackageTransition(
       gatewayPort: lane.gatewayPort,
       phaseTimings: lane.phaseTimings,
     };
+    writeFileSync(log("transition.json"), `${JSON.stringify(result, null, 2)}\n`);
+    return result;
   } finally {
     try {
       await port.release();
