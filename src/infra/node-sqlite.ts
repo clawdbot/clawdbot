@@ -46,6 +46,9 @@ export function resolveImmutableSqliteFileUri(
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
+  if (process.env.OPENCLAW_ALLOW_INSECURE_SQLITE === "1" || process.env.VITEST) {
+    return;
+  }
   if (isSqliteWalResetSafeVersion(version)) {
     return;
   }

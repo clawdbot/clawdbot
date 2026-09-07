@@ -52,6 +52,7 @@ import {
   getCodeModeExecBeforeHookMetadataForToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { evaluateLocalSecurityGateway } from "../security/local-security-gateway.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -198,8 +199,40 @@ export async function runBeforeToolCallHook(args: {
         params,
       };
     }
+
+    // MANDATORY LOCAL SECURITY GATEWAY EVALUATION
+    const gatewayEvaluation = await evaluateLocalSecurityGateway({
+      toolName,
+      params: normalizedParams,
+      ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
+    });
+
+    if (!gatewayEvaluation.allowed) {
+      const outcome: HookOutcome = {
+        blocked: true,
+        kind: "veto",
+        deniedReason:
+          gatewayEvaluation.authorizationResult === "BLOCKED_POLICY"
+            ? "security-gateway-blocked"
+            : "security-gateway-rejected",
+        reason: gatewayEvaluation.reason,
+        params,
+      };
+      markPrivateDecision(outcome, "genericDecision");
+      return outcome;
+    }
+
+    const attachGatewayMeta = (outcome: HookOutcome): HookOutcome => {
+      if (!outcome.blocked) {
+        outcome.gatewayClassification = gatewayEvaluation.classification;
+        outcome.gatewayAuthorizationResult = gatewayEvaluation.authorizationResult;
+      }
+      return withLoopWarning(outcome);
+    };
+
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
-      return withLoopWarning({ blocked: false, params });
+      return attachGatewayMeta({ blocked: false, params });
     }
     const deriveOptions =
       args.ctx?.cwd || args.ctx?.sandbox
@@ -435,7 +468,7 @@ export async function runBeforeToolCallHook(args: {
     if (finalApprovalResolution) {
       allowed.approvalResolution = finalApprovalResolution;
     }
-    return withLoopWarning(allowed);
+    return attachGatewayMeta(allowed);
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     const cause = unwrapErrorCause(err);
