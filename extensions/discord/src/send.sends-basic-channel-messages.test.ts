@@ -1077,6 +1077,104 @@ describe("sendMessageDiscord", () => {
     }
   });
 
+  it("reports thread send permission hints without requiring SendMessages", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    postMock.mockRejectedValueOnce(
+      Object.assign(new Error("Missing Permissions"), {
+        code: 50013,
+        status: 403,
+      }),
+    );
+    getMock
+      .mockResolvedValueOnce({ type: ChannelType.GuildPublicThread })
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPublicThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          {
+            id: "guild1",
+            permissions: PermissionFlagsBits.ViewChannel.toString(),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    let error: unknown;
+    try {
+      await sendMessageDiscord("channel:thread1", "hello", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toMatchObject({
+      missingPermissions: ["SendMessagesInThreads"],
+    });
+    expect(String(error)).not.toContain("ViewChannel/SendMessages/");
+  });
+
+  it.each([ChannelType.GuildVoice, ChannelType.GuildStageVoice])(
+    "reports message permissions for voice channel type %s",
+    async (channelType) => {
+      const { rest, postMock, getMock } = makeDiscordRest();
+      postMock.mockRejectedValueOnce(
+        Object.assign(new Error("Missing Permissions"), {
+          code: 50013,
+          status: 403,
+        }),
+      );
+      getMock
+        .mockResolvedValueOnce({ type: channelType })
+        .mockResolvedValueOnce({
+          id: "voice1",
+          guild_id: "guild1",
+          type: channelType,
+          permission_overwrites: [],
+        })
+        .mockResolvedValueOnce({ id: "bot1" })
+        .mockResolvedValueOnce({
+          id: "guild1",
+          roles: [
+            {
+              id: "guild1",
+              permissions: PermissionFlagsBits.ViewChannel.toString(),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ roles: [] });
+
+      let error: unknown;
+      try {
+        await sendMessageDiscord("channel:voice1", "hello", {
+          rest,
+          token: "t",
+          cfg: DISCORD_TEST_CFG,
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toMatchObject({
+        missingPermissions: ["SendMessages"],
+      });
+    },
+  );
+
   it("uploads media attachments", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
@@ -1625,6 +1723,80 @@ describe("fetchChannelPermissionsDiscord", () => {
     expect(res.permissions).toContain("ViewChannel");
     expect(res.permissions).toContain("SendMessages");
     expect(res.isDm).toBe(false);
+  });
+
+  it.each([
+    { name: "public", type: ChannelType.GuildPublicThread },
+    { name: "private", type: ChannelType.GuildPrivateThread },
+  ])("uses parent channel overwrites for $name thread diagnostics", async ({ type }) => {
+    const { rest, getMock } = makeDiscordRest();
+    const granted = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads;
+    const denied = PermissionFlagsBits.ViewChannel;
+    const responses = new Map<string, unknown>([
+      [
+        Routes.channel("thread1"),
+        {
+          id: "thread1",
+          guild_id: "guild1",
+          parent_id: "parent1",
+          type,
+        },
+      ],
+      [
+        Routes.channel("parent1"),
+        {
+          id: "parent1",
+          guild_id: "guild1",
+          type: ChannelType.GuildText,
+          permission_overwrites: [
+            {
+              id: "guild1",
+              deny: denied.toString(),
+              allow: "0",
+            },
+          ],
+        },
+      ],
+      [Routes.user("@me"), { id: "bot1" }],
+      [
+        Routes.guild("guild1"),
+        {
+          id: "guild1",
+          roles: [{ id: "guild1", permissions: granted.toString() }],
+        },
+      ],
+      [Routes.guildMember("guild1", "bot1"), { roles: [] }],
+    ]);
+    getMock.mockImplementation(async (route: string) => {
+      if (!responses.has(route)) {
+        throw new Error(`unexpected Discord REST route: ${route}`);
+      }
+      return responses.get(route);
+    });
+
+    const res = await fetchChannelPermissionsDiscord("thread1", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(res).toMatchObject({
+      channelId: "thread1",
+      guildId: "guild1",
+      channelType: type,
+      isDm: false,
+      raw: PermissionFlagsBits.SendMessagesInThreads.toString(),
+    });
+    expect(res.permissions).not.toContain("ViewChannel");
+    expect(res.permissions).not.toContain("SendMessages");
+    expect(res.permissions).toContain("SendMessagesInThreads");
+    expect(getMock.mock.calls.map(([route]) => route)).toEqual([
+      Routes.channel("thread1"),
+      Routes.channel("parent1"),
+      Routes.user("@me"),
+      Routes.guild("guild1"),
+      Routes.guildMember("guild1", "bot1"),
+    ]);
   });
 
   it("stops permission lookup when the caller deadline aborts", async () => {

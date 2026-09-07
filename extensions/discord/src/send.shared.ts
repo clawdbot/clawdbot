@@ -50,6 +50,12 @@ const DISCORD_UPLOAD_TOO_LARGE_STATUS = 413;
 const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
   "Attachment skipped: Discord rejected the file as too large.";
 
+function resolveRequiredDiscordSendPermissions(channelType?: number): string[] {
+  return isDiscordThreadChannelType(channelType)
+    ? ["ViewChannel", "SendMessagesInThreads"]
+    : ["ViewChannel", "SendMessages"];
+}
+
 type DiscordRequest = DiscordRetryRunner;
 
 export {
@@ -208,10 +214,7 @@ async function buildDiscordSendError(
     });
     probedChannelType = permissions.channelType;
     const current = new Set(permissions.permissions);
-    const required = ["ViewChannel", "SendMessages"];
-    if (isDiscordThreadChannelType(probedChannelType)) {
-      required.push("SendMessagesInThreads");
-    }
+    const required = resolveRequiredDiscordSendPermissions(probedChannelType);
     if (ctx.hasMedia) {
       required.push("AttachFiles");
     }
@@ -224,10 +227,7 @@ async function buildDiscordSendError(
   const apiDetails = [`code=${code}`, status != null ? `status=${status}` : undefined]
     .filter(Boolean)
     .join(" ");
-  const probedPermissions = ["ViewChannel", "SendMessages"];
-  if (isDiscordThreadChannelType(probedChannelType)) {
-    probedPermissions.push("SendMessagesInThreads");
-  }
+  const probedPermissions = resolveRequiredDiscordSendPermissions(probedChannelType);
   if (ctx.hasMedia) {
     probedPermissions.push("AttachFiles");
   }
