@@ -272,20 +272,180 @@ function targetsLiveStateSqliteDatabase(
 //     literal `#` can never equal a `#`-free control word, so skipping is
 //     safe for control matching);
 //   - even runs are untouched (literal backslashes + a real separator);
-//   - `\` + CRLF is untouched (not a continuation for the shell).
+//   - `\` + CRLF is untouched (not a continuation for the shell);
+//   - quoted here-document bodies are untouched: joining `x\` + `EOF` would
+//     move the terminator and swallow the following command into the body
+//     only in the rewritten input, while the shell executes it (verified
+//     vs sh). Unquoted bodies DO join (verified: the shell joins there and
+//     even a split terminator `E\`+`OF` terminates), so they are processed
+//     like code, minus operator scanning (body text opens no heredocs).
 // The replacement keeps (N-1)/2 literal backslashes, mirroring incremental
 // shell tokenization (re-emitting the newline would falsely escape the
 // character that follows it in a fresh parse).
-function joinWordInternalLineContinuations(command: string): string {
-  return command.replace(
-    /^(?!\s*#)([^#\n]*?)([^\s;|&()<>"'`#$\n\\])(\\+)\n(?=[^\s;|&()<>"'`#$\n\\])/gm,
+type HeredocFrame = { delim: string; stripTabs: boolean; quoted: boolean };
+
+// Finds `<<[-]delimiter` operators on one raw physical line, skipping
+// anything inside single/double quotes and trailing `#` comments — but the
+// delimiter itself may be quoted (`<<'EOF'`), so quotes are tracked rather
+// than stripped. `<<<` herestrings are skipped (no body follows).
+function scanHeredocOperators(line: string): HeredocFrame[] {
+  const frames: HeredocFrame[] = [];
+  let i = 0;
+  let squote = false;
+  let dquote = false;
+  const n = line.length;
+  while (i < n) {
+    const ch = line[i];
+    if (squote) {
+      if (ch === "'") {
+        squote = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (dquote) {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        dquote = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      squote = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      dquote = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /[\s;|&()<>]/.test(line[i - 1] ?? ""))) {
+      break;
+    }
+    if (ch === "<" && line[i + 1] === "<" && line[i + 2] !== "<") {
+      let j = i + 2;
+      let stripTabs = false;
+      if (line[j] === "-") {
+        stripTabs = true;
+        j += 1;
+      }
+      while (line[j] === " " || line[j] === "\t") {
+        j += 1;
+      }
+      let delim = "";
+      let quoted = false;
+      const q = line[j];
+      if (q === "'" || q === '"') {
+        const end = line.indexOf(q, j + 1);
+        if (end !== -1) {
+          delim = line.slice(j + 1, end);
+          quoted = true;
+          j = end + 1;
+        }
+      } else {
+        if (line[j] === "\\" && j + 1 < n) {
+          quoted = true;
+          j += 1;
+        }
+        const start = j;
+        while (j < n && /[A-Za-z0-9_]/.test(line[j] ?? "")) {
+          j += 1;
+        }
+        delim = line.slice(start, j);
+      }
+      if (delim.length > 0) {
+        frames.push({ delim, stripTabs, quoted });
+      }
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return frames;
+}
+
+function joinEolPair(line: string, nextLine: string): string {
+  return line.replace(
+    /^(?!\s*#)([^#\n]*?)([^\s;|&()<>"'`#$\n\\])(\\+)$/g,
     (match, prefix, before, run) => {
-      if (run.length % 2 === 0) {
+      if ((run as string).length % 2 === 0) {
         return match;
       }
-      return prefix + before + "\\".repeat((run.length - 1) / 2);
+      if (!/^[^\s;|&()<>"'`#$\n\\]/.test(nextLine)) {
+        return match;
+      }
+      return (prefix as string) + (before as string) + "\\".repeat(((run as string).length - 1) / 2);
     },
   );
+}
+
+function joinWordInternalLineContinuations(command: string): string {
+  const lines = command.split("\n");
+  const pending: HeredocFrame[] = [];
+  const out: string[] = [];
+  const isTerminator = (line: string, frame: HeredocFrame): boolean => {
+    const cmp = frame.stripTabs ? line.replace(/^\t+/, "") : line;
+    return cmp === frame.delim;
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const top = pending[0];
+    if (top && top.quoted) {
+      // Quoted here-document: body lines are literal, so they are never
+      // joined; only the exact terminator ends the body.
+      if (isTerminator(line, top)) {
+        pending.shift();
+      }
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    if (i === lines.length - 1) {
+      if (!top) {
+        for (const f of scanHeredocOperators(line)) {
+          if (f.delim.length > 0) {
+            pending.push(f);
+          }
+        }
+      } else if (isTerminator(line, top)) {
+        pending.shift();
+      }
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    // Code lines and unquoted-heredoc body lines both follow incremental
+    // shell tokenization: an odd `\` run joins with the next line, which is
+    // then consumed into this logical line (it is not body/a terminator on
+    // its own — verified vs sh). A joined line can itself be a terminator
+    // (`E\` + `OF` ends `<<EOF`); the check below runs on the joined text.
+    // Operators are scanned on the joined logical line, since a consumed
+    // physical line may carry them (`echo a \` + `cat <<EOF` opens `EOF`).
+    // Body text itself opens no heredocs, so only code lines are scanned.
+    const joined = joinEolPair(line, lines[i + 1] ?? "");
+    // A successful join strips the continuation backslash from this line;
+    // the next line's text belongs to the same logical line, so it is
+    // appended here and consumed (skipped) below — mirroring the shell.
+    const logical = joined !== line ? joined + (lines[i + 1] ?? "") : line;
+    if (!top) {
+      for (const f of scanHeredocOperators(logical)) {
+        if (f.delim.length > 0) {
+          pending.push(f);
+        }
+      }
+    } else if (isTerminator(logical, top)) {
+      pending.shift();
+    }
+    out.push(logical);
+    i += joined !== line ? 2 : 1;
+  }
+  return out.join("\n");
 }
 
 export async function detectUnsafeExecControlShellCommand(
