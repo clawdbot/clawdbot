@@ -236,9 +236,43 @@ describe("manual auth rollback", () => {
     ).resolves.toBe(false);
 
     expect(updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(3);
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(rollback).toHaveBeenCalledWith(insertedProfileIds);
-    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces protected storage release failure after indeterminate profile removal", async () => {
+    const releaseError = new Error("synthetic lock release failure");
+    const updateAuthProfileStoreWithLock = vi.fn(async () => null);
+
+    await expect(
+      rollbackManualAuthProfiles(
+        {
+          agentDir: "/synthetic/agent",
+          profiles: [
+            {
+              profileId: "fixture:inserted",
+              credential: {
+                type: "token",
+                provider: "fixture",
+                token: "synthetic-token",
+              },
+            },
+          ],
+          insertedProfileIds: new Set(["fixture:inserted"]),
+          protectedPersistence: {
+            profiles: [],
+            rollback: vi.fn(async () => {}),
+            commit: vi.fn(async () => {
+              throw releaseError;
+            }),
+          },
+        },
+        {
+          updateAuthProfileStoreWithLock,
+          loadPersistedAuthProfileStore: () => null,
+        },
+      ),
+    ).rejects.toBe(releaseError);
   });
 });
 

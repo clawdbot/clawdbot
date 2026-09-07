@@ -380,10 +380,9 @@ export async function persistManualAuthProfiles(params: {
 
 async function rollbackManualAuthSecretStorage(
   receipt: ManualAuthPersistenceReceipt,
-  retainProfileIds?: ReadonlySet<string>,
 ): Promise<boolean> {
   try {
-    await receipt.protectedPersistence?.rollback(retainProfileIds);
+    await receipt.protectedPersistence?.rollback();
     return true;
   } catch {
     return false;
@@ -452,7 +451,10 @@ export async function rollbackManualAuthProfiles(
       return await rollbackManualAuthSecretStorage(receipt);
     }
   }
-  await rollbackManualAuthSecretStorage(receipt, receipt.insertedProfileIds);
+  // Profile removal is indeterminate, so retain every protected write that a
+  // surviving profile may reference. Commit releases the staged locks, and its
+  // failure must remain visible instead of hiding a lock leak.
+  await receipt.protectedPersistence?.commit();
   return false;
 }
 
