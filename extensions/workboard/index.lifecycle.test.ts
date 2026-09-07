@@ -99,6 +99,36 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
 }
 
 describe("Workboard registration cleanup", () => {
+  it("registers store disposal before a later runtime dependency throws", async () => {
+    await withStateDirEnv("workboard-registration-failure-", async () => {
+      const store = WorkboardStore.openSqlite();
+      const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
+      const failure = new Error("synthetic Gateway runtime unavailable");
+      try {
+        const captured = capturePluginRegistration({
+          ...plugin,
+          register(api) {
+            const runtime = new Proxy(api.runtime, {
+              get(target, property) {
+                if (property === "gateway") {
+                  throw failure;
+                }
+                return Reflect.get(target, property, target);
+              },
+            });
+            expect(() => plugin.register({ ...api, runtime })).toThrow(failure);
+          },
+        });
+        expect(captured.runtimeLifecycles).toHaveLength(1);
+        await captured.runtimeLifecycles[0]!.dispose?.();
+        await expect(store.list()).rejects.toThrow("workboard store is closed.");
+      } finally {
+        opened.mockRestore();
+        await store.close();
+      }
+    });
+  });
+
   it.each(["disable", "restart"] as const)(
     "closes only the retired generation on %s",
     async (reason) => {

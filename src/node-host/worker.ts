@@ -56,7 +56,7 @@ export async function runNodeHostWorker(): Promise<void> {
   let connected = false;
   let readySent = false;
   let currentManifest = prepared.manifest;
-  const runtime = startNodeHostConnection({
+  const runtime = await startNodeHostConnection({
     prepared,
     client,
     writeStderrLine,

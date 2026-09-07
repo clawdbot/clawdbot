@@ -29,7 +29,12 @@ vi.mock("./mcp.js", () => ({
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn<
+    typeof import("./plugin-node-host.js").notifyRegisteredNodeHostCommandDisconnect
+  >(async () => {}),
+  ensureNodeHostPluginRegistry: vi.fn<
+    typeof import("./plugin-node-host.js").ensureNodeHostPluginRegistry
+  >(async () => ({ release: vi.fn() })),
   isRegisteredNodeHostCommandDuplex: vi.fn(() => false),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
@@ -87,7 +92,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
       expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const runtime = prepared.start({
+    const runtime = await prepared.start({
       client: { request },
       onRunnerCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });

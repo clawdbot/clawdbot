@@ -39,7 +39,12 @@ vi.mock("./node-worker-workspace.js", () => ({
   },
 }));
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn<
+    typeof import("./plugin-node-host.js").notifyRegisteredNodeHostCommandDisconnect
+  >(async () => {}),
+  ensureNodeHostPluginRegistry: vi.fn<
+    typeof import("./plugin-node-host.js").ensureNodeHostPluginRegistry
+  >(async () => ({ release: vi.fn() })),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
     commands: [],
@@ -131,7 +136,7 @@ describe("node-host worker manifest", () => {
       enableWorkerRuns: true,
     });
     const onWorkerHostingDisabled = vi.fn();
-    const runtime = prepared.start({ client, onWorkerHostingDisabled });
+    const runtime = await prepared.start({ client, onWorkerHostingDisabled });
     try {
       expect(prepared.workerHostingEnabled).toBe(false);
       expect(prepared.workerHostingDisabledReason).toBeUndefined();
@@ -160,7 +165,7 @@ describe("node-host worker manifest", () => {
 
     expect(prepared.workerHostingEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toBe(reason);
-    const runtime = prepared.start({ client });
+    const runtime = await prepared.start({ client });
     expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
     await runtime.close();
   });
@@ -182,7 +187,7 @@ describe("node-host worker manifest", () => {
     expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
     expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
     expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    const runtime = prepared.start({ client });
+    const runtime = await prepared.start({ client });
     expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
     await runtime.close();
   });
@@ -212,7 +217,7 @@ describe("node-host worker manifest", () => {
     expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({ client, onRunnerCapacityChanged });
+    const runtime = await prepared.start({ client, onRunnerCapacityChanged });
 
     expect(createNodeWorkerSupervisor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -242,7 +247,7 @@ describe("node-host worker manifest", () => {
     expect(mocks.closeWorkerSupervisor).not.toHaveBeenCalled();
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({ client, onRunnerCapacityChanged });
+    const runtime = await prepared.start({ client, onRunnerCapacityChanged });
 
     await vi.waitFor(() =>
       expect(onRunnerCapacityChanged).toHaveBeenLastCalledWith({ total: 2, available: 2 }),
@@ -270,7 +275,7 @@ describe("node-host worker manifest", () => {
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({ client, onRunnerCapacityChanged });
+    const runtime = await prepared.start({ client, onRunnerCapacityChanged });
 
     expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
     expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
@@ -290,7 +295,7 @@ describe("node-host worker manifest", () => {
 
     expect(prepared.workerHostingEnabled).toBe(true);
     const onWorkerHostingDisabled = vi.fn();
-    const runtime = prepared.start({ client, onWorkerHostingDisabled });
+    const runtime = await prepared.start({ client, onWorkerHostingDisabled });
 
     await vi.waitFor(() =>
       expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
@@ -311,7 +316,7 @@ describe("node-host worker manifest", () => {
       });
     const prepared = await prepareWorkerRuntime();
     const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({ client, onRunnerCapacityChanged });
+    const runtime = await prepared.start({ client, onRunnerCapacityChanged });
 
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
@@ -329,7 +334,7 @@ describe("node-host worker manifest", () => {
     vi.useFakeTimers();
     mocks.initializeWorkerSupervisor.mockRejectedValueOnce(new Error("launch journal unavailable"));
     const prepared = await prepareWorkerRuntime();
-    const runtime = prepared.start({ client });
+    const runtime = await prepared.start({ client });
     await vi.advanceTimersByTimeAsync(0);
 
     const closing = runtime.close();

@@ -3,10 +3,16 @@ import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  releasePluginRegistryResourcesAfter,
+} from "../plugins/registry-resources.js";
 import type {
   PluginNodeHostCommandRegistration,
   PluginRegistry,
@@ -18,6 +24,7 @@ import type {
   OpenClawPluginNodeHostCommandIo,
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
@@ -31,33 +38,144 @@ import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
 );
-let nodeHostPluginRegistry: PluginRegistry | undefined;
+type NodeHostPluginRegistryOwner = Omit<
+  ReturnType<typeof bindNodeHostPluginResources>,
+  "release"
+> & {
+  release: () => Promise<void>;
+  closed: boolean;
+  watcherCleanups: Set<() => Promise<void>>;
+};
+type NodeHostPluginRegistryHost = { current?: NodeHostPluginRegistryOwner };
+
+const nodeHostPluginRegistryHost = resolveGlobalSingleton<NodeHostPluginRegistryHost>(
+  Symbol.for("openclaw.nodeHostPluginRegistryHost"),
+  () => ({}),
+  resetNodeHostPluginRegistry,
+);
 
 function resolveNodeHostPluginRegistry() {
-  return nodeHostPluginRegistry ?? getActivePluginRegistry() ?? undefined;
+  const owner = nodeHostPluginRegistryHost.current;
+  return owner
+    ? owner.closed
+      ? undefined
+      : owner.registry
+    : (getActivePluginRegistry() ?? undefined);
+}
+
+function bindNodeHostPluginResources(
+  registry: PluginRegistry | undefined,
+  resources: PluginRegistryResourceScope,
+) {
+  const lease = createPluginRegistryResourceLease(resources);
+  return {
+    registry,
+    resources,
+    release: lease.release,
+    run: <T>(operation: () => T): T =>
+      lease.run(() => withPluginRuntimeRegistryScope(registry, operation)),
+  };
+}
+
+function acquireNodeHostPluginResources(registry: PluginRegistry | undefined) {
+  const owner = nodeHostPluginRegistryHost.current;
+  // Preparation may acquire another registry's resources for later command callbacks.
+  const resources =
+    owner && owner.registry === registry
+      ? owner.resources.fork()
+      : new PluginRegistryResourceScope();
+  if (registry) {
+    resources.retain(registry);
+  }
+  return bindNodeHostPluginResources(registry, resources);
+}
+
+function withNodeHostPluginResources<T>(registry: PluginRegistry | undefined, run: () => T): T {
+  const lease = acquireNodeHostPluginResources(registry);
+  try {
+    return lease.run(run);
+  } finally {
+    lease.release();
+  }
 }
 
 /** Ensure plugin registry data is loaded before node-host command dispatch. */
 export async function ensureNodeHostPluginRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
+}): Promise<{ release: () => void | Promise<void> }> {
+  const loaded = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
   });
-  // Resolve this registry's native readiness before publishing the first manifest.
-  // No process-wide preparation cache: a replacement registry owns fresh resources.
-  await withPluginRuntimeRegistryScope(registry, async () => {
-    const prepare = new Set(registry.nodeHostCommands.map((entry) => entry.command.prepare));
-    await Promise.all(
-      [...prepare].map(async (callback) =>
-        callback?.({ config: params.config, env: params.env ?? process.env }),
-      ),
-    );
-  });
-  nodeHostPluginRegistry = registry;
+  const resources = new PluginRegistryResourceScope();
+  const registry = resources.adopt(loaded);
+  const lease = bindNodeHostPluginResources(registry, resources);
+  let releasePromise: Promise<void> | undefined;
+  const handle: NodeHostPluginRegistryOwner = {
+    ...lease,
+    closed: false,
+    watcherCleanups: new Set(),
+    release: () => {
+      handle.closed = true;
+      releasePromise ??= (async () => {
+        const results = await Promise.allSettled(
+          [...handle.watcherCleanups].map(async (cleanup) => await cleanup()),
+        );
+        throwNodeHostCleanupFailures(
+          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+        lease.release();
+        await resources.waitForDisposals();
+      })().catch((error: unknown) => {
+        releasePromise = undefined;
+        throw error;
+      });
+      return releasePromise;
+    },
+  };
+  try {
+    // Resolve this registry's native readiness before publishing the first manifest.
+    // No process-wide preparation cache: a replacement registry owns fresh resources.
+    await handle.run(async () => {
+      const prepare = new Set(registry.nodeHostCommands.map((entry) => entry.command.prepare));
+      const results = await Promise.allSettled(
+        [...prepare].map(async (callback) =>
+          callback?.({ config: params.config, env: params.env ?? process.env }),
+        ),
+      );
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") {
+        throw failure.reason;
+      }
+    });
+    const previous = nodeHostPluginRegistryHost.current;
+    if (previous) {
+      await previous.release();
+      if (nodeHostPluginRegistryHost.current && nodeHostPluginRegistryHost.current !== previous) {
+        throw new Error("Node-host registry was replaced during resource retirement");
+      }
+    }
+    nodeHostPluginRegistryHost.current = handle;
+    return {
+      release: async () => {
+        await handle.release();
+        if (nodeHostPluginRegistryHost.current === handle) {
+          nodeHostPluginRegistryHost.current = undefined;
+        }
+      },
+    };
+  } catch (error) {
+    try {
+      await handle.release();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "node-host preparation and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */
@@ -71,7 +189,7 @@ export function listRegisteredNodeHostCapsAndCommands(
   nodePluginTools: NodePluginToolDescriptor[];
 } {
   const registry = resolveNodeHostPluginRegistry();
-  return withPluginRuntimeRegistryScope(registry, () => {
+  return withNodeHostPluginResources(registry, () => {
     const caps = new Set<string>();
     const commands = new Set<string>();
     let computerUse: ComputerUseCapabilityDescriptor | undefined;
@@ -112,37 +230,80 @@ export function listRegisteredNodeHostCapsAndCommands(
 /** Watch plugin-owned availability inputs that can change during this process. */
 export function watchRegisteredNodeHostCommandAvailability(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  onChange: () => void,
-): () => void {
+  onChange: () => void | Promise<void>,
+): () => Promise<void> {
   const registry = resolveNodeHostPluginRegistry();
-  const cleanups: Array<() => void> = [];
-  withPluginRuntimeRegistryScope(registry, () => {
-    for (const entry of registry?.nodeHostCommands ?? []) {
-      const cleanup = entry.command.watchAvailability?.(context, () =>
-        withPluginRuntimeRegistryScope(registry, onChange),
+  const lease = acquireNodeHostPluginResources(registry);
+  const owner = nodeHostPluginRegistryHost.current;
+  const watcherCleanups = owner && owner.registry === registry ? owner.watcherCleanups : undefined;
+  let cleanups: Array<() => void | Promise<void>> = [];
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    stopped = true;
+    stopping ??= (async () => {
+      const results = await Promise.all(
+        cleanups.map(async (cleanup) => {
+          try {
+            await lease.run(cleanup);
+            return { ok: true, cleanup } as const;
+          } catch (error) {
+            return { ok: false, cleanup, error } as const;
+          }
+        }),
       );
-      if (cleanup) {
-        cleanups.push(cleanup);
-      }
-    }
-  });
-  return () =>
-    withPluginRuntimeRegistryScope(registry, () => {
-      for (const cleanup of cleanups.splice(0)) {
-        cleanup();
+      cleanups = results.flatMap((result) => (result.ok ? [] : [result.cleanup]));
+      // Failed teardown still owns resources and is retryable through stop or host release.
+      throwNodeHostCleanupFailures(results.flatMap((result) => (result.ok ? [] : [result.error])));
+      watcherCleanups?.delete(stop);
+      lease.release();
+      await lease.resources.waitForDisposals();
+    })().catch((error: unknown) => {
+      stopping = undefined;
+      throw error;
+    });
+    return stopping;
+  };
+  watcherCleanups?.add(stop);
+  try {
+    lease.run(() => {
+      for (const entry of registry?.nodeHostCommands ?? []) {
+        const cleanup = entry.command.watchAvailability?.(context, () => {
+          if (!stopped) {
+            void lease.run(onChange);
+          }
+        });
+        if (cleanup) {
+          cleanups.push(cleanup);
+        }
       }
     });
+  } catch (error) {
+    // Registration stays synchronous; the existing host retains failed rollback for awaited release.
+    void stop().catch(() => {});
+    throw error;
+  }
+  return stop;
+}
+
+function throwNodeHostCleanupFailures(failures: unknown[]): void {
+  if (failures.length === 1) {
+    throw toErrorObject(failures[0], "node-host watcher cleanup failed");
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "node-host watcher cleanup failed");
+  }
 }
 
 /** Release plugin command state before a reconnected Gateway can invoke it again. */
 export async function notifyRegisteredNodeHostCommandDisconnect(): Promise<void> {
   const registry = resolveNodeHostPluginRegistry();
-  const callbacks = new Set(
-    (registry?.nodeHostCommands ?? [])
-      .map((entry) => entry.command.onDisconnect)
-      .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
-  );
-  await withPluginRuntimeRegistryScope(registry, async () => {
+  await withNodeHostPluginResources(registry, async () => {
+    const callbacks = new Set(
+      (registry?.nodeHostCommands ?? [])
+        .map((entry) => entry.command.onDisconnect)
+        .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
+    );
     const results = await Promise.allSettled(
       [...callbacks].map(async (callback) => await callback()),
     );
@@ -199,6 +360,8 @@ export async function invokeRegisteredNodeHostCommand(
   paramsJSON?: string | null,
   io?: OpenClawPluginNodeHostCommandIo,
   context?: OpenClawPluginNodeHostCommandContext,
+  /** The invocation owner also settles already accepted input and framed deliveries. */
+  resourceCompletion?: Promise<unknown>,
 ): Promise<string | null> {
   const registry = resolveNodeHostPluginRegistry();
   const match = (registry?.nodeHostCommands ?? []).find(
@@ -208,6 +371,7 @@ export async function invokeRegisteredNodeHostCommand(
     return null;
   }
   let active = true;
+  const lease = acquireNodeHostPluginResources(registry);
   const registeredCommand = match.command;
   const pluginRecord = registry?.plugins.find((record) => record.id === match.pluginId);
   const assertActive = () => {
@@ -238,15 +402,26 @@ export async function invokeRegisteredNodeHostCommand(
           }),
       }
     : undefined;
+  const frames = io?.frames;
+  const scopedFrames: OpenClawPluginNodeHostCommandIo["frames"] = frames && {
+    send: (message) => frames.send(message),
+    onMessage: (callback) => frames.onMessage((message) => lease.run(() => callback(message))),
+  };
+  const scopedIo: OpenClawPluginNodeHostCommandIo | undefined = io && {
+    signal: io.signal,
+    emitChunk: (chunk) => io.emitChunk(chunk),
+    onInput: (callback) => io.onInput((payload) => lease.run(() => callback(payload))),
+    ...(scopedFrames ? { frames: scopedFrames } : {}),
+  };
   try {
-    return await withPluginRuntimeRegistryScope(registry, async () => {
+    return await lease.run(async () => {
       if (match.command.duplex === true) {
-        if (!io) {
+        if (!scopedIo) {
           throw new Error(`node command requires duplex transport: ${command}`);
         }
         return invokeContext
-          ? await match.command.handle(paramsJSON, io, invokeContext)
-          : await match.command.handle(paramsJSON, io);
+          ? await match.command.handle(paramsJSON, scopedIo, invokeContext)
+          : await match.command.handle(paramsJSON, scopedIo);
       }
       return invokeContext
         ? await match.command.handle(paramsJSON, undefined, invokeContext)
@@ -254,6 +429,12 @@ export async function invokeRegisteredNodeHostCommand(
     });
   } finally {
     active = false;
+    // Authority ends with handle; accepted frame delivery can still own resource work.
+    if (resourceCompletion) {
+      releasePluginRegistryResourcesAfter(lease.resources, resourceCompletion);
+    } else {
+      lease.release();
+    }
   }
 }
 
@@ -265,13 +446,19 @@ export function isRegisteredNodeHostCommandDuplex(command: string): boolean {
   );
 }
 
-function resetNodeHostPluginRegistry(): void {
-  nodeHostPluginRegistry = undefined;
+async function resetNodeHostPluginRegistry(
+  host: NodeHostPluginRegistryHost = nodeHostPluginRegistryHost,
+): Promise<void> {
+  const handle = host.current;
+  await handle?.release();
+  if (host.current === handle) {
+    host.current = undefined;
+  }
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostPluginTestApi")] = {
-    getNodeHostPluginRegistry: () => nodeHostPluginRegistry,
+    getNodeHostPluginRegistry: () => nodeHostPluginRegistryHost.current?.registry,
     resetNodeHostPluginRegistry,
   };
 }

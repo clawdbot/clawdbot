@@ -1,12 +1,25 @@
+import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 // Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
 import { describe, expect, it } from "vitest";
-import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  createPluginRegistryResourceOwner,
+  drainPluginRegistryResourceDisposals,
+  registerPluginRegistryResourceDisposer,
+  requirePluginRegistryResourceScope,
+} from "../../plugins/registry-resources.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  acquireAgentToolResultMiddlewareRunner,
+  createAgentToolResultMiddlewareRunnerCore,
+} from "./tool-result-middleware.js";
 
-describe("createAgentToolResultMiddlewareRunner", () => {
+describe("createAgentToolResultMiddlewareRunnerCore", () => {
   it("fails closed when middleware throws", async () => {
     // Middleware errors may contain sensitive tool data. The public result must
     // collapse to a generic error instead of returning the thrown message.
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
       },
@@ -35,7 +48,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
 
   it("fails closed for invalid middleware results", async () => {
     const original = { content: [{ type: "text" as const, text: "raw" }], details: {} };
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({ result: { content: "not an array" } as never }),
     ]);
 
@@ -50,7 +63,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware mutates the current result into an invalid shape", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       (event) => {
         event.result.content = "not an array" as never;
         return undefined;
@@ -70,7 +83,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("rejects oversized multibyte middleware details", async () => {
     // Details are serialized into harness/tool payloads; cap them before a
     // middleware result can create unbounded transcript growth.
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -92,7 +105,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("rejects cyclic middleware details", async () => {
     const details: Record<string, unknown> = {};
     details.self = details;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -127,7 +140,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       content: [{ type: "text" as const, text: "delivered" }],
       details: cyclicDetails,
     };
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, []);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -152,7 +165,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       client,
     };
     client.message = payload;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       () => undefined,
     ]);
 
@@ -176,7 +189,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
 
   it("truncates oversized incoming text before a no-op middleware", async () => {
     let observedText = "";
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       (event) => {
         const content = event.result.content[0];
         observedText = content?.type === "text" ? content.text : "";
@@ -200,7 +213,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware returns oversized top-level text", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "x".repeat(100_001) }],
@@ -229,7 +242,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     };
     details.self = details;
     let observedDetails: unknown;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       (event) => {
         observedDetails = event.result.details;
         return undefined;
@@ -251,7 +264,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("coerces incoming nested toolResult content before middleware validation", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -282,7 +297,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("coerces nested tool_result blocks returned by middleware", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({
         result: {
           content: [
@@ -311,7 +326,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("does not coerce tool/function call blocks as middleware results", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({
         result: {
           content: [
@@ -337,7 +352,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("bounds nested toolResult content before flattening", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -370,7 +387,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("preserves nested image toolResult content without stringifying data", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -394,7 +413,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("preserves mixed nested text and image toolResult content", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -422,7 +443,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("preserves images from deeper nested toolResult content", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -455,7 +478,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("preserves interleaved nested text and image order", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -492,7 +517,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       content: [],
     };
     nested.content = [nested];
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -508,7 +535,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("sanitizes incoming function/symbol/bigint values in details", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -531,7 +560,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       () => undefined,
     ]);
 
@@ -551,7 +580,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "openclaw" }, [
       () => undefined,
     ]);
     const details = { blob: "é".repeat(60_000) };
@@ -573,7 +602,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => {
         throw new Error("post-processing failed");
       },
@@ -604,7 +633,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("preserves confirmed delivery when middleware returns an explicit failure", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "post-processing failed" }],
@@ -637,7 +666,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("accepts well-formed middleware results", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+    const runner = createAgentToolResultMiddlewareRunnerCore({ runtime: "codex" }, [
       (eventValue, ctx) => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -655,5 +684,66 @@ describe("createAgentToolResultMiddlewareRunner", () => {
 
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
     expect(result.details).toEqual({ compacted: true, runtime: "codex" });
+  });
+});
+
+describe("acquired middleware lifetime", () => {
+  it("joins admitted middleware and rejects new calls after release", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE proof (value INTEGER)");
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const disposalStarted = createDeferredCore();
+    const finishDisposal = createDeferredCore();
+    const runner = acquireAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      async () => {
+        const registry = createEmptyPluginRegistry();
+        requirePluginRegistryResourceScope().adopt({
+          registry,
+          ...createPluginRegistryResourceOwner(registry, "scoped"),
+        });
+        registerPluginRegistryResourceDisposer(registry, "fixture", {
+          id: "database",
+          async dispose() {
+            disposalStarted.resolve();
+            await finishDisposal.promise;
+            db.close();
+          },
+        });
+        started.resolve();
+        await finish.promise;
+        db.prepare("INSERT INTO proof VALUES (?)").run(1);
+        return { result: { content: [{ type: "text", text: "written" }], details: {} } };
+      },
+    ]);
+    const event = {
+      toolName: "write",
+      toolCallId: "call",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "input" }], details: {} },
+    };
+    const operation = runner.applyToolResultMiddleware(event);
+    await started.promise;
+    let released = false;
+    const release = runner.release().then(() => {
+      released = true;
+    });
+    try {
+      await expect(runner.applyToolResultMiddleware(event)).rejects.toThrow("released");
+      expect(released).toBe(false);
+      expect(db.isOpen).toBe(true);
+      finish.resolve();
+      await disposalStarted.promise;
+      await setImmediate();
+      expect(released).toBe(false);
+      expect(db.isOpen).toBe(true);
+    } finally {
+      finish.resolve();
+      finishDisposal.resolve();
+      await release;
+    }
+    await expect(operation).resolves.toMatchObject({ content: [{ text: "written" }] });
+    await drainPluginRegistryResourceDisposals();
+    expect(db.isOpen).toBe(false);
   });
 });

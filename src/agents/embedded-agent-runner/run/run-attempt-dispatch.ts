@@ -14,7 +14,7 @@ import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
-import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
+import { buildAgentRuntimePlanCore } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
@@ -170,7 +170,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
   }
-  const runtimePlan = buildAgentRuntimePlan({
+  const runtimePlan = buildAgentRuntimePlanCore({
     provider,
     modelId,
     model: effectiveModel,

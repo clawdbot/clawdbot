@@ -547,6 +547,7 @@ export class DiscordVoiceManager {
       if (this.sessions.has(guildId)) {
         return await this.voiceSessions.leave(params, options);
       }
+      this.voiceSessions.realtimeCleanup.retry(guildId);
       if (!options?.preserveFollowState) {
         this.following.followedVoiceGuilds.delete(guildId);
         this.following.deleteFollowedUserChannelsForGuild(guildId);
@@ -604,18 +605,14 @@ export class DiscordVoiceManager {
     this.destroyed = true;
     this.occupancyWatchers.clear();
     this.following.destroy();
-    for (const entry of this.sessions.values()) {
-      entry.stop();
+    try {
+      this.voiceSessions.realtimeCleanup.stopAll(this.sessions.values());
+    } finally {
+      // Destruction permanently closes admission; absent lifecycles also revoke pending generations.
+      this.guildLifecycles.clear();
+      this.sessions.clear();
+      this.receive.daveRecoveryAttempts.clear();
     }
-    for (const [guildId, lifecycle] of this.guildLifecycles) {
-      this.guildLifecycles.set(guildId, {
-        status: "stopped",
-        generation: lifecycle.generation,
-        reason: "manager destroyed",
-      });
-    }
-    this.sessions.clear();
-    this.receive.daveRecoveryAttempts.clear();
   }
 
   private isEntryCurrent(entry: VoiceSessionEntry): boolean {

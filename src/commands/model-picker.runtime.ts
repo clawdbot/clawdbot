@@ -8,7 +8,7 @@ import {
   resolveProviderPluginChoiceCore,
   runProviderModelSelectedHookCore,
 } from "../plugins/provider-wizard.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import { acquirePluginProvidersCore } from "../plugins/providers.runtime.js";
 
 /** Lazy runtime methods consumed by model picker command flows. */
 export const modelPickerRuntime = {
@@ -16,6 +16,6 @@ export const modelPickerRuntime = {
   resolveProviderModelPickerEntries: resolveProviderModelPickerFlowEntries,
   resolveProviderPluginChoice: resolveProviderPluginChoiceCore,
   runProviderModelSelectedHook: runProviderModelSelectedHookCore,
-  resolvePluginProviders: resolvePluginProvidersCore,
+  acquirePluginProviders: acquirePluginProvidersCore,
   runProviderPluginAuthMethod,
 };

@@ -5,7 +5,7 @@ import {
   readErrorName,
   toErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { listRegisteredMemoryEmbeddingProviderIds } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -456,9 +456,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected buildRequiredProviderUnavailableError(operation: "search" | "sync"): Error {
-    const registeredProviderIds = listRegisteredMemoryEmbeddingProviderAdapters()
-      .map((adapter) => adapter.id)
-      .toSorted();
+    const registeredProviderIds = listRegisteredMemoryEmbeddingProviderIds().toSorted();
     const registeredProviders =
       registeredProviderIds.length > 0 ? registeredProviderIds.join(",") : "none";
     const reason =

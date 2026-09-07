@@ -37,6 +37,7 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { withPluginRegistryResourceOperation } from "../../plugins/registry-resources.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import {
   getModelProviderRequestRouteFacts,
@@ -178,75 +179,79 @@ export function resolvePreparedExtraParams(params: {
   resolvedTransport?: SupportedTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
 }): Record<string, unknown> {
-  const resolvedExtraParams =
-    params.resolvedExtraParams ??
-    resolveExtraParams({
-      cfg: params.cfg,
+  return withPluginRegistryResourceOperation(() => {
+    const resolvedExtraParams =
+      params.resolvedExtraParams ??
+      resolveExtraParams({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        agentId: params.agentId,
+      });
+    const override =
+      params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
+        ? stripRequestScopedExtraParams(
+            sanitizeExtraParamsRecord(
+              Object.fromEntries(
+                Object.entries(params.extraParamsOverride).filter(
+                  ([, value]) => value !== undefined,
+                ),
+              ),
+            ),
+          )
+        : undefined;
+    const merged = {
+      ...sanitizeExtraParamsRecord(resolvedExtraParams),
+      ...override,
+    };
+    canonicalizeMaxTokensParam({
+      merged,
+      sources: [resolvedExtraParams, override],
+    });
+    const resolvedCachedContent = resolveAliasedParamValue(
+      [resolvedExtraParams, override],
+      "cached_content",
+      "cachedContent",
+    );
+    if (resolvedCachedContent !== undefined) {
+      merged.cachedContent = resolvedCachedContent;
+      delete merged.cached_content;
+    }
+    if (params.provider === "openrouter") {
+      canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
+    }
+    // Runtime plans memoize their own defaults. Results must not outlive the
+    // prepared provider or share mutable hook output with another attempt.
+    const { plugin } = ensureProviderRuntimePluginHandle({
       provider: params.provider,
       modelId: params.modelId,
-      agentId: params.agentId,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      runtimeHandle:
+        params.providerRuntimeHandle ?? getModelProviderRuntimePluginHandle(params.model),
     });
-  const override =
-    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? stripRequestScopedExtraParams(
-          sanitizeExtraParamsRecord(
-            Object.fromEntries(
-              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
-            ),
-          ),
-        )
-      : undefined;
-  const merged = {
-    ...sanitizeExtraParamsRecord(resolvedExtraParams),
-    ...override,
-  };
-  canonicalizeMaxTokensParam({
-    merged,
-    sources: [resolvedExtraParams, override],
+    const context = {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      provider: params.provider,
+      modelId: params.modelId,
+      model: params.model,
+      thinkingLevel: params.thinkingLevel,
+    };
+    const prepared = plugin?.prepareExtraParams?.({ ...context, extraParams: merged }) ?? merged;
+    const transportPatch = plugin?.extraParamsForTransport?.({
+      ...context,
+      extraParams: prepared,
+      transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
+    })?.patch;
+    const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+    canonicalizeMaxTokensParam({
+      merged: result,
+      sources: [prepared, transportPatch ?? undefined],
+    });
+    return result;
   });
-  const resolvedCachedContent = resolveAliasedParamValue(
-    [resolvedExtraParams, override],
-    "cached_content",
-    "cachedContent",
-  );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
-  if (params.provider === "openrouter") {
-    canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
-  }
-  // Runtime plans memoize their own defaults. Results must not outlive the
-  // prepared provider or share mutable hook output with another attempt.
-  const { plugin } = ensureProviderRuntimePluginHandle({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHandle:
-      params.providerRuntimeHandle ?? getModelProviderRuntimePluginHandle(params.model),
-  });
-  const context = {
-    config: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    provider: params.provider,
-    modelId: params.modelId,
-    model: params.model,
-    thinkingLevel: params.thinkingLevel,
-  };
-  const prepared = plugin?.prepareExtraParams?.({ ...context, extraParams: merged }) ?? merged;
-  const transportPatch = plugin?.extraParamsForTransport?.({
-    ...context,
-    extraParams: prepared,
-    transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
-  })?.patch;
-  const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
-  canonicalizeMaxTokensParam({
-    merged: result,
-    sources: [prepared, transportPatch ?? undefined],
-  });
-  return result;
 }
 
 function sanitizeExtraParamsRecord(

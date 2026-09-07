@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { createTranscriptsStore } from "../../transcripts/capture-operations.js";
 import { resolveSourceProvider } from "../../transcripts/capture.js";
 import {
@@ -53,7 +54,10 @@ function transcriptReadMethod<T>(
         config: cfg,
         logger: console,
       });
-      respond(true, await read(store, params, cfg));
+      const result = await withPluginRegistryResourceOperationAsync(async () =>
+        read(store, params, cfg),
+      );
+      respond(true, result);
     } catch (error) {
       if (!(error instanceof TranscriptLibraryError)) {
         context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);

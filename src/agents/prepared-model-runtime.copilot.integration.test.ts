@@ -12,6 +12,7 @@ import {
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
@@ -95,46 +96,48 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     preferPersisted: false,
   });
   const selection = { agentId: "worker", provider: "custom-proxy", modelId: "test-model" };
-  const { runtimePluginRegistry } = prepareWorkspacePluginRegistries(
-    {
-      config,
-      env,
-      agentDir: workspaceDir,
-      workspaceDir,
-      loadRuntimePlugins: true,
-      runtimePluginSelections: [selection],
-    },
-    metadata,
-  );
+  await withPluginRegistryResourceOperationAsync(async () => {
+    const { runtimePluginRegistry } = prepareWorkspacePluginRegistries(
+      {
+        config,
+        env,
+        agentDir: workspaceDir,
+        workspaceDir,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [selection],
+      },
+      metadata,
+    );
 
-  expect(runtimePluginRegistry).not.toBe(root);
-  expect(loadModule).toHaveBeenCalledWith(entrypoint);
-  expect(getActivePluginRegistry()).toBe(root);
-  expect(root.agentHarnesses).toEqual([]);
-  expect(
-    runtimePluginRegistry?.plugins,
-    JSON.stringify(runtimePluginRegistry?.diagnostics),
-  ).toEqual([expect.objectContaining({ id: "copilot", status: "loaded", source: entrypoint })]);
-  await expect(
-    ensureSelectedAgentHarnessPlugin({
-      ...selection,
-      config,
-      workspaceDir,
-      pluginRegistry: runtimePluginRegistry,
-    }),
-  ).resolves.toBeUndefined();
-  const harness = runtimePluginRegistry?.agentHarnesses.find(
-    (entry) => entry.harness.id === "copilot",
-  )?.harness;
-  expect(
-    harness?.supports({
-      ...selection,
-      requestedRuntime: "copilot",
-      providerOwnerStatus: "unowned",
-      providerOwnerPluginIds: [],
-      modelProvider: config.models!.providers!["custom-proxy"],
-    }),
-  ).toEqual({ supported: true, priority: 100 });
-  await harness?.dispose?.();
-  expect(openStore).not.toHaveBeenCalled();
+    expect(runtimePluginRegistry).not.toBe(root);
+    expect(loadModule).toHaveBeenCalledWith(entrypoint);
+    expect(getActivePluginRegistry()).toBe(root);
+    expect(root.agentHarnesses).toEqual([]);
+    expect(
+      runtimePluginRegistry?.plugins,
+      JSON.stringify(runtimePluginRegistry?.diagnostics),
+    ).toEqual([expect.objectContaining({ id: "copilot", status: "loaded", source: entrypoint })]);
+    await expect(
+      ensureSelectedAgentHarnessPlugin({
+        ...selection,
+        config,
+        workspaceDir,
+        pluginRegistry: runtimePluginRegistry,
+      }),
+    ).resolves.toBeUndefined();
+    const harness = runtimePluginRegistry?.agentHarnesses.find(
+      (entry) => entry.harness.id === "copilot",
+    )?.harness;
+    expect(
+      harness?.supports({
+        ...selection,
+        requestedRuntime: "copilot",
+        providerOwnerStatus: "unowned",
+        providerOwnerPluginIds: [],
+        modelProvider: config.models!.providers!["custom-proxy"],
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+    await harness?.dispose?.();
+    expect(openStore).not.toHaveBeenCalled();
+  });
 });

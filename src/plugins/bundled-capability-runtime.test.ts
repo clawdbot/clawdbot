@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, assert, describe, expect, it } from "vitest";
-import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { afterAll, afterEach, beforeEach, assert, describe, expect, it } from "vitest";
+import { loadBundledCapabilityRuntimeRegistry as loadBundledCapabilityRuntimeRegistryCore } from "./bundled-capability-runtime.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import {
@@ -18,12 +18,30 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "./registry-resources.js";
+import {
   captureActivePluginRegistrySnapshot,
   getActivePluginRegistry,
   getPluginRegistrationContext,
   listImportedRuntimePluginIds,
   setActivePluginRegistry,
 } from "./runtime.js";
+
+let resources: PluginRegistryResourceScope;
+beforeEach(() => {
+  resources = new PluginRegistryResourceScope();
+});
+afterEach(async () => {
+  resources.release();
+  await drainPluginRegistryResourceDisposals();
+});
+function loadBundledCapabilityRuntimeRegistry(
+  ...args: Parameters<typeof loadBundledCapabilityRuntimeRegistryCore>
+) {
+  return resources.adopt(loadBundledCapabilityRuntimeRegistryCore(...args));
+}
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);

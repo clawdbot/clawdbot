@@ -25,7 +25,8 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import { loadPluginRegistryHandle, type PluginRegistryHandle } from "../../../plugins/loader.js";
+import { withPluginRegistryResourceOperationAsync } from "../../../plugins/registry-resources.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
@@ -252,61 +253,69 @@ async function resolveSelectedContextEngineInfo(params: {
 
   ensureContextEnginesInitialized();
   let pluginRegistry: PluginRegistry | undefined;
-  if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
-    try {
-      pluginRegistry = loadPluginRegistryHandle({
-        config: params.cfg,
-        env: params.env,
-        onlyPluginIds: [engineId],
-      });
-    } catch (error) {
-      if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
-        const message = error instanceof Error ? error.message : String(error);
+  let registryHandle: PluginRegistryHandle | undefined;
+  try {
+    if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+      try {
+        registryHandle = loadPluginRegistryHandle({
+          config: params.cfg,
+          env: params.env,
+          onlyPluginIds: [engineId],
+        });
+        pluginRegistry = registryHandle.registry;
+      } catch (error) {
+        if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            warnings: [
+              `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`,
+            ],
+          };
+        }
+      }
+      const registration = pluginRegistry?.contextEngines.get(engineId);
+      if (registration?.lifecycle === "readOnlyDiscovery") {
         return {
           warnings: [
-            `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`,
+            `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`,
+          ],
+        };
+      }
+      if (registration?.lifecycle !== "runtime") {
+        return {
+          warnings: [
+            `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
           ],
         };
       }
     }
-    const registration = pluginRegistry?.contextEngines.get(engineId);
-    if (registration?.lifecycle === "readOnlyDiscovery") {
-      return {
-        warnings: [
-          `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`,
-        ],
-      };
-    }
-    if (registration?.lifecycle !== "runtime") {
-      return {
-        warnings: [
-          `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
-        ],
-      };
-    }
-  }
 
-  try {
-    const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
-      surface: "context-engine Doctor checks",
-      hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
-    });
-    const resolve = () =>
-      resolveContextEngine(params.cfg, {
-        agentDir: resolveAgentDir(params.cfg, agentId, params.env),
-        workspaceDir: params.cfg.agents?.defaults?.workspace
-          ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
-          : undefined,
+    try {
+      const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
+        surface: "context-engine Doctor checks",
+        hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
       });
-    const engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
-    return { info: engine.info, warnings: [] };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      warnings: [
-        `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements: ${message}`,
-      ],
-    };
+      const resolve = () =>
+        resolveContextEngine(params.cfg, {
+          agentDir: resolveAgentDir(params.cfg, agentId, params.env),
+          workspaceDir: params.cfg.agents?.defaults?.workspace
+            ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
+            : undefined,
+        });
+      const info = await withPluginRegistryResourceOperationAsync(() =>
+        withPluginRuntimeRegistryScope(pluginRegistry, async () => (await resolve()).info),
+      );
+      return { info, warnings: [] };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        warnings: [
+          `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements: ${message}`,
+        ],
+      };
+    }
+  } finally {
+    registryHandle?.release();
   }
 }
 

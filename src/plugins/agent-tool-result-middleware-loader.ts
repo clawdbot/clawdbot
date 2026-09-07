@@ -7,6 +7,7 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { listAgentToolResultMiddlewares } from "./agent-tool-result-middleware.js";
 import { loadPluginRegistryHandle } from "./loader.js";
+import { requirePluginRegistryResourceScope } from "./registry-resources.js";
 import type { PluginAgentToolResultMiddlewareOwner, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
@@ -56,10 +57,14 @@ function registryHasMiddlewareOwners(params: {
 export async function loadAgentToolResultMiddlewaresForRuntime(params: {
   runtime: AgentToolResultMiddlewareRuntime;
 }): Promise<AgentToolResultMiddleware[]> {
+  const resources = requirePluginRegistryResourceScope();
   const activeHandlers = listAgentToolResultMiddlewares(params.runtime);
 
   try {
     const activeRegistry = getActivePluginRegistry();
+    if (activeRegistry) {
+      resources.retain(activeRegistry);
+    }
     const owners = listMiddlewareOwners({
       registry: activeRegistry,
       runtime: params.runtime,
@@ -86,15 +91,18 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
         runtime: params.runtime,
       })
         ? loadedRegistry
-        : loadPluginRegistryHandle({
-            config: (await import("../config/config.js")).getRuntimeConfig(),
-            onlyPluginIds: missingPluginIds,
-            manifestRegistry: {
-              plugins: missingOwners.map((owner) => owner.manifest),
-              diagnostics: [],
-            },
-            channelPluginLoadIntent: "full",
-          });
+        : resources.adopt(
+            loadPluginRegistryHandle({
+              config: (await import("../config/config.js")).getRuntimeConfig(),
+              onlyPluginIds: missingPluginIds,
+              manifestRegistry: {
+                plugins: missingOwners.map((owner) => owner.manifest),
+                diagnostics: [],
+              },
+              channelPluginLoadIntent: "full",
+            }),
+          );
+    resources.retain(runtimeRegistry);
 
     const missingHandlers = runtimeRegistry.agentToolResultMiddlewares
       .filter(

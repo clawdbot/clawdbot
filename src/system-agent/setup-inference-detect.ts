@@ -220,91 +220,109 @@ export async function detectSetupInference(
   );
   if (discoveryChoices.length > 0) {
     const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-    // Runtime metadata must be resolved with consent under this lease, not reused
-    // from option preparation before awaited CLI probes could permit a replacement.
-    const discovery = await withPluginLifecycleLease({}, async () => {
-      let discoveryConfig = cfg;
-      const enabledChoices: ProviderAuthChoiceMetadata[] = [];
-      for (const choice of discoveryChoices) {
-        // Keep unaccepted choices visible, but do not import their runtime during discovery.
-        const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
-          workspaceDir: workspace,
-        });
-        if (!enabled.enabled) {
-          continue;
-        }
-        discoveryConfig = (deps.enablePluginInConfig ?? enablePluginInConfig)(
-          discoveryConfig,
-          choice.pluginId,
-        ).config;
-        enabledChoices.push(choice);
-      }
-      const providers = enabledChoices.length
-        ? (
-            deps.resolvePluginProviders ??
-            (await import("../plugins/providers.runtime.js")).resolvePluginProvidersCore
-          )({
-            config: discoveryConfig,
-            workspaceDir: workspace,
-            mode: "setup",
-            includeUntrustedWorkspacePlugins: false,
-            onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
-          })
-        : [];
-      return { discoveryConfig, enabledChoices, providers };
-    });
-    const discovered = await Promise.all(
-      discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
-        const provider = discovery.providers.find(
-          (candidate) =>
-            candidate.pluginId === choice.pluginId &&
-            normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-        );
-        const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
-        if (!method?.appGuidedSetup) {
-          return null;
-        }
-        try {
-          const candidate = await method.appGuidedSetup.detect({
-            config: discovery.discoveryConfig,
-            env: process.env,
+    const providerHandles: ReturnType<
+      NonNullable<DetectSetupInferenceDeps["acquirePluginProviders"]>
+    >[] = [];
+    try {
+      // Runtime metadata must be resolved with consent under this lease, not reused
+      // from option preparation before awaited CLI probes could permit a replacement.
+      const discovery = await withPluginLifecycleLease({}, async () => {
+        let discoveryConfig = cfg;
+        const enabledChoices: ProviderAuthChoiceMetadata[] = [];
+        for (const choice of discoveryChoices) {
+          // Keep unaccepted choices visible, but do not import their runtime during discovery.
+          const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
             workspaceDir: workspace,
           });
-          if (!candidate) {
+          if (!enabled.enabled) {
+            continue;
+          }
+          discoveryConfig = (deps.enablePluginInConfig ?? enablePluginInConfig)(
+            discoveryConfig,
+            choice.pluginId,
+          ).config;
+          enabledChoices.push(choice);
+        }
+        const providerHandle = enabledChoices.length
+          ? (
+              deps.acquirePluginProviders ??
+              (await import("../plugins/providers.runtime.js")).acquirePluginProvidersCore
+            )({
+              config: discoveryConfig,
+              workspaceDir: workspace,
+              mode: "setup",
+              includeUntrustedWorkspacePlugins: false,
+              onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
+            })
+          : undefined;
+        if (providerHandle) {
+          providerHandles.push(providerHandle);
+        }
+        return { discoveryConfig, enabledChoices, providerHandle };
+      });
+      const probes = await Promise.allSettled(
+        discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
+          const provider = discovery.providerHandle?.providers.find(
+            (candidate) =>
+              candidate.pluginId === choice.pluginId &&
+              normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
+          );
+          const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+          if (!method?.appGuidedSetup) {
             return null;
           }
-          const ref = parseProviderModelRef(candidate.modelRef);
-          if (
-            !ref ||
-            normalizeProviderId(ref.provider) !== normalizeProviderId(choice.providerId)
-          ) {
-            setupInferenceLog.warn(
-              `Ignoring invalid app-guided model ${candidate.modelRef} from ${choice.choiceId}.`,
+          try {
+            const candidate = await method.appGuidedSetup.detect({
+              config: discovery.discoveryConfig,
+              env: process.env,
+              workspaceDir: workspace,
+            });
+            if (!candidate) {
+              return null;
+            }
+            const ref = parseProviderModelRef(candidate.modelRef);
+            if (
+              !ref ||
+              normalizeProviderId(ref.provider) !== normalizeProviderId(choice.providerId)
+            ) {
+              setupInferenceLog.warn(
+                `Ignoring invalid app-guided model ${candidate.modelRef} from ${choice.choiceId}.`,
+              );
+              return null;
+            }
+            return Object.assign(
+              {
+                kind: toProviderAutoSetupKind(choice.choiceId),
+                brandId: choice.providerId,
+                label: choice.choiceLabel,
+                detail: candidate.detail?.trim() || "available locally",
+                modelRef: candidate.modelRef,
+                recommended: false as const,
+                credentials: true,
+              },
+              choice.icon ? { icon: choice.icon } : {},
+              choice.website ? { website: choice.website } : {},
+            );
+          } catch (error) {
+            setupInferenceLog.debug(
+              `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
             );
             return null;
           }
-          return Object.assign(
-            {
-              kind: toProviderAutoSetupKind(choice.choiceId),
-              brandId: choice.providerId,
-              label: choice.choiceLabel,
-              detail: candidate.detail?.trim() || "available locally",
-              modelRef: candidate.modelRef,
-              recommended: false as const,
-              credentials: true,
-            },
-            choice.icon ? { icon: choice.icon } : {},
-            choice.website ? { website: choice.website } : {},
-          );
-        } catch (error) {
-          setupInferenceLog.debug(
-            `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
-          );
-          return null;
+        }),
+      );
+      const discovered = probes.map((result) => {
+        if (result.status === "rejected") {
+          throw result.reason;
         }
-      }),
-    );
-    candidates.push(...discovered.filter((candidate) => candidate !== null));
+        return result.value;
+      });
+      candidates.push(...discovered.filter((candidate) => candidate !== null));
+    } finally {
+      for (const handle of providerHandles) {
+        handle.release();
+      }
+    }
   }
   return {
     ...partial,

@@ -102,6 +102,8 @@ function makeCallRegistrationResolver(params: {
     provider: params.provider,
     providerConfig: params.providerConfig,
     instructions: params.resolveInstructions?.(call) ?? params.instructions,
+    releaseProviderResources() {},
+    runWithProviderResources: <T>(operation: () => T): T => operation(),
   });
 }
 
@@ -819,7 +821,7 @@ describe("RealtimeCallHandler path routing", () => {
       | undefined;
     const processEvent = vi.fn();
     const endCall = vi.fn(async () => ({ success: true }));
-    const close = vi.fn(() => {
+    const close = vi.fn((): void => {
       callbacks?.onTranscript?.("user", "last words", true);
       callbacks?.onClose?.("completed");
       throw new Error("provider close failed");
@@ -903,12 +905,14 @@ describe("RealtimeCallHandler path routing", () => {
           processEvent.mock.calls.filter(([event]) => event.type === "call.ended"),
         ).toHaveLength(1);
         expect(endCall).not.toHaveBeenCalled();
+        await expect(handler.close()).rejects.toThrow("provider close failed");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }
       }
     } finally {
+      close.mockImplementation(() => {});
       await server.close();
     }
   });
@@ -2562,6 +2566,9 @@ describe("RealtimeCallHandler path routing", () => {
                 .map((event) => (event.type === "call.speech" ? event.transcript : undefined)),
             ).toEqual(["Old caller"]);
           });
+          if (outcome === "error") {
+            await expect(handler.close()).rejects.toThrow("replacement close failed");
+          }
         } finally {
           if (
             replacementWs.readyState !== WebSocket.CLOSED &&
@@ -2571,6 +2578,7 @@ describe("RealtimeCallHandler path routing", () => {
           }
         }
       } finally {
+        replacementClose.mockImplementation(() => {});
         if (
           oldWs &&
           oldWs.readyState !== WebSocket.CLOSED &&

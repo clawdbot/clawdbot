@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Voice Call tests cover runtime plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,7 +97,17 @@ vi.mock("./webhook.js", () => ({
 }));
 
 vi.mock("./realtime-voice.runtime.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  acquireConfiguredRealtimeVoiceProvider: (
+    ...args: Parameters<
+      typeof import("./realtime-voice.runtime.js").acquireConfiguredRealtimeVoiceProvider
+    >
+  ): ReturnType<
+    typeof import("./realtime-voice.runtime.js").acquireConfiguredRealtimeVoiceProvider
+  > => ({
+    ...mocks.resolveConfiguredRealtimeVoiceProvider(...args),
+    release() {},
+    run: (operation) => operation(),
+  }),
 }));
 
 vi.mock("./realtime-fast-context.js", () => ({
@@ -385,6 +397,38 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries failed public stop while retaining the native webhook cleanup owner", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE native_state (value TEXT); INSERT INTO native_state VALUES ('retained')");
+    mocks.startTunnel.mockResolvedValue({
+      publicUrl: "https://public.example/voice/webhook",
+      provider: "ngrok",
+      stop: async () => {},
+    });
+    mocks.webhookStop
+      .mockRejectedValueOnce(new Error("native webhook cleanup failed"))
+      .mockImplementation(async () => {
+        expect(db.prepare("SELECT value FROM native_state").get()?.value).toBe("retained");
+        db.close();
+      });
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {},
+      agentRuntime: createPluginRuntimeMock().agent,
+    });
+    try {
+      await expect(runtime.stop()).rejects.toThrow("native webhook cleanup failed");
+      expect(db.isOpen).toBe(true);
+      await expect(runtime.stop()).resolves.toBeUndefined();
+      expect(db.isOpen).toBe(false);
+      expect(mocks.webhookStop).toHaveBeenCalledTimes(2);
+    } finally {
+      if (db.isOpen) {
+        db.close();
+      }
+    }
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {

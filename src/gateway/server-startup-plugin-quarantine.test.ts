@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retainPluginRegistryHandleForTest } from "../plugins/loader-handles.test-support.js";
 import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
@@ -123,11 +124,13 @@ describe("Gateway startup plugin quarantine", () => {
         [validPluginId]: { enabled: true },
       },
     };
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: { plugins: pluginConfig },
-      onlyPluginIds: [brokenPluginId, validPluginId],
-    });
+    const registry = retainPluginRegistryHandleForTest(
+      loadOpenClawPlugins({
+        cache: false,
+        config: { plugins: pluginConfig },
+        onlyPluginIds: [brokenPluginId, validPluginId],
+      }),
+    );
     expect(registry.plugins.find((plugin) => plugin.id === brokenPluginId)).toMatchObject({
       status: "error",
       activated: false,
@@ -216,18 +219,20 @@ describe("Gateway startup plugin quarantine", () => {
 
     const { loadOpenClawPlugins } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-          load: { paths: [selectedRoot] },
-          allow: [pluginId],
-          entries: { [pluginId]: { enabled: true } },
+    const registry = retainPluginRegistryHandleForTest(
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [selectedRoot] },
+            allow: [pluginId],
+            entries: { [pluginId]: { enabled: true } },
+          },
         },
-      },
-      onlyPluginIds: [pluginId],
-    });
+        onlyPluginIds: [pluginId],
+      }),
+    );
 
     expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("loaded");
     expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
@@ -283,18 +288,20 @@ describe("Gateway startup plugin quarantine", () => {
 
     const { loadOpenClawPlugins } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-          load: { paths: [selectedRoot] },
-          allow: [pluginId],
-          entries: { [pluginId]: { enabled: true } },
+    const registry = retainPluginRegistryHandleForTest(
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [selectedRoot] },
+            allow: [pluginId],
+            entries: { [pluginId]: { enabled: true } },
+          },
         },
-      },
-      onlyPluginIds: [pluginId],
-    });
+        onlyPluginIds: [pluginId],
+      }),
+    );
 
     expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("error");
     expect(listActiveDegradedPlugins()).toMatchObject([

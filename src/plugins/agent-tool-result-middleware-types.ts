@@ -1,5 +1,5 @@
 // Defines plugin middleware contracts for agent tool results.
-import type { AgentToolResult } from "../agents/runtime/index.js";
+import type { AgentToolResult } from "../../packages/agent-core/src/types.js";
 import type { PluginToolMatcher } from "./hook-types.js";
 
 export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;

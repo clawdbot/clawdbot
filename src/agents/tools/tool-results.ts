@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "../runtime/index.js";
+import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 
 export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {

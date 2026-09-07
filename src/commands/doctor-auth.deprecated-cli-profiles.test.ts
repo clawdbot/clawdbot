@@ -27,7 +27,7 @@ const providerPolicyMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: () => resolvePluginProvidersMock(),
+  acquirePluginProvidersCore: () => ({ providers: resolvePluginProvidersMock(), release() {} }),
 }));
 
 vi.mock("../agents/auth-profiles/repair.js", () => ({

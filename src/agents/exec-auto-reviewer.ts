@@ -23,8 +23,8 @@ import {
   DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT,
 } from "./exec-auto-reviewer.prompt.js";
 import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore,
+  acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
@@ -48,8 +48,8 @@ export type ExecReviewerConfig = {
 };
 
 type ExecReviewerDeps = {
-  prepareSimpleCompletionModelForAgent?: typeof prepareSimpleCompletionModelForAgent;
-  completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
+  acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
+  completeWithPreparedSimpleCompletionModelCore?: typeof completeWithPreparedSimpleCompletionModelCore;
 };
 
 type ModelAutoReviewInput = ExecAutoReviewInput | BoardWidgetAutoReviewInput;
@@ -284,7 +284,7 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
 }
 
 function extractTextContent(
-  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
+  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModelCore>>,
 ) {
   return result.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -294,7 +294,7 @@ function extractTextContent(
 }
 
 function extractCompletionFailure(
-  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
+  result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModelCore>>,
 ): string | undefined {
   const stopReason = "stopReason" in result ? result.stopReason : undefined;
   if (stopReason === "stop") {
@@ -373,14 +373,16 @@ export function createModelExecAutoReviewer(params: {
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
   const prepareModel =
-    params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent;
+    params.deps?.acquireSimpleCompletionModelForAgent ?? acquireSimpleCompletionModelForAgent;
   const complete =
-    params.deps?.completeWithPreparedSimpleCompletionModel ??
-    completeWithPreparedSimpleCompletionModel;
+    params.deps?.completeWithPreparedSimpleCompletionModelCore ??
+    completeWithPreparedSimpleCompletionModelCore;
   const modelRef = resolveReviewerModelRef(params.reviewer);
   const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
   return async (input) => {
     let completionController: AbortController | undefined;
+    let acquisition: ReturnType<typeof prepareModel> | undefined;
+    let acquired = false;
     try {
       params.signal?.throwIfAborted();
       const serializedInput = stringifyInput(input);
@@ -398,18 +400,20 @@ export function createModelExecAutoReviewer(params: {
           rationale: "exec reviewer deferred because the command contains reviewer-directed text",
         };
       }
-      const prepared = await raceWithReviewerTimeout(
-        prepareModel({
-          cfg,
-          agentId,
-          modelRef,
-          allowMissingApiKeyModes: ["aws-sdk"],
-        }),
-        { timeoutMs, signal: params.signal },
-      );
+      acquisition = prepareModel({
+        cfg,
+        agentId,
+        modelRef,
+        allowMissingApiKeyModes: ["aws-sdk"],
+      });
+      const prepared = await raceWithReviewerTimeout(acquisition, {
+        timeoutMs,
+        signal: params.signal,
+      });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
+      acquired = true;
       if ("error" in prepared) {
         return buildExecAutoReviewFailureDecision(
           "exec reviewer model unavailable",
@@ -417,40 +421,46 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      completionController = new AbortController();
-      const result = await raceWithReviewerTimeout(
-        complete({
-          model: prepared.model,
-          auth: prepared.auth,
-          cfg,
-          context: {
-            systemPrompt:
-              "kind" in input
-                ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
-            messages: [
-              {
-                role: "user",
-                content: buildReviewerUserPrompt(input, serializedInput),
-                timestamp: Date.now(),
-              },
-            ],
-          },
-          options: {
-            maxTokens: EXEC_REVIEWER_MAX_TOKENS,
-            temperature: 0,
-            signal: params.signal
-              ? AbortSignal.any([completionController.signal, params.signal])
-              : completionController.signal,
-          },
-        }),
-        {
-          timeoutMs,
-          signal: params.signal,
-          // Abort the provider request after the local timeout wins the race.
-          onTimeout: () => completionController?.abort(),
-        },
-      );
+      const controller = new AbortController();
+      completionController = controller;
+      // A local timeout does not settle provider work. Its actual promise owns release.
+      const completion = (async () => {
+        try {
+          return await complete({
+            model: prepared.model,
+            auth: prepared.auth,
+            cfg,
+            context: {
+              systemPrompt:
+                "kind" in input
+                  ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
+                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: "user",
+                  content: buildReviewerUserPrompt(input, serializedInput),
+                  timestamp: Date.now(),
+                },
+              ],
+            },
+            options: {
+              maxTokens: EXEC_REVIEWER_MAX_TOKENS,
+              temperature: 0,
+              signal: params.signal
+                ? AbortSignal.any([controller.signal, params.signal])
+                : controller.signal,
+            },
+          });
+        } finally {
+          prepared.release();
+        }
+      })();
+      const result = await raceWithReviewerTimeout(completion, {
+        timeoutMs,
+        signal: params.signal,
+        // Abort the provider request after the local timeout wins the race.
+        onTimeout: () => completionController?.abort(),
+      });
       if (result === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
@@ -468,6 +478,18 @@ export function createModelExecAutoReviewer(params: {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
+    } finally {
+      if (!acquired && acquisition) {
+        // Timed-out preparation may still succeed after the reviewer has returned.
+        void acquisition.then(
+          (prepared) => {
+            if (!("error" in prepared)) {
+              prepared.release();
+            }
+          },
+          () => {},
+        );
+      }
     }
   };
 }

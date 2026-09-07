@@ -3,7 +3,7 @@ import "./plugin-node-host.js";
 
 type NodeHostPluginTestApi = {
   getNodeHostPluginRegistry(): PluginRegistry | undefined;
-  resetNodeHostPluginRegistry(): void;
+  resetNodeHostPluginRegistry(): Promise<void>;
 };
 
 function getTestApi(): NodeHostPluginTestApi {
@@ -16,6 +16,6 @@ export function getNodeHostPluginRegistry(): PluginRegistry | undefined {
   return getTestApi().getNodeHostPluginRegistry();
 }
 
-export function resetNodeHostPluginRegistry(): void {
-  getTestApi().resetNodeHostPluginRegistry();
+export async function resetNodeHostPluginRegistry(): Promise<void> {
+  await getTestApi().resetNodeHostPluginRegistry();
 }

@@ -5,6 +5,7 @@ import type { ResolveContextEngineOptions } from "../../../context-engine/regist
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
+import { requirePluginRegistryResourceScope } from "../../../plugins/registry-resources.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
@@ -120,8 +121,9 @@ export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   if (configuredLoader) {
     return configuredLoader(params);
   }
-  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
-    params,
+  const runtime = await subagentRegistryPluginRuntimeLoader.load();
+  return requirePluginRegistryResourceScope().adopt(
+    runtime.loadAgentRuntimePluginRegistryHandle(params),
   );
 }
 

@@ -4,10 +4,10 @@
  */
 import { createHash } from "node:crypto";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import * as middlewareRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
-  createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
@@ -48,6 +48,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -405,6 +406,8 @@ function hasExplicitNonSourceMessageRoute(
 
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
+  /** Stop new calls and join admitted execution before releasing plugin registrations. */
+  release: () => Promise<void>;
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
   availableTools: AnyAgentTool[];
   availableSpecs: CodexDynamicToolSpec[];
@@ -572,10 +575,15 @@ export function createCodexDynamicToolBridge(params: {
     acceptedSessionSpawns: [],
     quarantinedTools,
   };
-  const middlewareRunner = createAgentToolResultMiddlewareRunner({
-    runtime: "codex",
-    ...toolResultHookContext,
-  });
+  const middlewareContext = { runtime: "codex" as const, ...toolResultHookContext };
+  // Separately published Codex plugins can run on older compatible hosts whose
+  // middleware SDK has only the legacy host-owned callback contract.
+  const middlewareLease =
+    typeof middlewareRuntime.acquireAgentToolResultMiddlewareRunner === "function"
+      ? middlewareRuntime.acquireAgentToolResultMiddlewareRunner(middlewareContext)
+      : undefined;
+  const middlewareRunner =
+    middlewareLease ?? middlewareRuntime.createAgentToolResultMiddlewareRunner(middlewareContext);
   const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
     const pluginMeta = getPluginToolMeta(tool);
     if (pluginMeta) {
@@ -597,7 +605,17 @@ export function createCodexDynamicToolBridge(params: {
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
   const directToolNames = params.directToolNames;
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
-  return {
+  const pending = new Set<Promise<CodexDynamicToolRuntimeResponse>>();
+  let closing = false;
+  let released: Promise<void> | undefined;
+  const bridge: CodexDynamicToolBridge = {
+    release() {
+      closing = true;
+      return (released ??= (async () => {
+        await Promise.allSettled(pending);
+        await middlewareLease?.release();
+      })());
+    },
     availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: inheritedSpecs
       ? inheritedSpecs.flatMap<CodexDynamicToolSpec>((spec) => {
@@ -1020,6 +1038,21 @@ export function createCodexDynamicToolBridge(params: {
       }
     },
   };
+  const handleToolCall = bridge.handleToolCall;
+  bridge.handleToolCall = async (...args) => {
+    if (closing) {
+      throw new Error("Codex dynamic tool bridge has been released");
+    }
+    const execution = createDeferred<CodexDynamicToolRuntimeResponse>();
+    pending.add(execution.promise);
+    try {
+      execution.resolve(handleToolCall(...args));
+      return await execution.promise;
+    } finally {
+      pending.delete(execution.promise);
+    }
+  };
+  return bridge;
 }
 
 function projectCodexExecutableDynamicToolSurface(

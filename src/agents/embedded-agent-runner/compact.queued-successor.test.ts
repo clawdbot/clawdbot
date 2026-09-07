@@ -219,7 +219,11 @@ describe("queued compaction successor ownership", () => {
       // Prepared generations own registry lookup; an omitted registry deliberately means empty.
       acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (input) => {
         const lease = await previousAcquire(input);
-        return { ...lease, snapshot: { ...lease.snapshot, pluginRegistry } };
+        return {
+          ...lease,
+          snapshot: { ...lease.snapshot, pluginRegistry },
+          pluginGeneration: { ...lease.pluginGeneration, pluginRegistry },
+        };
       });
       const config: OpenClawConfig = {
         models: {

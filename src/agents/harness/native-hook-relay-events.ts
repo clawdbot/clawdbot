@@ -6,6 +6,7 @@ import {
 import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { getToolHookMatcherScope } from "../../plugins/hooks.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { mergePluginToolMatcherScopes } from "../../plugins/tool-hook-matcher.js";
 import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
 import {
@@ -34,7 +35,7 @@ import type {
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
+import { createAgentToolResultMiddlewareRunnerCore } from "./tool-result-middleware.js";
 
 function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_tool_call") {
   const registry = getGlobalHookRunnerRegistry();
@@ -206,20 +207,22 @@ async function runNativeHookRelayPostToolUse(params: {
   const hasToolResultMiddleware = listAgentToolResultMiddlewares("codex").length > 0;
   const result = !hasToolResultMiddleware
     ? rawResult
-    : await createAgentToolResultMiddlewareRunner({
-        runtime: "codex",
-        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-        sessionId: params.registration.sessionId,
-        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-        runId: params.registration.runId,
-      }).applyToolResultMiddleware({
-        turnId: params.invocation.turnId,
-        toolCallId,
-        toolName,
-        args: startArgs,
-        ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
-        result: payloadTextResult(rawResult),
-      });
+    : await withPluginRegistryResourceOperationAsync(() =>
+        createAgentToolResultMiddlewareRunnerCore({
+          runtime: "codex",
+          ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+          sessionId: params.registration.sessionId,
+          ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+          runId: params.registration.runId,
+        }).applyToolResultMiddleware({
+          turnId: params.invocation.turnId,
+          toolCallId,
+          toolName,
+          args: startArgs,
+          ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+          result: payloadTextResult(rawResult),
+        }),
+      );
   await runAgentHarnessAfterToolCallHook({
     toolName,
     toolCallId,

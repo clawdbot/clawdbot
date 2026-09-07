@@ -427,8 +427,8 @@ async function resolveLiteralPrefixProviderIds(params: {
   env?: NodeJS.ProcessEnv;
   providerRefs?: readonly string[];
 }): Promise<Set<string>> {
-  const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
-  const providers = resolvePluginProviders({
+  const { acquirePluginProviders } = await loadResolvedModelPickerRuntime();
+  const providerHandle = acquirePluginProviders({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -437,23 +437,28 @@ async function resolveLiteralPrefixProviderIds(params: {
     includeUntrustedWorkspacePlugins: false,
     ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
-  const ids = new Set<string>();
-  for (const provider of providers) {
-    if (!provider.preserveLiteralProviderPrefix) {
-      continue;
-    }
-    const id = normalizeProviderId(provider.id);
-    if (id) {
-      ids.add(id);
-    }
-    for (const alias of provider.aliases ?? []) {
-      const aliasId = normalizeProviderId(alias);
-      if (aliasId) {
-        ids.add(aliasId);
+  const { providers } = providerHandle;
+  try {
+    const ids = new Set<string>();
+    for (const provider of providers) {
+      if (!provider.preserveLiteralProviderPrefix) {
+        continue;
+      }
+      const id = normalizeProviderId(provider.id);
+      if (id) {
+        ids.add(id);
+      }
+      for (const alias of provider.aliases ?? []) {
+        const aliasId = normalizeProviderId(alias);
+        if (aliasId) {
+          ids.add(aliasId);
+        }
       }
     }
+    return ids;
+  } finally {
+    providerHandle.release();
   }
-  return ids;
 }
 
 function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
@@ -748,72 +753,84 @@ async function maybeHandleProviderPluginSelection(params: {
 }): Promise<PromptDefaultModelResult | null> {
   let pluginResolution: string | null = null;
   let pluginProviders: ProviderPlugin[] = [];
-  if (params.selection.startsWith("provider-plugin:")) {
-    pluginResolution = params.selection;
-  } else if (!params.selection.includes("/")) {
-    const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
-    pluginProviders = resolvePluginProviders({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      mode: "setup",
+  let providerHandle:
+    | ReturnType<
+        Awaited<ReturnType<typeof loadResolvedModelPickerRuntime>>["acquirePluginProviders"]
+      >
+    | undefined;
+  try {
+    if (params.selection.startsWith("provider-plugin:")) {
+      pluginResolution = params.selection;
+    } else if (!params.selection.includes("/")) {
+      const { acquirePluginProviders } = await loadResolvedModelPickerRuntime();
+      providerHandle = acquirePluginProviders({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        mode: "setup",
+      });
+      pluginProviders = providerHandle.providers;
+      pluginResolution = pluginProviders.some(
+        (provider) => normalizeProviderId(provider.id) === normalizeProviderId(params.selection),
+      )
+        ? params.selection
+        : null;
+    }
+    if (!pluginResolution) {
+      return null;
+    }
+    if (!params.agentDir || !params.runtime) {
+      await params.prompter.note(
+        t("wizard.model.providerSetupUnavailable"),
+        t("wizard.model.providerSetupUnavailableTitle"),
+      );
+      return {};
+    }
+    const {
+      acquirePluginProviders,
+      resolveProviderPluginChoice,
+      runProviderModelSelectedHook,
+      runProviderPluginAuthMethod,
+    } = await loadResolvedModelPickerRuntime();
+    if (pluginProviders.length === 0) {
+      providerHandle?.release();
+      providerHandle = acquirePluginProviders({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        mode: "setup",
+      });
+      pluginProviders = providerHandle.providers;
+    }
+    const resolved = resolveProviderPluginChoice({
+      providers: pluginProviders,
+      choice: pluginResolution,
     });
-    pluginResolution = pluginProviders.some(
-      (provider) => normalizeProviderId(provider.id) === normalizeProviderId(params.selection),
-    )
-      ? params.selection
-      : null;
-  }
-  if (!pluginResolution) {
-    return null;
-  }
-  if (!params.agentDir || !params.runtime) {
-    await params.prompter.note(
-      t("wizard.model.providerSetupUnavailable"),
-      t("wizard.model.providerSetupUnavailableTitle"),
-    );
-    return {};
-  }
-  const {
-    resolvePluginProviders,
-    resolveProviderPluginChoice,
-    runProviderModelSelectedHook,
-    runProviderPluginAuthMethod,
-  } = await loadResolvedModelPickerRuntime();
-  if (pluginProviders.length === 0) {
-    pluginProviders = resolvePluginProviders({
+    if (!resolved) {
+      return {};
+    }
+    const applied = await runProviderPluginAuthMethod({
       config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      mode: "setup",
-    });
-  }
-  const resolved = resolveProviderPluginChoice({
-    providers: pluginProviders,
-    choice: pluginResolution,
-  });
-  if (!resolved) {
-    return {};
-  }
-  const applied = await runProviderPluginAuthMethod({
-    config: params.cfg,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    method: resolved.method,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-  });
-  if (applied.defaultModel) {
-    await runProviderModelSelectedHook({
-      config: applied.config,
-      model: applied.defaultModel,
+      runtime: params.runtime,
       prompter: params.prompter,
+      method: resolved.method,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      env: params.env,
     });
+    if (applied.defaultModel) {
+      await runProviderModelSelectedHook({
+        config: applied.config,
+        model: applied.defaultModel,
+        prompter: params.prompter,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return { model: applied.defaultModel, config: applied.config };
+  } finally {
+    providerHandle?.release();
   }
-  return { model: applied.defaultModel, config: applied.config };
 }
 
 export async function promptDefaultModel(

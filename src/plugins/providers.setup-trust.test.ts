@@ -4,7 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { acquirePluginProvidersCore, type PluginProvidersHandle } from "./providers.runtime.js";
+
+const providerHandles: PluginProvidersHandle[] = [];
+function resolveProviderValuesForTest(params: Parameters<typeof acquirePluginProvidersCore>[0]) {
+  const handle = acquirePluginProvidersCore(params);
+  providerHandles.push(handle);
+  return handle.providers;
+}
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -14,6 +21,9 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  for (const handle of providerHandles.splice(0)) {
+    handle.release();
+  }
   cleanupTrackedTempDirs(tempDirs);
   resetPluginLoaderTestStateForTest();
 });
@@ -110,7 +120,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProvidersCore({
+      const providers = resolveProviderValuesForTest({
         config: {
           plugins: {
             enabled: true,
@@ -151,7 +161,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProvidersCore({
+      const providers = resolveProviderValuesForTest({
         config: {
           plugins: {
             allow: ["setup-trusted-provider"],

@@ -161,40 +161,51 @@ export async function runSystemAgent(
   const readSnapshot =
     boundOpts.deps?.readConfigFileSnapshot ??
     (await import("../config/config.js")).readConfigFileSnapshot;
-  const registry = await withPluginLifecycleLease({}, async (lease) => {
-    const snapshot = await readSnapshot();
-    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, {
-      ...boundOpts.deps,
-      readConfigFileSnapshot: async () => snapshot,
+  const handles: NonNullable<ReturnType<typeof loadAgentRuntimePluginRegistryHandle>>[] = [];
+  try {
+    const registryHandle = await withPluginLifecycleLease({}, async (lease) => {
+      const snapshot = await readSnapshot();
+      const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, {
+        ...boundOpts.deps,
+        readConfigFileSnapshot: async () => snapshot,
+      });
+      if (!currentArtifacts) {
+        throw new SystemAgentInferenceUnavailableError("conversation");
+      }
+      const config = snapshot.runtimeConfig ?? snapshot.config;
+      const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
+      // Validate and import under the same lifecycle lease. Frozen probe config could
+      // otherwise re-enable a revoked owner or another configured harness during loading.
+      lease.assertOwned();
+      const handle = loadAgentRuntimePluginRegistryHandle({
+        basePluginIds: [],
+        config,
+        workspaceDir,
+        selections: [
+          {
+            provider: route.provider,
+            modelId: route.model,
+            runtime: route.agentHarnessRuntimeOverride,
+            agentId: route.agentId,
+          },
+        ],
+      });
+      if (handle) {
+        handles.push(handle);
+      }
+      return handle;
     });
-    if (!currentArtifacts) {
+    if (!registryHandle) {
       throw new SystemAgentInferenceUnavailableError("conversation");
     }
-    const config = snapshot.runtimeConfig ?? snapshot.config;
-    const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
-    // Validate and import under the same lifecycle lease. Frozen probe config could
-    // otherwise re-enable a revoked owner or another configured harness during loading.
-    lease.assertOwned();
-    return loadAgentRuntimePluginRegistryHandle({
-      basePluginIds: [],
-      config,
-      workspaceDir,
-      selections: [
-        {
-          provider: route.provider,
-          modelId: route.model,
-          runtime: route.agentHarnessRuntimeOverride,
-          agentId: route.agentId,
-        },
-      ],
-    });
-  });
-  if (!registry) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
+    // Probe scope has ended; CLI preflight needs its private harness before the first
+    // run prepares an owner. Do not pin metadata or hold the install lease across chat.
+    await withPluginRuntimeRegistryScope(registryHandle.registry, run);
+  } finally {
+    for (const handle of handles) {
+      handle.release();
+    }
   }
-  // Probe scope has ended; CLI preflight needs its private harness before the first
-  // run prepares an owner. Do not pin metadata or hold the install lease across chat.
-  await withPluginRuntimeRegistryScope(registry, run);
 }
 
 async function runBoundSystemAgent(

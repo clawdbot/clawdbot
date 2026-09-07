@@ -9,8 +9,11 @@ type ResolveProviderWizardOptions =
   typeof import("../plugins/provider-wizard.js").resolveProviderWizardOptions;
 type ResolveProviderModelPickerEntries =
   typeof import("../plugins/provider-wizard.js").resolveProviderModelPickerEntries;
-type ResolvePluginProviders =
-  typeof import("../plugins/providers.runtime.js").resolvePluginProvidersCore;
+type ResolvePluginProviders = (
+  ...args: Parameters<typeof import("../plugins/providers.runtime.js").acquirePluginProvidersCore>
+) => ReturnType<
+  typeof import("../plugins/providers.runtime.js").acquirePluginProvidersCore
+>["providers"];
 type ResolveProviderSetupFlowContributions =
   typeof import("./provider-flow.js").resolveProviderSetupFlowContributions;
 type ResolveProviderModelPickerFlowContributions =
@@ -43,7 +46,10 @@ vi.mock("../plugins/provider-wizard.js", () => ({
 
 const resolvePluginProvidersCore = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof resolvePluginProvidersCore>) => ({
+    providers: resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;

@@ -17,6 +17,7 @@ import {
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
+import { registerPluginRegistryResourceDisposer } from "./registry-resources.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -425,13 +426,19 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `runtime lifecycle cleanup must be a function: ${id}`);
       return;
     }
+    if (lifecycle.dispose !== undefined && typeof lifecycle.dispose !== "function") {
+      reportRegistrationError(record, `runtime lifecycle dispose must be a function: ${id}`);
+      return;
+    }
+    const registeredLifecycle = { ...lifecycle, id };
     registry.runtimeLifecycles.push({
       pluginId: record.id,
       pluginName: record.name,
-      lifecycle: { ...lifecycle, id },
+      lifecycle: registeredLifecycle,
       source: record.source,
       rootDir: record.rootDir,
     });
+    registerPluginRegistryResourceDisposer(registry, record.id, registeredLifecycle);
   };
 
   const registerAgentEventSubscription = (

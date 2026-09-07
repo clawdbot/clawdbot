@@ -6,6 +6,7 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import { PluginRegistryResourceScope } from "./registry-resources.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
@@ -22,6 +23,7 @@ vi.mock("./capability-provider-runtime.js", () => ({
 }));
 
 let runtimeModule: typeof import("./memory-embedding-provider-runtime.js");
+let resources: PluginRegistryResourceScope;
 
 function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {
   return {
@@ -31,15 +33,25 @@ function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {
 }
 
 beforeEach(async () => {
+  resources = new PluginRegistryResourceScope();
   clearEmbeddingProviders();
   mocks.resolvePluginCapabilityProviders.mockReset();
   mocks.resolvePluginCapabilityProviders.mockReturnValue([]);
   mocks.resolvePluginCapabilityProvider.mockReset();
   mocks.resolvePluginCapabilityProvider.mockReturnValue(undefined);
-  runtimeModule = await import("./memory-embedding-provider-runtime.js");
+  const runtime = await import("./memory-embedding-provider-runtime.js");
+  runtimeModule = {
+    ...runtime,
+    getMemoryEmbeddingProviderCore: (...args) =>
+      resources.run(() => runtime.getMemoryEmbeddingProviderCore(...args)),
+    listMemoryEmbeddingProvidersCore: (...args) =>
+      resources.run(() => runtime.listMemoryEmbeddingProvidersCore(...args)),
+  };
 });
 
-afterEach(() => {
+afterEach(async () => {
+  resources.release();
+  await resources.waitForDisposals();
   clearEmbeddingProviders();
 });
 
@@ -51,12 +63,12 @@ describe("memory embedding provider runtime resolution", () => {
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("capability")]);
 
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+    expect(runtimeModule.listMemoryEmbeddingProvidersCore().map((adapter) => adapter.id)).toEqual([
       "openai-compatible",
       "registered",
       "capability",
     ]);
-    expect(runtimeModule.getMemoryEmbeddingProvider("registered")?.id).toBe("registered");
+    expect(runtimeModule.getMemoryEmbeddingProviderCore("registered")?.id).toBe("registered");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
@@ -64,11 +76,11 @@ describe("memory embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+    expect(runtimeModule.listMemoryEmbeddingProvidersCore().map((adapter) => adapter.id)).toEqual([
       "openai-compatible",
       "ollama",
     ]);
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
+    expect(runtimeModule.getMemoryEmbeddingProviderCore("ollama")?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "embeddingProviders",
@@ -94,7 +106,7 @@ describe("memory embedding provider runtime resolution", () => {
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)?.id).toBe(
+    expect(runtimeModule.getMemoryEmbeddingProviderCore("ollama-5080", config as never)?.id).toBe(
       ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
@@ -124,7 +136,7 @@ describe("memory embedding provider runtime resolution", () => {
       },
     } as never;
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)?.id).toBe(
+    expect(runtimeModule.getMemoryEmbeddingProviderCore("ollama-gpu1", config)?.id).toBe(
       ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
@@ -145,8 +157,8 @@ describe("memory embedding provider runtime resolution", () => {
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("openai")?.id).toBe(registered.id);
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+    expect(runtimeModule.getMemoryEmbeddingProviderCore("openai")?.id).toBe(registered.id);
+    expect(runtimeModule.listMemoryEmbeddingProvidersCore().map((adapter) => adapter.id)).toEqual([
       "openai-compatible",
       "openai",
     ]);
@@ -181,13 +193,13 @@ describe("memory embedding provider runtime resolution", () => {
       create,
     });
 
-    const adapter = runtimeModule.getMemoryEmbeddingProvider("generic");
+    const adapter = runtimeModule.getMemoryEmbeddingProviderCore("generic");
     expect(adapter).toMatchObject({
       id: "generic",
       defaultModel: "generic-default",
       transport: "local",
     });
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((entry) => entry.id)).toContain(
+    expect(runtimeModule.listMemoryEmbeddingProvidersCore().map((entry) => entry.id)).toContain(
       "generic",
     );
     const options = { config: {}, model: "generic-model", dimensions: 7 };
@@ -214,7 +226,7 @@ describe("memory embedding provider runtime resolution", () => {
     } satisfies MemoryEmbeddingProviderAdapter;
     registerEmbeddingProvider(memoryAdapter);
 
-    const adapter = runtimeModule.getMemoryEmbeddingProvider("migrated-memory");
+    const adapter = runtimeModule.getMemoryEmbeddingProviderCore("migrated-memory");
     expect(adapter).toBe(memoryAdapter);
     expect(adapter?.supportsMultimodalEmbeddings?.({ model: "multimodal" })).toBe(true);
     expect(adapter?.shouldContinueAutoSelection?.(new Error("setup"))).toBe(true);

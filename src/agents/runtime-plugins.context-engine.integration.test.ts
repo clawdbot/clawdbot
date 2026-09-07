@@ -1,7 +1,11 @@
 // Verifies prepared agent turns retain their selected runtime context-engine owner.
 import { afterAll, afterEach, expect, it } from "vitest";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
-import { loadAndActivateRootPluginRegistry, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  loadAndActivateRootPluginRegistry,
+  loadPluginRegistryHandleForTest as loadPluginRegistryHandle,
+  retainPluginRegistryHandleForTest,
+} from "../plugins/loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -72,11 +76,13 @@ it("keeps the configured context engine active in a prepared agent registry", as
     workspaceDir: makePluginLoaderTempDir(),
     onlyPluginIds: [engineId],
   });
-  const preparedRegistry = loadAgentRuntimePluginRegistryHandle({
-    basePluginIds: [],
-    config,
-    workspaceDir: plugin.dir,
-  });
+  const preparedRegistry = retainPluginRegistryHandleForTest(
+    loadAgentRuntimePluginRegistryHandle({
+      basePluginIds: [],
+      config,
+      workspaceDir: plugin.dir,
+    }),
+  );
 
   expect(preparedRegistry).not.toBe(activeRegistry);
   await withPluginRuntimeRegistryScope(preparedRegistry, async () => {
@@ -165,11 +171,13 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   expect(rootSandboxFactory).not.toBeNull();
   expect(sandboxRegistrationsAfterRoot).toBe(1);
 
-  const handle = loadAgentRuntimePluginRegistryHandle({
-    basePluginIds: ["ce-probe", "sandbox-probe"],
-    config,
-    workspaceDir,
-  });
+  const handle = retainPluginRegistryHandleForTest(
+    loadAgentRuntimePluginRegistryHandle({
+      basePluginIds: ["ce-probe", "sandbox-probe"],
+      config,
+      workspaceDir,
+    }),
+  );
   const discovery = loadPluginRegistryHandle({
     cache: false,
     config,

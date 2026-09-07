@@ -11,6 +11,7 @@ import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runti
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -340,57 +341,59 @@ export function resolveTranscriptPolicy(params: {
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
 }): TranscriptPolicy {
-  const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
-  const cacheKey = cacheConfig
-    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
-    : undefined;
-  if (cacheConfig && cacheKey) {
-    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
-    if (cached) {
-      return cached;
+  return withPluginRegistryResourceOperation(() => {
+    const provider = normalizeProviderId(params.provider ?? "");
+    const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
+    const cacheKey = cacheConfig
+      ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
+      : undefined;
+    if (cacheConfig && cacheKey) {
+      const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
     }
-  }
-  const runtimePlugin =
-    params.runtimeHandle?.plugin ??
-    (provider
-      ? resolveProviderRuntimePlugin({
-          provider,
-          modelId: params.modelId,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        })
-      : undefined);
-  const context = {
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    provider,
-    modelId: params.modelId ?? "",
-    modelApi: params.modelApi,
-    model: params.model,
-  };
+    const runtimePlugin =
+      params.runtimeHandle?.plugin ??
+      (provider
+        ? resolveProviderRuntimePlugin({
+            provider,
+            modelId: params.modelId,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          })
+        : undefined);
+    const context = {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      provider,
+      modelId: params.modelId ?? "",
+      modelApi: params.modelApi,
+      model: params.model,
+    };
 
-  // Once a provider adopts the replay-policy hook, replay policy should come
-  // from the plugin, not from transport-family defaults in core.
-  const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  const policy = buildReplayPolicy
-    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
-    : mergeTranscriptPolicy(
-        buildUnownedProviderTransportReplayFallback({
-          modelApi: params.modelApi,
-          modelId: params.modelId,
-          model: params.model,
-        }),
-      );
-  if (cacheConfig && cacheKey) {
-    let configCache = transcriptPolicyCache.get(cacheConfig);
-    if (!configCache) {
-      configCache = new Map();
-      transcriptPolicyCache.set(cacheConfig, configCache);
+    // Once a provider adopts the replay-policy hook, replay policy should come
+    // from the plugin, not from transport-family defaults in core.
+    const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
+    const policy = buildReplayPolicy
+      ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
+      : mergeTranscriptPolicy(
+          buildUnownedProviderTransportReplayFallback({
+            modelApi: params.modelApi,
+            modelId: params.modelId,
+            model: params.model,
+          }),
+        );
+    if (cacheConfig && cacheKey) {
+      let configCache = transcriptPolicyCache.get(cacheConfig);
+      if (!configCache) {
+        configCache = new Map();
+        transcriptPolicyCache.set(cacheConfig, configCache);
+      }
+      configCache.set(cacheKey, policy);
     }
-    configCache.set(cacheKey, policy);
-  }
-  return policy;
+    return policy;
+  });
 }

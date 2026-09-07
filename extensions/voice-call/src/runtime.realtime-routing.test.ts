@@ -26,7 +26,17 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./realtime-voice.runtime.js")>();
   return {
     ...actual,
-    resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+    acquireConfiguredRealtimeVoiceProvider: (
+      ...args: Parameters<
+        typeof import("./realtime-voice.runtime.js").acquireConfiguredRealtimeVoiceProvider
+      >
+    ): ReturnType<
+      typeof import("./realtime-voice.runtime.js").acquireConfiguredRealtimeVoiceProvider
+    > => ({
+      ...mocks.resolveConfiguredRealtimeVoiceProvider(...args),
+      release() {},
+      run: (operation) => operation(),
+    }),
   };
 });
 

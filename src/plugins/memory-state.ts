@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type {
   MemoryCorpusSupplement,
@@ -19,6 +20,10 @@ import type {
   MemoryPromptSupplementRegistration,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
+import {
+  associatePluginRegistryResourceAlias,
+  type PluginRegistryHandle,
+} from "./registry-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getPluginRegistrationContext,
@@ -197,12 +202,16 @@ export function adoptRuntimeMemoryRegistrations(
     memoryPromptPreparations === targetRegistry.memoryPromptPreparations &&
     memoryPromptSupplements === targetRegistry.memoryPromptSupplements
     ? targetRegistry
-    : {
-        ...targetRegistry,
-        memoryCorpusSupplements,
-        memoryPromptPreparations,
-        memoryPromptSupplements,
-      };
+    : associatePluginRegistryResourceAlias(
+        {
+          ...targetRegistry,
+          memoryCorpusSupplements,
+          memoryPromptPreparations,
+          memoryPromptSupplements,
+        },
+        targetRegistry,
+        runtimeRegistry,
+      );
 }
 export function registerMemoryPromptSupplement(
   requestedPluginId: string,
@@ -365,15 +374,15 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
 }
 
-let standaloneMemoryManagerActive = false;
-
-// Standalone managers are intentionally absent from the active plugin registry.
-export function setStandaloneMemoryManagerActive(active: boolean): void {
-  standaloneMemoryManagerActive = active;
-}
+// Standalone managers are absent from the active registry; runtime chunks share their owner.
+export const standaloneMemoryRuntimeState = resolveGlobalSingleton<{
+  slot?: { key: string; handle: PluginRegistryHandle; retiredRuntimes: Set<PluginRegistryHandle> };
+  active: boolean;
+  generation: number;
+}>(Symbol.for("openclaw.standaloneMemoryRegistryHost"), () => ({ active: false, generation: 0 }));
 
 export function hasMemoryRuntime(): boolean {
-  return standaloneMemoryManagerActive || getMemoryRuntime() !== undefined;
+  return standaloneMemoryRuntimeState.active || getMemoryRuntime() !== undefined;
 }
 
 function cloneMemoryPublicArtifact(

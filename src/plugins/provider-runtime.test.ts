@@ -22,7 +22,9 @@ import type {
   ProviderValidateReplayTurnsContext,
 } from "./types.js";
 
-type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+type ResolvePluginProviders = (
+  params: Parameters<typeof import("./providers.runtime.js").acquirePluginProvidersCore>[0],
+) => ProviderPlugin[];
 type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
@@ -300,7 +302,10 @@ describe("provider-runtime", () => {
       },
     }));
     vi.doMock("./providers.runtime.js", () => ({
-      resolvePluginProvidersCore: (params: unknown) => resolvePluginProvidersMock(params as never),
+      acquirePluginProvidersCore: (params: Parameters<ResolvePluginProviders>[0]) => ({
+        providers: resolvePluginProvidersMock(params),
+        release() {},
+      }),
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));

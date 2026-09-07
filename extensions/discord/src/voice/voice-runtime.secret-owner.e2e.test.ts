@@ -1,4 +1,5 @@
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { createRealtimeVoiceProviderFixture } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -52,10 +53,17 @@ defineDiscordVoiceTests(
       );
       resolveConfiguredRealtimeVoiceProviderMock.mockImplementationOnce((params) => {
         expect(params?.configuredProviderId).toBeUndefined();
-        expect(params?.isProviderAvailable?.({ id: "openai" })).toBe(false);
-        expect(params?.isProviderAvailable?.({ id: "xai" })).toBe(true);
+        expect(
+          params?.isProviderAvailable?.(createRealtimeVoiceProviderFixture({ id: "openai" })),
+        ).toBe(false);
+        expect(
+          params?.isProviderAvailable?.(createRealtimeVoiceProviderFixture({ id: "xai" })),
+        ).toBe(true);
         return {
-          provider: { id: "xai", capabilities: { supportsActivationNameGating: true } },
+          provider: createRealtimeVoiceProviderFixture({
+            id: "xai",
+            capabilities: { supportsActivationNameGating: true },
+          }),
           providerConfig: { model: "grok-voice", voice: "ara" },
         };
       });
@@ -91,8 +99,10 @@ defineDiscordVoiceTests(
         );
       });
       resolveConfiguredRealtimeVoiceProviderMock.mockImplementationOnce((params) => {
-        expect(params?.isProviderAvailable?.({ id: "openai" })).toBe(false);
-        params?.assertProviderAvailable?.({ id: "openai" });
+        expect(
+          params?.isProviderAvailable?.(createRealtimeVoiceProviderFixture({ id: "openai" })),
+        ).toBe(false);
+        params?.assertProviderAvailable?.(createRealtimeVoiceProviderFixture({ id: "openai" }));
         throw new Error("expected availability assertion to throw");
       });
       const session = new realtimeModule.DiscordRealtimeVoiceSession({

@@ -105,7 +105,8 @@ const mocks = vi.hoisted(() => ({
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
   loadModelCatalog: vi.fn(async () => []),
-  prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+  acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+    release: vi.fn(),
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -122,7 +123,7 @@ const mocks = vi.hoisted(() => ({
       mode: "api-key",
     },
   })),
-  completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+  completeWithPreparedSimpleCompletionModelCore: vi.fn(async () => ({
     content: [{ type: "text", text: "local reply" }],
   })),
   callGateway: vi.fn(async ({ method }: { method: string }) => {
@@ -345,10 +346,10 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent:
-    mocks.prepareSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel:
-    mocks.completeWithPreparedSimpleCompletionModel as unknown as typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent:
+    mocks.acquireSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore:
+    mocks.completeWithPreparedSimpleCompletionModelCore as unknown as typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -429,13 +430,13 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/memory-embedding-provider-runtime.js", () => ({
-  listRegisteredMemoryEmbeddingProviderAdapters:
-    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-provider-runtime.js").listRegisteredMemoryEmbeddingProviderAdapters,
+  listRegisteredMemoryEmbeddingProviderAdaptersCore:
+    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-provider-runtime.js").listRegisteredMemoryEmbeddingProviderAdaptersCore,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
-  listEmbeddingProviders:
-    mocks.listEmbeddingProviders as unknown as typeof import("../plugins/embedding-provider-runtime.js").listEmbeddingProviders,
+  listEmbeddingProvidersCore:
+    mocks.listEmbeddingProviders as unknown as typeof import("../plugins/embedding-provider-runtime.js").listEmbeddingProvidersCore,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -445,12 +446,12 @@ vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
 
 vi.mock("../image-generation/runtime.js", () => ({
   generateImage: (...args: unknown[]) => mocks.generateImage(...args),
-  listRuntimeImageGenerationProviders: mocks.listRuntimeImageGenerationProviders,
+  listRuntimeImageGenerationProvidersCore: mocks.listRuntimeImageGenerationProviders,
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
   generateVideo: mocks.generateVideo,
-  listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
+  listRuntimeVideoGenerationProvidersCore: mocks.listRuntimeVideoGenerationProviders,
 }));
 
 vi.mock("../tts/tts.js", () => ({
@@ -471,7 +472,7 @@ vi.mock("../tts/tts.js", () => ({
 
 vi.mock("../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
-  listSpeechProviders: mocks.listSpeechProviders,
+  listSpeechProvidersCore: mocks.listSpeechProviders,
   normalizeSpeechProviderId: vi.fn(
     (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
   ),
@@ -638,8 +639,8 @@ describe("capability cli", () => {
         return store;
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
-    mocks.prepareSimpleCompletionModelForAgent.mockClear();
-    mocks.completeWithPreparedSimpleCompletionModel.mockClear();
+    mocks.acquireSimpleCompletionModelForAgent.mockClear();
+    mocks.completeWithPreparedSimpleCompletionModelCore.mockClear();
     mocks.callGateway.mockReset().mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
         return { enabled: true, provider: "openai" };
@@ -759,14 +760,13 @@ describe("capability cli", () => {
   }
 
   function firstCompletionCall() {
-    const calls = mocks.completeWithPreparedSimpleCompletionModel.mock.calls as unknown as Array<
-      [CompletionCall]
-    >;
+    const calls = mocks.completeWithPreparedSimpleCompletionModelCore.mock
+      .calls as unknown as Array<[CompletionCall]>;
     return calls[0]?.[0];
   }
 
   function firstPreparedModelParams() {
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     return calls[0]?.[0];
@@ -1122,8 +1122,8 @@ describe("capability cli", () => {
   it("defaults model run to local transport", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
-    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.completeWithPreparedSimpleCompletionModelCore).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
     expect(firstJsonOutput()?.transport).toBe("local");
@@ -1215,7 +1215,7 @@ describe("capability cli", () => {
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
@@ -1245,7 +1245,8 @@ describe("capability cli", () => {
   });
 
   it("adds minimal instructions only for openai local model probes", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      release: vi.fn(),
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1390,12 +1391,12 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Only image files are supported");
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("fails local model probes when the provider returns no text output", async () => {
-    mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+    mocks.completeWithPreparedSimpleCompletionModelCore.mockResolvedValueOnce({
       content: [],
     } as never);
 
@@ -1408,7 +1409,7 @@ describe("capability cli", () => {
   });
 
   it("surfaces provider errors when local model probes return no text output", async () => {
-    mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+    mocks.completeWithPreparedSimpleCompletionModelCore.mockResolvedValueOnce({
       content: [],
       stopReason: "error",
       errorMessage: '{"detail":"Instructions are required"}',
@@ -1423,7 +1424,8 @@ describe("capability cli", () => {
   });
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      release: vi.fn(),
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",
@@ -1446,7 +1448,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Codex app-server agent runtime");
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -1458,8 +1460,8 @@ describe("capability cli", () => {
       );
 
       expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     },
@@ -1483,8 +1485,8 @@ describe("capability cli", () => {
       ).rejects.toThrow("exit 1");
 
       expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
@@ -1647,8 +1649,8 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Invalid thinking level.");
-    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });

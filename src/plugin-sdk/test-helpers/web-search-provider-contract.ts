@@ -1,16 +1,20 @@
 /**
  * Contract suite for bundled web search provider registration and runtime behavior.
  */
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
-  resolveWebSearchProviderContractEntriesForPluginId,
+  resolveWebSearchProviderContractEntriesForPluginIdCore,
 } from "../../plugins/contracts/registry.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../../plugins/registry-resources.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
 import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
 
 type WebSearchContractEntry = ReturnType<
-  typeof resolveWebSearchProviderContractEntriesForPluginId
+  typeof resolveWebSearchProviderContractEntriesForPluginIdCore
 >[number];
 
 function resolveWebSearchCredentialValue(provider: {
@@ -32,6 +36,8 @@ function resolveWebSearchCredentialValue(provider: {
 }
 
 export function describeWebSearchProviderContracts(pluginId: string) {
+  const resources = new PluginRegistryResourceScope();
+  afterAll(() => resources.release());
   const providerIds =
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
@@ -52,7 +58,9 @@ export function describeWebSearchProviderContracts(pluginId: string) {
       }));
       return providerEntries;
     }
-    providerEntries = resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = withPluginRegistryResourceScope(resources, () =>
+      resolveWebSearchProviderContractEntriesForPluginIdCore(pluginId),
+    );
     return providerEntries;
   };
 

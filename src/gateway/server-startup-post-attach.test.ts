@@ -12,6 +12,11 @@ import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceOperationAsync,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { OpenClawPluginServiceContext } from "../plugins/types.js";
@@ -1893,10 +1898,14 @@ describe("startGatewayPostAttachRuntime", () => {
   it("skips rate-limit rewarms while retaining auth recovery without startup prewarm", async () => {
     vi.useFakeTimers();
     const onGatewayLifetimeSidecars = vi.fn();
+    const params = createPostAttachParams();
+    hoisted.warmCurrentProviderAuthStateOffMainThread.mockImplementation(async () => {
+      await withPluginRegistryResourceOperationAsync(async () => {});
+    });
 
     try {
       await startGatewayPostAttachRuntime({
-        ...createPostAttachParams(),
+        ...params,
         sidecarStartup: "defer",
         providerAuthPrewarm: {},
         onGatewayLifetimeSidecars,
@@ -1923,13 +1932,24 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
-      hook("auth");
-      hook("rate_limit");
-      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
+      const attemptResources = new PluginRegistryResourceScope();
+      try {
+        await withPluginRegistryResourceScope(attemptResources, async () => {
+          hook("auth");
+          hook("rate_limit");
+          expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+          // Fake timers run in the clock caller's context; retain the real delayed ALS boundary.
+          attemptResources.release();
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+      } finally {
+        attemptResources.release();
+      }
       await waitForGatewayTestState(() => {
         expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
+        expect(params.log.info).toHaveBeenCalledWith(
+          expect.stringContaining("provider auth state re-warmed (auth-profile-failure)"),
+        );
       });
     } finally {
       vi.useRealTimers();

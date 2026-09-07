@@ -73,14 +73,14 @@ vi.mock("../../agents/realtime-bootstrap-context.js", () => ({
   resolveRealtimeBootstrapContextInstructions: async () => undefined,
 }));
 vi.mock("../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderCore: mocks.resolveProvider,
   resolveRealtimeVoiceProviderCapabilities: (): InternalRealtimeVoiceProviderCapabilities => ({
     ...mocks.capabilities,
     supportsGatewayControl: true,
     handlesAgentConsult: true,
   }),
 }));
-vi.mock("../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
+vi.mock("../../talk/provider-registry.js", () => ({ listRealtimeVoiceProvidersCore: () => [] }));
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;

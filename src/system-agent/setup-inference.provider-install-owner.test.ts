@@ -152,7 +152,11 @@ it.each([false, true])(
             authProfiles: [],
             pendingPluginInstalls: { "fixture-provider": trustedRecord },
             persistAuthProfiles: async () => {},
-            provider: { id: "fixture-provider", label: "Fixture", auth: [] },
+            projectedModelRef: params.projectStarterModelRef?.("fixture-provider/fixture-model", {
+              id: "fixture-provider",
+              label: "Fixture",
+              auth: [],
+            }),
           };
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);

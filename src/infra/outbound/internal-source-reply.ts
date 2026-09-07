@@ -6,6 +6,7 @@ import {
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -83,22 +84,24 @@ export async function shouldUseInternalSourceReplySink(
   input: InternalSourceReplySinkInput,
   params: Record<string, unknown>,
 ): Promise<boolean> {
-  const hasImplicitCurrentSourceRoute =
-    input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
-    hasCurrentSourceReplyContext(input) &&
-    Boolean(input.sessionKey?.trim()) &&
-    !hasExplicitRouteParam(params);
-  if (!hasImplicitCurrentSourceRoute) {
-    return false;
-  }
-  if (
-    !normalizeOptionalString(input.toolContext?.currentChannelId) &&
-    !normalizeOptionalString(input.toolContext?.currentMessagingTarget)
-  ) {
-    return true;
-  }
-  // Configured current-source channels can infer the target and deliver through
-  // the normal plugin path; the sink is only the private fallback.
-  return !(await hasConfiguredCurrentSourceChannel(input));
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const hasImplicitCurrentSourceRoute =
+      input.action === "send" &&
+      input.sourceReplyDeliveryMode === "message_tool_only" &&
+      hasCurrentSourceReplyContext(input) &&
+      Boolean(input.sessionKey?.trim()) &&
+      !hasExplicitRouteParam(params);
+    if (!hasImplicitCurrentSourceRoute) {
+      return false;
+    }
+    if (
+      !normalizeOptionalString(input.toolContext?.currentChannelId) &&
+      !normalizeOptionalString(input.toolContext?.currentMessagingTarget)
+    ) {
+      return true;
+    }
+    // Configured current-source channels can infer the target and deliver through
+    // the normal plugin path; the sink is only the private fallback.
+    return !(await hasConfiguredCurrentSourceChannel(input));
+  });
 }

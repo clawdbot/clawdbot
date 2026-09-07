@@ -23,15 +23,15 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  acquireSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModelCore: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: completionMocks.prepareSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel:
-    completionMocks.completeWithPreparedSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent: completionMocks.acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore:
+    completionMocks.completeWithPreparedSimpleCompletionModelCore,
   resolveSimpleCompletionSelectionForAgent:
     completionMocks.resolveSimpleCompletionSelectionForAgent,
 }));
@@ -132,8 +132,9 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
 }
 
 beforeEach(() => {
-  completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
-  completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+  completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
+  completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
+    release: vi.fn(),
     selection: {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -156,8 +157,8 @@ beforeEach(() => {
       mode: "api-key",
     },
   });
-  completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
-  completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+  completionMocks.completeWithPreparedSimpleCompletionModelCore.mockReset();
+  completionMocks.completeWithPreparedSimpleCompletionModelCore.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
     usage: {},
   });
@@ -1514,7 +1515,7 @@ describe("registerPluginCommand", () => {
       } as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
       }),
@@ -1555,7 +1556,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
         preferredProfile: "openai:owner@example.com",

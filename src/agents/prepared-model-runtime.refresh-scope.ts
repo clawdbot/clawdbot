@@ -5,6 +5,7 @@ import {
   normalizePreparedModelRuntimeInput,
   ownerKey,
 } from "./prepared-model-runtime.owner.js";
+import { releasePreparedModelRuntimeOwnerResources } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -98,6 +99,7 @@ export function updateOwnersForScopedRefresh(
     if (options.retireStandalone && owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
+      releasePreparedModelRuntimeOwnerResources(owner);
       continue;
     }
     owner.generation += 1;
@@ -108,6 +110,7 @@ export function updateOwnersForScopedRefresh(
     }
     if (options.resetPluginGeneration) {
       owner.pluginGeneration = undefined;
+      releasePreparedModelRuntimeOwnerResources(owner);
     }
   }
 }

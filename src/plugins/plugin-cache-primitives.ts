@@ -1,6 +1,5 @@
 // Defines bounded caches for plugin runtime results and schema validation.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 
 /** Small process-local LRU cache for runtime registries and compiled validators. */
@@ -8,7 +7,10 @@ export class PluginLruCache<T> {
   readonly #maxEntries: number;
   readonly #entries = new Map<string, T>();
 
-  constructor(maxEntries: number) {
+  constructor(
+    maxEntries: number,
+    private readonly onRemove?: (value: T, cacheKey: string) => void,
+  ) {
     this.#maxEntries = normalizeMaxEntries(maxEntries, 1);
   }
 
@@ -17,14 +19,27 @@ export class PluginLruCache<T> {
   }
 
   clear(): void {
+    const removed = [...this.#entries];
     this.#entries.clear();
+    for (const [key, value] of removed) {
+      this.onRemove?.(value, key);
+    }
   }
 
   deleteValue(value: T): void {
+    this.deleteWhere((entry) => entry === value);
+  }
+
+  deleteWhere(matches: (value: T) => boolean): void {
+    const removed: [string, T][] = [];
     for (const [key, entry] of this.#entries) {
-      if (entry === value) {
+      if (matches(entry)) {
         this.#entries.delete(key);
+        removed.push([key, entry]);
       }
+    }
+    for (const [key, value] of removed) {
+      this.onRemove?.(value, key);
     }
   }
 
@@ -41,11 +56,21 @@ export class PluginLruCache<T> {
 
   /** Stores a value as the newest entry and evicts oldest entries past capacity. */
   set(cacheKey: string, value: T): void {
+    const removed: [string, T][] = [];
     if (this.#entries.has(cacheKey)) {
+      removed.push([cacheKey, this.#entries.get(cacheKey)!]);
       this.#entries.delete(cacheKey);
     }
     this.#entries.set(cacheKey, value);
-    pruneMapToMaxSize(this.#entries, this.#maxEntries);
+    while (this.#entries.size > this.#maxEntries) {
+      const oldest = this.#entries.entries().next().value!;
+      this.#entries.delete(oldest[0]);
+      removed.push(oldest);
+    }
+    // All removals are visible before callbacks can reenter the cache.
+    for (const [key, entry] of removed) {
+      this.onRemove?.(entry, key);
+    }
   }
 }
 

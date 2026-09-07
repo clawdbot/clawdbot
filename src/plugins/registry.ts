@@ -2,6 +2,7 @@
 import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { createPluginApiFactory } from "./registry-api.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
+import { disposePluginRegistrationResources } from "./registry-resources.js";
 import { createPluginRuntimeResolver } from "./registry-runtime.js";
 import { createPluginRegistryState } from "./registry-state.js";
 import type {
@@ -51,6 +52,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
     runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
+    disposePluginRegistrationResources(state.registry, pluginId);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );

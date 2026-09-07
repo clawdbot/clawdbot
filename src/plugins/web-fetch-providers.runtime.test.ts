@@ -1,6 +1,10 @@
 // Covers web fetch provider runtime hooks supplied by plugins.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "./registry-resources.js";
 
 type LoaderModule = typeof import("./loader.js");
 type ManifestRegistryModule = typeof import("./manifest-registry.js");
@@ -11,6 +15,7 @@ type WebProviderResolutionModule = typeof import("./web-provider-resolution-shar
 let loaderModule: LoaderModule;
 let manifestRegistryModule: ManifestRegistryModule;
 let webProviderResolutionModule: WebProviderResolutionModule;
+let resources: PluginRegistryResourceScope;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
@@ -121,10 +126,13 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webProviderResolutionModule = await import("./web-provider-resolution-shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
+    const runtime = await import("./web-fetch-providers.runtime.js");
+    resolvePluginWebFetchProviders = (params) =>
+      resources.run(() => runtime.resolvePluginWebFetchProviders(params));
   });
 
   beforeEach(() => {
+    resources = new PluginRegistryResourceScope();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistryCore").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
@@ -137,13 +145,15 @@ describe("resolvePluginWebFetchProviders", () => {
       .mockImplementation(() => {
         const registry = createEmptyPluginRegistry();
         registry.webFetchProviders = [createRuntimeWebFetchProvider()];
-        return registry;
+        return { registry, release() {} };
       });
     resetPluginRuntimeStateForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    resources.release();
     resetPluginRuntimeStateForTest();
+    await drainPluginRegistryResourceDisposals();
     vi.restoreAllMocks();
   });
 

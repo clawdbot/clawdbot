@@ -14,12 +14,15 @@ class PluginLoadReentryError extends Error {
 
 /** Small registry cache with reentry detection and per-key warning memory. */
 export class PluginLoaderCacheState<T> {
-  readonly #registryCache: PluginLruCache<T>;
+  readonly #registryCache: PluginLruCache<{ value: T; claim?: { release(): void } }>;
   readonly #inFlightLoads = new Set<string>();
   readonly #openAllowlistWarningCache: PluginLruCache<true>;
 
-  constructor(defaultMaxEntries: number) {
-    this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
+  constructor(
+    defaultMaxEntries: number,
+    private readonly retain?: (state: T) => { release(): void },
+  ) {
+    this.#registryCache = new PluginLruCache(defaultMaxEntries, (entry) => entry.claim?.release());
     this.#openAllowlistWarningCache = new PluginLruCache<true>(defaultMaxEntries);
   }
 
@@ -35,15 +38,16 @@ export class PluginLoaderCacheState<T> {
   }
 
   get(cacheKey: string): T | undefined {
-    return this.#registryCache.get(cacheKey);
+    return this.#registryCache.get(cacheKey)?.value;
   }
 
   set(cacheKey: string, state: T): void {
-    this.#registryCache.set(cacheKey, state);
+    const claim = this.retain?.(state);
+    this.#registryCache.set(cacheKey, { value: state, claim });
   }
 
   deleteValue(state: T): void {
-    this.#registryCache.deleteValue(state);
+    this.#registryCache.deleteWhere((entry) => entry.value === state);
   }
 
   isLoadInFlight(cacheKey: string): boolean {

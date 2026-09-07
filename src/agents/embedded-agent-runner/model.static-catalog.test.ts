@@ -50,7 +50,16 @@ vi.mock("../../plugins/providers.js", async (importOriginal) => ({
 vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/provider-discovery.js")>()),
   normalizePluginDiscoveryResult: providerMocks.normalizePluginDiscoveryResult,
-  resolveRuntimePluginDiscoveryProviders: providerMocks.resolveRuntimePluginDiscoveryProviders,
+  acquireRuntimePluginDiscoveryProviders: async (
+    params: Parameters<
+      typeof import("../../plugins/provider-discovery.js").acquireRuntimePluginDiscoveryProviders
+    >[0],
+  ): ReturnType<
+    typeof import("../../plugins/provider-discovery.js").acquireRuntimePluginDiscoveryProviders
+  > => ({
+    providers: await providerMocks.resolveRuntimePluginDiscoveryProviders(params),
+    release() {},
+  }),
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 

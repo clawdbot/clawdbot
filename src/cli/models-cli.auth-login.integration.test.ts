@@ -42,8 +42,8 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupRegistry: () => ({ providers: [] }),
 }));
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: () =>
-    [
+  acquirePluginProvidersCore: () => ({
+    providers: [
       {
         id: "openai",
         label: "OpenAI",
@@ -57,6 +57,8 @@ vi.mock("../plugins/providers.runtime.js", () => ({
         ],
       },
     ] satisfies ProviderPlugin[],
+    release() {},
+  }),
 }));
 
 function makeStdinInteractive(): () => void {

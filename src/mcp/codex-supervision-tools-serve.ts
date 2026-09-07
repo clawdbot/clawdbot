@@ -13,6 +13,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -97,17 +101,23 @@ function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]):
 export function createCodexSupervisionToolsMcpServer(
   params: { config?: OpenClawConfig; tools?: AnyAgentTool[] } = {},
 ): Server {
-  const config = withCodexSupervisionEnabled(params.config ?? getRuntimeConfig());
-  const tools = params.tools ?? resolveCodexSupervisionTools(config);
-  requireCompleteCodexSupervisionToolSet(tools);
-  return createToolsMcpServer({ name: "openclaw-codex-supervisor", tools });
+  const resources = new PluginRegistryResourceScope();
+  try {
+    return withPluginRegistryResourceScope(resources, () => {
+      const config = withCodexSupervisionEnabled(params.config ?? getRuntimeConfig());
+      const tools = params.tools ?? resolveCodexSupervisionTools(config);
+      requireCompleteCodexSupervisionToolSet(tools);
+      return createToolsMcpServer({ name: "openclaw-codex-supervisor", tools, resources });
+    });
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
 }
 
 export async function serveCodexSupervisionToolsMcp(): Promise<void> {
   routeLogsToStderr();
-  const config = withCodexSupervisionEnabled(getRuntimeConfig());
-  const tools = resolveCodexSupervisionTools(config);
-  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer({ config, tools }), {
+  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer(), {
     onShutdown: disposeRegisteredAgentHarnesses,
   });
 }

@@ -9,7 +9,7 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "./provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { acquirePluginProvidersCore } from "./providers.runtime.js";
 
 const log = createSubsystemLogger("plugins/provider-setup-availability");
 
@@ -35,62 +35,78 @@ export async function detectAvailableSetupProviderIds(params: {
       choice.assistantVisibility !== "manual-only" &&
       supportsTextInference(choice),
   );
-  // Keep the accepted artifact stable through import, then release before provider probes.
-  const discovery = await withPluginLifecycleLease({ env }, async () => {
-    let discoveryConfig = params.config;
-    const enabledChoices: ProviderAuthChoiceMetadata[] = [];
-    for (const choice of choices) {
-      // Discovery executes plugin code: only probe existing accepted or legacy runtimes.
-      const enabled = await enablePluginWithCapabilityConsent(params.config, choice.pluginId, {
-        env,
-        workspaceDir: params.workspaceDir,
-      });
-      if (enabled.enabled) {
-        discoveryConfig = enablePluginInConfig(discoveryConfig, choice.pluginId).config;
-        enabledChoices.push(choice);
-      }
-    }
-    const providers =
-      enabledChoices.length === 0
-        ? []
-        : resolvePluginProvidersCore({
-            config: discoveryConfig,
-            workspaceDir: params.workspaceDir,
-            env,
-            mode: "setup",
-            includeUntrustedWorkspacePlugins: false,
-            onlyPluginIds: uniqueStrings(enabledChoices.map((choice) => choice.pluginId)),
-          });
-    return { discoveryConfig, enabledChoices, providers };
-  });
-  const detected = await Promise.all(
-    discovery.enabledChoices.map(async (choice) => {
-      const provider = discovery.providers.find(
-        (candidate) =>
-          candidate.pluginId === choice.pluginId &&
-          normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-      );
-      const method = provider?.auth.find(
-        (candidate) => normalizeProviderId(candidate.id) === normalizeProviderId(choice.methodId),
-      );
-      if (!method?.appGuidedSetup?.detectAvailability) {
-        return undefined;
-      }
-      try {
-        return (await method.appGuidedSetup.detectAvailability({
-          config: discovery.discoveryConfig,
+  // The artifact lease ends after import; the resource claim survives all provider probes.
+  const providerHandles: ReturnType<typeof acquirePluginProvidersCore>[] = [];
+  try {
+    const discovery = await withPluginLifecycleLease({ env }, async () => {
+      let discoveryConfig = params.config;
+      const enabledChoices: ProviderAuthChoiceMetadata[] = [];
+      for (const choice of choices) {
+        // Discovery executes plugin code: only probe existing accepted or legacy runtimes.
+        const enabled = await enablePluginWithCapabilityConsent(params.config, choice.pluginId, {
           env,
           workspaceDir: params.workspaceDir,
-        }))
-          ? choice.providerId
-          : undefined;
-      } catch (error) {
-        log.debug(
-          `Provider availability detection failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
-        );
-        return undefined;
+        });
+        if (enabled.enabled) {
+          discoveryConfig = enablePluginInConfig(discoveryConfig, choice.pluginId).config;
+          enabledChoices.push(choice);
+        }
       }
-    }),
-  );
-  return new Set(detected.filter((providerId): providerId is string => Boolean(providerId)));
+      const providerHandle =
+        enabledChoices.length === 0
+          ? undefined
+          : acquirePluginProvidersCore({
+              config: discoveryConfig,
+              workspaceDir: params.workspaceDir,
+              env,
+              mode: "setup",
+              includeUntrustedWorkspacePlugins: false,
+              onlyPluginIds: uniqueStrings(enabledChoices.map((choice) => choice.pluginId)),
+            });
+      if (providerHandle) {
+        providerHandles.push(providerHandle);
+      }
+      return { discoveryConfig, enabledChoices, providerHandle };
+    });
+    const probes = await Promise.allSettled(
+      discovery.enabledChoices.map(async (choice) => {
+        const provider = discovery.providerHandle?.providers.find(
+          (candidate) =>
+            candidate.pluginId === choice.pluginId &&
+            normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
+        );
+        const method = provider?.auth.find(
+          (candidate) => normalizeProviderId(candidate.id) === normalizeProviderId(choice.methodId),
+        );
+        if (!method?.appGuidedSetup?.detectAvailability) {
+          return undefined;
+        }
+        try {
+          return (await method.appGuidedSetup.detectAvailability({
+            config: discovery.discoveryConfig,
+            env,
+            workspaceDir: params.workspaceDir,
+          }))
+            ? choice.providerId
+            : undefined;
+        } catch (error) {
+          log.debug(
+            `Provider availability detection failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
+          );
+          return undefined;
+        }
+      }),
+    );
+    const detected = probes.map((probe) => {
+      if (probe.status === "rejected") {
+        throw probe.reason;
+      }
+      return probe.value;
+    });
+    return new Set(detected.filter((providerId): providerId is string => Boolean(providerId)));
+  } finally {
+    for (const handle of providerHandles) {
+      handle.release();
+    }
+  }
 }

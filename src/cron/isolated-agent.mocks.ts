@@ -65,9 +65,16 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn(),
-}));
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  const { createPluginRegistryResourceOwner } = await import("../plugins/registry-resources.js");
+  return {
+    loadAgentRuntimePluginRegistryHandle: vi.fn(() => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, ...createPluginRegistryResourceOwner(registry, "scoped") };
+    }),
+  };
+});
 
 vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),

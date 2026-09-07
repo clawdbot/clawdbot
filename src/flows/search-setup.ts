@@ -17,6 +17,10 @@ import {
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { sortPluginEntriesById } from "../plugins/plugin-entry-order.js";
+import {
+  withPluginRegistryResourceOperation,
+  withPluginRegistryResourceOperationAsync,
+} from "../plugins/registry-resources.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolveWebSearchInstallCatalogEntries,
@@ -28,6 +32,7 @@ import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { restoreDisabledSearchConfig } from "./search-setup-config.js";
 import { sortFlowContributionsByLabel, type FlowContribution } from "./types.js";
 
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
@@ -226,11 +231,15 @@ export function resolveExistingKey(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): string | undefined {
-  return normalizeSecretInputString(rawKeyValue(config, provider));
+  return withPluginRegistryResourceOperation(() =>
+    normalizeSecretInputString(rawKeyValue(config, provider)),
+  );
 }
 
 export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
-  return hasConfiguredSecretInput(rawKeyValue(config, provider));
+  return withPluginRegistryResourceOperation(() =>
+    hasConfiguredSecretInput(rawKeyValue(config, provider)),
+  );
 }
 
 function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {
@@ -263,6 +272,16 @@ function resolveSearchSecretInput(
 }
 
 export function applySearchKey(
+  config: OpenClawConfig,
+  provider: SearchProvider,
+  key: SecretInput,
+): OpenClawConfig {
+  return withPluginRegistryResourceOperation(() =>
+    applySearchKeyWithResources(config, provider, key),
+  );
+}
+
+function applySearchKeyWithResources(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: SecretInput,
@@ -301,6 +320,15 @@ export function applySearchProviderSelection(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): OpenClawConfig {
+  return withPluginRegistryResourceOperation(() =>
+    applySearchProviderSelectionWithResources(config, provider),
+  );
+}
+
+function applySearchProviderSelectionWithResources(
+  config: OpenClawConfig,
+  provider: SearchProvider,
+): OpenClawConfig {
   const providerEntry = resolveSearchProviderEntry(config, provider);
   if (!providerEntry) {
     return config;
@@ -327,58 +355,12 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   if (original.tools?.web?.search?.enabled !== false) {
     return result;
   }
-
-  const next: OpenClawConfig = {
-    ...result,
-    tools: {
-      ...result.tools,
-      web: { ...result.tools?.web, search: { ...result.tools?.web?.search, enabled: false } },
-    },
-  };
-
-  const provider = next.tools?.web?.search?.provider;
-  if (typeof provider !== "string") {
-    return next;
-  }
-  const providerEntry = resolveSearchProviderEntry(original, provider);
-  if (!providerEntry?.pluginId) {
-    return next;
-  }
-
-  const pluginId = providerEntry.pluginId;
-  const originalPluginEntry = (
-    original.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
-  const resultPluginEntry = (
-    next.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
-
-  const nextPlugins = { ...next.plugins } as Record<string, unknown>;
-
-  if (Array.isArray(original.plugins?.allow)) {
-    nextPlugins.allow = [...original.plugins.allow];
-  } else {
-    delete nextPlugins.allow;
-  }
-
-  if (resultPluginEntry || originalPluginEntry) {
-    const nextEntries = {
-      ...(nextPlugins.entries as Record<string, Record<string, unknown>> | undefined),
-    };
-    const patchedEntry = { ...resultPluginEntry };
-    if (typeof originalPluginEntry?.enabled === "boolean") {
-      patchedEntry.enabled = originalPluginEntry.enabled;
-    } else {
-      delete patchedEntry.enabled;
-    }
-    nextEntries[pluginId] = patchedEntry;
-    nextPlugins.entries = nextEntries;
-  }
-
-  return {
-    ...next,
-    plugins: nextPlugins as OpenClawConfig["plugins"],
-  };
+  const provider = result.tools?.web?.search?.provider;
+  const pluginId =
+    typeof provider === "string"
+      ? resolveSearchProviderEntry(original, provider)?.pluginId
+      : undefined;
+  return restoreDisabledSearchConfig(original, result, pluginId);
 }
 
 type SetupSearchOptions = {
@@ -481,6 +463,17 @@ async function finalizeSearchProviderSetup(params: {
 }
 
 export async function runSearchSetupFlow(
+  config: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+  opts?: SetupSearchOptions,
+): Promise<SearchSetupResult> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    runSearchSetupFlowWithResources(config, runtime, prompter, opts),
+  );
+}
+
+async function runSearchSetupFlowWithResources(
   config: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,

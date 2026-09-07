@@ -229,7 +229,10 @@ vi.mock("../commands/model-picker.runtime.js", () => ({
     resolveProviderModelPickerEntries,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
-    resolvePluginProviders,
+    acquirePluginProviders: (...args: Parameters<typeof resolvePluginProviders>) => ({
+      providers: resolvePluginProviders(...args),
+      release() {},
+    }),
     runProviderPluginAuthMethod,
   },
 }));

@@ -11,6 +11,7 @@ import type {
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistryHandle } from "./registry-resources.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
@@ -20,7 +21,7 @@ type ClassifyWorkspaceMemoryPaths = NonNullable<
 
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
-  loadPluginRegistryHandle: vi.fn(),
+  loadPluginRegistryHandle: vi.fn<typeof import("./loader.js").loadPluginRegistryHandle>(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
@@ -64,6 +65,7 @@ function createRuntime() {
 }
 
 type TestRegistry<T extends MemoryPluginRuntime> = {
+  handle: PluginRegistryHandle;
   registry: ReturnType<typeof createEmptyPluginRegistry>;
   runtime: T;
 };
@@ -75,7 +77,7 @@ function createRegistry(
 ): TestRegistry<MemoryPluginRuntime> {
   const registry = createEmptyPluginRegistry();
   registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
-  return { registry, runtime };
+  return { registry, runtime, handle: { registry, release: vi.fn() } };
 }
 
 const memoryConfig = {
@@ -96,7 +98,7 @@ describe("memory runtime handles", () => {
   });
 
   it("loads only the selected memory plugin into a non-activating handle", async () => {
-    const { registry, runtime } = createRegistry();
+    const { registry, runtime, handle } = createRegistry();
     runtime.getMemorySearchManager.mockImplementationOnce(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return { manager: null, error: "no index" };
@@ -105,7 +107,7 @@ describe("memory runtime handles", () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return { backend: "builtin" };
     });
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    mocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
       getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
@@ -127,8 +129,8 @@ describe("memory runtime handles", () => {
   });
 
   it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
-    const { registry, runtime } = createRegistry();
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    const { runtime, handle } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     expect(hasMemoryRuntime()).toBe(false);
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
@@ -155,8 +157,8 @@ describe("memory runtime handles", () => {
     const main = createRegistry();
     const research = createRegistry();
     mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(main.registry)
-      .mockReturnValueOnce(research.registry);
+      .mockReturnValueOnce(main.handle)
+      .mockReturnValueOnce(research.handle);
 
     await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
@@ -172,8 +174,8 @@ describe("memory runtime handles", () => {
   });
 
   it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {
-    const { registry, runtime } = createRegistry();
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    const { runtime, handle } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(handle);
     runtime.getMemorySearchManager.mockRejectedValueOnce(
       new Error("manager initialization failed"),
     );
@@ -197,8 +199,8 @@ describe("memory runtime handles", () => {
     const main = createRegistry();
     const research = createRegistry();
     mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(main.registry)
-      .mockReturnValueOnce(research.registry);
+      .mockReturnValueOnce(main.handle)
+      .mockReturnValueOnce(research.handle);
 
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",
@@ -400,12 +402,12 @@ describe("memory runtime handles", () => {
   });
 
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {
-    const { registry, runtime } = createRegistry();
+    const { registry, runtime, handle } = createRegistry();
     runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return hits.filter((hit) => hit.source === "memory");
     });
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    mocks.loadPluginRegistryHandle.mockReturnValue(handle);
     const hits: MemorySearchResult[] = [
       {
         source: "memory",
@@ -437,7 +439,7 @@ describe("memory runtime handles", () => {
   });
 
   it("classifies workspace paths inside the selected plugin runtime scope", async () => {
-    const { registry, runtime } = createRegistry();
+    const { registry, runtime, handle } = createRegistry();
     runtime.classifyWorkspaceMemoryPaths.mockImplementationOnce(async ({ relativePaths }) => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return relativePaths.map((relativePath) => ({
@@ -445,7 +447,7 @@ describe("memory runtime handles", () => {
         originClass: relativePath === "MEMORY.md" ? "untrusted" : "owner",
       }));
     });
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    mocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
       classifyActiveMemoryWorkspacePaths({
@@ -468,9 +470,7 @@ describe("memory runtime handles", () => {
       getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
       resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     } satisfies MemoryPluginRuntime;
-    mocks.loadPluginRegistryHandle.mockReturnValue(
-      createRegistry(runtimeWithoutClassifier).registry,
-    );
+    mocks.loadPluginRegistryHandle.mockReturnValue(createRegistry(runtimeWithoutClassifier).handle);
 
     await expect(
       classifyActiveMemoryWorkspacePaths({
@@ -489,9 +489,7 @@ describe("memory runtime handles", () => {
       closeMemorySearchManager: vi.fn(async () => {}),
       closeAllMemorySearchManagers: vi.fn(async () => {}),
     } satisfies MemoryPluginRuntime;
-    mocks.loadPluginRegistryHandle.mockReturnValue(
-      createRegistry(runtimeWithoutAuthorizer).registry,
-    );
+    mocks.loadPluginRegistryHandle.mockReturnValue(createRegistry(runtimeWithoutAuthorizer).handle);
     const hits: MemorySearchResult[] = [
       {
         source: "memory",
@@ -534,8 +532,8 @@ describe("memory runtime handles", () => {
       });
     }
     mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(main.registry)
-      .mockReturnValueOnce(research.registry);
+      .mockReturnValueOnce(main.handle)
+      .mockReturnValueOnce(research.handle);
     resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" });
     resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "research" });
     mocks.loadPluginRegistryHandle.mockClear();

@@ -11,7 +11,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
-import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
+import {
+  canonicalizeSpeechProviderId,
+  listSpeechProvidersCore,
+} from "../../tts/provider-registry.js";
 import {
   getTtsProvider,
   getTtsPersona,
@@ -46,6 +50,18 @@ async function copyTtsOutputAtomically(sourcePath: string, targetPath: string): 
 }
 
 export async function runTtsConvert(params: {
+  text: string;
+  channel?: string;
+  provider?: string;
+  modelId?: string;
+  voiceId?: string;
+  output?: string;
+  transport: CapabilityTransport;
+}) {
+  return withPluginRegistryResourceOperationAsync(() => runTtsConvertWithResources(params));
+}
+
+async function runTtsConvertWithResources(params: {
   text: string;
   channel?: string;
   provider?: string;
@@ -415,6 +431,12 @@ function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string)
 }
 
 export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
+  return withPluginRegistryResourceOperationAsync(() =>
+    runTtsProvidersWithResources(transport, rawAgentId),
+  );
+}
+
+async function runTtsProvidersWithResources(transport: CapabilityTransport, rawAgentId?: string) {
   const cfg = getRuntimeConfig();
   if (transport === "gateway") {
     if (rawAgentId !== undefined) {
@@ -450,7 +472,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
   const prefsPath = resolveTtsPrefsPath(config);
   const active = getTtsProvider(config, prefsPath);
   return {
-    providers: listSpeechProviders(cfg).map((provider) => ({
+    providers: listSpeechProvidersCore(cfg).map((provider) => ({
       available: true,
       configured:
         active === provider.id ||
@@ -466,6 +488,10 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
 }
 
 export async function runTtsPersonas(transport: CapabilityTransport) {
+  return withPluginRegistryResourceOperationAsync(() => runTtsPersonasWithResources(transport));
+}
+
+async function runTtsPersonasWithResources(transport: CapabilityTransport) {
   if (transport === "gateway") {
     return await callGateway({
       method: "tts.personas",
@@ -490,6 +516,10 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
 }
 
 export async function runTtsVoices(providerRaw?: string) {
+  return withPluginRegistryResourceOperationAsync(() => runTtsVoicesWithResources(providerRaw));
+}
+
+async function runTtsVoicesWithResources(providerRaw?: string) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer tts voices",
     targetIds: getTtsCommandSecretTargetIds(),
@@ -505,6 +535,15 @@ export async function runTtsVoices(providerRaw?: string) {
 }
 
 export async function runTtsStateMutation(params: {
+  capability: "tts.enable" | "tts.disable" | "tts.set-provider" | "tts.set-persona";
+  transport: CapabilityTransport;
+  provider?: string;
+  persona?: string | null;
+}) {
+  return withPluginRegistryResourceOperationAsync(() => runTtsStateMutationWithResources(params));
+}
+
+async function runTtsStateMutationWithResources(params: {
   capability: "tts.enable" | "tts.disable" | "tts.set-provider" | "tts.set-persona";
   transport: CapabilityTransport;
   provider?: string;

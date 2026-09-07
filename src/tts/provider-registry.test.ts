@@ -25,8 +25,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./provider-registry.js")>()),
   canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
+  getSpeechProviderCore: mocks.getSpeechProvider,
+  listSpeechProvidersCore: mocks.listSpeechProviders,
 }));
 
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {

@@ -11,14 +11,14 @@ import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderCore,
+  listRealtimeTranscriptionProvidersCore,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
-import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
+import { listRealtimeVoiceProvidersCore } from "../../talk/provider-registry.js";
 import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderConfig,
@@ -169,9 +169,9 @@ export function listTalkTranscriptionProviders(
   config: OpenClawConfig,
   configuredProviderIds: Iterable<string | undefined>,
 ) {
-  const providers = listRealtimeTranscriptionProviders(config);
+  const providers = listRealtimeTranscriptionProvidersCore(config);
   for (const providerId of configuredProviderIds) {
-    const configuredProvider = getRealtimeTranscriptionProvider(providerId, config);
+    const configuredProvider = getRealtimeTranscriptionProviderCore(providerId, config);
     if (
       configuredProvider &&
       !providers.some(
@@ -261,7 +261,7 @@ export function buildTalkRealtimeConfig(
     config,
     provider: selectedProvider,
     providerConfigs,
-    providers: listRealtimeVoiceProviders(config),
+    providers: listRealtimeVoiceProvidersCore(config),
     requestedModel:
       normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
@@ -339,7 +339,7 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
 }) {
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
   const providers = normalizedConfigured
-    ? [getRealtimeTranscriptionProvider(normalizedConfigured, params.config)].filter(
+    ? [getRealtimeTranscriptionProviderCore(normalizedConfigured, params.config)].filter(
         (provider) => provider !== undefined,
       )
     : listTalkTranscriptionProviders(params.config, Object.keys(params.providerConfigs));

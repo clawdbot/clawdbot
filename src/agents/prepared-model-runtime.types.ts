@@ -5,6 +5,7 @@ import type { prepareMediaCapabilityProviders } from "../plugins/capability-prov
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
@@ -187,6 +188,7 @@ export type PreparedModelRuntimeOwner = {
   catalogInventory?: PreparedModelCatalogInventory;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
+  resources?: PluginRegistryResourceScope;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Explicit generation admitted for the current publication, when known. */
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;

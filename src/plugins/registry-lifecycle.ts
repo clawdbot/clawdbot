@@ -1,6 +1,10 @@
 /** Tracks active and retired plugin registries so stale runtime calls can be rejected. */
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
+import {
+  getPluginRegistryResourceAlias,
+  retainPluginRegistryResources,
+} from "./registry-resource-claims.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -10,22 +14,35 @@ type PluginRecordLifecycleEpoch = object;
 type PluginRegistryLifecycleState = {
   epoch: PluginRegistryLifecycleEpoch | undefined;
   controller: AbortController;
+  signal?: AbortSignal;
 };
 
-export const pluginLoaderCacheState = new PluginLoaderCacheState<PluginRegistry>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+export const pluginLoaderCacheState = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginLoaderRegistryCache"),
+  () =>
+    new PluginLoaderCacheState<PluginRegistry>(MAX_PLUGIN_REGISTRY_CACHE_ENTRIES, (registry) =>
+      retainPluginRegistryResources(registry),
+    ),
+  (cache) => cache.clearCachedRegistries(),
 );
 
 // Registry identities cross built/source module copies. Their activation and
 // revocation state must share that lifetime, or valid owners fail and revocations split.
-const { retiredRegistries, activatedRegistries, registryEpochs, recordEpochs, revokedRecordEpoch } =
-  resolveGlobalSingleton(Symbol.for("openclaw.pluginRegistryLifecycle"), () => ({
-    retiredRegistries: new WeakSet<PluginRegistry>(),
-    activatedRegistries: new WeakSet<PluginRegistry>(),
-    registryEpochs: new WeakMap<PluginRegistry, PluginRegistryLifecycleState>(),
-    recordEpochs: new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>(),
-    revokedRecordEpoch: Object.freeze({}),
-  }));
+const {
+  retiredRegistries,
+  activatedRegistries,
+  registryEpochs,
+  recordEpochs,
+  revokedRecordEpoch,
+  signalSources,
+} = resolveGlobalSingleton(Symbol.for("openclaw.pluginRegistryLifecycle"), () => ({
+  retiredRegistries: new WeakSet<PluginRegistry>(),
+  activatedRegistries: new WeakSet<PluginRegistry>(),
+  registryEpochs: new WeakMap<PluginRegistry, PluginRegistryLifecycleState>(),
+  recordEpochs: new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>(),
+  revokedRecordEpoch: Object.freeze({}),
+  signalSources: new WeakMap<AbortSignal, readonly AbortSignal[]>(),
+}));
 
 /** Marks a registry retired so late runtime calls can reject stale plugin state. */
 export function markPluginRegistryRetired(registry: PluginRegistry | null | undefined): void {
@@ -58,7 +75,7 @@ export function markPluginRegistryActive(registry: PluginRegistry | null | undef
 export function capturePluginRegistryLifecycleEpoch(
   registry: PluginRegistry,
 ): PluginRegistryLifecycleEpoch | undefined {
-  return retiredRegistries.has(registry) ? undefined : registryEpochs.get(registry)?.epoch;
+  return isPluginRegistryRetired(registry) ? undefined : registryEpochs.get(registry)?.epoch;
 }
 
 /** Observe an exact active epoch or explicitly scoped handle without granting activation. */
@@ -69,7 +86,7 @@ export function capturePluginRegistryLifecycleSignal(
 ): AbortSignal | undefined {
   let current = registryEpochs.get(registry);
   if (
-    retiredRegistries.has(registry) ||
+    isPluginRegistryRetired(registry) ||
     (epoch === undefined && options?.scopedRuntime !== true) ||
     current?.epoch !== epoch
   ) {
@@ -81,7 +98,19 @@ export function capturePluginRegistryLifecycleSignal(
     current = { epoch: undefined, controller: new AbortController() };
     registryEpochs.set(registry, current);
   }
-  return current.controller.signal;
+  const inherited = getPluginRegistryResourceAlias(registry)?.signal;
+  if (!current.signal) {
+    if (inherited) {
+      const sources = [current.controller.signal, inherited];
+      current.signal = AbortSignal.any(sources);
+      // A retained observer keeps its captured abort facts even after controller replacement.
+      // The weak key never makes a source retain its historical aliases or observers.
+      signalSources.set(current.signal, sources);
+    } else {
+      current.signal = current.controller.signal;
+    }
+  }
+  return current.signal;
 }
 
 /** True only while the exact captured registry activation remains current. */
@@ -89,7 +118,7 @@ export function isPluginRegistryLifecycleEpochActive(
   registry: PluginRegistry,
   epoch: PluginRegistryLifecycleEpoch,
 ): boolean {
-  return !retiredRegistries.has(registry) && registryEpochs.get(registry)?.epoch === epoch;
+  return !isPluginRegistryRetired(registry) && registryEpochs.get(registry)?.epoch === epoch;
 }
 
 /** Mint the exact record generation used by one registered native channel runtime. */
@@ -98,7 +127,7 @@ export function activatePluginRecordLifecycleEpoch(
   record: PluginRecord,
 ): PluginRecordLifecycleEpoch | undefined {
   const registryEpoch = registryEpochs.get(registry)?.epoch;
-  if (!registryEpoch || retiredRegistries.has(registry)) {
+  if (!registryEpoch || isPluginRegistryRetired(registry)) {
     return undefined;
   }
   const epoch = Object.freeze({ registryEpoch });
@@ -118,7 +147,7 @@ export function isPluginRecordLifecycleEpochActive(
   const epochRegistry = Object.getOwnPropertyDescriptor(epoch, "registryEpoch");
   return (
     registryEpoch !== undefined &&
-    !retiredRegistries.has(registry) &&
+    !isPluginRegistryRetired(registry) &&
     epochRegistry !== undefined &&
     "value" in epochRegistry &&
     epochRegistry.value === registryEpoch &&
@@ -143,7 +172,10 @@ export function isPluginRegistryActivated(registry: PluginRegistry): boolean {
 
 /** True when a registry has been retired by a newer active registry. */
 export function isPluginRegistryRetired(registry: PluginRegistry): boolean {
-  return retiredRegistries.has(registry);
+  return (
+    retiredRegistries.has(registry) ||
+    getPluginRegistryResourceAlias(registry)?.signal.aborted === true
+  );
 }
 
 /** Capture an activation; reactivating the same objects must not revive an old operation. */
@@ -156,14 +188,14 @@ export function capturePluginLifecycleAuthority(
   const recordEpoch = record && recordEpochs.get(registry)?.get(record);
   if (
     (!epoch && !options?.scopedRuntime) ||
-    retiredRegistries.has(registry) ||
+    isPluginRegistryRetired(registry) ||
     recordEpoch === revokedRecordEpoch
   ) {
     return undefined;
   }
   return () =>
     registryEpochs.get(registry)?.epoch === epoch &&
-    !retiredRegistries.has(registry) &&
+    !isPluginRegistryRetired(registry) &&
     (!record ||
       (registry.plugins.includes(record) &&
         record.enabled &&

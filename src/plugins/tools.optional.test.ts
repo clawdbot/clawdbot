@@ -12,6 +12,11 @@ import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  PluginRegistryResourceScope,
+  retainPluginRegistryResources,
+  withPluginRegistryResourceScope,
+} from "./registry-resources.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
 type MockRegistryToolEntry = {
@@ -47,7 +52,10 @@ vi.mock("./loader.js", async () => {
     import("./active-runtime-registry.js"),
     import("./loader-cache.js"),
   ]);
-  const loadPluginRegistryHandle = (params: unknown) => loadOpenClawPluginsMock(params);
+  const loadPluginRegistryHandle = (params: unknown) => {
+    const registry = loadOpenClawPluginsMock(params);
+    return { registry, ...retainPluginRegistryResources(registry) };
+  };
   return {
     loadOpenClawPlugins: loadPluginRegistryHandle,
     loadPluginRegistryHandle,
@@ -86,6 +94,7 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
   };
 });
 
+let toolHostResources: PluginRegistryResourceScope;
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
@@ -580,7 +589,15 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    const toolsModule = await import("./tools.js");
+    resolvePluginTools = (params) =>
+      withPluginRegistryResourceScope(toolHostResources, () =>
+        toolsModule.resolvePluginTools(params),
+      );
+    ensureStandalonePluginToolRegistryLoaded = (params) =>
+      withPluginRegistryResourceScope(toolHostResources, () =>
+        toolsModule.ensureStandalonePluginToolRegistryLoaded(params),
+      );
     ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
@@ -592,6 +609,7 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   beforeEach(() => {
+    toolHostResources = new PluginRegistryResourceScope();
     loadOpenClawPluginsMock.mockReset();
     activeRegistryMocks.getLoadedRegistry.mockReset();
     activeRegistryMocks.getLoadedRegistry.mockImplementation((...args: unknown[]) => {
@@ -617,6 +635,7 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   afterEach(() => {
+    toolHostResources.release();
     resetPluginRuntimeStateForTest?.();
     clearPluginMetadataLifecycleCaches?.();
     setLoggerOverride(null);

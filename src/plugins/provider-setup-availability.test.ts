@@ -17,7 +17,10 @@ vi.mock("./enable.js", () => ({
 }));
 
 vi.mock("./providers.runtime.js", () => ({
-  resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof resolvePluginProvidersCore>) => ({
+    providers: resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

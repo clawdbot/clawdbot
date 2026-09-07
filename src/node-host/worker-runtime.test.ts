@@ -46,7 +46,9 @@ vi.mock("./mcp.js", async (importOriginal) => ({
   startNodeHostMcpManager: async () => ({ descriptors: [], close: async () => {} }),
 }));
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: async () => {},
+  ensureNodeHostPluginRegistry: vi.fn<
+    typeof import("./plugin-node-host.js").ensureNodeHostPluginRegistry
+  >(async () => ({ release: vi.fn() })),
   invokeRegisteredNodeHostCommand: async () => null,
   isRegisteredNodeHostCommandDuplex: () => false,
   listRegisteredNodeHostCapsAndCommands: () => ({ caps: [], commands: [], nodePluginTools: [] }),
@@ -103,7 +105,7 @@ function startWorkerFixture(
     }
     return true;
   });
-  fixture.start.mockImplementation((callbacks) => {
+  fixture.start.mockImplementation(async (callbacks) => {
     if (workerHostingEnabled) {
       callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
     }

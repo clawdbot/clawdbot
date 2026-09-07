@@ -86,15 +86,16 @@ describe("catalog-only provider preparation", () => {
         provider: "FIXTURE",
         key: "synthetic-selected-key",
       };
-      vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockResolvedValue({
+      vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockImplementation(async (params) => ({
         config,
         agentModelOverride: "fixture/starter-alias",
-        provider: {
+        projectedModelRef: params.projectStarterModelRef?.("fixture/starter-alias", {
           id: "fixture",
           label: "Fixture",
           auth: [],
           normalizeModelId: () => "test-model",
-        },
+        }),
+        providerLabel: "Fixture",
         authProfiles: [
           {
             profileId: "other:default",
@@ -109,7 +110,7 @@ describe("catalog-only provider preparation", () => {
             : []),
         ],
         persistAuthProfiles,
-      });
+      }));
       const plan = await buildTestPlan({
         kind: "provider-auth",
         authChoice: "fixture-api-key",
@@ -124,7 +125,9 @@ describe("catalog-only provider preparation", () => {
       });
       expect(persistAuthProfiles).not.toHaveBeenCalled();
       if (profileCase === "missing-match") {
-        expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
+        expect(plan).toEqual({
+          error: 'Fixture did not return credentials for "fixture/test-model".',
+        });
         return;
       }
       expect(plan).toMatchObject({
@@ -142,7 +145,7 @@ describe("catalog-only provider preparation", () => {
     "normalizes the starter while retaining trusted installation and the selected %s runtime",
     async (runtimeId) => {
       const normalizeModelId = vi.fn(() => "test-model");
-      vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockResolvedValue({
+      vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockImplementation(async (params) => ({
         config: {
           ...config,
           agents: {
@@ -156,10 +159,15 @@ describe("catalog-only provider preparation", () => {
         },
         pendingPluginInstalls: { fixture: installRecord },
         agentModelOverride: "fixture/starter-alias",
-        provider: { id: "fixture", label: "Fixture", auth: [], normalizeModelId },
+        projectedModelRef: params.projectStarterModelRef?.("fixture/starter-alias", {
+          id: "fixture",
+          label: "Fixture",
+          auth: [],
+          normalizeModelId,
+        }),
         authProfiles: [],
         persistAuthProfiles,
-      });
+      }));
       const plan = await buildTestPlan({
         kind: "provider-auth",
         authChoice: "fixture-api-key",

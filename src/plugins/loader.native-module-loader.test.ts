@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "./loader-handles.test-support.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 

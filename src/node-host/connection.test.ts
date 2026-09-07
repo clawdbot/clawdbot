@@ -6,7 +6,7 @@ import * as hostStats from "./host-stats.js";
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
 
-function startConnectionFixture() {
+async function startConnectionFixture() {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
     invoke: vi.fn(),
@@ -17,7 +17,7 @@ function startConnectionFixture() {
     close: vi.fn().mockResolvedValue(undefined),
   };
   type Prepared = Parameters<typeof startNodeHostConnection>[0]["prepared"];
-  const start = vi.fn<Prepared["start"]>(() => runtime);
+  const start = vi.fn<Prepared["start"]>(async () => runtime);
   const prepared: Prepared = {
     manifest: { commands: [], caps: [], pathEnv: "/bin" },
     workerHostingEnabled: false,
@@ -25,7 +25,7 @@ function startConnectionFixture() {
     start,
   };
   const writeStderrLine = vi.fn();
-  const connection = startNodeHostConnection({
+  const connection = await startNodeHostConnection({
     prepared,
     client: { request },
     onManifestChanged: vi.fn(),
@@ -48,7 +48,7 @@ afterEach(() => {
 it.each(["disconnect", "close", "manifest"] as const)(
   "publishes immediately and every minute until %s retires the connection",
   async (retire) => {
-    const { connection, publications, start, prepared } = startConnectionFixture();
+    const { connection, publications, start, prepared } = await startConnectionFixture();
     try {
       expect(publications()).toEqual([]);
       connection.connect(gateway);
@@ -74,7 +74,7 @@ it.each(["disconnect", "close", "manifest"] as const)(
 );
 
 it("logs failures once per connection, redacts secrets, and waits for the next cadence", async () => {
-  const { connection, request, publications, writeStderrLine } = startConnectionFixture();
+  const { connection, request, publications, writeStderrLine } = await startConnectionFixture();
   request.mockImplementation(async (method) => {
     if (method === "node.event") {
       throw new Error("publish unavailable password=fixture-secret");
@@ -99,7 +99,7 @@ it("logs failures once per connection, redacts secrets, and waits for the next c
 });
 
 it("fences late failures and sends replacement samples only through the new client", async () => {
-  const { connection, request, publications, writeStderrLine } = startConnectionFixture();
+  const { connection, request, publications, writeStderrLine } = await startConnectionFixture();
   let rejectOld!: (error: Error) => void;
   request.mockImplementation((method) =>
     method === "node.event"

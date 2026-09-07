@@ -10,6 +10,7 @@ import type {
 import { listRouteBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -341,29 +342,31 @@ export async function resolveAgentExplicitRecipientSession(params: {
   threadId?: string | number;
   error?: Error;
 }> {
-  const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    requestedChannel: params.channel,
-    explicitTo: params.to,
-    explicitThreadId: params.threadId,
-    accountId: params.accountId,
-    wantsDelivery: true,
-    sessionRouteMode: "allow-fallback",
-  });
-  if (!plan.resolvedSessionKey && !plan.targetResolutionError) {
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      requestedChannel: params.channel,
+      explicitTo: params.to,
+      explicitThreadId: params.threadId,
+      accountId: params.accountId,
+      wantsDelivery: true,
+      sessionRouteMode: "allow-fallback",
+    });
+    if (!plan.resolvedSessionKey && !plan.targetResolutionError) {
+      return {
+        error: new Error(`Unable to resolve a session route for channel "${params.channel}"`),
+      };
+    }
     return {
-      error: new Error(`Unable to resolve a session route for channel "${params.channel}"`),
+      sessionKey: plan.resolvedSessionKey,
+      channel: plan.resolvedChannel,
+      to: plan.resolvedTo,
+      accountId: plan.resolvedAccountId,
+      threadId: plan.resolvedThreadId,
+      error: plan.targetResolutionError,
     };
-  }
-  return {
-    sessionKey: plan.resolvedSessionKey,
-    channel: plan.resolvedChannel,
-    to: plan.resolvedTo,
-    accountId: plan.resolvedAccountId,
-    threadId: plan.resolvedThreadId,
-    error: plan.targetResolutionError,
-  };
+  });
 }
 
 export function resolveAgentOutboundTarget(params: {

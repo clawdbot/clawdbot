@@ -8,6 +8,7 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
 
@@ -23,7 +24,7 @@ export function normalizeRealtimeVoiceProviderId(
 /**
  * Lists canonical realtime voice providers, discovering additional candidates through manifest policy.
  */
-export function listRealtimeVoiceProviders(
+export function listRealtimeVoiceProvidersCore(
   cfg?: OpenClawConfig,
   additionalProviderIds?: readonly string[],
 ): RealtimeVoiceProviderPlugin[] {
@@ -38,7 +39,7 @@ export function listRealtimeVoiceProviders(
 /**
  * Resolves a realtime voice provider by canonical id or declared alias.
  */
-export function getRealtimeVoiceProvider(
+export function getRealtimeVoiceProviderCore(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
 ): RealtimeVoiceProviderPlugin | undefined {
@@ -60,10 +61,19 @@ export function canonicalizeRealtimeVoiceProviderId(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
 ): RealtimeVoiceProviderId | undefined {
+  return withPluginRegistryResourceOperation(() =>
+    canonicalizeRealtimeVoiceProviderIdWithResources(providerId, cfg),
+  );
+}
+
+function canonicalizeRealtimeVoiceProviderIdWithResources(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+): RealtimeVoiceProviderId | undefined {
   const normalized = normalizeRealtimeVoiceProviderId(providerId);
   if (!normalized) {
     return undefined;
   }
   // Unknown ids stay normalized so validation can report the same operator-facing value.
-  return getRealtimeVoiceProvider(normalized, cfg)?.id ?? normalized;
+  return getRealtimeVoiceProviderCore(normalized, cfg)?.id ?? normalized;
 }

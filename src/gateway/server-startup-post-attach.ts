@@ -12,10 +12,10 @@ import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
-import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
+import { runOutsidePluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
@@ -146,34 +146,38 @@ function scheduleProviderAuthStatePrewarm(params: {
     ]);
     const loadProviderAuthWarmModule = () => import("../agents/model-provider-auth.js");
     const runRewarm = async (reason: string) => {
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (isStopped()) {
-          return;
-        }
-        const cfg = params.getConfig();
-        rewarmInFlight = true;
-        try {
-          const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
-          const metrics = await measureProviderAuthWarm(() =>
-            warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
-          );
+      // The failure timer can outlive its attempt; rewarm owns fresh resource operations.
+      await runOutsidePluginRegistryResourceScope(() =>
+        runWithGatewayIndependentRootWorkAdmission(async () => {
           if (isStopped()) {
             return;
           }
-          params.log.info(
-            `provider auth state re-warmed (${reason}) ${formatProviderAuthWarmMetrics(metrics)}`,
-          );
-        } catch (err) {
-          logProviderAuthWarmFailure("rewarm", err);
-        } finally {
-          rewarmInFlight = false;
-          const nextReason = pendingRewarmReason;
-          pendingRewarmReason = undefined;
-          if (nextReason && !isStopped()) {
-            scheduleAuthMapRewarm(nextReason);
+          const cfg = params.getConfig();
+          rewarmInFlight = true;
+          try {
+            const { warmCurrentProviderAuthStateOffMainThread } =
+              await loadProviderAuthWarmModule();
+            const metrics = await measureProviderAuthWarm(() =>
+              warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
+            );
+            if (isStopped()) {
+              return;
+            }
+            params.log.info(
+              `provider auth state re-warmed (${reason}) ${formatProviderAuthWarmMetrics(metrics)}`,
+            );
+          } catch (err) {
+            logProviderAuthWarmFailure("rewarm", err);
+          } finally {
+            rewarmInFlight = false;
+            const nextReason = pendingRewarmReason;
+            pendingRewarmReason = undefined;
+            if (nextReason && !isStopped()) {
+              scheduleAuthMapRewarm(nextReason);
+            }
           }
-        }
-      }, "runtime:provider-auth-rewarm");
+        }, "runtime:provider-auth-rewarm"),
+      );
     };
     const scheduleAuthMapRewarm = (reason: string) => {
       // Collapse repeated auth-profile failures into one rewarm turn while a
@@ -406,7 +410,7 @@ async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel();
 }
 
-function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
+function hasGatewayStartHooks(pluginRegistry: PluginRegistry): boolean {
   return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
 }
 
@@ -591,7 +595,7 @@ export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   getModelRuntimeConfig?: () => OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  pluginRegistry: PluginRegistry;
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
@@ -1222,7 +1226,7 @@ export async function startGatewayPostAttachRuntime(
     pluginManifestRecords: readonly PluginManifestRecord[];
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-    pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+    pluginRegistry: PluginRegistry;
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;

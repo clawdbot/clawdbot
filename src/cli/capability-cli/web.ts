@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Command } from "commander";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isWebFetchProviderConfigured,
@@ -139,15 +140,17 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       let failed = false;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runWebSearchCommand({
-          query: String(opts.query),
-          provider: opts.provider as string | undefined,
-          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
-        });
-        failed = !result.ok;
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
+      await runCommandWithRuntime(defaultRuntime, () =>
+        withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runWebSearchCommand({
+            query: String(opts.query),
+            provider: opts.provider as string | undefined,
+            limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
+          });
+          failed = !result.ok;
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        }),
+      );
       if (failed) {
         defaultRuntime.exit(1);
       }
@@ -162,15 +165,17 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       let failed = false;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runWebFetchCommand({
-          url: String(opts.url),
-          provider: opts.provider as string | undefined,
-          format: opts.format as string | undefined,
-        });
-        failed = !result.ok;
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
+      await runCommandWithRuntime(defaultRuntime, () =>
+        withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runWebFetchCommand({
+            url: String(opts.url),
+            provider: opts.provider as string | undefined,
+            format: opts.format as string | undefined,
+          });
+          failed = !result.ok;
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        }),
+      );
       if (failed) {
         defaultRuntime.exit(1);
       }
@@ -182,37 +187,39 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
-        const agentDir = resolveAgentDir(cfg, agentId);
-        const selectedSearchProvider =
-          typeof cfg.tools?.web?.search?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
-            : "";
-        const selectedFetchProvider =
-          typeof cfg.tools?.web?.fetch?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
-            : "";
-        const result = {
-          search: listWebSearchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
-            selected: provider.id === selectedSearchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-          fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebFetchProviderConfigured({ provider, config: cfg }),
-            selected: provider.id === selectedFetchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-        };
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
+      await runCommandWithRuntime(defaultRuntime, () =>
+        withPluginRegistryResourceOperationAsync(async () => {
+          const cfg = getRuntimeConfig();
+          const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+          const agentDir = resolveAgentDir(cfg, agentId);
+          const selectedSearchProvider =
+            typeof cfg.tools?.web?.search?.provider === "string"
+              ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
+              : "";
+          const selectedFetchProvider =
+            typeof cfg.tools?.web?.fetch?.provider === "string"
+              ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
+              : "";
+          const result = {
+            search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+              available: true,
+              configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+              selected: provider.id === selectedSearchProvider,
+              id: provider.id,
+              envVars: provider.envVars,
+            })),
+            fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
+              available: true,
+              configured: isWebFetchProviderConfigured({ provider, config: cfg }),
+              selected: provider.id === selectedFetchProvider,
+              id: provider.id,
+              envVars: provider.envVars,
+            })),
+          };
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+            JSON.stringify(value, null, 2),
+          );
+        }),
+      );
     });
 }

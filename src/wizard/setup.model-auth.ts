@@ -82,37 +82,42 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     };
   }
 
-  const { resolvePluginProviders, resolveProviderPluginChoice } =
+  const { acquireProviderAuthChoiceProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
+  const providerHandle = acquireProviderAuthChoiceProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
   });
-  const resolvedChoice = resolveProviderPluginChoice({
-    providers,
-    choice: params.authChoice,
-  });
-  const matchedProvider =
-    resolvedChoice?.provider ??
-    (() => {
-      const preferredId = preferredProvider?.trim();
-      if (!preferredId) {
-        return undefined;
-      }
-      return providers.find(
-        (provider) => typeof provider.id === "string" && provider.id.trim() === preferredId,
-      );
-    })();
-  const setupPolicy =
-    resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
+  const { providers } = providerHandle;
+  try {
+    const resolvedChoice = resolveProviderPluginChoice({
+      providers,
+      choice: params.authChoice,
+    });
+    const matchedProvider =
+      resolvedChoice?.provider ??
+      (() => {
+        const preferredId = preferredProvider?.trim();
+        if (!preferredId) {
+          return undefined;
+        }
+        return providers.find(
+          (provider) => typeof provider.id === "string" && provider.id.trim() === preferredId,
+        );
+      })();
+    const setupPolicy =
+      resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
 
-  return {
-    preferredProvider,
-    promptWhenAuthChoiceProvided: setupPolicy?.promptWhenAuthChoiceProvided === true,
-    allowKeepCurrent: setupPolicy?.allowKeepCurrent ?? true,
-  };
+    return {
+      preferredProvider,
+      promptWhenAuthChoiceProvided: setupPolicy?.promptWhenAuthChoiceProvided === true,
+      allowKeepCurrent: setupPolicy?.allowKeepCurrent ?? true,
+    };
+  } finally {
+    providerHandle.release();
+  }
 }
 
 /**

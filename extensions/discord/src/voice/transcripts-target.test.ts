@@ -27,6 +27,27 @@ defineDiscordVoiceTests(
     receiveRecordedSpeech,
   }) => {
     type Residency = "live" | "other autoJoin" | "empty autoJoin" | "unknown autoJoin";
+
+    function captureEntryFields(entry: object, omitTranscripts = false) {
+      return new Map<PropertyKey, unknown>(
+        Reflect.ownKeys(entry)
+          .filter((key) => !omitTranscripts || key !== "transcripts")
+          .map((key): [PropertyKey, unknown] => [key, Reflect.get(entry, key)]),
+      );
+    }
+
+    function expectEntryFieldsUnchanged(
+      entry: object,
+      snapshot: ReturnType<typeof captureEntryFields>,
+      omitTranscripts = false,
+    ) {
+      const current = captureEntryFields(entry, omitTranscripts);
+      expect(new Set(current.keys())).toEqual(new Set(snapshot.keys()));
+      for (const [key, value] of snapshot) {
+        expect(current.get(key), String(key)).toBe(value);
+      }
+    }
+
     const source = {
       providerId: "discord-voice",
       accountId: "default",
@@ -69,10 +90,7 @@ defineDiscordVoiceTests(
         });
       }
       const entry = residency === "live" ? getSessionEntry(manager) : undefined;
-      const snapshot = entry ? { ...entry } : undefined;
-      if (snapshot) {
-        delete snapshot.transcripts;
-      }
+      const snapshot = entry ? captureEntryFields(entry, true) : undefined;
       const connection = joinVoiceChannelMock.mock.results.at(-1)?.value;
       const joins = joinVoiceChannelMock.mock.calls.length;
       const bridges = createRealtimeVoiceBridgeSessionMock.mock.calls.length;
@@ -81,7 +99,7 @@ defineDiscordVoiceTests(
         expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(bridges);
         if (entry) {
           expect(getSessionEntry(manager)).toBe(entry);
-          expect(entry).toMatchObject(snapshot!);
+          expectEntryFieldsUnchanged(entry, snapshot!, true);
           expect(connection?.destroy).not.toHaveBeenCalled();
           expect(manager.status()).toMatchObject([{ channelId: "1001" }]);
         } else {
@@ -272,7 +290,7 @@ defineDiscordVoiceTests(
           expect(await manual).toMatchObject({ ok: true });
           expect(connection.destroy).not.toHaveBeenCalled();
           const entry = getSessionEntry(manager);
-          const snapshot = { ...entry };
+          const snapshot = captureEntryFields(entry);
           expect(await capturing).toMatchObject({ ok: transition === "none" });
           if (replacement) {
             expect(await replacement).toMatchObject({ ok: true });
@@ -288,7 +306,7 @@ defineDiscordVoiceTests(
                 ],
           );
           expect(getSessionEntry(manager)).toBe(entry);
-          expect(entry).toMatchObject(snapshot);
+          expectEntryFieldsUnchanged(entry, snapshot);
           expect(connection.destroy).not.toHaveBeenCalled();
           expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
           expect(manager.status()).toMatchObject([{ channelId: "1003" }]);
@@ -540,10 +558,10 @@ defineDiscordVoiceTests(
           ready.resolve(undefined);
           expect(await manual).toMatchObject({ ok: true });
           const entry = getSessionEntry(f.manager);
-          const snapshot = { ...entry };
+          const snapshot = captureEntryFields(entry);
           expect(await starting).toMatchObject({ ok: true });
           expect(getSessionEntry(f.manager)).toBe(entry);
-          expect(entry).toMatchObject(snapshot);
+          expectEntryFieldsUnchanged(entry, snapshot);
           expect(connection.destroy).not.toHaveBeenCalled();
           expect(joinVoiceChannelMock).toHaveBeenCalledTimes(residency === "live" ? 2 : 1);
           expect(f.manager.status()).toMatchObject([{ channelId }]);

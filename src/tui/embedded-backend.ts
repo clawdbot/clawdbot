@@ -94,6 +94,10 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
+import {
+  requirePluginRegistryResourceScope,
+  withPluginRegistryResourceOperationAsync,
+} from "../plugins/registry-resources.js";
 import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -197,10 +201,12 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
 }): { status: "warmed" } | { status: "failed"; error: string } {
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
-    loadAgentRuntimePluginRegistryHandle({
-      config: params.cfg,
-      workspaceDir,
-    });
+    requirePluginRegistryResourceScope().adopt(
+      loadAgentRuntimePluginRegistryHandle({
+        config: params.cfg,
+        workspaceDir,
+      }),
+    );
     return { status: "warmed" };
   } catch (err) {
     return { status: "failed", error: formatTuiErrorMessage(err) };
@@ -619,107 +625,109 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
-    await this.ready;
-    await this.preparedModelRuntime.waitUntilReady();
-    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const {
-      cfg,
-      agentId: sessionAgentId,
-      storePath,
-      store,
-      entry,
-      canonicalKey,
-    } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
-      ...loadOptions,
-      includeStoreChildEntries: true,
-    });
-    const sessionId = entry?.sessionId;
-    const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
-      cfg,
-      sessionAgentId,
-    });
-    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(
-      CHAT_HISTORY_MAX_ENTRIES,
-      typeof opts.limit === "number" ? opts.limit : 200,
-    );
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
-    const historyPage = await readChatHistoryPage({
-      entry,
-      provider: resolvedSessionModel.provider,
-      sessionId,
-      storePath,
-      sessionAgentId,
-      canonicalKey,
-      max,
-      maxHistoryBytes,
-      effectiveMaxChars,
-      offset: undefined,
-      messageId: undefined,
-    });
-    const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
-    const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
-    const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
-      maxSingleMessageBytes: perMessageHardCap,
-    });
-    const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const messages = capped;
-    const newestInFlightRun = [...this.runs.entries()].findLast(
-      ([, run]) =>
-        !run.isBtw &&
-        run.terminalState !== "final" &&
-        agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
-        normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
-    );
-    const inFlightRun = newestInFlightRun
-      ? {
-          runId: newestInFlightRun[0],
-          text: projectLiveAssistantBufferedText(
-            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer, {
-              managedMediaUrls: [...newestInFlightRun[1].managedMediaUrls],
-            }).trim(),
-            { suppressLeadFragments: true },
-          ).text.trim(),
-        }
-      : undefined;
-
-    let thinkingLevel = entry?.thinkingLevel;
-    if (!thinkingLevel) {
-      const catalog = await loadEmbeddedTuiModelCatalog(cfg, sessionAgentId);
-      thinkingLevel = resolveThinkingDefault({
+    return await withPluginRegistryResourceOperationAsync(async () => {
+      await this.ready;
+      await this.preparedModelRuntime.waitUntilReady();
+      const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
+      const {
         cfg,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
-        catalog,
+        agentId: sessionAgentId,
+        storePath,
+        store,
+        entry,
+        canonicalKey,
+      } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
+        ...loadOptions,
+        includeStoreChildEntries: true,
       });
-    }
+      const sessionId = entry?.sessionId;
+      const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
+        cfg,
+        sessionAgentId,
+      });
+      const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const max = Math.min(
+        CHAT_HISTORY_MAX_ENTRIES,
+        typeof opts.limit === "number" ? opts.limit : 200,
+      );
+      const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
+      const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
+      const historyPage = await readChatHistoryPage({
+        entry,
+        provider: resolvedSessionModel.provider,
+        sessionId,
+        storePath,
+        sessionAgentId,
+        canonicalKey,
+        max,
+        maxHistoryBytes,
+        effectiveMaxChars,
+        offset: undefined,
+        messageId: undefined,
+      });
+      const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
+      const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
+      const replaced = replaceOversizedChatHistoryMessages({
+        messages: normalized,
+        maxSingleMessageBytes: perMessageHardCap,
+      });
+      const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+      const messages = capped;
+      const newestInFlightRun = [...this.runs.entries()].findLast(
+        ([, run]) =>
+          !run.isBtw &&
+          run.terminalState !== "final" &&
+          agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
+          normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
+      );
+      const inFlightRun = newestInFlightRun
+        ? {
+            runId: newestInFlightRun[0],
+            text: projectLiveAssistantBufferedText(
+              normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer, {
+                managedMediaUrls: [...newestInFlightRun[1].managedMediaUrls],
+              }).trim(),
+              { suppressLeadFragments: true },
+            ).text.trim(),
+          }
+        : undefined;
 
-    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
-    const sessionInfo = buildGatewaySessionInfo({
-      cfg,
-      storePath,
-      store,
-      key: canonicalKey,
-      entry,
-      agentId: sessionAgentId,
+      let thinkingLevel = entry?.thinkingLevel;
+      if (!thinkingLevel) {
+        const catalog = await loadEmbeddedTuiModelCatalog(cfg, sessionAgentId);
+        thinkingLevel = resolveThinkingDefault({
+          cfg,
+          provider: resolvedSessionModel.provider,
+          model: resolvedSessionModel.model,
+          catalog,
+        });
+      }
+
+      const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+      const sessionInfo = buildGatewaySessionInfo({
+        cfg,
+        storePath,
+        store,
+        key: canonicalKey,
+        entry,
+        agentId: sessionAgentId,
+      });
+      sessionInfo.thinkingLevel = thinkingLevel;
+      sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
+      return {
+        sessionKey: opts.sessionKey,
+        sessionId,
+        messages,
+        defaults,
+        sessionInfo,
+        thinkingLevel,
+        fastMode: entry?.fastMode,
+        verboseLevel: sessionInfo.verboseLevel,
+        runtimePluginsPrewarm,
+        ...(inFlightRun ? { inFlightRun } : {}),
+      };
     });
-    sessionInfo.thinkingLevel = thinkingLevel;
-    sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-
-    return {
-      sessionKey: opts.sessionKey,
-      sessionId,
-      messages,
-      defaults,
-      sessionInfo,
-      thinkingLevel,
-      fastMode: entry?.fastMode,
-      verboseLevel: sessionInfo.verboseLevel,
-      runtimePluginsPrewarm,
-      ...(inFlightRun ? { inFlightRun } : {}),
-    };
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {

@@ -8,7 +8,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
-import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
+import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlanCore } from "./build.js";
 
 const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
 
@@ -104,7 +104,7 @@ describe("AgentRuntimePlan", () => {
         prepareExtraParams: prepareProviderExtraParamsMock,
       },
     } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -138,7 +138,7 @@ describe("AgentRuntimePlan", () => {
           prepareExtraParams: ({ extraParams }) => ({ ...extraParams, owner }),
         },
       } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
-      return buildAgentRuntimePlan({
+      return buildAgentRuntimePlanCore({
         config,
         provider: "fixture-provider",
         modelId: "fixture-model",
@@ -158,7 +158,7 @@ describe("AgentRuntimePlan", () => {
   it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {
     // This is the broad contract snapshot for the runtime plan facade; callers
     // read these nested policies instead of recomputing runtime decisions.
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -226,7 +226,7 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -246,7 +246,7 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("forwards OpenAI API-key backup profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -266,7 +266,7 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("carries forwarded Codex harness auth candidates", () => {
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -285,7 +285,7 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("forwards OpenAI OAuth profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -302,7 +302,7 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("forwards OpenAI Codex profiles for explicit OpenAI OpenClaw runs", () => {
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -337,7 +337,7 @@ describe("AgentRuntimePlan", () => {
       prepared: true,
     };
 
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       config: {},
@@ -380,7 +380,7 @@ describe("AgentRuntimePlan", () => {
       plugin: {} as never,
     };
 
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       config: {},
@@ -437,7 +437,7 @@ describe("AgentRuntimePlan", () => {
     const metadataSnapshot = { plugins: [] };
     vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
     resolveProviderIdForAuth.mockClear();
-    const plan = buildAgentRuntimePlan({
+    const plan = buildAgentRuntimePlanCore({
       provider: "openai",
       modelId: "gpt-5.4",
       metadataSnapshot,

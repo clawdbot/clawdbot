@@ -4,8 +4,9 @@ import {
   loadOpenClawPlugins,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
+import { withPluginRegistryResourceOperation } from "../../plugins/registry-resources.js";
 import { createVoiceProviderFixture } from "../../talk/provider-discovery.test-fixtures.js";
-import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
+import { listRealtimeVoiceProvidersCore } from "../../talk/provider-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 import { talkHandlers } from "./talk.js";
@@ -50,9 +51,11 @@ describe("Talk catalog provider discovery", () => {
           },
         },
       });
-      expect(listRealtimeVoiceProviders(cfg)).toEqual(
-        registry.realtimeVoiceProviders.map((entry) => entry.provider),
-      );
+      withPluginRegistryResourceOperation(() => {
+        expect(listRealtimeVoiceProvidersCore(cfg)).toEqual(
+          registry.realtimeVoiceProviders.map((entry) => entry.provider),
+        );
+      });
     });
   });
 });

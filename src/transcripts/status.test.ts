@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import {
   captureActivePluginRegistrySnapshot,
   listImportedRuntimePluginIds,
@@ -18,17 +19,66 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activeSessions } from "./capture.js";
+import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  for (const entry of activeSessions.values()) {
+    entry.resources.release();
+  }
   activeSessions.clear();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("transcript library capture health", () => {
+  it("distinguishes historical unstopped rows from exact live subscriptions and stopping captures", async () => {
+    const stateDir = tempDirs.make("transcript-subscription-state-");
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const old = {
+      sessionId: "reused",
+      title: "reused",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-08-20T10:00:00.000Z",
+    };
+    const current = { ...old, startedAt: "2026-08-21T10:00:00.000Z" };
+    await store.writeSession(old);
+    await store.writeSession(current);
+    activeSessions.set(current.sessionId, {
+      resources: new PluginRegistryResourceScope(),
+      session: current,
+      phase: "active",
+      provider: {},
+      providerId: current.source.providerId,
+    });
+    const first = listTranscriptLibrary(store, {});
+    expect(first.sessions.map((entry) => entry.activeSubscription)).toEqual([true, false]);
+    activeSessions.get(current.sessionId)!.stopping = true;
+    expect(
+      (await getTranscriptLibrary(store, { selector: transcriptSessionSelector(current) })).session
+        .activeSubscription,
+    ).toBe(false);
+    const capture = activeSessions.get(current.sessionId)!;
+    delete capture.stopping;
+    capture.phase = "terminal";
+    expect(
+      listTranscriptLibrary(store, {}).sessions.every((entry) => !entry.activeSubscription),
+    ).toBe(true);
+    for (const entry of activeSessions.values()) {
+      entry.resources.release();
+    }
+    activeSessions.clear();
+    expect(
+      listTranscriptLibrary(store, {}).sessions.every(
+        (entry) => !entry.activeSubscription && entry.stoppedAt === undefined,
+      ),
+    ).toBe(true);
+  });
+
   it("does not claim an exact configured URL identity from a sanitized capture locator", async () => {
     const stateDir = tempDirs.make("transcript-status-url-");
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -45,6 +95,7 @@ describe("transcript library capture health", () => {
     };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      resources: new PluginRegistryResourceScope(),
       session,
       providerId: source.providerId,
       provider: {},
@@ -78,6 +129,7 @@ describe("transcript library capture health", () => {
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      resources: new PluginRegistryResourceScope(),
       session,
       providerId: "canonical-captions",
       provider: {},
@@ -118,6 +170,7 @@ describe("transcript library capture health", () => {
       activeSubscription: false,
     });
     activeSessions.set(session.sessionId, {
+      resources: new PluginRegistryResourceScope(),
       session,
       providerId: source.providerId,
       phase: "active",

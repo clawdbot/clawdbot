@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  runOutsidePluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { retainPreparedPluginGenerationResources } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -21,23 +26,32 @@ const preparedModelRuntimePluginGenerationScope = resolveGlobalSingleton<
 >(PREPARED_MODEL_RUNTIME_PLUGIN_GENERATION_SCOPE_KEY, () => new AsyncLocalStorage());
 
 /** Keeps the exact admitted generation available to nested embedded agent runs. */
-export function withPreparedModelRuntimePluginGenerationScope<T>(
+export async function withPreparedModelRuntimePluginGenerationScope<T>(
   generation: PreparedModelRuntimePluginGeneration,
-  run: () => T,
+  run: () => T | Promise<T>,
   borrowSnapshot?: () => PreparedModelRuntimeSnapshot | undefined,
-): T {
+): Promise<T> {
   const inherited = preparedModelRuntimePluginGenerationScope.getStore();
   const borrow =
     borrowSnapshot ?? (inherited?.generation === generation ? inherited.borrowSnapshot : undefined);
-  return preparedModelRuntimePluginGenerationScope.run(
-    { generation, ...(borrow ? { borrowSnapshot: borrow } : {}) },
-    run,
-  );
+  const resources = retainPreparedPluginGenerationResources(generation);
+  try {
+    return await withPluginRegistryResourceScope(resources, () =>
+      preparedModelRuntimePluginGenerationScope.run(
+        { generation, ...(borrow ? { borrowSnapshot: borrow } : {}) },
+        run,
+      ),
+    );
+  } finally {
+    resources.release();
+  }
 }
 
 /** Detached queue drains re-admit on the current generation, never a predecessor's scope. */
 export function runOutsidePreparedModelRuntimePluginGenerationScope<T>(run: () => T): T {
-  return preparedModelRuntimePluginGenerationScope.exit(run);
+  return preparedModelRuntimePluginGenerationScope.exit(() =>
+    runOutsidePluginRegistryResourceScope(run),
+  );
 }
 
 /** Exact admitted generation active for nested prepared model-runtime acquisition. */

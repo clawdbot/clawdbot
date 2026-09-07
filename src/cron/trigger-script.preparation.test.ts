@@ -20,6 +20,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -207,36 +208,48 @@ describe("cron preparation plugin ownership", () => {
   it.each(["scoped", "global"] as const)(
     "uses only %s registry ownership during downstream loading without a model runtime",
     async (owner) => {
-      const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
-      const metadataSnapshot = loadPluginMetadataSnapshot(input);
-      const registry = createPreparedInboundRegistryLoader()(input, metadataSnapshot);
-      prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
-      if (owner === "global") {
-        setActivePluginRegistry(registry);
+      const resources = new PluginRegistryResourceScope();
+      const loadRegistry = createPreparedInboundRegistryLoader();
+      try {
+        await resources.run(async () => {
+          const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
+          const metadataSnapshot = loadPluginMetadataSnapshot(input);
+          const registry = resources.adopt(loadRegistry(input, metadataSnapshot));
+          prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
+          if (owner === "global") {
+            setActivePluginRegistry(registry);
+          }
+          const tools = withPluginRuntimeRegistryScope(
+            owner === "scoped" ? registry : undefined,
+            () =>
+              resolveOpenClawPluginToolsForOptions({
+                options: {
+                  config,
+                  workspaceDir: state.workspaceDir,
+                  agentSessionKey: "agent:main:cron:scoped:trigger",
+                  pluginToolAllowlist: ["cold_probe"],
+                },
+                resolvedConfig: config,
+              }),
+          );
+          expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
+          await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
+            details: {
+              artifact: owner === "scoped" ? "built" : "source",
+              agentId: "main",
+              sessionKey: "agent:main:cron:scoped:trigger",
+            },
+          });
+          expect(readRegistrations()).toEqual([
+            { artifact: "built", mode: "discovery" },
+            { artifact: owner === "scoped" ? "built" : "source", mode: "tool-discovery" },
+          ]);
+        });
+      } finally {
+        loadRegistry.release();
+        resources.release();
+        await resources.waitForDisposals();
       }
-      const tools = withPluginRuntimeRegistryScope(owner === "scoped" ? registry : undefined, () =>
-        resolveOpenClawPluginToolsForOptions({
-          options: {
-            config,
-            workspaceDir: state.workspaceDir,
-            agentSessionKey: "agent:main:cron:scoped:trigger",
-            pluginToolAllowlist: ["cold_probe"],
-          },
-          resolvedConfig: config,
-        }),
-      );
-      expect(tools.map((tool) => tool.name)).toEqual(["cold_probe"]);
-      await expect(tools[0]!.execute("scoped-call", {})).resolves.toMatchObject({
-        details: {
-          artifact: owner === "scoped" ? "built" : "source",
-          agentId: "main",
-          sessionKey: "agent:main:cron:scoped:trigger",
-        },
-      });
-      expect(readRegistrations()).toEqual([
-        { artifact: "built", mode: "discovery" },
-        { artifact: owner === "scoped" ? "built" : "source", mode: "tool-discovery" },
-      ]);
     },
   );
 });

@@ -2,10 +2,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
-const loadPluginMetadataRegistrySnapshotMock = vi.hoisted(() => vi.fn());
+const loadPluginMetadataRegistrySnapshotMock = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../plugins/runtime/metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot
+  >(),
+);
 const resolveConfiguredChannelPluginIdsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -26,8 +31,7 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
-  loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
-    loadPluginMetadataRegistrySnapshotMock(...args),
+  loadPluginMetadataRegistrySnapshot: loadPluginMetadataRegistrySnapshotMock,
 }));
 
 const { runSecurityAuditCore } = await import("./audit.js");
@@ -75,7 +79,8 @@ describe("security audit read-only plugin scope", () => {
       autoEnabledReasons: {},
     }));
     loadPluginMetadataRegistrySnapshotMock.mockReturnValue({
-      securityAuditCollectors: [],
+      registry: createEmptyPluginRegistry(),
+      release() {},
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue([]);
   });

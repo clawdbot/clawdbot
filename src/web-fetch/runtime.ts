@@ -4,6 +4,10 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
+import {
+  getPluginRegistryResourceScope,
+  type PluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -47,7 +51,12 @@ type WebFetchProviderCacheEntry = {
   providers: PluginWebFetchProviderEntry[];
 };
 
-let webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
+// Factory callbacks borrow their operation or prepared host's registration resources.
+// Cache entries cannot outlive that owner merely because the config object is retained.
+let webFetchProviderCache = new WeakMap<
+  PluginRegistryResourceScope,
+  WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>
+>();
 
 function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
   return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
@@ -185,7 +194,16 @@ function resolveCachedWebFetchProviders(params: {
   configFingerprint: string;
   load: () => PluginWebFetchProviderEntry[];
 }): PluginWebFetchProviderEntry[] {
-  const cached = webFetchProviderCache.get(params.config);
+  const resourceScope = getPluginRegistryResourceScope();
+  if (!resourceScope) {
+    throw new Error("Web fetch definitions require an operation or host resource scope");
+  }
+  let cache = webFetchProviderCache.get(resourceScope);
+  if (!cache) {
+    cache = new WeakMap();
+    webFetchProviderCache.set(resourceScope, cache);
+  }
+  const cached = cache.get(params.config);
   if (
     cached?.cacheKey === params.cacheKey &&
     cached.configFingerprint === params.configFingerprint
@@ -194,7 +212,7 @@ function resolveCachedWebFetchProviders(params: {
   }
   const loaded = params.load();
   if (loaded.length > 0) {
-    webFetchProviderCache.set(params.config, {
+    cache.set(params.config, {
       cacheKey: params.cacheKey,
       configFingerprint: params.configFingerprint,
       providers: loaded,

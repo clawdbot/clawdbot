@@ -1,5 +1,5 @@
+import type { StreamFn } from "../../packages/agent-core/src/types.js";
 import type { ProviderLocalServiceReconcileContext } from "../agents/provider-local-service-reconcile.js";
-import type { StreamFn } from "../agents/runtime/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderPrepareExtraParamsContext } from "./provider-runtime.types.js";

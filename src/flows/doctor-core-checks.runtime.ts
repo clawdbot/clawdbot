@@ -665,11 +665,11 @@ export async function collectProviderCatalogProjectionFindings(
   workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
+  const { acquirePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
+  let handle: ReturnType<typeof acquirePluginProvidersCore>;
   try {
-    providers = resolvePluginProvidersCore({
+    handle = acquirePluginProvidersCore({
       config: cfg,
       workspaceDir,
       env,
@@ -687,65 +687,69 @@ export async function collectProviderCatalogProjectionFindings(
     ];
   }
 
-  const findings: HealthFinding[] = [];
-  const grouped = groupProviderCatalogsForDoctor(providers);
-  findings.push(...grouped.findings);
-  for (const order of PROVIDER_CATALOG_ORDERS) {
-    for (const provider of grouped.byOrder[order]) {
-      let staticCatalog: unknown;
-      let staticCatalogRun: unknown;
-      try {
-        staticCatalog = provider.staticCatalog;
-        staticCatalogRun = isReadableRecord(staticCatalog) ? staticCatalog.run : undefined;
-      } catch (error) {
+  try {
+    const findings: HealthFinding[] = [];
+    const grouped = groupProviderCatalogsForDoctor(handle.providers);
+    findings.push(...grouped.findings);
+    for (const order of PROVIDER_CATALOG_ORDERS) {
+      for (const provider of grouped.byOrder[order]) {
+        let staticCatalog: unknown;
+        let staticCatalogRun: unknown;
+        try {
+          staticCatalog = provider.staticCatalog;
+          staticCatalogRun = isReadableRecord(staticCatalog) ? staticCatalog.run : undefined;
+        } catch (error) {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} static catalog hook cannot be read during doctor validation.`,
+              error,
+            }),
+          );
+          continue;
+        }
+        if (staticCatalog === undefined) {
+          continue;
+        }
+        if (typeof staticCatalogRun !== "function") {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} static catalog hook is invalid during doctor validation.`,
+              error: new Error("static catalog run must be a function"),
+            }),
+          );
+          continue;
+        }
+        let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
+        try {
+          result = await runProviderStaticCatalog({ provider });
+        } catch (error) {
+          findings.push(
+            providerCatalogProjectionFinding({
+              providerId: provider.id,
+              pluginId: provider.pluginId,
+              message: `Provider catalog ${provider.id} failed during doctor validation.`,
+              error,
+            }),
+          );
+          continue;
+        }
         findings.push(
-          providerCatalogProjectionFinding({
+          ...collectProviderCatalogResultFindings({
             providerId: provider.id,
             pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} static catalog hook cannot be read during doctor validation.`,
-            error,
+            result,
           }),
         );
-        continue;
       }
-      if (staticCatalog === undefined) {
-        continue;
-      }
-      if (typeof staticCatalogRun !== "function") {
-        findings.push(
-          providerCatalogProjectionFinding({
-            providerId: provider.id,
-            pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} static catalog hook is invalid during doctor validation.`,
-            error: new Error("static catalog run must be a function"),
-          }),
-        );
-        continue;
-      }
-      let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
-      try {
-        result = await runProviderStaticCatalog({ provider });
-      } catch (error) {
-        findings.push(
-          providerCatalogProjectionFinding({
-            providerId: provider.id,
-            pluginId: provider.pluginId,
-            message: `Provider catalog ${provider.id} failed during doctor validation.`,
-            error,
-          }),
-        );
-        continue;
-      }
-      findings.push(
-        ...collectProviderCatalogResultFindings({
-          providerId: provider.id,
-          pluginId: provider.pluginId,
-          result,
-        }),
-      );
     }
+    return findings;
+  } finally {
+    handle.release();
   }
-  return findings;
 }
 
 function buildDoctorRuntimeModel(params: {

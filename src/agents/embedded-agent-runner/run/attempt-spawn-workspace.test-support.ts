@@ -743,7 +743,7 @@ vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
 
 vi.mock("../../../image-generation/runtime.js", () => ({
   generateImage: vi.fn(),
-  listRuntimeImageGenerationProviders: () => [],
+  listRuntimeImageGenerationProvidersCore: () => [],
 }));
 
 vi.mock("../../model-selection.js", () => ({

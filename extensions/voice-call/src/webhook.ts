@@ -8,6 +8,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
+import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
   normalizeOptionalString,
@@ -184,6 +185,7 @@ export class VoiceCallWebhookServer {
   private listeningUrl: string | null = null;
   private startPromise: Promise<string> | null = null;
   private stopPromise: Promise<void> | null = null;
+  private cleanupPending = false;
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
@@ -196,6 +198,7 @@ export class VoiceCallWebhookServer {
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  private releaseTranscriptionRegistrations: (() => void) | undefined;
   private readonly streamDisconnectGrace: StreamDisconnectGrace;
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
@@ -356,153 +359,222 @@ export class VoiceCallWebhookServer {
     const streaming = this.config.streaming;
     const pluginConfig =
       this.fullConfig ?? (this.coreConfig as unknown as OpenClawConfig | undefined);
-    const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
+    const { acquireRealtimeTranscriptionProvider, acquireRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
-    const resolution = resolveConfiguredCapabilityProvider({
-      configuredProviderId: streaming.provider,
-      providerConfigs: streaming.providers,
-      cfg: pluginConfig,
-      cfgForResolve: pluginConfig ?? ({} as OpenClawConfig),
-      getConfiguredProvider: (providerId) =>
-        getRealtimeTranscriptionProvider(providerId, pluginConfig),
-      listProviders: () =>
-        listRealtimeTranscriptionProviders(pluginConfig, Object.keys(streaming.providers)),
-      resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
-        provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
-      isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-        provider.isConfigured({ cfg, providerConfig }),
-    });
-    if (!resolution.ok && resolution.code === "missing-configured-provider") {
-      this.logger.warn(
-        `Streaming enabled but realtime transcription provider "${resolution.configuredProviderId}" is not registered`,
-      );
-      return;
-    }
-    if (!resolution.ok && resolution.code === "no-registered-provider") {
-      this.logger.warn("Streaming enabled but no realtime transcription provider is registered");
-      return;
-    }
-    if (!resolution.ok) {
-      this.logger.warn(
-        `Streaming enabled but provider "${resolution.provider?.id}" is not configured`,
-      );
-      return;
-    }
-    const provider = resolution.provider;
-    const providerConfig = resolution.providerConfig;
-
-    const streamConfig: MediaStreamConfig = {
-      transcriptionProvider: provider,
-      providerConfig,
-      cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
-      preStartTimeoutMs: streaming.preStartTimeoutMs,
-      maxPendingConnections: streaming.maxPendingConnections,
-      maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
-      maxConnections: streaming.maxConnections,
-      resolveClientIp: (request) => this.resolveMediaStreamClientIp(request),
-      shouldAcceptStream: ({ callId, token }) => {
-        // The classic media handler parses Twilio frames and only Twilio issues
-        // its per-call token. Other carriers use their separate realtime path.
-        if (this.provider.name !== "twilio") {
-          this.logger.warn(
-            `Rejecting media stream: provider ${this.provider.name} does not support authenticated classic streaming`,
-          );
-          return false;
-        }
-        const call = this.manager.getCallByProviderCallId(callId);
-        if (!call) {
-          return false;
-        }
-        const twilio = this.provider as TwilioProvider;
-        if (!twilio.isValidStreamToken(callId, token)) {
-          this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
-          return false;
-        }
-        return true;
-      },
-      onTranscript: (providerCallId, transcript, streamSid) => {
-        this.logger.info(`Transcript received ${providerCallId} chars=${transcript.length}`);
-        const current = this.getCurrentStream(providerCallId, streamSid);
-        if (!current) {
-          this.logger.info(
-            `Ignoring transcript from inactive stream ${streamSid} (${providerCallId})`,
-          );
-          return;
-        }
-        const { call, provider: streamProvider } = current;
-        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
-        if (suppressBargeIn) {
-          this.logger.info(
-            `Ignoring barge transcript while initial message is still playing (${providerCallId})`,
-          );
-          return;
-        }
-
-        streamProvider.clearTtsQueue(providerCallId);
-
-        // Create a speech event and process it through the manager
-        const event: NormalizedEvent = {
-          id: `stream-transcript-${Date.now()}`,
-          type: "call.speech",
-          callId: call.callId,
-          providerCallId,
-          timestamp: Date.now(),
-          transcript,
-          isFinal: true,
+    const releases: Array<() => void> = [];
+    const bindProvider = (
+      provider: RealtimeTranscriptionProviderPlugin,
+      run: ReturnType<typeof acquireRealtimeTranscriptionProviders>["run"],
+    ): RealtimeTranscriptionProviderPlugin => ({
+      ...provider,
+      isConfigured: (context) => run(() => provider.isConfigured(context)),
+      ...(provider.resolveConfig
+        ? {
+            resolveConfig: (
+              context: Parameters<
+                NonNullable<RealtimeTranscriptionProviderPlugin["resolveConfig"]>
+              >[0],
+            ) => run(() => provider.resolveConfig!(context)),
+          }
+        : {}),
+      createSession: (request) => {
+        const session = run(() => provider.createSession(request));
+        let closeRequested = false;
+        let closing = false;
+        let closed = false;
+        return {
+          connect: () =>
+            closeRequested
+              ? Promise.reject(new Error("Realtime transcription session is closed"))
+              : run(() => session.connect()),
+          sendAudio: (audio) => {
+            if (!closeRequested) {
+              run(() => session.sendAudio(audio));
+            }
+          },
+          isConnected: () => !closeRequested && run(() => session.isConnected()),
+          close: () => {
+            if (closed || closing) {
+              return;
+            }
+            closeRequested = true;
+            closing = true;
+            try {
+              run(() => session.close());
+              closed = true;
+            } finally {
+              closing = false;
+            }
+          },
         };
-        this.processEventWithAutoResponse(event);
       },
-      onSpeechStart: (providerCallId, streamSid) =>
-        this.interruptStreamReply(providerCallId, streamSid),
-      onPartialTranscript: (callId, partial, streamSid) => {
-        this.logger.info(`Partial transcript ${callId} chars=${partial.length}`);
-        this.interruptStreamReply(callId, streamSid);
-      },
-      onTalkEvent: (providerCallId, streamSid, event) => {
-        const current = this.getCurrentStream(providerCallId, streamSid);
-        if (current) {
-          appendRecentTalkEventMetadata(current.call, event);
-        }
-      },
-      onConnect: (callId, streamSid) => {
-        this.logger.info(`Media stream connected: ${callId} -> ${streamSid}`);
-        this.streamDisconnectGrace.connect(callId, streamSid);
-        const call = this.manager.getCallByProviderCallId(callId);
-        if (call) {
-          this.manager.invalidateAutoResponse(call);
-        }
+    });
+    let transferred = false;
+    try {
+      const resolution = resolveConfiguredCapabilityProvider({
+        configuredProviderId: streaming.provider,
+        providerConfigs: streaming.providers,
+        cfg: pluginConfig,
+        cfgForResolve: pluginConfig ?? ({} as OpenClawConfig),
+        getConfiguredProvider: (providerId) => {
+          if (providerId === undefined) {
+            return undefined;
+          }
+          const lease = acquireRealtimeTranscriptionProvider(providerId, pluginConfig);
+          releases.push(lease.release);
+          return lease.provider ? bindProvider(lease.provider, lease.run) : undefined;
+        },
+        listProviders: () => {
+          const lease = acquireRealtimeTranscriptionProviders(
+            pluginConfig,
+            Object.keys(streaming.providers),
+          );
+          releases.push(lease.release);
+          return lease.providers.map((provider) => bindProvider(provider, lease.run));
+        },
+        resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
+          provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
+        isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+          provider.isConfigured({ cfg, providerConfig }),
+      });
+      if (!resolution.ok && resolution.code === "missing-configured-provider") {
+        this.logger.warn(
+          `Streaming enabled but realtime transcription provider "${resolution.configuredProviderId}" is not registered`,
+        );
+        return;
+      }
+      if (!resolution.ok && resolution.code === "no-registered-provider") {
+        this.logger.warn("Streaming enabled but no realtime transcription provider is registered");
+        return;
+      }
+      if (!resolution.ok) {
+        this.logger.warn(
+          `Streaming enabled but provider "${resolution.provider?.id}" is not configured`,
+        );
+        return;
+      }
+      const provider = resolution.provider;
+      const providerConfig = resolution.providerConfig;
 
-        // Register stream with provider for TTS routing
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
-        }
-      },
-      onTranscriptionReady: (callId, streamSid) => {
-        if (!this.getCurrentStream(callId, streamSid)) {
-          return;
-        }
-        this.manager.speakInitialMessage(callId).catch((err: unknown) => {
-          this.logger.warn(`Failed to speak initial message: ${String(err)}`);
-        });
-      },
-      onDisconnect: (callId, streamSid) => {
-        this.logger.info(`Media stream disconnected: ${callId} (${streamSid})`);
-        if (this.provider.name === "twilio") {
-          const twilio = this.provider as TwilioProvider;
-          twilio.unregisterCallStream(callId, streamSid);
+      const streamConfig: MediaStreamConfig = {
+        transcriptionProvider: provider,
+        providerConfig,
+        cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
+        preStartTimeoutMs: streaming.preStartTimeoutMs,
+        maxPendingConnections: streaming.maxPendingConnections,
+        maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
+        maxConnections: streaming.maxConnections,
+        resolveClientIp: (request) => this.resolveMediaStreamClientIp(request),
+        shouldAcceptStream: ({ callId, token }) => {
+          // The classic media handler parses Twilio frames and only Twilio issues
+          // its per-call token. Other carriers use their separate realtime path.
+          if (this.provider.name !== "twilio") {
+            this.logger.warn(
+              `Rejecting media stream: provider ${this.provider.name} does not support authenticated classic streaming`,
+            );
+            return false;
+          }
           const call = this.manager.getCallByProviderCallId(callId);
-          // A late disconnect must not revoke the replacement stream's reply.
-          if (call && !twilio.hasRegisteredStream(callId)) {
+          if (!call) {
+            return false;
+          }
+          const twilio = this.provider as TwilioProvider;
+          if (!twilio.isValidStreamToken(callId, token)) {
+            this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
+            return false;
+          }
+          return true;
+        },
+        onTranscript: (providerCallId, transcript, streamSid) => {
+          this.logger.info(`Transcript received ${providerCallId} chars=${transcript.length}`);
+          const current = this.getCurrentStream(providerCallId, streamSid);
+          if (!current) {
+            this.logger.info(
+              `Ignoring transcript from inactive stream ${streamSid} (${providerCallId})`,
+            );
+            return;
+          }
+          const { call, provider: streamProvider } = current;
+          const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
+          if (suppressBargeIn) {
+            this.logger.info(
+              `Ignoring barge transcript while initial message is still playing (${providerCallId})`,
+            );
+            return;
+          }
+
+          streamProvider.clearTtsQueue(providerCallId);
+
+          // Create a speech event and process it through the manager
+          const event: NormalizedEvent = {
+            id: `stream-transcript-${Date.now()}`,
+            type: "call.speech",
+            callId: call.callId,
+            providerCallId,
+            timestamp: Date.now(),
+            transcript,
+            isFinal: true,
+          };
+          this.processEventWithAutoResponse(event);
+        },
+        onSpeechStart: (providerCallId, streamSid) =>
+          this.interruptStreamReply(providerCallId, streamSid),
+        onPartialTranscript: (callId, partial, streamSid) => {
+          this.logger.info(`Partial transcript ${callId} chars=${partial.length}`);
+          this.interruptStreamReply(callId, streamSid);
+        },
+        onTalkEvent: (providerCallId, streamSid, event) => {
+          const current = this.getCurrentStream(providerCallId, streamSid);
+          if (current) {
+            appendRecentTalkEventMetadata(current.call, event);
+          }
+        },
+        onConnect: (callId, streamSid) => {
+          this.logger.info(`Media stream connected: ${callId} -> ${streamSid}`);
+          this.streamDisconnectGrace.connect(callId, streamSid);
+          const call = this.manager.getCallByProviderCallId(callId);
+          if (call) {
             this.manager.invalidateAutoResponse(call);
           }
-        }
 
-        this.streamDisconnectGrace.disconnect(callId, streamSid);
-      },
-    };
+          // Register stream with provider for TTS routing
+          if (this.provider.name === "twilio") {
+            (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
+          }
+        },
+        onTranscriptionReady: (callId, streamSid) => {
+          if (!this.getCurrentStream(callId, streamSid)) {
+            return;
+          }
+          this.manager.speakInitialMessage(callId).catch((err: unknown) => {
+            this.logger.warn(`Failed to speak initial message: ${String(err)}`);
+          });
+        },
+        onDisconnect: (callId, streamSid) => {
+          this.logger.info(`Media stream disconnected: ${callId} (${streamSid})`);
+          if (this.provider.name === "twilio") {
+            const twilio = this.provider as TwilioProvider;
+            twilio.unregisterCallStream(callId, streamSid);
+            const call = this.manager.getCallByProviderCallId(callId);
+            // A late disconnect must not revoke the replacement stream's reply.
+            if (call && !twilio.hasRegisteredStream(callId)) {
+              this.manager.invalidateAutoResponse(call);
+            }
+          }
 
-    this.mediaStreamHandler = new MediaStreamHandler(streamConfig);
-    this.logger.info("Media streaming initialized");
+          this.streamDisconnectGrace.disconnect(callId, streamSid);
+        },
+      };
+
+      this.mediaStreamHandler = new MediaStreamHandler(streamConfig);
+      this.logger.info("Media streaming initialized");
+      this.releaseTranscriptionRegistrations = () => releases.forEach((release) => release());
+      transferred = true;
+    } finally {
+      if (!transferred) {
+        releases.forEach((release) => release());
+      }
+    }
   }
 
   /**
@@ -512,6 +584,9 @@ export class VoiceCallWebhookServer {
   async start(): Promise<string> {
     if (this.stopPromise) {
       await this.stopPromise;
+    }
+    if (this.cleanupPending) {
+      await this.stop();
     }
 
     const { port, bind, path: webhookPath } = this.config.serve;
@@ -596,6 +671,7 @@ export class VoiceCallWebhookServer {
       return this.stopPromise;
     }
 
+    this.cleanupPending = true;
     const server = this.server;
     const serverClosePromise = new Promise<void>((resolve, reject) => {
       if (!server) {
@@ -637,6 +713,12 @@ export class VoiceCallWebhookServer {
       if (failure) {
         throw failure.reason;
       }
+      this.releaseTranscriptionRegistrations?.();
+      this.releaseTranscriptionRegistrations = undefined;
+      // Streaming providers were released; a later start must acquire a fresh handler.
+      // The realtime handler retains its factory/tool wiring and acquires providers per call.
+      this.mediaStreamHandler = null;
+      this.cleanupPending = false;
     })().finally(() => {
       this.stopPromise = null;
     });

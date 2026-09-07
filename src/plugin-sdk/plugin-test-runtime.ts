@@ -6,6 +6,12 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import {
+  resolveProviderContractProvidersForPluginIdsCore,
+  resolveWebFetchProviderContractEntriesForPluginIdCore,
+  resolveWebSearchProviderContractEntriesForPluginIdCore,
+} from "../plugins/contracts/registry.js";
+import { withLegacyPluginSdkResourceScope } from "./legacy-registry-resource-scope.js";
 
 type AgentHarnessHostTestAttempt = Omit<
   EmbeddedRunAttemptParams,
@@ -49,9 +55,6 @@ export {
 export {
   providerContractLoadError,
   pluginRegistrationContractRegistry,
-  resolveProviderContractProvidersForPluginIds,
-  resolveWebFetchProviderContractEntriesForPluginId,
-  resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
 export { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 export {
@@ -153,3 +156,30 @@ export {
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
+
+/** Legacy bare test callbacks remain owned by the test host until its teardown. */
+export function resolveProviderContractProvidersForPluginIds(
+  ...args: Parameters<typeof resolveProviderContractProvidersForPluginIdsCore>
+) {
+  return withLegacyPluginSdkResourceScope(() =>
+    resolveProviderContractProvidersForPluginIdsCore(...args),
+  );
+}
+
+/** Legacy bare test callbacks remain owned by the test host until its teardown. */
+export function resolveWebFetchProviderContractEntriesForPluginId(
+  ...args: Parameters<typeof resolveWebFetchProviderContractEntriesForPluginIdCore>
+) {
+  return withLegacyPluginSdkResourceScope(() =>
+    resolveWebFetchProviderContractEntriesForPluginIdCore(...args),
+  );
+}
+
+/** Legacy bare test callbacks remain owned by the test host until its teardown. */
+export function resolveWebSearchProviderContractEntriesForPluginId(
+  ...args: Parameters<typeof resolveWebSearchProviderContractEntriesForPluginIdCore>
+) {
+  return withLegacyPluginSdkResourceScope(() =>
+    resolveWebSearchProviderContractEntriesForPluginIdCore(...args),
+  );
+}

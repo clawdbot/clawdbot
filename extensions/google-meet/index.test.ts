@@ -6653,23 +6653,28 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
-    expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      "[google-meet] audio input command stdout failed: EPIPE",
-    );
-    expect(handle.getHealth().bridgeClosed).toBe(true);
-    expect(sttSession.close).toHaveBeenCalled();
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    try {
+      expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        "[google-meet] audio input command stdout failed: EPIPE",
+      );
+      expect(handle.getHealth().bridgeClosed).toBe(true);
+      await handle.stop();
+      expect(sttSession.close).toHaveBeenCalled();
+      expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
 
-    expect(() => inputStderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
-    expect(() => outputStderr.emit("error", new Error("output EPIPE"))).not.toThrow();
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      "[google-meet] audio input command stderr failed: stderr EPIPE",
-    );
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      "[google-meet] audio output command stderr failed: output EPIPE",
-    );
+      expect(() => inputStderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
+      expect(() => outputStderr.emit("error", new Error("output EPIPE"))).not.toThrow();
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        "[google-meet] audio input command stderr failed: stderr EPIPE",
+      );
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        "[google-meet] audio output command stderr failed: output EPIPE",
+      );
+    } finally {
+      await handle.stop();
+    }
   });
 
   it("preserves telephony TTS output formats when routing Google Meet agent audio", () => {
@@ -6940,16 +6945,19 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
-    expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
-    expect(noopLogger.warn).toHaveBeenCalledWith(
-      "[google-meet] audio input command stdout failed: EPIPE",
-    );
-    expect(handle.getHealth().bridgeClosed).toBe(true);
-    await vi.waitFor(() => {
+    try {
+      expect(() => inputStdout.emit("error", new Error("EPIPE"))).not.toThrow();
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        "[google-meet] audio input command stdout failed: EPIPE",
+      );
+      expect(handle.getHealth().bridgeClosed).toBe(true);
+      await handle.stop();
       expect(bridge.close).toHaveBeenCalled();
-    });
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      await handle.stop();
+    }
   });
 
   it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {

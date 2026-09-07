@@ -6,8 +6,14 @@ export function registerWorkboardStoreLifecycle(
   store: WorkboardStore,
   stopServices?: () => void,
 ): void {
+  const dispose = () => {
+    // Stop producers before the store drains admitted work and closes its connection.
+    stopServices?.();
+    return store.close();
+  };
   api.lifecycle.registerRuntimeLifecycle({
     id: "workboard-sqlite-store",
+    dispose,
     cleanup: ({ reason, sessionKey, runId }) => {
       // Session cleanup shares this hook, but only registry retirement owns the whole store.
       if (
@@ -15,9 +21,7 @@ export function registerWorkboardStoreLifecycle(
         runId === undefined &&
         (reason === "disable" || reason === "restart")
       ) {
-        // Stop producers before the store drains admitted work and closes its connection.
-        stopServices?.();
-        return store.close();
+        return dispose();
       }
       return undefined;
     },

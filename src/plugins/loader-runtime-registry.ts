@@ -1,15 +1,17 @@
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import type { PluginRegistry } from "./registry-types.js";
+import { retainPluginRegistryResources, type PluginRegistryHandle } from "./registry-resources.js";
 
 export function createPluginRuntimeRegistryResolver(
-  loadRegistry: (options: PluginLoadOptions) => PluginRegistry,
+  loadRegistry: (options: PluginLoadOptions) => PluginRegistryHandle,
 ) {
-  function resolveRuntimePluginRegistry(options?: PluginLoadOptions): PluginRegistry | undefined {
+  function resolveRuntimePluginRegistry(
+    options?: PluginLoadOptions,
+  ): PluginRegistryHandle | undefined {
     const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
     if (activeRegistry) {
-      return activeRegistry;
+      return { registry: activeRegistry, ...retainPluginRegistryResources(activeRegistry) };
     }
     // Runtime helpers must not recurse while this exact snapshot is registering.
     if (isPluginRegistryLoadInFlight(options)) {

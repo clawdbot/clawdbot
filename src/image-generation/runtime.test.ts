@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   generateImage,
-  listRuntimeImageGenerationProviders,
+  listRuntimeImageGenerationProvidersCore,
   type GenerateImageParams,
 } from "./runtime.js";
 import type { ImageGenerationProvider } from "./types.js";
@@ -1007,7 +1007,7 @@ describe("image-generation runtime", () => {
     providers = registryProviders;
 
     expect(
-      listRuntimeImageGenerationProviders({ config: {} as OpenClawConfig }, runtimeDeps),
+      listRuntimeImageGenerationProvidersCore({ config: {} as OpenClawConfig }, runtimeDeps),
     ).toEqual(registryProviders);
     expect(listedConfigs).toEqual([{} as OpenClawConfig]);
   });

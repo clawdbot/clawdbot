@@ -1,4 +1,14 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
+import {
+  acquirePluginCapabilityProvider,
+  acquirePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
+import {
+  getRealtimeVoiceProviderCore as getProviderCore,
+  listRealtimeVoiceProvidersCore as listProvidersCore,
+} from "../talk/provider-registry.js";
+import { resolveConfiguredRealtimeVoiceProviderCore as resolveConfiguredProviderCore } from "../talk/provider-resolver.js";
+import { withLegacyPluginSdkResourceScope } from "./legacy-registry-resource-scope.js";
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   OpenAICompatibleRealtimeAudioFormat,
@@ -182,12 +192,9 @@ export {
 } from "../talk/fast-context-runtime.js";
 export {
   canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider,
-  listRealtimeVoiceProviders,
   normalizeRealtimeVoiceProviderId,
 } from "../talk/provider-registry.js";
 export {
-  resolveConfiguredRealtimeVoiceProvider,
   type ResolvedRealtimeVoiceProvider,
   type ResolveConfiguredRealtimeVoiceProviderParams,
 } from "../talk/provider-resolver.js";
@@ -234,3 +241,40 @@ export {
   resamplePcm,
   resamplePcmTo8k,
 } from "../talk/audio-codec.js";
+
+/** @deprecated Use acquireRealtimeVoiceProvider and release after all callbacks finish. */
+export function getRealtimeVoiceProvider(...args: Parameters<typeof getProviderCore>) {
+  return withLegacyPluginSdkResourceScope(() => getProviderCore(...args));
+}
+
+/** @deprecated Use acquireRealtimeVoiceProviders and release after all callbacks finish. */
+export function listRealtimeVoiceProviders(...args: Parameters<typeof listProvidersCore>) {
+  return withLegacyPluginSdkResourceScope(() => listProvidersCore(...args));
+}
+
+export function acquireRealtimeVoiceProvider(
+  providerId: string,
+  cfg?: Parameters<typeof listProvidersCore>[0],
+) {
+  return acquirePluginCapabilityProvider({ key: "realtimeVoiceProviders", providerId, cfg });
+}
+
+export function acquireRealtimeVoiceProviders(
+  cfg?: Parameters<typeof listProvidersCore>[0],
+  additionalProviderIds?: readonly string[],
+) {
+  return acquirePluginCapabilityProviders({
+    key: "realtimeVoiceProviders",
+    cfg,
+    additionalProviderIds,
+  });
+}
+
+export { acquireConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
+
+/** @deprecated Acquire the selected provider and release after its session closes. */
+export function resolveConfiguredRealtimeVoiceProvider(
+  ...args: Parameters<typeof resolveConfiguredProviderCore>
+) {
+  return withLegacyPluginSdkResourceScope(() => resolveConfiguredProviderCore(...args));
+}

@@ -14,6 +14,7 @@ import {
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -106,7 +107,7 @@ function buildNoVideoGenerationModelConfiguredMessage(
   });
 }
 
-export function listRuntimeVideoGenerationProviders(
+export function listRuntimeVideoGenerationProvidersCore(
   params?: { config?: OpenClawConfig },
   deps: VideoGenerationRuntimeDeps = {},
 ) {
@@ -116,6 +117,13 @@ export function listRuntimeVideoGenerationProviders(
 export async function generateVideo(
   params: GenerateVideoParams,
   deps: VideoGenerationRuntimeDeps = {},
+): Promise<GenerateVideoRuntimeResult> {
+  return withPluginRegistryResourceOperationAsync(() => generateVideoWithResources(params, deps));
+}
+
+async function generateVideoWithResources(
+  params: GenerateVideoParams,
+  deps: VideoGenerationRuntimeDeps,
 ): Promise<GenerateVideoRuntimeResult> {
   const getProvider = deps.getProvider ?? getVideoGenerationProvider;
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;

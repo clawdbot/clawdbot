@@ -10,7 +10,10 @@ import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import type { SkillBinsProvider } from "./invoke.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import {
+  ensureNodeHostPluginRegistry,
+  listRegisteredNodeHostCapsAndCommands,
+} from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
@@ -65,7 +68,12 @@ vi.mock("./node-worker-workspace.js", () => ({
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn<
+    typeof import("./plugin-node-host.js").notifyRegisteredNodeHostCommandDisconnect
+  >(async () => {}),
+  ensureNodeHostPluginRegistry: vi.fn<
+    typeof import("./plugin-node-host.js").ensureNodeHostPluginRegistry
+  >(async () => ({ release: vi.fn() })),
   isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: ["terminal"],
@@ -377,14 +385,26 @@ describe("node-host invocation cancellation", () => {
     await invoking;
   });
 
-  it("retires MCP even when supervisor close fails", async () => {
+  it("retries failed supervisor retirement before releasing the registry without retiring MCP twice", async () => {
     const supervisorError = new Error("supervisor close failed");
+    const releaseRegistry = vi.fn();
+    vi.mocked(ensureNodeHostPluginRegistry).mockResolvedValueOnce({ release: releaseRegistry });
     mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
     const runtime = await startRuntime();
 
-    await expect(runtime.close()).rejects.toBe(supervisorError);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    try {
+      await expect(runtime.close()).rejects.toBe(supervisorError);
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      expect(releaseRegistry).not.toHaveBeenCalled();
+
+      await expect(runtime.close()).resolves.toBeUndefined();
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(2);
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      expect(releaseRegistry).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close().catch(() => {});
+    }
   });
 
   it("completes supervisor retirement even when MCP close fails", async () => {

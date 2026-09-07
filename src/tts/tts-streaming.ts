@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
@@ -7,6 +13,108 @@ import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthe
 import { resolveTtsSynthesisTarget } from "./tts-synthesis.js";
 
 export async function streamSpeech(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  channel?: string;
+  overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
+  timeoutMs?: number;
+  agentId?: string;
+  accountId?: string;
+}): Promise<TtsSynthesisStreamResult> {
+  const resources = new PluginRegistryResourceScope();
+  const registration = createPluginRegistryResourceLease(resources);
+  try {
+    const synthesis = await registration.run(() => streamSpeechWithResources(params));
+    if (!synthesis.success || !synthesis.audioStream) {
+      try {
+        await registration.run(() => synthesis.release?.());
+      } finally {
+        resources.release();
+      }
+      return synthesis;
+    }
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    try {
+      reader = synthesis.audioStream.getReader();
+    } catch (error) {
+      // A provider can return a locked stream. Even reader construction failure
+      // must release the transport already returned by synthesis.
+      try {
+        await registration.run(() => synthesis.release?.());
+      } finally {
+        resources.release();
+      }
+      throw error;
+    }
+    let completion: Promise<void> | undefined;
+    const release = (cancel = true): Promise<void> => {
+      if (!completion) {
+        const cleanup = createDeferredCore();
+        completion = cleanup.promise;
+        // Publish completion before invoking provider code: cancellation callbacks
+        // can reenter release or trigger host shutdown synchronously.
+        registration.release(completion);
+        try {
+          cleanup.resolve(
+            withPluginRegistryResourceScope(resources, async () => {
+              try {
+                try {
+                  if (cancel) {
+                    await reader.cancel();
+                  }
+                } finally {
+                  await synthesis.release?.();
+                }
+              } finally {
+                reader.releaseLock();
+              }
+            }),
+          );
+        } catch (error) {
+          cleanup.reject(error);
+        }
+      }
+      return completion;
+    };
+    return {
+      ...synthesis,
+      release,
+      audioStream: new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            if (completion) {
+              // Buffered audio can outlive transport release; do not reenter its retired scope.
+              await completion;
+              controller.close();
+              return;
+            }
+            const chunk = await withPluginRegistryResourceScope(resources, () => reader.read());
+            if (chunk.done) {
+              await release(false);
+              controller.close();
+            } else {
+              controller.enqueue(chunk.value);
+            }
+          } catch (error) {
+            try {
+              await release(false);
+            } finally {
+              controller.error(error);
+            }
+          }
+        },
+        cancel: () => release(),
+      }),
+    };
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
+}
+
+async function streamSpeechWithResources(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -91,6 +199,7 @@ export async function textToSpeechStream(params: {
 }): Promise<TtsStreamResult> {
   const synthesis = await streamSpeech(params);
   if (!synthesis.success || !synthesis.audioStream || !synthesis.fileExtension) {
+    await synthesis.release?.();
     return {
       success: false,
       error: synthesis.error ?? "Streaming TTS conversion failed",

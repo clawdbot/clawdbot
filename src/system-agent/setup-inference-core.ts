@@ -7,7 +7,10 @@ import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store-runtime.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+import type {
+  CodexCliApiKeyCredential,
+  readCodexCliActiveApiKey,
+} from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
@@ -22,7 +25,7 @@ import type {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { acquirePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -272,7 +275,7 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
+  acquirePluginProviders?: typeof acquirePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
@@ -300,13 +303,36 @@ export type ActivateSetupInferenceDeps = {
   timeoutMs?: number;
 };
 
+export type SetupInferencePlanInput = Pick<
+  ActivateSetupInferenceParams,
+  | "kind"
+  | "modelRef"
+  | "authChoice"
+  | "apiKey"
+  | "runtime"
+  | "prompter"
+  | "signal"
+  | "isCancelled"
+  | "beforePersistentEffect"
+  | "isRemoteProviderAuth"
+> & {
+  cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
+  workspaceDir: string;
+  pluginWorkspaceDir: string;
+  agentDir: string;
+  routeAgentId?: string;
+  codexCliApiKey?: CodexCliApiKeyCredential;
+  deps: ActivateSetupInferenceDeps;
+};
+
 export type DetectSetupInferenceDeps = {
   /** Supplies prepared setup choices before native or provider discovery starts. */
   onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
+  acquirePluginProviders?: typeof acquirePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };
 

@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   listPersonalAccountAuthChoices,
-  resolvePersonalAccountAuthMethod,
+  acquirePersonalAccountAuthMethod,
 } from "../plugins/personal-account-auth.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-choice.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
@@ -293,7 +293,7 @@ export function createModelAccountConnectService(options: {
       operations.set(id, operation);
       let resolvedMethod;
       try {
-        resolvedMethod = await resolvePersonalAccountAuthMethod(
+        resolvedMethod = await acquirePersonalAccountAuthMethod(
           options.getConfig(),
           provider,
           methodId,
@@ -305,11 +305,13 @@ export function createModelAccountConnectService(options: {
           );
         }
       } catch (error) {
+        resolvedMethod?.release();
         snapshot(operation);
         finish(operation, { status: "failed", reason: "unavailable" });
         throw error;
       }
-      const method = resolvedMethod;
+      const methodHandle = resolvedMethod;
+      const { method } = methodHandle;
       operation.session = new WizardSession(async (prompter, signal) => {
         // Constructor runners start immediately; yield until the operation owns
         // its session so synchronous provider failures can also be cancelled.
@@ -364,6 +366,9 @@ export function createModelAccountConnectService(options: {
         } catch {
           snapshot(operation);
           finish(operation, { status: "failed", reason: failure });
+        } finally {
+          // Cancellation revokes authority immediately; resources follow actual provider completion.
+          methodHandle.release();
         }
       });
       return { connectId: id, expiresAtMs: operation.expiresAtMs };

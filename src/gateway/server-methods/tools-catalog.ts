@@ -13,6 +13,7 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperation } from "../../plugins/registry-resources.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
@@ -202,11 +203,13 @@ function buildToolsCatalogResult(params: {
       groups.flatMap((group) => group.tools.map((tool) => tool.id)),
     );
     groups.push(
-      ...buildPluginGroups({
-        cfg: params.cfg,
-        agentId,
-        existingToolNames,
-      }),
+      ...withPluginRegistryResourceOperation(() =>
+        buildPluginGroups({
+          cfg: params.cfg,
+          agentId,
+          existingToolNames,
+        }),
+      ),
     );
   }
   return {

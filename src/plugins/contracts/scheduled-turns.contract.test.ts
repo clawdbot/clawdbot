@@ -22,7 +22,7 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "../loader-handles.test-support.js";
 import {
   clearPluginLoaderCache,
   makePluginLoaderTempDir,

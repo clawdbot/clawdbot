@@ -134,7 +134,7 @@ function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
 }
 
 /** Build the complete runtime plan for an embedded agent attempt. */
-export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
+export function buildAgentRuntimePlanCore(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const config = asOpenClawConfig(params.config);
   const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;

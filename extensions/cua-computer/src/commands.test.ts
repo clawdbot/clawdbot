@@ -147,33 +147,61 @@ describe("cua-computer provider", () => {
     }
   });
 
-  it("lazily owns one session and closes it when node-host availability stops", async () => {
-    const { session, dispose } = driver();
-    const createDriver = vi.fn(() => session);
-    const clearInterval = vi.fn();
-    const provider = createCuaComputerProvider({
-      platform: "linux",
-      createDriver,
-      imageProcessor: {
-        encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
-      },
-      setInterval: vi.fn(() => Object.assign(1, { unref: vi.fn() })) as never,
-      clearInterval: clearInterval as never,
-    });
-    expect(createDriver).not.toHaveBeenCalled();
-
-    const computer = await provider.openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174000",
-    });
-    await computer.snapshot('{"format":"png","maxWidth":100}');
-    expect(createDriver).toHaveBeenCalledOnce();
-
-    const stop = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await Promise.resolve();
-    expect(clearInterval).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
+  it.each(["closed", "failed"] as const)(
+    "awaits one terminal availability-driver disposal across repeated watcher stops: %s",
+    async (outcome) => {
+      const { session, dispose, getDesktopState } = driver();
+      const retirement = createDeferred<void>();
+      dispose.mockImplementation(() => retirement.promise);
+      const createDriver = vi.fn(() => session);
+      const clearInterval = vi.fn();
+      const provider = createCuaComputerProvider({
+        platform: "linux",
+        createDriver,
+        setInterval: vi.fn(() => Object.assign(1, { unref: vi.fn() })) as never,
+        clearInterval: clearInterval as never,
+      });
+      expect(createDriver).not.toHaveBeenCalled();
+      const stop = provider.watchAvailability?.({ config: {}, env: {} }, vi.fn());
+      if (!stop) {
+        throw new Error("expected availability watcher cleanup");
+      }
+      const settled = vi.fn();
+      const stopping = Promise.allSettled([stop(), stop()]).then((results) => {
+        settled();
+        return results;
+      });
+      const failure = new Error("native availability driver shutdown failed");
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(createDriver).toHaveBeenCalledOnce();
+        expect(getDesktopState).not.toHaveBeenCalled();
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(settled).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          retirement.reject(failure);
+          expect(await stopping).toEqual([
+            { status: "rejected", reason: failure },
+            { status: "rejected", reason: failure },
+          ]);
+          await expect(stop()).rejects.toBe(failure);
+        } else {
+          retirement.resolve();
+          expect(await stopping).toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          await stop();
+        }
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally {
+        retirement.resolve();
+        await stopping;
+      }
+    },
+  );
 
   it("passes node invocation cancellation to the direct SDK", async () => {
     const { session, getDesktopState } = driver();

@@ -10,6 +10,7 @@ import { parseDiscordTarget } from "../target-parsing.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
+import { DiscordRealtimeCleanup } from "./realtime-cleanup.js";
 import {
   createVoiceReceiveRecoveryState,
   DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
@@ -129,6 +130,8 @@ function resolveDiscordVoiceAgentRoute(params: {
 }
 
 export class DiscordVoiceSessions {
+  readonly realtimeCleanup = new DiscordRealtimeCleanup();
+
   constructor(
     private readonly params: {
       accountId: string;
@@ -200,6 +203,8 @@ export class DiscordVoiceSessions {
     authority?: VoiceSessionGeneration,
   ): Promise<VoiceOperationResult> {
     const { guildId, channelId } = params;
+    // A new connection cannot orphan a previous generation whose physical cleanup failed.
+    this.realtimeCleanup.retry(guildId);
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
     const cancelledJoinResult = (): VoiceOperationResult => ({
@@ -428,25 +433,14 @@ export class DiscordVoiceSessions {
       connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
       connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
       player.off("error", playerErrorHandler);
-      const realtimeLifecycle = entry.realtimeLifecycle;
-      if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
-        realtimeLifecycle.instance.close();
+      try {
+        this.realtimeCleanup.stopEntry(entry, optionsLocal.reason);
+      } finally {
+        if (optionsLocal.destroyConnection) {
+          destroyVoiceConnectionSafely({ connection, voiceSdk, reason: optionsLocal.reason });
+        }
+        this.params.onSessionStopped(entry, optionsLocal.reason);
       }
-      entry.realtimeLifecycle = {
-        status: "stopped",
-        generation: realtimeLifecycle.generation,
-        reason: optionsLocal.reason,
-      };
-      // Buffering resources cannot drain silence padding; terminal teardown must reach Idle now.
-      player.stop(true);
-      if (optionsLocal.destroyConnection) {
-        destroyVoiceConnectionSafely({
-          connection,
-          voiceSdk,
-          reason: optionsLocal.reason,
-        });
-      }
-      this.params.onSessionStopped(entry, optionsLocal.reason);
     };
 
     const getTranscripts = this.params.getTranscripts;
@@ -605,9 +599,12 @@ export class DiscordVoiceSessions {
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
+    const cleaned = this.realtimeCleanup.retry(guildId);
     const entry = this.params.sessions.get(guildId);
     if (!entry) {
-      return { ok: false, message: "Not connected to a voice channel." };
+      return cleaned
+        ? { ok: true, message: "Completed pending realtime voice cleanup.", guildId }
+        : { ok: false, message: "Not connected to a voice channel." };
     }
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
@@ -675,7 +672,7 @@ export class DiscordVoiceSessions {
             generation: lifecycle.generation,
             reason: "realtime terminal error",
           };
-          realtime.close();
+          this.realtimeCleanup.close(entry.guildId, realtime);
         } else {
           entry.stop("realtime terminal error");
         }
@@ -693,24 +690,8 @@ export class DiscordVoiceSessions {
     entry.realtimeLifecycle = { status: "starting", generation, instance: realtime };
     try {
       await realtime.connect();
-      if (
-        entry.realtimeLifecycle.status !== "starting" ||
-        entry.realtimeLifecycle.generation !== generation ||
-        entry.realtimeLifecycle.instance !== realtime ||
-        isVoiceSessionStopped(entry) ||
-        options?.isCurrent?.() === false ||
-        (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
-      ) {
-        realtime.close();
-        return {
-          ok: false,
-          message: "Discord realtime voice session stopped before startup completed.",
-        };
-      }
-      entry.realtimeLifecycle = { status: "active", generation, instance: realtime };
-      return { ok: true };
     } catch (err) {
-      realtime.close();
+      this.realtimeCleanup.close(entry.guildId, realtime);
       if (
         entry.realtimeLifecycle.status === "starting" &&
         entry.realtimeLifecycle.generation === generation
@@ -726,5 +707,21 @@ export class DiscordVoiceSessions {
         message: `Failed to start Discord realtime voice: ${formatErrorMessage(err)}`,
       };
     }
+    if (
+      entry.realtimeLifecycle.status !== "starting" ||
+      entry.realtimeLifecycle.generation !== generation ||
+      entry.realtimeLifecycle.instance !== realtime ||
+      isVoiceSessionStopped(entry) ||
+      options?.isCurrent?.() === false ||
+      (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
+    ) {
+      this.realtimeCleanup.close(entry.guildId, realtime);
+      return {
+        ok: false,
+        message: "Discord realtime voice session stopped before startup completed.",
+      };
+    }
+    entry.realtimeLifecycle = { status: "active", generation, instance: realtime };
+    return { ok: true };
   }
 }

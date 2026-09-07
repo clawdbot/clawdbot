@@ -493,6 +493,8 @@ async function runScopeScenario(root: string): Promise<void> {
   const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
   const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
   const { loadPluginRegistryHandle } = await import("../plugins/loader.js");
+  const { drainPluginRegistryResourceDisposals } = await import("../plugins/registry-resources.js");
+  const handles = new Set<ReturnType<typeof loadPluginRegistryHandle>>();
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
@@ -509,7 +511,7 @@ async function runScopeScenario(root: string): Promise<void> {
         workspaceDir: fixture.workspaceDir,
         preferPersisted: false,
       });
-      const pluginRegistry = loadPluginRegistryHandle({
+      const handle = loadPluginRegistryHandle({
         config: fixture.config,
         env: process.env,
         workspaceDir: fixture.workspaceDir,
@@ -518,7 +520,8 @@ async function runScopeScenario(root: string): Promise<void> {
         onlyPluginIds: [PLUGIN_ID],
         cache: false,
       });
-      return { config: fixture.config, metadataSnapshot, pluginRegistry };
+      handles.add(handle);
+      return { config: fixture.config, metadataSnapshot, pluginRegistry: handle.registry };
     });
   const endpoint = await createHttpFixture();
   try {
@@ -604,6 +607,10 @@ async function runScopeScenario(root: string): Promise<void> {
   } finally {
     inspectHook = undefined;
     await endpoint.close();
+    for (const handle of handles) {
+      handle.release();
+    }
+    await drainPluginRegistryResourceDisposals();
   }
 }
 

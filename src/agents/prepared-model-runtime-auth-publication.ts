@@ -293,3 +293,36 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     return rejected;
   }
 }
+
+/** Invalidates affected owner generations before auth publication is enqueued. */
+export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
+  owners: Iterable<PreparedModelRuntimeOwner>,
+  normalizedEvent: PreparedModelRuntimeAuthMutation,
+): {
+  invalidatedOwners: PreparedModelRuntimeOwner[];
+  invalidatedConfiguredAgentIds: Set<string>;
+} {
+  const staleError = new Error("prepared model runtime owner is stale after auth mutation");
+  const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
+  const invalidatedConfiguredAgentIds = new Set<string>();
+  for (const owner of owners) {
+    if (
+      !normalizedEvent.affectsInheritedStores &&
+      owner.input.agentDir !== normalizedEvent.agentDir &&
+      owner.input.inheritedAuthDir !== normalizedEvent.agentDir
+    ) {
+      continue;
+    }
+    invalidatedOwners.push(owner);
+    owner.generation += 1;
+    owner.needsRefresh = true;
+    owner.refreshError = staleError;
+    if (normalizedEvent.profileSetChanged) {
+      owner.catalogStale = true;
+    }
+    if (owner.provenance === "configured" && owner.input.agentId) {
+      invalidatedConfiguredAgentIds.add(owner.input.agentId);
+    }
+  }
+  return { invalidatedOwners, invalidatedConfiguredAgentIds };
+}

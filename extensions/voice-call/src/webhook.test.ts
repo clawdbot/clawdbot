@@ -41,16 +41,38 @@ const mocks = vi.hoisted(() => {
         deliveredEarly: false,
       }),
     ),
-    getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
-      () => realtimeTranscriptionProvider,
-    ),
-    listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
+    getRealtimeTranscriptionProvider: vi.fn<
+      typeof import("openclaw/plugin-sdk/realtime-transcription").getRealtimeTranscriptionProvider
+    >(() => realtimeTranscriptionProvider),
+    listRealtimeTranscriptionProviders: vi.fn<
+      typeof import("openclaw/plugin-sdk/realtime-transcription").listRealtimeTranscriptionProviders
+    >(() => [realtimeTranscriptionProvider]),
   };
 });
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
-  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+  acquireRealtimeTranscriptionProvider: (
+    ...args: Parameters<
+      typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProvider
+    >
+  ): ReturnType<
+    typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProvider
+  > => ({
+    provider: mocks.getRealtimeTranscriptionProvider(...args),
+    run: (operation) => operation(),
+    release() {},
+  }),
+  acquireRealtimeTranscriptionProviders: (
+    ...args: Parameters<
+      typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProviders
+    >
+  ): ReturnType<
+    typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProviders
+  > => ({
+    providers: mocks.listRealtimeTranscriptionProviders(...args),
+    run: (operation) => operation(),
+    release() {},
+  }),
 }));
 
 vi.mock("./response-generator.js", () => ({

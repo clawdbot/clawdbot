@@ -7,6 +7,7 @@ import type {
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -1270,34 +1271,36 @@ export async function drainPendingDeliveriesCore(opts: {
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
   shouldContinue?: () => boolean;
 }): Promise<void> {
-  const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
-    const now = Date.now();
-    const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir)).filter(
-      (entry) => entry.settlement || opts.selectEntry(entry, now).match,
-    );
-    await recoveryCoordinator.scan({
-      entries: matchingEntries,
-      loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir),
-      onMissingEntry: (entry) => {
-        opts.log.info(`${opts.logLabel}: entry ${entry.id} already gone, skipping`);
-      },
-      // Poll-driven reconnect drains can repeat while a live send owns its
-      // claim. Leave conflicts silent so reconnect polling cannot starve it.
-      onEntry: (entry) =>
-        processQueuedRecovery(
-          { ...opts, entry },
-          {
-            kind: "drain",
-            logLabel: opts.logLabel,
-            selectEntry: opts.selectEntry,
-            ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
-          },
-        ),
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
+      const now = Date.now();
+      const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir)).filter(
+        (entry) => entry.settlement || opts.selectEntry(entry, now).match,
+      );
+      await recoveryCoordinator.scan({
+        entries: matchingEntries,
+        loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir),
+        onMissingEntry: (entry) => {
+          opts.log.info(`${opts.logLabel}: entry ${entry.id} already gone, skipping`);
+        },
+        // Poll-driven reconnect drains can repeat while a live send owns its
+        // claim. Leave conflicts silent so reconnect polling cannot starve it.
+        onEntry: (entry) =>
+          processQueuedRecovery(
+            { ...opts, entry },
+            {
+              kind: "drain",
+              logLabel: opts.logLabel,
+              selectEntry: opts.selectEntry,
+              ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
+            },
+          ),
+      });
     });
+    if (!drained) {
+      opts.log.info(`${opts.logLabel}: already in progress for ${opts.drainKey}, skipping`);
+    }
   });
-  if (!drained) {
-    opts.log.info(`${opts.logLabel}: already in progress for ${opts.drainKey}, skipping`);
-  }
 }
 
 /**
@@ -1314,46 +1317,48 @@ export async function recoverPendingDeliveries(opts: {
   maxRecoveryMs?: number;
   shouldContinue?: () => boolean;
 }): Promise<DeliveryRecoverySummary> {
-  const pending = await loadUnfinishedDeliveries(opts.stateDir);
-  if (pending.length === 0) {
-    return createEmptyDeliveryRecoverySummary();
-  }
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const pending = await loadUnfinishedDeliveries(opts.stateDir);
+    if (pending.length === 0) {
+      return createEmptyDeliveryRecoverySummary();
+    }
 
-  opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
+    opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
-  const deadline = resolveDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
-  const summary = createEmptyDeliveryRecoverySummary();
-  const onDeadlineExceeded = () => {
-    // Budget deferral is not an attempt; preserve pending rows and retry counts.
-    opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
-  };
-  await recoveryCoordinator.scan({
-    entries: pending,
-    loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir),
-    deadlineMs: deadline,
-    onDeadlineExceeded,
-    onClaimConflict: (entry) => {
-      opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
-    },
-    onMissingEntry: (entry) => {
-      opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
-    },
-    onEntry: (entry) =>
-      processQueuedRecovery(
-        { ...opts, entry },
-        {
-          kind: "startup",
-          summary,
-          deadline,
-          onDeadlineExceeded,
-          ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
-        },
-      ),
+    const deadline = resolveDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
+    const summary = createEmptyDeliveryRecoverySummary();
+    const onDeadlineExceeded = () => {
+      // Budget deferral is not an attempt; preserve pending rows and retry counts.
+      opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
+    };
+    await recoveryCoordinator.scan({
+      entries: pending,
+      loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir),
+      deadlineMs: deadline,
+      onDeadlineExceeded,
+      onClaimConflict: (entry) => {
+        opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
+      },
+      onMissingEntry: (entry) => {
+        opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
+      },
+      onEntry: (entry) =>
+        processQueuedRecovery(
+          { ...opts, entry },
+          {
+            kind: "startup",
+            summary,
+            deadline,
+            onDeadlineExceeded,
+            ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
+          },
+        ),
+    });
+
+    opts.log.info(
+      `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
+    );
+    return summary;
   });
-
-  opts.log.info(
-    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
-  );
-  return summary;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceAgentControlResult,
+  RealtimeVoiceAudioFormat,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 const {
   createConnectionMock,
@@ -21,6 +25,7 @@ const {
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
+  createRealtimeVoiceProviderFixture,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   createRealtimeSessionMock,
@@ -127,8 +132,33 @@ const {
     triggerGreeting: vi.fn() as Mock,
   });
   const realtimeSessionMockLocal = createRealtimeSessionMockLocal();
+  const audioFormat: RealtimeVoiceAudioFormat = {
+    encoding: "pcm16",
+    sampleRateHz: 24000,
+    channels: 1,
+  };
+  const createRealtimeVoiceProviderFixtureLocal = (details: {
+    id: string;
+    capabilities?: Partial<NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>>;
+  }): RealtimeVoiceProviderPlugin => ({
+    ...details,
+    capabilities: {
+      transports: ["gateway-relay"],
+      inputAudioFormats: [audioFormat],
+      outputAudioFormats: [audioFormat],
+      ...details.capabilities,
+    },
+    label: "Test realtime provider",
+    isConfigured: () => true,
+    createBridge: () => ({
+      ...realtimeSessionMockLocal,
+      ...realtimeSessionMockLocal.bridge,
+      isConnected: () => true,
+    }),
+  });
 
   return {
+    createRealtimeVoiceProviderFixture: createRealtimeVoiceProviderFixtureLocal,
     createConnectionMock: createConnectionMockLocal,
     getVoiceConnectionMock: getVoiceConnectionMockLocal,
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
@@ -180,19 +210,12 @@ const {
     loggerWarnMock: vi.fn() as Mock,
     loggerErrorMock: vi.fn() as Mock,
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
-      (params?: {
-        configuredProviderId?: string;
-        isProviderAvailable?: (provider: { id: string }) => boolean;
-        assertProviderAvailable?: (provider: { id: string }) => void;
-      }) => {
-        provider: {
-          id: string;
-          capabilities?: { supportsActivationNameGating?: boolean };
-        };
-        providerConfig: Record<string, unknown>;
-      }
+      typeof import("openclaw/plugin-sdk/realtime-voice").resolveConfiguredRealtimeVoiceProvider
     >(() => ({
-      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
+      provider: createRealtimeVoiceProviderFixtureLocal({
+        id: "openai",
+        capabilities: { supportsActivationNameGating: true },
+      }),
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
@@ -224,6 +247,8 @@ const {
     ),
   };
 });
+
+export { createRealtimeVoiceProviderFixture };
 
 export const voiceTestMocks = {
   createConnectionMock,
@@ -415,6 +440,13 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
     },
     controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
+    acquireConfiguredRealtimeVoiceProvider: (
+      ...args: Parameters<typeof actual.acquireConfiguredRealtimeVoiceProvider>
+    ): ReturnType<typeof actual.acquireConfiguredRealtimeVoiceProvider> => ({
+      ...resolveConfiguredRealtimeVoiceProviderMock(...args),
+      release() {},
+      run: (operation) => operation(),
+    }),
   };
 });
 

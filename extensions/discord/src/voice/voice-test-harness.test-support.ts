@@ -19,7 +19,10 @@ import {
 import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import { createDiscordVoiceTranscriptFixture } from "./transcripts.test-support.js";
-import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
+import {
+  createRealtimeVoiceProviderFixture,
+  voiceTestMocks,
+} from "./voice-test-mocks.test-support.js";
 
 const {
   createConnectionMock,
@@ -158,7 +161,10 @@ function buildVoiceTestHarness() {
     });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
-      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
+      provider: createRealtimeVoiceProviderFixture({
+        id: "openai",
+        capabilities: { supportsActivationNameGating: true },
+      }),
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
     decodeOpusStreamChunksMock.mockReset();

@@ -15,11 +15,14 @@ const providerState = vi.hoisted(() => ({
 vi.mock("./provider-registry.js", async () => {
   const { createSpeechProviderRegistry, normalizeSpeechProviderId } =
     await import("./provider-registry-core.js");
+  const registry = createSpeechProviderRegistry({
+    getProvider: () => providerState.provider,
+    listProviders: () => (providerState.provider ? [providerState.provider] : []),
+  });
   return {
-    ...createSpeechProviderRegistry({
-      getProvider: () => providerState.provider,
-      listProviders: () => (providerState.provider ? [providerState.provider] : []),
-    }),
+    getSpeechProviderCore: registry.getSpeechProvider,
+    listSpeechProvidersCore: registry.listSpeechProviders,
+    canonicalizeSpeechProviderId: registry.canonicalizeSpeechProviderId,
     normalizeSpeechProviderId,
   };
 });

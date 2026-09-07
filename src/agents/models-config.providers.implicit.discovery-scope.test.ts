@@ -7,6 +7,7 @@ import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../plugins/plugin-metadata.test-support.js";
+import type { acquireRuntimePluginDiscoveryProviders } from "../plugins/provider-discovery.js";
 import {
   prepareProviderExternalAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -27,7 +28,12 @@ import { MODELS_CONFIG_IMPLICIT_ENV_VARS } from "./models-config.e2e-harness.js"
 
 const mocks = vi.hoisted(() => ({
   prepareProviderStaticCatalog: vi.fn(),
-  resolveRuntimePluginDiscoveryProviders: vi.fn(),
+  resolveRuntimePluginDiscoveryProviders:
+    vi.fn<
+      (
+        params: Parameters<typeof acquireRuntimePluginDiscoveryProviders>[0],
+      ) => Promise<ProviderPlugin[]>
+    >(),
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
@@ -43,7 +49,12 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/provider-discovery.js", () => ({
-  resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
+  acquireRuntimePluginDiscoveryProviders: async (
+    params: Parameters<typeof acquireRuntimePluginDiscoveryProviders>[0],
+  ): ReturnType<typeof acquireRuntimePluginDiscoveryProviders> => ({
+    providers: await mocks.resolveRuntimePluginDiscoveryProviders(params),
+    release: () => {},
+  }),
   runProviderCatalog: mocks.runProviderCatalog,
   runProviderStaticCatalog: mocks.runProviderStaticCatalog,
   groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) => ({
@@ -602,20 +613,26 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("records an unavailable outcome when live catalog discovery times out", async () => {
-    mocks.runProviderCatalog.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const completion = createDeferredCore();
+    mocks.runProviderCatalog.mockImplementationOnce(() => completion.promise);
     const outcomes: Array<{ provider: string; status: string }> = [];
 
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: ["openai"],
-      providerDiscoveryTimeoutMs: 1,
-      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
+    try {
+      await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        config: {},
+        env: state.env,
+        explicitProviders: {},
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 1,
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
 
-    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+      expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+    } finally {
+      completion.resolve();
+      await completion.promise;
+    }
   });
 
   it.each(["timeout", "secret-unavailable"] as const)(

@@ -34,7 +34,6 @@ export type {
   AgentOptions,
   AgentState,
   AgentTool,
-  AgentToolProgress,
   AgentToolResult,
   AgentToolUpdateCallback,
   BashExecutionMessage,

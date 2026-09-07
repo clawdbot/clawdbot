@@ -542,6 +542,20 @@ targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
 seam is for async tool-result transforms that must run before OpenClaw or
 Codex feeds tool output back into the model.
 
+Hosts applying middleware directly should call
+`acquireAgentToolResultMiddlewareRunner(context)` from
+`openclaw/plugin-sdk/agent-harness-runtime`. Reuse its
+`applyToolResultMiddleware(event)` callback for the owning run, then await
+`release()` in the run's cleanup. Release refuses new calls and waits for
+admitted middleware to finish before dropping its registration resources.
+Cancellation alone does not prove those callbacks have stopped.
+
+The older `createAgentToolResultMiddlewareRunner` SDK export remains available
+for existing hosts. It retains callbacks until the OpenClaw host closes or
+restarts; standalone hosts retain them for the process lifetime. New hosts
+should use the acquisition API. The older export can be removed only after
+its public SDK deprecation window.
+
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty

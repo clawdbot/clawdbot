@@ -44,9 +44,9 @@ beforeEach(() => {
   resetConfigRuntimeState();
   configGuardTestApi.resetConfigGuardStateForTests();
 });
-afterEach(() => {
+afterEach(async () => {
   resetConfigRuntimeState();
-  resetNodeHostPluginRegistry();
+  await resetNodeHostPluginRegistry();
   resetPluginLoaderTestStateForTest();
   clearPluginMetadataLifecycleCaches();
   closeOpenClawStateDatabaseForTest();
@@ -275,7 +275,7 @@ describe("private node worker bootstrap", () => {
           "system.run.prepare",
         ]),
       );
-      const runtime = prepared.start({
+      const runtime = await prepared.start({
         client: {
           request: async () => {
             throw new Error("unexpected Gateway request");

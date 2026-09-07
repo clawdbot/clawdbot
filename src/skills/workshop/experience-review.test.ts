@@ -131,7 +131,7 @@ describe("skill experience review scheduler", () => {
       setTimer: (callback) => setTimeout(callback, 0),
     });
 
-    withPreparedModelRuntimePluginGenerationScope(generation, () => {
+    await withPreparedModelRuntimePluginGenerationScope(generation, () => {
       scheduler.schedule(completedRun());
     });
     await reviewFinished;

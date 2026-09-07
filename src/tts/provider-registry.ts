@@ -6,6 +6,7 @@ import {
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
 import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   createSpeechProviderRegistry,
@@ -37,7 +38,7 @@ const defaultSpeechProviderRegistry = createSpeechProviderRegistry(
 );
 
 /** List configured speech providers using manifest/capability discovery. */
-export const listSpeechProviders = defaultSpeechProviderRegistry.listSpeechProviders;
+export const listSpeechProvidersCore = defaultSpeechProviderRegistry.listSpeechProviders;
 /** List currently loaded speech providers from the active runtime registry. */
 export function listLoadedSpeechProviders(_cfg?: OpenClawConfig): SpeechProviderPlugin[] {
   const providers = (getActiveRuntimePluginRegistry()?.speechProviders ?? []).map(
@@ -46,7 +47,12 @@ export function listLoadedSpeechProviders(_cfg?: OpenClawConfig): SpeechProvider
   return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 /** Resolve a configured speech provider by canonical ID or alias. */
-export const getSpeechProvider = defaultSpeechProviderRegistry.getSpeechProvider;
+export const getSpeechProviderCore = defaultSpeechProviderRegistry.getSpeechProvider;
 /** Resolve an input provider ID or alias to the provider's canonical ID. */
-export const canonicalizeSpeechProviderId =
-  defaultSpeechProviderRegistry.canonicalizeSpeechProviderId;
+export function canonicalizeSpeechProviderId(
+  ...args: Parameters<typeof defaultSpeechProviderRegistry.canonicalizeSpeechProviderId>
+) {
+  return withPluginRegistryResourceOperation(() =>
+    defaultSpeechProviderRegistry.canonicalizeSpeechProviderId(...args),
+  );
+}

@@ -2,6 +2,7 @@ import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { drainPluginRegistryResourceDisposals } from "../plugins/registry-resources.js";
 import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -55,8 +56,8 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 }));
 
 import {
-  prepareSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
 function createOllamaModelResolver(): typeof resolveModelAsync {
@@ -152,7 +153,7 @@ it("keeps route rematerialization and runtime auth on the acquired generation", 
     return undefined;
   });
 
-  const result = await prepareSimpleCompletionModel({
+  const result = await acquireSimpleCompletionModel({
     cfg: {},
     agentId: "main",
     provider: "openai",
@@ -168,6 +169,12 @@ it("keeps route rematerialization and runtime auth on the acquired generation", 
   expect(result.model.params).toMatchObject({ generation: "A" });
   expect(observedModelGenerations).toEqual(["A", "A"]);
   expect(observedRuntimeAuthGenerations).toEqual(["A"]);
+  const lease = await mocks.acquireRuntimeLease.mock.results[0]?.value;
+  expect(lease.release).not.toHaveBeenCalled();
+  result.release();
+  result.release();
+  await drainPluginRegistryResourceDisposals();
+  expect(lease.release).toHaveBeenCalledOnce();
 });
 
 it("acquires direct completion runtime for the exact selected model", async () => {
@@ -178,7 +185,7 @@ it("acquires direct completion runtime for the exact selected model", async () =
     mode: "api-key",
   });
 
-  await prepareSimpleCompletionModel({
+  await acquireSimpleCompletionModel({
     cfg: {},
     agentId: "main",
     provider: "ollama",
@@ -212,7 +219,7 @@ it("selects an explicit agent completion model before runtime acquisition", asyn
     mode: "api-key",
   });
 
-  await prepareSimpleCompletionModelForAgent({
+  await acquireSimpleCompletionModelForAgent({
     cfg: {},
     agentId: "main",
     modelRef: "ollama/qwen3:0.6b",
@@ -246,7 +253,7 @@ it("acquires the canonical manifest-derived utility model selection", async () =
   });
   mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
 
-  const result = await prepareSimpleCompletionModelForAgent({
+  const result = await acquireSimpleCompletionModelForAgent({
     cfg: {
       agents: { defaults: { model: "selected-provider/primary-model@work" } },
     },
@@ -274,6 +281,8 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     }),
     expect.objectContaining({ catalogMode: "static", pluginMetadataSnapshot: metadataSnapshot }),
   );
+  const lease = await mocks.acquireRuntimeLease.mock.results[0]?.value;
+  expect(lease.release).toHaveBeenCalledOnce();
   expect(result).toMatchObject({
     selection: {
       provider: "selected-provider",

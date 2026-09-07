@@ -32,6 +32,7 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoicePublicClientHints } from "../../plugins/provider-policy-surface.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
 import {
   assertSecretOwnerAvailable,
@@ -46,18 +47,18 @@ import {
 } from "../../talk/provider-internal.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider,
-  listRealtimeVoiceProviders,
+  getRealtimeVoiceProviderCore,
+  listRealtimeVoiceProvidersCore,
 } from "../../talk/provider-registry.js";
 import {
   isRealtimeVoiceProviderConfigured,
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderCore,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
 import {
   canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
+  getSpeechProviderCore,
+  listSpeechProvidersCore,
 } from "../../tts/provider-registry.js";
 import {
   withSpeakerSelectionCompat,
@@ -210,7 +211,7 @@ function buildTalkTtsConfig(
   }
   assertSecretOwnerAvailable("capability", "talk:speech");
 
-  const speechProvider = getSpeechProvider(provider, config);
+  const speechProvider = getSpeechProviderCore(provider, config);
   if (!speechProvider) {
     return {
       error: `talk.speak unavailable: speech provider "${provider}" does not support Talk mode`,
@@ -281,7 +282,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () => {
       assertSecretOwnerAvailable("capability", "talk:realtime");
-      return resolveConfiguredRealtimeVoiceProvider({
+      return resolveConfiguredRealtimeVoiceProviderCore({
         cfg: config,
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
@@ -301,7 +302,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
     brains: ["agent-consult", "direct-tools", "none"],
     speech: {
       ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
-      providers: listSpeechProviders(config).map((provider) => {
+      providers: listSpeechProvidersCore(config).map((provider) => {
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,
@@ -386,7 +387,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
     realtime: {
       ready: realtimeSelection.ready,
       ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
-      providers: listRealtimeVoiceProviders(config, realtimeProviderIds).map((provider) => {
+      providers: listRealtimeVoiceProvidersCore(config, realtimeProviderIds).map((provider) => {
         const available = isSecretOwnerAvailable("capability", "talk:realtime");
         const rawConfig = resolveProviderRawConfig({
           providerConfigs: realtimeConfig.providers ?? {},
@@ -524,7 +525,7 @@ function buildTalkSpeakOverrides(
   config: OpenClawConfig,
   params: TalkSpeakParams,
 ): TtsDirectiveOverrides {
-  const speechProvider = getSpeechProvider(provider, config);
+  const speechProvider = getSpeechProviderCore(provider, config);
   if (!speechProvider?.resolveTalkOverrides) {
     return { provider };
   }
@@ -627,7 +628,7 @@ function resolveTalkResponseFromConfig(params: {
     return { talk: payload, realtimeClientHints: projectedRealtime.realtimeClientHints };
   }
 
-  const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
+  const speechProvider = getSpeechProviderCore(provider, params.runtimeConfig);
   const sourceBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
     asOptionalRecord(params.sourceConfig.tts) ?? {},
   );
@@ -687,7 +688,7 @@ function projectTalkRealtimePublicModels(params: {
     config: T,
     providerConfig: TalkProviderConfig = config,
   ): T => {
-    const provider = getRealtimeVoiceProvider(providerId, params.runtimeConfig);
+    const provider = getRealtimeVoiceProviderCore(providerId, params.runtimeConfig);
     return projectInternalRealtimeVoicePublicConfig({
       ...(provider ? { provider } : {}),
       providerId,
@@ -701,7 +702,7 @@ function projectTalkRealtimePublicModels(params: {
       )
     : undefined;
   const providerConfig = realtime.providers?.[params.effectiveProvider ?? ""] ?? {};
-  const provider = getRealtimeVoiceProvider(params.effectiveProvider, params.runtimeConfig);
+  const provider = getRealtimeVoiceProviderCore(params.effectiveProvider, params.runtimeConfig);
   const config = { ...realtime, ...(providers ? { providers } : {}) };
   const projection = projectInternalRealtimeVoicePublicProjection({
     ...(provider ? { provider } : {}),
@@ -828,181 +829,191 @@ export const talkHandlers: GatewayRequestHandlers = {
   ...talkSessionHandlers,
   ...talkClientHandlers,
   "talk.catalog": async ({ params, respond, context }) => {
-    const catalogParams = params ?? {};
-    if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
-      return;
-    }
+    return withPluginRegistryResourceOperationAsync(async () => {
+      const catalogParams = params ?? {};
+      if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
+        return;
+      }
 
-    try {
-      respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
-    } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          err instanceof AgentSelectionRequiredError
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatForLog(err),
-        ),
-      );
-    }
+      try {
+        respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            err instanceof AgentSelectionRequiredError
+              ? ErrorCodes.INVALID_REQUEST
+              : ErrorCodes.UNAVAILABLE,
+            formatForLog(err),
+          ),
+        );
+      }
+    });
   },
   "talk.config": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateTalkConfigParams, "talk.config", respond)) {
-      return;
-    }
+    return withPluginRegistryResourceOperationAsync(async () => {
+      if (!assertValidParams(params, validateTalkConfigParams, "talk.config", respond)) {
+        return;
+      }
 
-    const includeSecrets = Boolean((params as { includeSecrets?: boolean }).includeSecrets);
-    if (includeSecrets && !canReadTalkSecrets(client)) {
-      respond(
-        false,
-        undefined,
-        missingScopeErrorShape({
-          missingScope: TALK_SECRETS_SCOPE,
-          requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
-        }),
-      );
-      return;
-    }
+      const includeSecrets = Boolean((params as { includeSecrets?: boolean }).includeSecrets);
+      if (includeSecrets && !canReadTalkSecrets(client)) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({
+            missingScope: TALK_SECRETS_SCOPE,
+            requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
+          }),
+        );
+        return;
+      }
 
-    const snapshot = await readConfigFileSnapshot();
-    const runtimeConfig = context.getRuntimeConfig();
-    const configPayload: Record<string, unknown> = {};
+      const snapshot = await readConfigFileSnapshot();
+      const runtimeConfig = context.getRuntimeConfig();
+      const configPayload: Record<string, unknown> = {};
 
-    let talk: TalkConfigResponse | undefined;
-    let realtimeClientHints: RealtimeVoicePublicClientHints | undefined;
-    try {
-      const resolved = resolveTalkResponseFromConfig({
-        includeSecrets,
-        sourceConfig: snapshot.config,
-        runtimeConfig,
-      });
-      talk = resolved?.talk;
-      realtimeClientHints = resolved?.realtimeClientHints;
-    } catch (err) {
-      respondUnavailable(respond, err);
-      return;
-    }
-    if (talk) {
-      configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
-    }
-    if (realtimeClientHints) {
-      configPayload.clientHints = { realtime: realtimeClientHints };
-    }
+      let talk: TalkConfigResponse | undefined;
+      let realtimeClientHints: RealtimeVoicePublicClientHints | undefined;
+      try {
+        const resolved = resolveTalkResponseFromConfig({
+          includeSecrets,
+          sourceConfig: snapshot.config,
+          runtimeConfig,
+        });
+        talk = resolved?.talk;
+        realtimeClientHints = resolved?.realtimeClientHints;
+      } catch (err) {
+        respondUnavailable(respond, err);
+        return;
+      }
+      if (talk) {
+        configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
+      }
+      if (realtimeClientHints) {
+        configPayload.clientHints = { realtime: realtimeClientHints };
+      }
 
-    const sessionMainKey = snapshot.config.session?.mainKey;
-    if (typeof sessionMainKey === "string") {
-      configPayload.session = { mainKey: sessionMainKey };
-    }
+      const sessionMainKey = snapshot.config.session?.mainKey;
+      if (typeof sessionMainKey === "string") {
+        configPayload.session = { mainKey: sessionMainKey };
+      }
 
-    const profileId = client?.authenticatedUserProfile?.profileId;
-    const canonicalProfileId = profileId ? resolveUserProfileId(profileId) : undefined;
-    const accentKey = UI_APPEARANCE_PREFERENCE_KEYS.accent;
-    const profileAccent = canonicalProfileId
-      ? normalizeUiAppearancePreference(
-          accentKey,
-          getUserPreferences(canonicalProfileId, [accentKey])[accentKey],
-        )
-      : undefined;
-    // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
-    const seamColor =
-      profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
-    if (typeof seamColor === "string") {
-      configPayload.ui = { seamColor };
-    }
+      const profileId = client?.authenticatedUserProfile?.profileId;
+      const canonicalProfileId = profileId ? resolveUserProfileId(profileId) : undefined;
+      const accentKey = UI_APPEARANCE_PREFERENCE_KEYS.accent;
+      const profileAccent = canonicalProfileId
+        ? normalizeUiAppearancePreference(
+            accentKey,
+            getUserPreferences(canonicalProfileId, [accentKey])[accentKey],
+          )
+        : undefined;
+      // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
+      const seamColor =
+        profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
+      if (typeof seamColor === "string") {
+        configPayload.ui = { seamColor };
+      }
 
-    respond(true, { config: configPayload }, undefined);
+      respond(true, { config: configPayload }, undefined);
+    });
   },
   "talk.speak": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateTalkSpeakParams, "talk.speak", respond)) {
-      return;
-    }
-
-    const typedParams = params;
-    const text = normalizeOptionalString(typedParams.text);
-    if (!text) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
-      return;
-    }
-
-    if (
-      typedParams.speed == null &&
-      typedParams.rateWpm != null &&
-      resolveTalkSpeed(typedParams) == null
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.speak params: rateWpm must resolve to speed between 0.5 and 2.0`,
-        ),
-      );
-      return;
-    }
-
-    try {
-      const runtimeConfig = context.getRuntimeConfig();
-      const setup = buildTalkTtsConfig(runtimeConfig);
-      if ("error" in setup) {
-        respond(false, undefined, talkSpeakError(setup.reason, setup.error));
+    return withPluginRegistryResourceOperationAsync(async () => {
+      if (!assertValidParams(params, validateTalkSpeakParams, "talk.speak", respond)) {
         return;
       }
 
-      const overrides = buildTalkSpeakOverrides(
-        setup.provider,
-        setup.providerConfig,
-        runtimeConfig,
-        typedParams,
-      );
-      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
-      const result = await synthesizeTalkSpeech({
-        text: speechText,
-        cfg: setup.cfg,
-        overrides,
-        disableFallback: true,
-      });
-      if (!result.success || !result.audioBuffer) {
+      const typedParams = params;
+      const text = normalizeOptionalString(typedParams.text);
+      if (!text) {
         respond(
           false,
           undefined,
-          talkSpeakError("synthesis_failed", result.error ?? "talk synthesis failed"),
-        );
-        return;
-      }
-      if ((result.provider ?? setup.provider).trim().length === 0) {
-        respond(
-          false,
-          undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
-        );
-        return;
-      }
-      if (result.audioBuffer.length === 0) {
-        respond(
-          false,
-          undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"),
         );
         return;
       }
 
-      respond(
-        true,
-        {
-          audioBase64: result.audioBuffer.toString("base64"),
-          provider: result.provider ?? setup.provider,
-          outputFormat: result.outputFormat,
-          voiceCompatible: result.voiceCompatible,
-          mimeType: inferSpeechMimeType(result.outputFormat, result.fileExtension),
-          fileExtension: result.fileExtension,
-        },
-        undefined,
-      );
-    } catch (err) {
-      respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
-    }
+      if (
+        typedParams.speed == null &&
+        typedParams.rateWpm != null &&
+        resolveTalkSpeed(typedParams) == null
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid talk.speak params: rateWpm must resolve to speed between 0.5 and 2.0`,
+          ),
+        );
+        return;
+      }
+
+      try {
+        const runtimeConfig = context.getRuntimeConfig();
+        const setup = buildTalkTtsConfig(runtimeConfig);
+        if ("error" in setup) {
+          respond(false, undefined, talkSpeakError(setup.reason, setup.error));
+          return;
+        }
+
+        const overrides = buildTalkSpeakOverrides(
+          setup.provider,
+          setup.providerConfig,
+          runtimeConfig,
+          typedParams,
+        );
+        const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
+        const result = await synthesizeTalkSpeech({
+          text: speechText,
+          cfg: setup.cfg,
+          overrides,
+          disableFallback: true,
+        });
+        if (!result.success || !result.audioBuffer) {
+          respond(
+            false,
+            undefined,
+            talkSpeakError("synthesis_failed", result.error ?? "talk synthesis failed"),
+          );
+          return;
+        }
+        if ((result.provider ?? setup.provider).trim().length === 0) {
+          respond(
+            false,
+            undefined,
+            talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
+          );
+          return;
+        }
+        if (result.audioBuffer.length === 0) {
+          respond(
+            false,
+            undefined,
+            talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
+          );
+          return;
+        }
+
+        respond(
+          true,
+          {
+            audioBase64: result.audioBuffer.toString("base64"),
+            provider: result.provider ?? setup.provider,
+            outputFormat: result.outputFormat,
+            voiceCompatible: result.voiceCompatible,
+            mimeType: inferSpeechMimeType(result.outputFormat, result.fileExtension),
+            fileExtension: result.fileExtension,
+          },
+          undefined,
+        );
+      } catch (err) {
+        respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
+      }
+    });
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

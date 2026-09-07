@@ -14,8 +14,8 @@ import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
 vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getProvider,
-  listTranscriptSourceProviders: () => [],
+  getTranscriptSourceProviderCore: getProvider,
+  listTranscriptSourceProvidersCore: () => [],
 }));
 const tempDirs = createTempDirTracker();
 afterEach(() => {

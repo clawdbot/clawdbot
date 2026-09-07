@@ -722,13 +722,14 @@ describe("prepared harness source delivery", () => {
         const borrowed = generation
           ? getPreparedModelRuntimeBorrowedSnapshot(generation)
           : undefined;
-        if (!borrowed) {
+        if (!generation || !borrowed) {
           throw new Error("prepared model runtime plugin generation was superseded");
         }
         publishedMetadataAtAcquire = publishedMetadataSnapshot;
         servedMetadataSnapshot = borrowed.metadataSnapshot;
         return {
           ...baseLease,
+          pluginGeneration: generation,
           snapshot: borrowed as typeof baseLease.snapshot,
           release,
         };
@@ -804,6 +805,10 @@ describe("prepared harness source delivery", () => {
           signal?.throwIfAborted();
           return {
             ...baseLease,
+            pluginGeneration: {
+              ...baseLease.pluginGeneration,
+              pluginMetadataSnapshot: isolatedMetadataSnapshot,
+            },
             snapshot: {
               ...baseLease.snapshot,
               config,

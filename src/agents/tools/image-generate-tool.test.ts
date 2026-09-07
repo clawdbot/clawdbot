@@ -112,7 +112,7 @@ function hasStubbedImageProviderAuth(providerId: string): boolean {
 }
 
 function stubImageGenerationProviders() {
-  vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+  vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
     {
       id: "google",
       defaultModel: "gemini-3.1-flash-image-preview",
@@ -207,7 +207,7 @@ function resultText(result: ToolResult): string {
 }
 
 function ensureDefaultImageGenerationProvidersStubbed() {
-  if (vi.isMockFunction(imageGenerationRuntime.listRuntimeImageGenerationProviders)) {
+  if (vi.isMockFunction(imageGenerationRuntime.listRuntimeImageGenerationProvidersCore)) {
     return;
   }
   stubImageGenerationProviders();
@@ -414,7 +414,7 @@ describe("createImageGenerateTool", () => {
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
     const listProviders = vi
-      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
+      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore")
       .mockImplementation(() => {
         throw new Error("runtime provider list should not run during tool registration");
       });
@@ -458,7 +458,7 @@ describe("createImageGenerateTool", () => {
   it("infers the canonical OpenAI image model from provider readiness without explicit config", async () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "gpt-image-2",
@@ -541,7 +541,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("generates images and returns details.media paths", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "gpt-image-1",
@@ -740,7 +740,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockImplementation(
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockImplementation(
       (params) => {
         expect(params?.config?.agents?.defaults?.mediaModels?.image).toEqual({
           primary: "microsoft-foundry/prod-image",
@@ -1682,7 +1682,7 @@ describe("createImageGenerateTool", () => {
   it.each(["krea/v2/medium/text-to-image", "google/nano-banana-2-lite"])(
     "does not infer edit resolution when %s declares no resolution options",
     async (model) => {
-      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
         createFalEditProvider({
           defaultModel: model,
           models: [model],
@@ -1757,7 +1757,7 @@ describe("createImageGenerateTool", () => {
     },
   ])("accepts $model edits up to its reference limit", async (testCase) => {
     const { model, primaryRef, maxInputImages } = testCase;
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({
         defaultModel: model,
         models: [model],
@@ -1806,7 +1806,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({ omitMaxInputImages: true }),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
@@ -1827,7 +1827,7 @@ describe("createImageGenerateTool", () => {
 
   it("rejects model-specific reference limits before loading inputs", async () => {
     const model = "xai/grok-imagine-image";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({
         defaultModel: model,
         models: [model],
@@ -1854,7 +1854,7 @@ describe("createImageGenerateTool", () => {
   it("accepts the highest reference limit across configured fallbacks", async () => {
     const primaryModel = "xai/grok-imagine-image";
     const fallbackModel = "google/nano-banana-2-lite";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({
         defaultModel: primaryModel,
         models: [primaryModel, fallbackModel],
@@ -1902,7 +1902,7 @@ describe("createImageGenerateTool", () => {
 
   it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
     const fallbackModel = "google/nano-banana-2-lite";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "google",
         defaultModel: "gemini-3-pro-image-preview",
@@ -1961,7 +1961,7 @@ describe("createImageGenerateTool", () => {
 
   it("accepts Grok-specific aspect ratios through image_generate", async () => {
     const model = "xai/grok-imagine-image";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({
         defaultModel: model,
         models: [model],
@@ -2074,7 +2074,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "google",
         defaultModel: "gemini-3.1-flash-image-preview",
@@ -2147,7 +2147,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects counts outside the supported range", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "google",
         defaultModel: "gemini-3.1-flash-image-preview",
@@ -2371,7 +2371,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("does not treat inferred edit resolution as an OpenAI override", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "gpt-image-1",
@@ -2478,7 +2478,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("reports ignored unsupported overrides instead of failing", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "gpt-image-1",
@@ -2598,7 +2598,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("escapes image-generation summary text before appending tool MEDIA output", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "gpt-image-1",
@@ -2752,7 +2752,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("reports model-specific edit limits in provider listings", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({
         defaultModel: "fal-ai/flux/dev",
         models: ["fal-ai/flux/dev", "google/nano-banana-2-lite"],
@@ -2771,7 +2771,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("skips auth hints for prototype-like provider ids", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       {
         id: "__proto__",
         defaultModel: "proto-v1",
@@ -2818,7 +2818,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects provider-specific edit limits before runtime", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider(),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
@@ -2843,7 +2843,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("uses registered provider metadata for slash-containing model overrides", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider(),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
@@ -2868,7 +2868,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("passes edit aspect ratio overrides through to runtime for provider-level handling", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue([
       createFalEditProvider({ aspectRatios: ["1:1", "16:9"] }),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({

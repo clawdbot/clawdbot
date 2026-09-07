@@ -53,7 +53,7 @@ const voiceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: voiceMocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderCore: voiceMocks.resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities: ({
     provider,
   }: {
@@ -62,7 +62,7 @@ vi.mock("../../talk/provider-resolver.js", () => ({
 }));
 vi.mock("../../talk/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/provider-registry.js")>()),
-  listRealtimeVoiceProviders: () => [],
+  listRealtimeVoiceProvidersCore: () => [],
 }));
 vi.mock("../../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: voiceMocks.consultRealtimeVoiceAgent,

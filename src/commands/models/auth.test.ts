@@ -145,7 +145,10 @@ vi.mock("../../agents/model-selection-cli.js", () => ({
 }));
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof mocks.resolvePluginProvidersCore>) => ({
+    providers: mocks.resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("../../plugins/setup-registry.js", () => ({

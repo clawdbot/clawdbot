@@ -49,7 +49,7 @@ function requireImageProvider(
   registry: ProviderRegistryModule,
   id: string,
 ): ImageGenerationProviderPlugin {
-  const provider = registry.getImageGenerationProvider(id);
+  const provider = registry.getImageGenerationProviderCore(id);
   if (!provider) {
     throw new Error(`expected image generation provider ${id}`);
   }
@@ -82,9 +82,9 @@ beforeEach(() => {
 describe("image-generation provider registry", () => {
   it("delegates provider resolution to the capability provider boundary", () => {
     const cfg = {} as OpenClawConfig;
-    const { listImageGenerationProviders } = registry;
+    const { listImageGenerationProvidersCore } = registry;
 
-    expect(listImageGenerationProviders(cfg)).toStrictEqual([]);
+    expect(listImageGenerationProvidersCore(cfg)).toStrictEqual([]);
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "imageGenerationProviders",
       cfg,
@@ -95,9 +95,9 @@ describe("image-generation provider registry", () => {
     resolvePluginCapabilityProvidersMock.mockReturnValue([
       createImageProvider({ id: "custom-image" }),
     ]);
-    const { getImageGenerationProvider } = registry;
+    const { getImageGenerationProviderCore } = registry;
 
-    const provider = getImageGenerationProvider("custom-image");
+    const provider = getImageGenerationProviderCore("custom-image");
 
     expect(provider?.id).toBe("custom-image");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
@@ -112,11 +112,11 @@ describe("image-generation provider registry", () => {
       createImageProvider({ id: "safe-image", aliases: ["safe-alias", "constructor"] }),
     ]);
 
-    expect(registry.listImageGenerationProviders().map((provider) => provider.id)).toEqual([
+    expect(registry.listImageGenerationProvidersCore().map((provider) => provider.id)).toEqual([
       "safe-image",
     ]);
-    expect(registry.getImageGenerationProvider("__proto__")).toBeUndefined();
-    expect(registry.getImageGenerationProvider("constructor")).toBeUndefined();
+    expect(registry.getImageGenerationProviderCore("__proto__")).toBeUndefined();
+    expect(registry.getImageGenerationProviderCore("constructor")).toBeUndefined();
     expect(requireImageProvider(registry, "safe-alias").id).toBe("safe-image");
   });
 });

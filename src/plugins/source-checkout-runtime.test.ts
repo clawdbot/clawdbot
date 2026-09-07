@@ -1,7 +1,7 @@
 /** Verifies source-checkout plugin runtime resolution and dependency diagnostics. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "./loader-handles.test-support.js";
 
 describe("source checkout bundled plugin runtime", () => {
   it("loads enabled bundled plugins from source checkout", () => {

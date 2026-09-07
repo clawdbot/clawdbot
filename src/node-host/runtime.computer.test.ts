@@ -20,7 +20,15 @@ vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({ descriptors: [], close: async () => {} })),
 }));
 vi.mock("../plugins/loader.js", () => ({
-  loadPluginRegistryHandle: () => getActivePluginRegistry(),
+  loadPluginRegistryHandle: vi.fn<typeof import("../plugins/loader.js").loadPluginRegistryHandle>(
+    () => {
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("Computer runtime fixture registry was not installed");
+      }
+      return { registry, release: vi.fn() };
+    },
+  ),
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -84,7 +92,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     return {};
   }
   const onManifestChanged = vi.fn();
-  const runtime = prepared.start({ client: { request }, onManifestChanged });
+  const runtime = await prepared.start({ client: { request }, onManifestChanged });
   let invokeId = 0;
   const invoke = async (input: unknown, command = NODE_WORKER_DESKTOP_COMPUTER_COMMAND) => {
     const id = `invoke-${++invokeId}`;

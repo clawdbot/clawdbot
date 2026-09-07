@@ -48,101 +48,106 @@ export async function maybeRepairLegacyOAuthProfileIds(
   ) {
     return { config: nextCfg, retiredProfileCleanupPlans };
   }
-  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
-  const providers = resolvePluginProvidersCore({
+  const { acquirePluginProvidersCore } = await import("../plugins/providers.runtime.js");
+  const providerHandle = acquirePluginProvidersCore({
     config: cfg,
     env: process.env,
     mode: "setup",
   });
-  for (const provider of providers) {
-    for (const profileId of provider.deprecatedProfileIds ?? []) {
-      const profileStores = repairCandidates.flatMap(({ agentDir, profiles }) => {
-        const profile = profiles[profileId];
-        return profile ? [{ agentDir, provider: profile.provider }] : [];
-      });
-      if (profileStores.length === 0 && !configReferencesAuthProfile(nextCfg, profileId)) {
-        continue;
+  const { providers } = providerHandle;
+  try {
+    for (const provider of providers) {
+      for (const profileId of provider.deprecatedProfileIds ?? []) {
+        const profileStores = repairCandidates.flatMap(({ agentDir, profiles }) => {
+          const profile = profiles[profileId];
+          return profile ? [{ agentDir, provider: profile.provider }] : [];
+        });
+        if (profileStores.length === 0 && !configReferencesAuthProfile(nextCfg, profileId)) {
+          continue;
+        }
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        note(
+          `- Remove retired auth profile ${profileId}. The provider's native login remains unchanged.`,
+          "Auth profiles",
+        );
+        const label = sanitizePromptLabel(provider.label) ?? provider.id;
+        const apply = await prompter.confirm({
+          message: `Remove retired ${label} auth profile now?`,
+          initialValue: true,
+        });
+        if (!apply) {
+          continue;
+        }
+        const configuredProfileProvider = nextCfg.auth?.profiles?.[profileId]?.provider;
+        const selectedProviderIds = new Set([
+          provider.id,
+          ...profileStores.map((store) => store.provider),
+        ]);
+        if (configuredProfileProvider) {
+          selectedProviderIds.add(configuredProfileProvider);
+        }
+        if (
+          collectConfiguredModelRefs(nextCfg).some(({ value }) => {
+            const separator = value.indexOf("/");
+            return separator > 0 && selectedProviderIds.has(value.slice(0, separator));
+          })
+        ) {
+          // Preserve a selected provider's runtime routing before removing the
+          // retired profile that still identifies its native CLI migration.
+          nextCfg = applyProviderConfigDefaultsForConfig({
+            provider: provider.id,
+            config: nextCfg,
+            env: process.env,
+          });
+        }
+        nextCfg = removeAuthProfileConfig(nextCfg, profileId);
+        for (const candidate of profileStores) {
+          retiredProfileCleanupPlans.push({
+            agentDir: candidate.agentDir,
+            profileIds: [profileId],
+          });
+        }
       }
-      const { note } = await import("../../packages/terminal-core/src/note.js");
-      note(
-        `- Remove retired auth profile ${profileId}. The provider's native login remains unchanged.`,
-        "Auth profiles",
-      );
-      const label = sanitizePromptLabel(provider.label) ?? provider.id;
-      const apply = await prompter.confirm({
-        message: `Remove retired ${label} auth profile now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
-      }
-      const configuredProfileProvider = nextCfg.auth?.profiles?.[profileId]?.provider;
-      const selectedProviderIds = new Set([
-        provider.id,
-        ...profileStores.map((store) => store.provider),
-      ]);
-      if (configuredProfileProvider) {
-        selectedProviderIds.add(configuredProfileProvider);
-      }
-      if (
-        collectConfiguredModelRefs(nextCfg).some(({ value }) => {
-          const separator = value.indexOf("/");
-          return separator > 0 && selectedProviderIds.has(value.slice(0, separator));
-        })
-      ) {
-        // Preserve a selected provider's runtime routing before removing the
-        // retired profile that still identifies its native CLI migration.
-        nextCfg = applyProviderConfigDefaultsForConfig({
+    }
+    if (!Object.values(nextCfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth")) {
+      return { config: nextCfg, retiredProfileCleanupPlans };
+    }
+    const store = ensureAuthProfileStoreWithoutExternalProfiles();
+    if (Object.keys(store.profiles).length === 0) {
+      return { config: nextCfg, retiredProfileCleanupPlans };
+    }
+    for (const provider of providers) {
+      for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
+        const repair = repairOAuthProfileIdMismatch({
+          cfg: nextCfg,
+          store,
           provider: provider.id,
-          config: nextCfg,
-          env: process.env,
+          legacyProfileId: repairSpec.legacyProfileId,
         });
-      }
-      nextCfg = removeAuthProfileConfig(nextCfg, profileId);
-      for (const candidate of profileStores) {
-        retiredProfileCleanupPlans.push({
-          agentDir: candidate.agentDir,
-          profileIds: [profileId],
-        });
-      }
-    }
-  }
-  if (!Object.values(nextCfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth")) {
-    return { config: nextCfg, retiredProfileCleanupPlans };
-  }
-  const store = ensureAuthProfileStoreWithoutExternalProfiles();
-  if (Object.keys(store.profiles).length === 0) {
-    return { config: nextCfg, retiredProfileCleanupPlans };
-  }
-  for (const provider of providers) {
-    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
-      const repair = repairOAuthProfileIdMismatch({
-        cfg: nextCfg,
-        store,
-        provider: provider.id,
-        legacyProfileId: repairSpec.legacyProfileId,
-      });
-      if (!repair.migrated || repair.changes.length === 0) {
-        continue;
-      }
+        if (!repair.migrated || repair.changes.length === 0) {
+          continue;
+        }
 
-      const { note } = await import("../../packages/terminal-core/src/note.js");
-      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-      const label =
-        sanitizePromptLabel(repairSpec.promptLabel) ??
-        sanitizePromptLabel(provider.label) ??
-        provider.id;
-      const apply = await prompter.confirm({
-        message: `Update ${label} OAuth profile id in config now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
+        const label =
+          sanitizePromptLabel(repairSpec.promptLabel) ??
+          sanitizePromptLabel(provider.label) ??
+          provider.id;
+        const apply = await prompter.confirm({
+          message: `Update ${label} OAuth profile id in config now?`,
+          initialValue: true,
+        });
+        if (!apply) {
+          continue;
+        }
+        nextCfg = repair.config;
       }
-      nextCfg = repair.config;
     }
+    return { config: nextCfg, retiredProfileCleanupPlans };
+  } finally {
+    providerHandle.release();
   }
-  return { config: nextCfg, retiredProfileCleanupPlans };
 }
 
 export type RetiredAuthProfileCleanupPlan = {

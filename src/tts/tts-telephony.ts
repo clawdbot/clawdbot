@@ -1,10 +1,21 @@
 import type { OpenClawConfig } from "../config/types.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import type { TtsTelephonyResult } from "./tts-runtime-types.js";
 import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthesis-support.js";
 
 export async function textToSpeechTelephony(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  overrides?: TtsDirectiveOverrides;
+  timeoutMs?: number;
+}): Promise<TtsTelephonyResult> {
+  return withPluginRegistryResourceOperationAsync(() => textToSpeechTelephonyWithResources(params));
+}
+
+async function textToSpeechTelephonyWithResources(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;

@@ -6,6 +6,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { runWithOwnedPluginRegistryResources } from "../../plugins/registry-resources.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -25,6 +26,7 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { retainPreparedPluginGenerationResources } from "../prepared-model-runtime.plugin-generation.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
@@ -533,7 +535,10 @@ export async function compactEmbeddedAgentSessionDirect(
       });
       return fallbackResult.result;
     };
-    return await withPluginRuntimeGenerationScope(preparedModelRuntime, compactPrepared);
+    return await runWithOwnedPluginRegistryResources(
+      retainPreparedPluginGenerationResources(preparedModelRuntimeLease.pluginGeneration),
+      async () => await withPluginRuntimeGenerationScope(preparedModelRuntime, compactPrepared),
+    );
   } catch (err) {
     return fallbackFailureToCompactionResult(err);
   } finally {

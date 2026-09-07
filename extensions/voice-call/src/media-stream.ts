@@ -70,6 +70,7 @@ export interface MediaStreamConfig {
  * Active media stream session.
  */
 interface StreamSession {
+  stopped: boolean;
   callId: string;
   streamSid: string;
   ws: WebSocket;
@@ -149,6 +150,7 @@ export class MediaStreamHandler {
   private closePromise: Promise<void> | null = null;
   private closing = false;
   private sessions = new Map<string, StreamSession>();
+  private readonly failedSessionCloses = new Map<StreamSession, unknown>();
   private config: MediaStreamConfig;
   /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
   private pendingConnections = new Map<WebSocket, PendingConnection>();
@@ -246,6 +248,7 @@ export class MediaStreamHandler {
     this.closing = true;
     const wss = this.wss;
     this.wss = null;
+    const failedBeforeClose = new Set(this.failedSessionCloses.keys());
     this.closePromise = (async () => {
       if (wss) {
         await new Promise<void>((resolve) => {
@@ -255,9 +258,22 @@ export class MediaStreamHandler {
           }
         });
       }
-      await shutdownBarrier;
+      const errors: unknown[] = [];
+      try {
+        await shutdownBarrier;
+      } catch (error) {
+        errors.push(error);
+      }
+      // A socket close already attempted new failures; only a later explicit stop retries them.
+      for (const session of failedBeforeClose) {
+        this.closeTranscriptionSession(session);
+      }
+      errors.push(...this.failedSessionCloses.values());
+      if (errors.length > 0) {
+        throw errors[0];
+      }
     })().finally(() => {
-      this.closing = false;
+      this.closing = this.failedSessionCloses.size > 0;
       this.closePromise = null;
     });
     return this.closePromise;
@@ -298,7 +314,7 @@ export class MediaStreamHandler {
             break;
 
           case "media":
-            if (session && message.media?.payload) {
+            if (session && !session.stopped && message.media?.payload) {
               const canonicalPayload = canonicalizeVoiceCallMediaBase64(message.media.payload);
               if (!canonicalPayload) {
                 break;
@@ -444,6 +460,7 @@ export class MediaStreamHandler {
     });
 
     const session: StreamSession = {
+      stopped: false,
       callId: callSid,
       streamSid,
       ws,
@@ -485,7 +502,7 @@ export class MediaStreamHandler {
       ) {
         session.ws.close(1011, "STT connection failed");
       } else {
-        session.sttSession.close();
+        this.handleStop(session);
       }
       return;
     }
@@ -494,7 +511,7 @@ export class MediaStreamHandler {
       this.sessions.get(session.streamSid) !== session ||
       session.ws.readyState !== WebSocket.OPEN
     ) {
-      session.sttSession.close();
+      this.handleStop(session);
       return;
     }
 
@@ -509,17 +526,38 @@ export class MediaStreamHandler {
    * Handle stream stop event.
    */
   private handleStop(session: StreamSession): void {
+    if (session.stopped) {
+      return;
+    }
+    session.stopped = true;
     console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
-
-    this.clearTtsState(session.streamSid);
-    session.sttSession.close();
-    this.sessions.delete(session.streamSid);
+    const ownsStream = this.sessions.get(session.streamSid) === session;
+    if (ownsStream) {
+      this.clearTtsState(session.streamSid);
+    }
+    // The provider may flush a final transcript synchronously while closing.
+    this.closeTranscriptionSession(session);
+    if (ownsStream && this.sessions.get(session.streamSid) === session) {
+      this.sessions.delete(session.streamSid);
+    }
     this.emitTalkEvent(session, {
       type: "session.closed",
       final: true,
       payload: { callId: session.callId, streamSid: session.streamSid },
     });
-    this.config.onDisconnect?.(session.callId, session.streamSid);
+    if (ownsStream) {
+      this.config.onDisconnect?.(session.callId, session.streamSid);
+    }
+  }
+
+  private closeTranscriptionSession(session: StreamSession): void {
+    try {
+      session.sttSession.close();
+      this.failedSessionCloses.delete(session);
+    } catch (error) {
+      this.failedSessionCloses.set(session, error);
+      console.warn("[MediaStream] Transcription cleanup pending:", error);
+    }
   }
 
   private getStreamToken(request: IncomingMessage): string | undefined {

@@ -10,6 +10,12 @@ import { loadPluginRegistryHandle, type PluginLoadOptions } from "../plugins/loa
 import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  retainPluginRegistryResources,
+  PluginRegistryResourceScope,
+  runWithOwnedPluginRegistryResources,
+  type PluginRegistryHandle,
+} from "../plugins/registry-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
@@ -107,26 +113,35 @@ function resolveAgentRuntimePluginRegistryLoad(
 /** Loads the registry handle owned by an agent prepared-runtime generation. */
 export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
-): PluginRegistry {
+): PluginRegistryHandle {
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
   if (
     params.reusableRegistry &&
     loadOptions.onlyPluginIds !== undefined &&
     registryContainsRuntimePluginIds(params.reusableRegistry, loadOptions.onlyPluginIds)
   ) {
-    return params.reusableRegistry;
+    return {
+      registry: params.reusableRegistry,
+      ...retainPluginRegistryResources(params.reusableRegistry),
+    };
   }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.
-  const pluginRegistry = loadPluginRegistryHandle({ ...loadOptions, activate: false });
+  const handle = loadPluginRegistryHandle({ ...loadOptions, activate: false });
+  const pluginRegistry = handle.registry;
   const activeRegistry = getActivePluginRegistry();
   if (!activeRegistry) {
-    return pluginRegistry;
+    return handle;
   }
-  return adoptRuntimeWidgetPresenterRegistrations(
-    adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
-    activeRegistry,
-  );
+  try {
+    const registry = adoptRuntimeWidgetPresenterRegistrations(
+      adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
+      activeRegistry,
+    );
+    return { registry, ...retainPluginRegistryResources(registry) };
+  } finally {
+    handle.release();
+  }
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
@@ -139,7 +154,11 @@ export async function withAgentPluginRegistry<T>(params: {
 }): Promise<T> {
   const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   if (requestPluginRegistry && params.selections === undefined) {
-    return await params.run(requestPluginRegistry);
+    const resources = new PluginRegistryResourceScope();
+    resources.retain(requestPluginRegistry);
+    return await runWithOwnedPluginRegistryResources(resources, () =>
+      params.run(requestPluginRegistry),
+    );
   }
   // Borrowed Gateway registries must not load direct-host context dependencies.
   const [{ setPluginRuntimeLoadContext }, { resolvePluginRuntimeLoadContext }] = await Promise.all([
@@ -157,20 +176,29 @@ export async function withAgentPluginRegistry<T>(params: {
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
   // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  const handle = loadAgentRuntimePluginRegistryHandle({
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,
     selections: params.selections,
     workspaceDir: params.workspaceDir,
   });
-  const activeRegistry = getActivePluginRegistry();
-  const scopedRegistry =
-    activeRegistry &&
-    context.metadataSnapshot &&
-    getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(pluginRegistry, activeRegistry, context.config)
-      : pluginRegistry;
-  setPluginRuntimeLoadContext(scopedRegistry, context);
-  return await withPluginRuntimeRegistryScope(scopedRegistry, () => params.run(scopedRegistry));
+  try {
+    const pluginRegistry = handle.registry;
+    const activeRegistry = getActivePluginRegistry();
+    const scopedRegistry =
+      activeRegistry &&
+      context.metadataSnapshot &&
+      getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
+        ? adoptRuntimeMemoryRegistrations(pluginRegistry, activeRegistry, context.config)
+        : pluginRegistry;
+    setPluginRuntimeLoadContext(scopedRegistry, context);
+    const resources = new PluginRegistryResourceScope();
+    resources.retain(scopedRegistry);
+    return await runWithOwnedPluginRegistryResources(resources, () =>
+      withPluginRuntimeRegistryScope(scopedRegistry, () => params.run(scopedRegistry)),
+    );
+  } finally {
+    handle.release();
+  }
 }

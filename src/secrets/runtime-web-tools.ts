@@ -6,6 +6,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -759,6 +760,18 @@ function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): s
  */
 /** Resolves web search/fetch secret metadata from config, plugins, and fallback runtime providers. */
 export async function resolveRuntimeWebTools(params: {
+  sourceConfig: OpenClawConfig;
+  resolvedConfig: OpenClawConfig;
+  context: ResolverContext;
+  allowUnavailableSecretOwners?: boolean;
+  forceColdRefKeys?: ReadonlySet<string>;
+}): Promise<ResolvedRuntimeWebTools> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    resolveRuntimeWebToolsWithResources(params),
+  );
+}
+
+async function resolveRuntimeWebToolsWithResources(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;

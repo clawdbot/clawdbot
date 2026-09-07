@@ -1,4 +1,3 @@
-// Verifies persisted provider auth markers preserve credential provenance.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +9,9 @@ import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/ty
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
+  acquirePluginDiscoveryProvidersRuntime: (): ReturnType<
+    typeof import("../plugins/provider-discovery.runtime.js").acquirePluginDiscoveryProvidersRuntime
+  > => ({ providers: discovery.providers, release() {} }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -21,13 +22,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       if (params.provider !== "google" || !baseUrl || baseUrl.endsWith("/v1beta")) {
         return providerConfig;
       }
-      return {
-        ...providerConfig,
-        baseUrl:
-          baseUrl === "https://generativelanguage.googleapis.com"
-            ? `${baseUrl}/v1beta`
-            : providerConfig?.baseUrl,
-      };
+      const normalizedBaseUrl =
+        baseUrl === "https://generativelanguage.googleapis.com"
+          ? `${baseUrl}/v1beta`
+          : providerConfig?.baseUrl;
+      return { ...providerConfig, baseUrl: normalizedBaseUrl };
     },
   ),
   resolveProviderConfigApiKeyWithPlugin: (params: {

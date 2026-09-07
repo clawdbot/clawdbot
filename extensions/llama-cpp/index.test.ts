@@ -37,10 +37,17 @@ vi.mock("./src/hardware.js", async (importOriginal) => ({
   detectLlamaCppHardware: mocks.detectHardware,
 }));
 
-vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/embedding-providers")>()),
-  getEmbeddingProvider: () => ({ create: mocks.genericCreate }),
-}));
+vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/embedding-providers")>();
+  return {
+    ...actual,
+    acquireEmbeddingProvider: (): ReturnType<typeof actual.acquireEmbeddingProvider> => ({
+      provider: { id: "openai-compatible", create: mocks.genericCreate },
+      run: (operation) => operation(),
+      release() {},
+    }),
+  };
+});
 
 vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/managed-server.js")>()),

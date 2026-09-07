@@ -5,7 +5,7 @@ import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { requirePluginRegistryResourceScope } from "./registry-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
@@ -14,18 +14,6 @@ type MigrationProviderPluginResolution = {
   pluginIds: string[];
   bundledCompatPluginIds: string[];
 };
-
-let standaloneMigrationRegistrySlot:
-  | {
-      config: OpenClawConfig | undefined;
-      pluginIdsKey: string;
-      registry: PluginRegistry;
-    }
-  | undefined;
-
-function migrationPluginIdsKey(pluginIds: readonly string[]): string {
-  return JSON.stringify(pluginIds);
-}
 
 function findMigrationProviderById(
   entries: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
@@ -38,36 +26,50 @@ function bindMigrationProviderToRegistry(
   provider: MigrationProviderPlugin,
   registry: PluginRegistry,
 ): MigrationProviderPlugin {
+  const resources = requirePluginRegistryResourceScope();
+  const invoke = <T>(run: () => T): T => {
+    resources.assertOpen();
+    return withPluginRuntimeRegistryScope(registry, run);
+  };
   return {
     ...provider,
     ...(provider.detect
       ? {
-          detect: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.detect!(ctx)),
+          detect: (ctx) => invoke(() => provider.detect!(ctx)),
         }
       : {}),
     ...(provider.prepareApply
       ? {
-          prepareApply: (ctx) =>
-            withPluginRuntimeRegistryScope(registry, () => provider.prepareApply!(ctx)),
+          prepareApply: (ctx) => invoke(() => provider.prepareApply!(ctx)),
         }
       : {}),
-    plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
-    apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
+    plan: (ctx) => invoke(() => provider.plan(ctx)),
+    apply: (ctx, plan) => invoke(() => provider.apply(ctx, plan)),
   };
 }
 
-function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
+function resolveMigrationProviderRegistry(params: {
+  cfg?: OpenClawConfig;
+  pluginIds: string[];
+  bundledCompatPluginIds: string[];
+}): PluginRegistry {
+  const resources = requirePluginRegistryResourceScope();
   const active = getLoadedRuntimePluginRegistry({ requiredPluginIds: params.pluginIds });
   if (active) {
+    resources.retain(active);
     return active;
   }
-  const standalone = standaloneMigrationRegistrySlot;
-  return standalone &&
-    !isPluginRegistryRetired(standalone.registry) &&
-    standalone.config === params.cfg &&
-    standalone.pluginIdsKey === migrationPluginIdsKey(params.pluginIds)
-    ? standalone.registry
-    : undefined;
+  const compatConfig = withBundledPluginEnablementCompat({
+    config: params.cfg,
+    pluginIds: params.bundledCompatPluginIds,
+  });
+  return resources.adopt(
+    loadPluginRegistryHandle({
+      ...(compatConfig === undefined ? {} : { config: compatConfig }),
+      onlyPluginIds: params.pluginIds,
+      activate: false,
+    }),
+  );
 }
 
 function resolveMigrationProviderPluginResolution(params: {
@@ -127,22 +129,7 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   if (resolution.pluginIds.length === 0) {
     return;
   }
-  const compatConfig = withBundledPluginEnablementCompat({
-    config: params.cfg,
-    pluginIds: resolution.bundledCompatPluginIds,
-  });
-  const registry = loadPluginRegistryHandle({
-    ...(compatConfig === undefined ? {} : { config: compatConfig }),
-    onlyPluginIds: resolution.pluginIds,
-    activate: false,
-  });
-  standaloneMigrationRegistrySlot = registry
-    ? {
-        config: params.cfg,
-        pluginIdsKey: migrationPluginIdsKey(resolution.pluginIds),
-        registry,
-      }
-    : undefined;
+  resolveMigrationProviderRegistry({ cfg: params.cfg, ...resolution });
 }
 
 export function resolvePluginMigrationProvider(params: {
@@ -169,6 +156,7 @@ export function resolvePluginMigrationProvider(params: {
   const registry = resolveMigrationProviderRegistry({
     cfg: params.cfg,
     pluginIds,
+    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
   });
   const provider = findMigrationProviderById(registry?.migrationProviders ?? [], params.providerId);
   return provider && registry ? bindMigrationProviderToRegistry(provider, registry) : undefined;
@@ -189,6 +177,7 @@ export function resolvePluginMigrationProviders(
   const registry = resolveMigrationProviderRegistry({
     cfg: params.cfg,
     pluginIds,
+    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
   });
   const scopedProviders = registry
     ? registry.migrationProviders.map(({ provider }) => ({

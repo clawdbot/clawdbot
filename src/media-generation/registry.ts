@@ -2,8 +2,8 @@ import { createMediaProviderRegistry } from "./provider-registry.js";
 
 /** Registry for image-generation providers contributed by plugin capabilities. */
 export const {
-  listProviders: listImageGenerationProviders,
-  getProvider: getImageGenerationProvider,
+  listProviders: listImageGenerationProvidersCore,
+  getProvider: getImageGenerationProviderCore,
 } = createMediaProviderRegistry("imageGenerationProviders");
 
 /** Registry for music-generation providers contributed by plugin capabilities. */

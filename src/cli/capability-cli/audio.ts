@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { inspectLocalAudioSelection } from "../../media-understanding/local-audio.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { transcribeAudioFile } from "../../media-understanding/runtime.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -78,14 +79,16 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runAudioTranscribe({
-          file: String(opts.file),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          language: opts.language as string | undefined,
-          model: opts.model as string | undefined,
-          prompt: opts.prompt as string | undefined,
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runAudioTranscribe({
+            file: String(opts.file),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+            language: opts.language as string | undefined,
+            model: opts.model as string | undefined,
+            prompt: opts.prompt as string | undefined,
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -96,52 +99,54 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-          .filter((provider) => provider.capabilities?.includes("audio"))
-          .map((provider) => ({
-            available: true,
-            configured: providerHasGenericConfig({
-              cfg,
-              providerId: provider.id,
-              agentId,
-              envVars: getProviderEnvVars(provider.id, {
-                config: cfg,
-                includeUntrustedWorkspacePlugins: false,
-              }),
-            }),
-            selected: false,
-            id: provider.id,
-            capabilities: provider.capabilities,
-            defaultModels: provider.defaultModels,
-          }));
-        const localSelection = await inspectLocalAudioSelection();
-        const localProviders = localSelection.candidates
-          .filter((candidate) => candidate.available)
-          .map((candidate) =>
-            Object.assign(
-              {
-                available: candidate.available,
-                configured: candidate.ready,
-                selected: false,
-                localFallbackSelected: candidate.selected,
-                id: `local/${candidate.id}`,
-                transport: "local-cli",
-                command: candidate.command,
-                observedBackend: candidate.observedBackend ?? "unknown",
-                evidence: candidate.evidence,
-              },
-              candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
-              candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
-              candidate.reason ? { reason: candidate.reason } : {},
-            ),
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const cfg = getRuntimeConfig();
+          const agentId = resolveCapabilityProviderAgentId(
+            cfg,
+            resolveCapabilityAgentOption(command, opts.agent),
           );
-        const providers = [...remoteProviders, ...localProviders];
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
+          const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+            .filter((provider) => provider.capabilities?.includes("audio"))
+            .map((provider) => ({
+              available: true,
+              configured: providerHasGenericConfig({
+                cfg,
+                providerId: provider.id,
+                agentId,
+                envVars: getProviderEnvVars(provider.id, {
+                  config: cfg,
+                  includeUntrustedWorkspacePlugins: false,
+                }),
+              }),
+              selected: false,
+              id: provider.id,
+              capabilities: provider.capabilities,
+              defaultModels: provider.defaultModels,
+            }));
+          const localSelection = await inspectLocalAudioSelection();
+          const localProviders = localSelection.candidates
+            .filter((candidate) => candidate.available)
+            .map((candidate) =>
+              Object.assign(
+                {
+                  available: candidate.available,
+                  configured: candidate.ready,
+                  selected: false,
+                  localFallbackSelected: candidate.selected,
+                  id: `local/${candidate.id}`,
+                  transport: "local-cli",
+                  command: candidate.command,
+                  observedBackend: candidate.observedBackend ?? "unknown",
+                  evidence: candidate.evidence,
+                },
+                candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
+                candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
+                candidate.reason ? { reason: candidate.reason } : {},
+              ),
+            );
+          const providers = [...remoteProviders, ...localProviders];
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
+        });
       });
     });
 }

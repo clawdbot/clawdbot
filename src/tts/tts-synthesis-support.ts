@@ -3,7 +3,7 @@ import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import { canonicalizeSpeechProviderId, getSpeechProviderCore } from "./provider-registry.js";
 import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -72,7 +72,7 @@ function buildTtsFailureResult(
 type TtsProviderReadyResolution =
   | {
       kind: "ready";
-      provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+      provider: NonNullable<ReturnType<typeof getSpeechProviderCore>>;
       providerConfig: SpeechProviderConfig;
       personaProviderConfig?: SpeechProviderConfig;
       synthesisPersona?: ResolvedTtsPersona;
@@ -93,7 +93,7 @@ function resolveReadySpeechProvider(params: {
   voiceModel?: VoiceModelRef;
   requireTelephony?: boolean;
 }): TtsProviderReadyResolution {
-  const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
+  const resolvedProvider = getSpeechProviderCore(params.provider, params.cfg);
   if (!resolvedProvider) {
     return {
       kind: "skip",
@@ -157,7 +157,7 @@ function resolveReadySpeechProvider(params: {
 }
 
 async function prepareSpeechSynthesis(params: {
-  provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+  provider: NonNullable<ReturnType<typeof getSpeechProviderCore>>;
   text: string;
   cfg: OpenClawConfig;
   providerConfig: SpeechProviderConfig;

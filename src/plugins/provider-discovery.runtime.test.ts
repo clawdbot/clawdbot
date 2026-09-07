@@ -1,5 +1,5 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   prepareSyntheticAuthWithProvider,
@@ -35,7 +35,10 @@ vi.mock("./providers.js", () => ({
 }));
 
 vi.mock("./providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof mocks.resolvePluginProvidersCore>) => ({
+    providers: mocks.resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => ({
@@ -43,7 +46,21 @@ vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => ({
   getCachedPluginModuleLoader: mocks.getCachedPluginModuleLoader,
 }));
 
-import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
+import { acquirePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
+
+const discoveryHandles: ReturnType<typeof acquirePluginDiscoveryProvidersRuntime>[] = [];
+afterEach(() => {
+  for (const handle of discoveryHandles.splice(0)) {
+    handle.release();
+  }
+});
+function resolvePluginDiscoveryProvidersRuntime(
+  ...args: Parameters<typeof acquirePluginDiscoveryProvidersRuntime>
+) {
+  const handle = acquirePluginDiscoveryProvidersRuntime(...args);
+  discoveryHandles.push(handle);
+  return handle.providers;
+}
 
 function createManifestPlugin(id: string): PluginManifestRecord {
   return {

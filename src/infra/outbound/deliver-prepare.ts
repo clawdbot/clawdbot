@@ -2,6 +2,7 @@ import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
@@ -121,148 +122,150 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: { onBeforeFirstModifier?: () => void },
 ): Promise<PreparedOutboundBatch> {
-  const directiveOptions = await resolveChannelOutboundDirectiveOptions({
-    cfg: params.cfg,
-    agentId: params.session?.agentId,
-    channel: params.channel,
-  });
-  const plan = createOutboundPayloadPlan(params.payloads, {
-    cfg: params.cfg,
-    sessionKey: params.session?.policyKey ?? params.session?.key,
-    surface: params.channel,
-    conversationType: params.session?.conversationType,
-    extractMarkdownImages: directiveOptions.extractMarkdownImages,
-  });
-  const handler = await createPreparationHandler(params);
-  const normalized = normalizePayloadsForChannelDelivery(plan, handler);
-  const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
-  const entries: PreparedOutboundBatchEntry[] = [];
-  for (const [sourceIndex] of params.payloads.entries()) {
-    if (!normalizedIndexes.has(sourceIndex)) {
-      entries.push({ sourceIndex, status: "suppressed", reason: "no_visible_payload" });
-    }
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  const hasReplyPayloadSendingHooks =
-    params.replyPayloadSendingHook !== undefined &&
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false);
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
-  const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
-  const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
-  const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
-  let modifierBoundaryEntered = false;
-
-  for (const { index: sourceIndex, payload } of normalized) {
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
-    if (hasModifyingHooks && !modifierBoundaryEntered) {
-      options?.onBeforeFirstModifier?.();
-      modifierBoundaryEntered = true;
-    }
-    let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
-    try {
-      replyHookResult = await applyReplyPayloadSendingHook({
-        hook: params.replyPayloadSendingHook,
-        payload,
-      });
-    } catch (error) {
-      throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
-    }
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, replyHookResult.payload);
-    if (replyHookResult.cancelled) {
-      entries.push({
-        sourceIndex,
-        status: "suppressed",
-        reason: "cancelled_by_reply_payload_sending_hook",
-      });
-      continue;
-    }
-
-    const replyPayload = stripInternalRuntimeScaffoldingFromPayload(replyHookResult.payload);
-    let messageHookResult: Awaited<ReturnType<typeof applyMessageSendingHook>>;
-    try {
-      messageHookResult = await applyMessageSendingHook({
-        hookRunner,
-        enabled: hasMessageSendingHooks,
-        payload: replyPayload,
-        payloadSummary: buildPayloadSummary(replyPayload),
-        to: params.to,
-        channel: params.channel,
-        accountId: params.accountId,
-        replyToId: resolveCurrentReplyTo(replyPayload).replyToId,
-        threadId: params.threadId,
-        sessionKey: sessionKeyForHooks,
-      });
-    } catch (error) {
-      // Modifier handlers are fail-open. Only a host invariant failure can
-      // escape here, and atomic preparation must attribute it before aborting.
-      throw new OutboundPayloadPreparationError(error, sourceIndex, replyPayload);
-    }
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, messageHookResult.payload);
-    if (messageHookResult.cancelled) {
-      const hookEffect =
-        messageHookResult.cancelReason || messageHookResult.hookMetadata
-          ? {
-              ...(messageHookResult.cancelReason
-                ? { cancelReason: messageHookResult.cancelReason }
-                : {}),
-              ...(messageHookResult.hookMetadata
-                ? { metadata: messageHookResult.hookMetadata }
-                : {}),
-            }
-          : undefined;
-      entries.push({
-        sourceIndex,
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-        ...(hookEffect ? { hookEffect } : {}),
-      });
-      continue;
-    }
-
-    const postHookPayload = stripInternalRuntimeScaffoldingFromPayload(messageHookResult.payload);
-    // Adapter normalization may project visible text into transport fields. Re-run it
-    // after policy so durable custody cannot retain a stale pre-rewrite projection.
-    const normalizedPostHookPayload = handler.normalizePayload
-      ? handler.normalizePayload(postHookPayload)
-      : postHookPayload;
-    const preparedPayload = normalizedPostHookPayload
-      ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPostHookPayload),
-        )
-      : null;
-    if (!preparedPayload) {
-      entries.push({
-        sourceIndex,
-        status: "suppressed",
-        reason: suppressionReasonForEmpty({
-          replyHookChanged: replyHookResult.changed,
-          messageHookChanged: messageHookResult.contentRewritten,
-        }),
-      });
-      continue;
-    }
-    const compactPayload = compactPreparedPayload(preparedPayload);
-    entries.push({
-      sourceIndex,
-      status: "accepted",
-      payload: compactPayload,
-      replyHookChanged: replyHookResult.changed,
-      messageHookChanged: messageHookResult.contentRewritten,
-      preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const directiveOptions = await resolveChannelOutboundDirectiveOptions({
+      cfg: params.cfg,
+      agentId: params.session?.agentId,
+      channel: params.channel,
     });
-  }
+    const plan = createOutboundPayloadPlan(params.payloads, {
+      cfg: params.cfg,
+      sessionKey: params.session?.policyKey ?? params.session?.key,
+      surface: params.channel,
+      conversationType: params.session?.conversationType,
+      extractMarkdownImages: directiveOptions.extractMarkdownImages,
+    });
+    const handler = await createPreparationHandler(params);
+    const normalized = normalizePayloadsForChannelDelivery(plan, handler);
+    const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
+    const entries: PreparedOutboundBatchEntry[] = [];
+    for (const [sourceIndex] of params.payloads.entries()) {
+      if (!normalizedIndexes.has(sourceIndex)) {
+        entries.push({ sourceIndex, status: "suppressed", reason: "no_visible_payload" });
+      }
+    }
 
-  return {
-    schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
-    sourcePayloadCount: params.payloads.length,
-    channelNormalized: true,
-    ...((params.runId ?? params.replyPayloadSendingHook?.runId)
-      ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
-      : {}),
-    ...(params.executionIdentityToken
-      ? { executionIdentityToken: params.executionIdentityToken }
-      : {}),
-    entries,
-  };
+    const hookRunner = getGlobalHookRunner();
+    const hasReplyPayloadSendingHooks =
+      params.replyPayloadSendingHook !== undefined &&
+      (hookRunner?.hasHooks("reply_payload_sending") ?? false);
+    const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+    const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
+    const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
+    const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
+    let modifierBoundaryEntered = false;
+
+    for (const { index: sourceIndex, payload } of normalized) {
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
+      if (hasModifyingHooks && !modifierBoundaryEntered) {
+        options?.onBeforeFirstModifier?.();
+        modifierBoundaryEntered = true;
+      }
+      let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
+      try {
+        replyHookResult = await applyReplyPayloadSendingHook({
+          hook: params.replyPayloadSendingHook,
+          payload,
+        });
+      } catch (error) {
+        throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
+      }
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, replyHookResult.payload);
+      if (replyHookResult.cancelled) {
+        entries.push({
+          sourceIndex,
+          status: "suppressed",
+          reason: "cancelled_by_reply_payload_sending_hook",
+        });
+        continue;
+      }
+
+      const replyPayload = stripInternalRuntimeScaffoldingFromPayload(replyHookResult.payload);
+      let messageHookResult: Awaited<ReturnType<typeof applyMessageSendingHook>>;
+      try {
+        messageHookResult = await applyMessageSendingHook({
+          hookRunner,
+          enabled: hasMessageSendingHooks,
+          payload: replyPayload,
+          payloadSummary: buildPayloadSummary(replyPayload),
+          to: params.to,
+          channel: params.channel,
+          accountId: params.accountId,
+          replyToId: resolveCurrentReplyTo(replyPayload).replyToId,
+          threadId: params.threadId,
+          sessionKey: sessionKeyForHooks,
+        });
+      } catch (error) {
+        // Modifier handlers are fail-open. Only a host invariant failure can
+        // escape here, and atomic preparation must attribute it before aborting.
+        throw new OutboundPayloadPreparationError(error, sourceIndex, replyPayload);
+      }
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, messageHookResult.payload);
+      if (messageHookResult.cancelled) {
+        const hookEffect =
+          messageHookResult.cancelReason || messageHookResult.hookMetadata
+            ? {
+                ...(messageHookResult.cancelReason
+                  ? { cancelReason: messageHookResult.cancelReason }
+                  : {}),
+                ...(messageHookResult.hookMetadata
+                  ? { metadata: messageHookResult.hookMetadata }
+                  : {}),
+              }
+            : undefined;
+        entries.push({
+          sourceIndex,
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          ...(hookEffect ? { hookEffect } : {}),
+        });
+        continue;
+      }
+
+      const postHookPayload = stripInternalRuntimeScaffoldingFromPayload(messageHookResult.payload);
+      // Adapter normalization may project visible text into transport fields. Re-run it
+      // after policy so durable custody cannot retain a stale pre-rewrite projection.
+      const normalizedPostHookPayload = handler.normalizePayload
+        ? handler.normalizePayload(postHookPayload)
+        : postHookPayload;
+      const preparedPayload = normalizedPostHookPayload
+        ? normalizeEmptyPayloadForDelivery(
+            stripInternalRuntimeScaffoldingFromPayload(normalizedPostHookPayload),
+          )
+        : null;
+      if (!preparedPayload) {
+        entries.push({
+          sourceIndex,
+          status: "suppressed",
+          reason: suppressionReasonForEmpty({
+            replyHookChanged: replyHookResult.changed,
+            messageHookChanged: messageHookResult.contentRewritten,
+          }),
+        });
+        continue;
+      }
+      const compactPayload = compactPreparedPayload(preparedPayload);
+      entries.push({
+        sourceIndex,
+        status: "accepted",
+        payload: compactPayload,
+        replyHookChanged: replyHookResult.changed,
+        messageHookChanged: messageHookResult.contentRewritten,
+        preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
+      });
+    }
+
+    return {
+      schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
+      sourcePayloadCount: params.payloads.length,
+      channelNormalized: true,
+      ...((params.runId ?? params.replyPayloadSendingHook?.runId)
+        ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
+        : {}),
+      ...(params.executionIdentityToken
+        ? { executionIdentityToken: params.executionIdentityToken }
+        : {}),
+      entries,
+    };
+  });
 }

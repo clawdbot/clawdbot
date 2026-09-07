@@ -27,6 +27,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
@@ -110,17 +114,26 @@ export function createPluginToolsMcpServer(
     tools?: AnyAgentTool[];
     agentSessionKey?: string;
     agentId?: string;
+    resources?: PluginRegistryResourceScope;
   } = {},
 ): Server {
-  const cfg = params.config ?? getRuntimeConfig();
-  const tools =
-    params.tools ??
-    resolvePluginToolsForMcp({
-      config: cfg,
-      agentSessionKey: params.agentSessionKey,
-      agentId: params.agentId,
+  const resources = params.resources ?? new PluginRegistryResourceScope();
+  try {
+    return withPluginRegistryResourceScope(resources, () => {
+      const cfg = params.config ?? getRuntimeConfig();
+      const tools =
+        params.tools ??
+        resolvePluginToolsForMcp({
+          config: cfg,
+          agentSessionKey: params.agentSessionKey,
+          agentId: params.agentId,
+        });
+      return createToolsMcpServer({ name: "openclaw-plugin-tools", tools, resources });
     });
-  return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
@@ -128,13 +141,21 @@ export async function servePluginToolsMcp(): Promise<void> {
   // tool discovery before the transport is connected.
   routeLogsToStderr();
 
-  const config = getRuntimeConfig();
-  const tools = resolvePluginToolsForMcp({ config, agentId: resolveToolsMcpAgentId() });
-  const server = createPluginToolsMcpServer({ config, tools });
-  if (tools.length === 0) {
-    process.stderr.write("plugin-tools-serve: no plugin tools found\n");
+  const resources = new PluginRegistryResourceScope();
+  let server: Server;
+  try {
+    server = withPluginRegistryResourceScope(resources, () => {
+      const config = getRuntimeConfig();
+      const tools = resolvePluginToolsForMcp({ config, agentId: resolveToolsMcpAgentId() });
+      if (tools.length === 0) {
+        process.stderr.write("plugin-tools-serve: no plugin tools found\n");
+      }
+      return createPluginToolsMcpServer({ config, tools, resources });
+    });
+  } catch (error) {
+    resources.release();
+    throw error;
   }
-
   await connectToolsMcpServerToStdio(server);
 }
 

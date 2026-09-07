@@ -46,7 +46,18 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
 });
 
 import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
-import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
+import {
+  acquirePluginProvidersCore,
+  isPluginProvidersLoadInFlight,
+  type PluginProvidersHandle,
+} from "./providers.runtime.js";
+
+const providerHandles: PluginProvidersHandle[] = [];
+function resolveProviderValuesForTest(params: Parameters<typeof acquirePluginProvidersCore>[0]) {
+  const handle = acquirePluginProvidersCore(params);
+  providerHandles.push(handle);
+  return handle.providers;
+}
 
 const WORKSPACE = "/workspace/a";
 
@@ -96,6 +107,9 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   });
 
   afterEach(() => {
+    for (const handle of providerHandles.splice(0)) {
+      handle.release();
+    }
     clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
@@ -146,7 +160,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     });
   });
 
-  describe("resolvePluginProvidersCore", () => {
+  describe("resolveProviderValuesForTest", () => {
     it("keeps prepared provider discovery scoped to its exact generation and requested owners", () => {
       const config: OpenClawConfig = { plugins: { entries: { demo: { enabled: true } } } };
       const metadataSnapshot = registerCurrentSnapshot(config);
@@ -162,7 +176,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
       ];
       setActivePluginRegistry(activeRegistry, undefined, "default", WORKSPACE);
       const resolve = (onlyPluginIds = ["demo"]) =>
-        resolvePluginProvidersCore({ config, env: {}, workspaceDir: WORKSPACE, onlyPluginIds });
+        resolveProviderValuesForTest({ config, env: {}, workspaceDir: WORKSPACE, onlyPluginIds });
 
       withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
         expect(resolve()).toEqual([{ id: "demo", label: "prepared", auth: [], pluginId: "demo" }]);
@@ -178,7 +192,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
 
       // onlyPluginIds:[] short-circuits provider materialization after the
       // snapshot is resolved, isolating the consult-first routing.
-      const providers = resolvePluginProvidersCore({
+      const providers = resolveProviderValuesForTest({
         config,
         env: {},
         workspaceDir: WORKSPACE,
@@ -194,7 +208,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     it("falls back to a direct disk load when no current snapshot is registered", () => {
       armFallbackLoad();
 
-      resolvePluginProvidersCore({
+      resolveProviderValuesForTest({
         config: {},
         env: {},
         workspaceDir: WORKSPACE,

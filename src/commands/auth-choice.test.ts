@@ -34,7 +34,15 @@ const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
+const resolvePluginProviders = vi.hoisted(() =>
+  vi.fn<
+    (
+      ...args: Parameters<
+        typeof import("../plugins/provider-auth-choice.runtime.js").acquireProviderAuthChoiceProviders
+      >
+    ) => ProviderPlugin[]
+  >(() => []),
+);
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
   vi.fn<ResolveDeprecatedProviderInstallCatalogEntry>(() => undefined),
@@ -46,7 +54,10 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders,
+  acquireProviderAuthChoiceProviders: (...args: Parameters<typeof resolvePluginProviders>) => ({
+    providers: resolvePluginProviders(...args),
+    release() {},
+  }),
   resolvePluginSetupProvider: () => undefined,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
@@ -63,7 +74,7 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
     if (!providerId) {
       return params.authChoice;
     }
-    const provider = resolvePluginProviders().find(
+    const provider = resolvePluginProviders({}).find(
       (entry) => normalizeProviderIdLocal(entry.id) === providerId,
     );
     return (

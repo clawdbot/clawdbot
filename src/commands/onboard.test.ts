@@ -1,5 +1,5 @@
-// Onboard command tests cover guided setup entrypoints, setup aliases, and CLI messaging.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -81,7 +81,7 @@ const mocks = vi.hoisted(() => ({
     valid: false,
     config: {},
   })),
-  handleReset: vi.fn(async () => {}),
+  handleReset: vi.fn<typeof import("./onboard-helpers.js").handleReset>(async () => {}),
   withSetupMigrationTargetLock: vi.fn(
     async (_stateDir: string, run: () => Promise<unknown>) => await run(),
   ),
@@ -109,7 +109,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  acquireProviderAuthChoiceProviders: () => ({
+    providers: mocks.resolvePluginProviders(),
+    release() {},
+  }),
 }));
 
 vi.mock("../wizard/setup.migration-snapshot.js", () => ({
@@ -135,11 +138,7 @@ async function expectAuthPreflightError(
 }
 
 function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace?: string }): void {
-  const calls = mocks.handleReset.mock.calls as unknown as Array<[string, string, RuntimeEnv]>;
-  const call = calls[0];
-  if (!call) {
-    throw new Error("expected handleReset call");
-  }
+  const call = expectDefined(mocks.handleReset.mock.calls[0], "expected handleReset call");
   expect(call[0]).toBe(params.scope);
   if (params.workspace) {
     expect(call[1]).toBe(params.workspace);

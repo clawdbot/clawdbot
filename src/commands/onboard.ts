@@ -13,7 +13,7 @@ import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
-import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
+import { acquireProviderAuthChoiceProviders } from "../plugins/provider-auth-choice.runtime.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -397,58 +397,63 @@ async function validateResetAuthChoice(params: {
     }
   }
   if (authChoice !== "custom-api-key") {
-    const runtimeProvider = providerAuthChoice
-      ? resolveProviderMatch(
-          resolvePluginProviders({
-            config: params.baseConfig,
-            workspaceDir: params.workspaceDir,
-            mode: "setup",
-            includeUntrustedWorkspacePlugins: false,
-            providerRefs: [providerAuthChoice.providerId],
-            activate: true,
-          }),
-          providerAuthChoice.providerId,
-        )
-      : null;
-    const runtimeMethod = runtimeProvider?.auth.find(
-      (method) =>
-        method.id === providerAuthChoice?.methodId ||
-        method.wizard?.choiceId === providerAuthChoice?.choiceId,
-    );
-    if (!runtimeMethod?.runNonInteractive || !runtimeMethod.validateNonInteractive) {
-      const reason = !runtimeMethod
-        ? "provider unavailable"
-        : !runtimeMethod.runNonInteractive
-          ? "non-interactive setup unsupported"
-          : "reset validation unavailable";
-      return rejectOption(
-        params.opts,
-        params.runtime,
-        `Auth choice "${authChoice}" cannot be safely preflighted with --reset (${reason}). Choose a provider method that supports non-interactive reset validation, or run setup without --reset.`,
-      );
-    }
-    const valid = await runtimeMethod.validateNonInteractive({
-      authChoice,
-      config: params.baseConfig,
-      baseConfig: params.baseConfig,
-      opts: params.opts,
-      runtime: params.runtime,
-      agentDir: target.agentDir,
-      workspaceDir: params.workspaceDir,
-      resolveApiKey: async (input) =>
-        await resolveNonInteractiveCredential({
-          ...input,
-          cfg: params.baseConfig,
-          runtime: params.runtime,
-          agentDir: target.agentDir,
+    const providerHandle = providerAuthChoice
+      ? acquireProviderAuthChoiceProviders({
+          config: params.baseConfig,
           workspaceDir: params.workspaceDir,
-          allowProfile: input.allowProfile === false ? false : params.resetScope === "config",
-          secretInputMode: params.opts.secretInputMode,
-          json: params.opts.json,
-        }),
-    });
-    if (!valid) {
-      return false;
+          mode: "setup",
+          includeUntrustedWorkspacePlugins: false,
+          providerRefs: [providerAuthChoice.providerId],
+          activate: true,
+        })
+      : undefined;
+    try {
+      const runtimeProvider =
+        providerAuthChoice && providerHandle
+          ? resolveProviderMatch(providerHandle.providers, providerAuthChoice.providerId)
+          : null;
+      const runtimeMethod = runtimeProvider?.auth.find(
+        (method) =>
+          method.id === providerAuthChoice?.methodId ||
+          method.wizard?.choiceId === providerAuthChoice?.choiceId,
+      );
+      if (!runtimeMethod?.runNonInteractive || !runtimeMethod.validateNonInteractive) {
+        const reason = !runtimeMethod
+          ? "provider unavailable"
+          : !runtimeMethod.runNonInteractive
+            ? "non-interactive setup unsupported"
+            : "reset validation unavailable";
+        return rejectOption(
+          params.opts,
+          params.runtime,
+          `Auth choice "${authChoice}" cannot be safely preflighted with --reset (${reason}). Choose a provider method that supports non-interactive reset validation, or run setup without --reset.`,
+        );
+      }
+      const valid = await runtimeMethod.validateNonInteractive({
+        authChoice,
+        config: params.baseConfig,
+        baseConfig: params.baseConfig,
+        opts: params.opts,
+        runtime: params.runtime,
+        agentDir: target.agentDir,
+        workspaceDir: params.workspaceDir,
+        resolveApiKey: async (input) =>
+          await resolveNonInteractiveCredential({
+            ...input,
+            cfg: params.baseConfig,
+            runtime: params.runtime,
+            agentDir: target.agentDir,
+            workspaceDir: params.workspaceDir,
+            allowProfile: input.allowProfile === false ? false : params.resetScope === "config",
+            secretInputMode: params.opts.secretInputMode,
+            json: params.opts.json,
+          }),
+      });
+      if (!valid) {
+        return false;
+      }
+    } finally {
+      providerHandle?.release();
     }
   }
   return true;

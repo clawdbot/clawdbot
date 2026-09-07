@@ -6,11 +6,16 @@
 import { vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  createPluginRegistryResourceOwner,
+  retainPluginRegistryResources,
+} from "../../plugins/registry-resources.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import type {
   PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
@@ -149,12 +154,20 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    loadAgentRuntimePluginRegistryHandle: vi.fn(
-      () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
-    ),
+    loadAgentRuntimePluginRegistryHandle: vi.fn<
+      typeof import("../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+    >(() => {
+      const registry = options?.pluginRegistry ?? createEmptyPluginRegistry();
+      const claim = options?.pluginRegistry
+        ? retainPluginRegistryResources(registry)
+        : createPluginRegistryResourceOwner(registry, "scoped");
+      return { registry, ...claim };
+    }),
   }));
   vi.doMock("../prepared-model-runtime.js", () => {
-    const acquire = async (input: PreparedModelRuntimeInput) => {
+    const acquire = async (
+      input: PreparedModelRuntimeInput,
+    ): Promise<PreparedModelRuntimeLease> => {
       if (!input.readOnly) {
         const { ensureOpenClawModelsJson } = await import("../models-config.js");
         await ensureOpenClawModelsJson(
@@ -163,8 +176,15 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
           input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {},
         );
       }
+      const snapshot = createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry);
       return {
-        snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        snapshot,
+        pluginGeneration: {
+          pluginMetadataSnapshot: snapshot.metadataSnapshot,
+          pluginRegistry: snapshot.pluginRegistry,
+          inlineProviderModels: snapshot.inlineProviderModels,
+          configuredCatalogEntries: snapshot.modelCatalog.entries,
+        },
         release: vi.fn(),
       };
     };
@@ -222,7 +242,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
       options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
-    buildAgentRuntimePlan: vi.fn(
+    buildAgentRuntimePlanCore: vi.fn(
       (params: {
         provider: string;
         modelId: string;

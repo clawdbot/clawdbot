@@ -187,7 +187,6 @@ it.each([false, true])(
             });
             expect(install).toHaveBeenCalledOnce();
             expect(prepared?.retrySelection).not.toBe(true);
-            expect(prepared?.provider?.id).toBe("installed-provider");
             expect(prompter.text).toHaveBeenCalledWith({ message: "Selected provider credential" });
             if (setDefaultModel) {
               expect(prompter.note).toHaveBeenCalledWith(

@@ -256,7 +256,7 @@ function createVideoProviderSnapshot(params: {
 }
 
 function mockVideoPluginProvider(capabilities: Record<string, unknown> = {}) {
-  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
     {
       id: "video-plugin",
       defaultModel: "vid-v1",
@@ -338,7 +338,7 @@ function resetVideoGenerateMocks() {
   for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
     vi.stubEnv(key, "");
   }
-  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
   taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -380,13 +380,13 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("returns null when no video-generation config or auth-backed provider is available", () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([]);
 
     expect(emptyConfigTool).toBeNull();
   });
 
   it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([]);
 
     expectVideoGenerateTool(
       createVideoGenerateTool({
@@ -412,7 +412,7 @@ describe("createVideoGenerateTool", () => {
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
     const listProviders = vi
-      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore")
       .mockImplementation(() => {
         throw new Error("runtime provider list should not run during video tool registration");
       });
@@ -712,7 +712,7 @@ describe("createVideoGenerateTool", () => {
         videos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
       })),
     };
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockImplementation(
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockImplementation(
       () => {
         throw new Error("prepared video execution should not rediscover runtime providers");
       },
@@ -1354,7 +1354,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("dedupes a model-only primary video request repeated with provider-qualified model", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "google",
         defaultModel: "veo-3.1-fast-generate-preview",
@@ -1603,7 +1603,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("lists supported provider durations when advertised", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "google",
         defaultModel: "veo-3.1-fast-generate-preview",
@@ -1664,7 +1664,7 @@ describe("createVideoGenerateTool", () => {
         supportsAspectRatio: true,
       },
     };
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "video-plugin",
         defaultModel: "text-video",
@@ -1720,7 +1720,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("defers disabled primary modes to the fallback-aware runtime", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "video-plugin",
         defaultModel: "vid-v1",
@@ -1760,7 +1760,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("defers model-specific reference limits to runtime overlays", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "video-plugin",
         defaultModel: "r2v",
@@ -1811,7 +1811,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("warns when optional provider overrides are ignored", async () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([
       {
         id: "openai",
         defaultModel: "sora-2",

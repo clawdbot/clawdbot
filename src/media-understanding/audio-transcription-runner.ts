@@ -3,6 +3,7 @@ import type { ActiveMediaModel } from "../../packages/media-understanding-common
 // pipeline and extracts the first transcript output.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -13,6 +14,18 @@ import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
 /** Runs the configured audio-understanding pipeline and returns the first transcript output. */
 export async function runAudioTranscription(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  attachments?: MediaAttachment[];
+  agentDir?: string;
+  providers?: Record<string, MediaUnderstandingProvider>;
+  activeModel?: ActiveMediaModel;
+  localPathRoots?: readonly string[];
+}): Promise<{ transcript: string | undefined; attachments: MediaAttachment[] }> {
+  return withPluginRegistryResourceOperationAsync(() => runAudioTranscriptionWithResources(params));
+}
+
+async function runAudioTranscriptionWithResources(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   attachments?: MediaAttachment[];

@@ -1,9 +1,9 @@
 // Real workspace contract for memory embedding providers and batch helpers.
 
 export {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
+  getMemoryEmbeddingProviderCore,
+  listMemoryEmbeddingProvidersCore,
+  listRegisteredMemoryEmbeddingProviderAdaptersCore,
 } from "./host/openclaw-runtime-memory.js";
 export type {
   MemoryEmbeddingBatchChunk,

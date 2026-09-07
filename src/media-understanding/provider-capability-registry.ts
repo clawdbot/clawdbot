@@ -2,12 +2,19 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { resolveConfiguredMediaEntryCapabilities } from "./entry-capabilities.js";
 import type { MediaUnderstandingCapabilityRegistry } from "./types.js";
 
 /** Resolves capability metadata for configured shared media model providers. */
 export function buildMediaUnderstandingCapabilityRegistry(
+  cfg?: OpenClawConfig,
+): MediaUnderstandingCapabilityRegistry {
+  return withPluginRegistryResourceOperation(() => buildCapabilityRegistryWithResources(cfg));
+}
+
+function buildCapabilityRegistryWithResources(
   cfg?: OpenClawConfig,
 ): MediaUnderstandingCapabilityRegistry {
   const registry: MediaUnderstandingCapabilityRegistry = new Map();

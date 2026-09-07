@@ -3,6 +3,7 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -12,6 +13,10 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  createPluginRegistryResourceOwner,
+  registerPluginRegistryResourceDisposer,
+} from "../plugins/registry-resources.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -265,6 +270,90 @@ describe("createGatewayCloseHandler", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalRestartTraceEnv;
     }
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "joins %s disposal released by the final SDK host phase",
+    async (outcome) => {
+      const registry = createEmptyPluginRegistry();
+      const claim = createPluginRegistryResourceOwner(registry, "scoped");
+      const db = new DatabaseSync(":memory:");
+      db.exec("CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES ('preserved')");
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const failure = new Error("synthetic final resource disposal failure");
+      const dispose = vi.fn(async () => {
+        entered.resolve();
+        await finish.promise;
+        expect(db.prepare("SELECT value FROM proof").get()?.value).toBe("preserved");
+        db.close();
+        if (outcome === "reject") {
+          throw failure;
+        }
+      });
+      registerPluginRegistryResourceDisposer(registry, "synthetic", { id: "native", dispose });
+      // The SDK host releases in the default phase, after clearActivePluginRegistry's drain.
+      resolveGlobalSingleton(
+        Symbol("final-sdk-host-resource-proof"),
+        () => claim,
+        (owner) => owner.release(),
+      );
+      const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+      let settled = false;
+      const closing = close({ reason: "test resource shutdown" });
+      const observed = closing.then(
+        (value) => {
+          settled = true;
+          return { value, error: undefined };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { value: undefined, error };
+        },
+      );
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        expect(db.isOpen).toBe(true);
+        finish.resolve();
+        const result = await observed;
+        if (outcome === "reject") {
+          expect(result.error).toBeInstanceOf(AggregateError);
+        } else {
+          expect(result.error).toBeUndefined();
+        }
+        expect(db.isOpen).toBe(false);
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally {
+        finish.resolve();
+        await observed;
+        if (db.isOpen) {
+          db.close();
+        }
+      }
+    },
+  );
+
+  it("preserves early registry disposal failure through the final shutdown aggregate", async () => {
+    const registry = createEmptyPluginRegistry();
+    const claim = createPluginRegistryResourceOwner(registry, "scoped");
+    const failure = new Error("synthetic early registry disposal failure");
+    registerPluginRegistryResourceDisposer(registry, "synthetic", {
+      id: "early-failure",
+      dispose: () => {
+        throw failure;
+      },
+    });
+    claim.release();
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+    await expect(close({ reason: "test early disposal failure" })).rejects.toThrow(
+      "Failed to reset global singleton lifecycle state",
+    );
+    expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
   });
 
   it("still runs later teardown when cron.stopAndDrain() rejects (no listener strand)", async () => {

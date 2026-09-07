@@ -1,8 +1,14 @@
 // One-shot diagnostics exporter start/flush lifecycle for embedded CLI runs.
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  createPluginRegistryResourceOwner,
+  drainPluginRegistryResourceDisposals,
+  registerPluginRegistryResourceDisposer,
+} from "./registry-resources.js";
 import type { PluginServicesHandle } from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
@@ -29,16 +35,19 @@ const otelEnabledConfig = {
 } as OpenClawConfig;
 
 function mockRegistryWithServices(serviceIds: string[]) {
-  const registry = {
-    services: serviceIds.map((id) => ({
+  const registry = createEmptyPluginRegistry();
+  for (const id of serviceIds) {
+    registry.services.push({
       pluginId: id,
-      pluginName: id,
-      service: { id },
+      service: { id, start: () => {} },
       source: "test",
       origin: "bundled",
-    })),
-  };
-  loadOpenClawPlugins.mockReturnValue(registry);
+    });
+  }
+  loadOpenClawPlugins.mockReturnValue({
+    registry,
+    ...createPluginRegistryResourceOwner(registry, "scoped"),
+  });
   return registry;
 }
 
@@ -47,7 +56,10 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
   registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
-  loadOpenClawPlugins.mockReturnValue(registry);
+  loadOpenClawPlugins.mockReturnValue({
+    registry,
+    ...createPluginRegistryResourceOwner(registry, "scoped"),
+  });
   let servicesHandle: PluginServicesHandle | undefined;
   startPluginServices.mockImplementationOnce(
     async (params: Parameters<typeof startRealServices>[0]) => {
@@ -55,7 +67,7 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
       return servicesHandle;
     },
   );
-  return { stop: () => servicesHandle?.stop() };
+  return { registry, stop: () => servicesHandle?.stop() };
 }
 
 beforeEach(() => {
@@ -101,6 +113,7 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.registry.services.map((entry) => entry.service.id)).toEqual([
       "diagnostics-otel",
     ]);
+    await handle?.stop();
   });
 
   it("keeps OTLP logs but suppresses stdout JSONL logs when requested", async () => {
@@ -122,6 +135,7 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.config.diagnostics?.otel?.logs).toBe(true);
     expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
     expect(config.diagnostics?.otel?.logsExporter).toBe("both");
+    await handle?.stop();
   });
 
   it("disables stdout-only JSONL logs when requested", async () => {
@@ -143,6 +157,7 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
     expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
     expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
+    await handle?.stop();
   });
 
   it("returns null when the scoped load registers no exporter service", async () => {
@@ -216,7 +231,16 @@ describe("startOneShotDiagnosticsExporters", () => {
     async ({ drainWaitMs, origin }) => {
       const drain = createDeferredCore();
       const flush = createDeferredCore();
-      const exporterStop = vi.fn(() => flush.promise);
+      const database = new DatabaseSync(":memory:");
+      database.exec(
+        "CREATE TABLE pending_export (value TEXT); INSERT INTO pending_export VALUES ('tail');",
+      );
+      let exported: unknown;
+      let disposals = 0;
+      const exporterStop = vi.fn(async () => {
+        await flush.promise;
+        exported = database.prepare("SELECT value FROM pending_export").get()?.value;
+      });
       let internalDiagnostics: OpenClawPluginServiceContext["internalDiagnostics"];
       const services = await mockRealExporter(
         {
@@ -228,6 +252,13 @@ describe("startOneShotDiagnosticsExporters", () => {
         },
         origin,
       );
+      registerPluginRegistryResourceDisposer(services.registry, "diagnostics-otel", {
+        id: "pending-export-database",
+        dispose: () => {
+          disposals += 1;
+          database.close();
+        },
+      });
       waitForDiagnosticEventsDrained.mockImplementation(() => drain.promise);
       let stopping: Promise<void> | undefined;
       let stopped = false;
@@ -256,7 +287,10 @@ describe("startOneShotDiagnosticsExporters", () => {
         expect(stopped).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
         await stopping;
+        await vi.advanceTimersByTimeAsync(0);
         expect(stopped).toBe(true);
+        expect(database.isOpen).toBe(true);
+        expect(disposals).toBe(0);
         if (internalDiagnostics) {
           expect(internalDiagnostics.getRuntimeIdentity).toThrow("no longer active");
         }
@@ -266,11 +300,17 @@ describe("startOneShotDiagnosticsExporters", () => {
         try {
           await vi.advanceTimersByTimeAsync(0);
           await stopping;
-          await services.stop();
+          await Promise.allSettled([services.stop()]);
+          await drainPluginRegistryResourceDisposals();
         } finally {
+          if (database.isOpen) {
+            database.close();
+          }
           vi.useRealTimers();
         }
       }
+      expect(exported).toBe("tail");
+      expect(disposals).toBe(1);
     },
   );
 

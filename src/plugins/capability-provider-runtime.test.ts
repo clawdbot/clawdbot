@@ -10,6 +10,10 @@ import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "./registry-resources.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -82,7 +86,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./loader.js", () => ({
-  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+  resolveRuntimePluginRegistry: (
+    ...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>
+  ) => {
+    const registry = mocks.resolveRuntimePluginRegistry(...args);
+    return registry && { registry, release() {} };
+  },
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
@@ -99,7 +108,10 @@ vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
 }));
 
 vi.mock("./bundled-capability-runtime.js", () => ({
-  loadBundledCapabilityRuntimeRegistry: mocks.loadBundledCapabilityRuntimeRegistry,
+  loadBundledCapabilityRuntimeRegistry: (...args: unknown[]) => ({
+    registry: mocks.loadBundledCapabilityRuntimeRegistry(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -386,19 +398,22 @@ function expectCompatChainApplied(params: {
 }
 
 describe("resolvePluginCapabilityProviders", () => {
+  let resources: PluginRegistryResourceScope;
   beforeAll(async () => {
     vi.resetModules();
-    ({
-      prepareMediaCapabilityProviders,
-      resolvePluginCapabilityProvider,
-      resolvePluginCapabilityProviders,
-    } = await import("./capability-provider-runtime.js"));
+    const runtime = await import("./capability-provider-runtime.js");
+    prepareMediaCapabilityProviders = runtime.prepareMediaCapabilityProviders;
+    resolvePluginCapabilityProvider = (params) =>
+      resources.run(() => runtime.resolvePluginCapabilityProvider(params));
+    resolvePluginCapabilityProviders = (params) =>
+      resources.run(() => runtime.resolvePluginCapabilityProviders(params));
     ({ setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata.test-support.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
 
   beforeEach(() => {
+    resources = new PluginRegistryResourceScope();
     clearPluginMetadataLifecycleCaches();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
@@ -417,8 +432,10 @@ describe("resolvePluginCapabilityProviders", () => {
     restoreBundledDiscoveryState();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    resources.release();
     clearPluginMetadataLifecycleCaches();
+    await drainPluginRegistryResourceDisposals();
     // isolate:false shared worker: the compat state root must not outlive
     // this file's last test into sibling suites.
     restoreBundledDiscoveryState();

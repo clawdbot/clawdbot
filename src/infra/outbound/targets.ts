@@ -14,6 +14,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import {
+  withPluginRegistryResourceOperation,
+  withPluginRegistryResourceOperationAsync,
+} from "../../plugins/registry-resources.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import {
@@ -224,246 +228,249 @@ export function resolveHeartbeatDeliveryTarget(params: {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
 }): OutboundTarget {
-  const { cfg, entry } = params;
-  const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
-  const rawTarget = heartbeat?.target;
-  const implicitDefaultRoute = rawTarget === undefined;
-  let target = implicitDefaultRoute ? "owner" : "none";
-  let preparedExplicitPlugin: ChannelPlugin | undefined;
-  let preparedExplicitTo: string | undefined;
-  if (rawTarget === "none" || rawTarget === "last" || rawTarget === "owner") {
-    target = rawTarget;
-  } else if (typeof rawTarget === "string") {
-    const normalized = normalizeDeliverableOutboundChannel(rawTarget);
-    if (normalized) {
-      target = normalized;
-    } else {
-      const explicitTo = heartbeat?.to?.trim();
-      if (explicitTo) {
-        preparedExplicitPlugin = resolveOutboundChannelPlugin({
-          channel: rawTarget,
-          cfg,
-          agentId: params.agentId,
-          allowBootstrap: true,
-        });
-        if (preparedExplicitPlugin) {
-          target = preparedExplicitPlugin.id;
-          preparedExplicitTo = explicitTo;
+  return withPluginRegistryResourceOperation(() => {
+    const { cfg, entry } = params;
+    const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
+    const rawTarget = heartbeat?.target;
+    const implicitDefaultRoute = rawTarget === undefined;
+    let target = implicitDefaultRoute ? "owner" : "none";
+    let preparedExplicitPlugin: ChannelPlugin | undefined;
+    let preparedExplicitTo: string | undefined;
+    if (rawTarget === "none" || rawTarget === "last" || rawTarget === "owner") {
+      target = rawTarget;
+    } else if (typeof rawTarget === "string") {
+      const normalized = normalizeDeliverableOutboundChannel(rawTarget);
+      if (normalized) {
+        target = normalized;
+      } else {
+        const explicitTo = heartbeat?.to?.trim();
+        if (explicitTo) {
+          preparedExplicitPlugin = resolveOutboundChannelPlugin({
+            channel: rawTarget,
+            cfg,
+            agentId: params.agentId,
+            allowBootstrap: true,
+          });
+          if (preparedExplicitPlugin) {
+            target = preparedExplicitPlugin.id;
+            preparedExplicitTo = explicitTo;
+          }
         }
       }
     }
-  }
 
-  if (target === "none") {
-    const base = resolveSessionDeliveryTarget({ entry });
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "target-none",
-      lastChannel: base.lastChannel,
-      lastAccountId: base.lastAccountId,
-    });
-  }
+    if (target === "none") {
+      const base = resolveSessionDeliveryTarget({ entry });
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "target-none",
+        lastChannel: base.lastChannel,
+        lastAccountId: base.lastAccountId,
+      });
+    }
 
-  const sessionDelivery = deliveryContextFromSession(entry);
-  const ownerMode = target === "owner";
-  const ownerTurnSource = ownerMode && hasDeliverableHeartbeatTurnSource(params.turnSource);
-  const resolvedTurnSource =
-    target === "last" || ownerTurnSource
-      ? mergeDeliveryContext(params.turnSource, sessionDelivery)
-      : undefined;
-  const ownerRoute =
-    ownerMode && !ownerTurnSource
-      ? resolveHeartbeatOwnerRoute({ cfg, entry, heartbeat })
-      : undefined;
-  if (ownerMode && !ownerTurnSource && !ownerRoute) {
-    const base = resolveSessionDeliveryTarget({ entry });
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      lastChannel: base.lastChannel,
-      lastAccountId: base.lastAccountId,
-    });
-  }
-  const ownerSession = ownerRoute?.reuseSessionRoute ? sessionDelivery : undefined;
+    const sessionDelivery = deliveryContextFromSession(entry);
+    const ownerMode = target === "owner";
+    const ownerTurnSource = ownerMode && hasDeliverableHeartbeatTurnSource(params.turnSource);
+    const resolvedTurnSource =
+      target === "last" || ownerTurnSource
+        ? mergeDeliveryContext(params.turnSource, sessionDelivery)
+        : undefined;
+    const ownerRoute =
+      ownerMode && !ownerTurnSource
+        ? resolveHeartbeatOwnerRoute({ cfg, entry, heartbeat })
+        : undefined;
+    if (ownerMode && !ownerTurnSource && !ownerRoute) {
+      const base = resolveSessionDeliveryTarget({ entry });
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "no-route",
+        lastChannel: base.lastChannel,
+        lastAccountId: base.lastAccountId,
+      });
+    }
+    const ownerSession = ownerRoute?.reuseSessionRoute ? sessionDelivery : undefined;
 
-  const resolvedTarget =
-    preparedExplicitPlugin && preparedExplicitTo
-      ? resolveSessionDeliveryTarget({
-          entry,
-          requestedChannel: target,
-          explicitTo: preparedExplicitTo,
-          mode: "heartbeat",
-        })
-      : ownerRoute
+    const resolvedTarget =
+      preparedExplicitPlugin && preparedExplicitTo
         ? resolveSessionDeliveryTarget({
             entry,
-            requestedChannel: ownerRoute.plugin.id,
-            explicitTo: ownerSession?.to ?? ownerRoute.ownerId,
-            explicitThreadId: ownerSession?.threadId,
+            requestedChannel: target,
+            explicitTo: preparedExplicitTo,
             mode: "heartbeat",
           })
-        : resolveSessionDeliveryTarget({
-            entry,
-            requestedChannel: target === "last" || ownerTurnSource ? "last" : target,
-            explicitTo: ownerMode ? undefined : heartbeat?.to,
-            mode: "heartbeat",
-            turnSourceChannel:
-              resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
-                ? resolvedTurnSource.channel
-                : undefined,
-            turnSourceTo: resolvedTurnSource?.to,
-            turnSourceAccountId: resolvedTurnSource?.accountId,
-            // Explicit wake origins own their thread. Session-only threads stay dropped;
-            // reusing one could post a later heartbeat into a stale conversation.
-            turnSourceThreadId: params.turnSource?.threadId,
-          });
+        : ownerRoute
+          ? resolveSessionDeliveryTarget({
+              entry,
+              requestedChannel: ownerRoute.plugin.id,
+              explicitTo: ownerSession?.to ?? ownerRoute.ownerId,
+              explicitThreadId: ownerSession?.threadId,
+              mode: "heartbeat",
+            })
+          : resolveSessionDeliveryTarget({
+              entry,
+              requestedChannel: target === "last" || ownerTurnSource ? "last" : target,
+              explicitTo: ownerMode ? undefined : heartbeat?.to,
+              mode: "heartbeat",
+              turnSourceChannel:
+                resolvedTurnSource?.channel &&
+                isDeliverableMessageChannel(resolvedTurnSource.channel)
+                  ? resolvedTurnSource.channel
+                  : undefined,
+              turnSourceTo: resolvedTurnSource?.to,
+              turnSourceAccountId: resolvedTurnSource?.accountId,
+              // Explicit wake origins own their thread. Session-only threads stay dropped;
+              // reusing one could post a later heartbeat into a stale conversation.
+              turnSourceThreadId: params.turnSource?.threadId,
+            });
 
-  const heartbeatAccountId = ownerTurnSource ? undefined : heartbeat?.accountId?.trim();
-  // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
-  let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
+    const heartbeatAccountId = ownerTurnSource ? undefined : heartbeat?.accountId?.trim();
+    // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
+    let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
-  if (!resolvedTarget.channel || !resolvedTarget.to) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: target === "last" || ownerMode ? "no-route" : "no-target",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
-  }
-
-  // Bootstrap once after a concrete route exists, then carry the prepared plugin
-  // through account validation, target policy, and allow-from comparison.
-  const preparedPlugin = preparedExplicitPlugin ?? ownerRoute?.plugin;
-  const plugin =
-    resolveOutboundChannelPlugin({
-      channel: resolvedTarget.channel,
-      cfg,
-      agentId: params.agentId,
-      allowBootstrap: true,
-    }) ?? preparedPlugin;
-
-  if (heartbeatAccountId) {
-    const listAccountIds = plugin?.config.listAccountIds;
-    const accountIds = listAccountIds ? listAccountIds(cfg) : [];
-    if (accountIds.length > 0) {
-      const normalizedAccountId = normalizeAccountId(heartbeatAccountId);
-      const normalizedAccountIds = new Set(
-        accountIds.map((accountId) => normalizeAccountId(accountId)),
-      );
-      if (!normalizedAccountIds.has(normalizedAccountId)) {
-        return buildNoHeartbeatDeliveryTarget({
-          reason: ownerMode ? "no-route" : "unknown-account",
-          accountId: normalizedAccountId,
-          lastChannel: resolvedTarget.lastChannel,
-          lastAccountId: resolvedTarget.lastAccountId,
-        });
-      }
-      effectiveAccountId = normalizedAccountId;
-    }
-  }
-
-  const resolved = resolveOutboundTargetWithPlugin({
-    plugin,
-    target: {
-      channel: resolvedTarget.channel,
-      to: resolvedTarget.to,
-      allowFrom: ownerRoute ? [ownerRoute.ownerId] : undefined,
-      cfg,
-      accountId: effectiveAccountId,
-      mode: "heartbeat",
-    },
-  });
-  if (!resolved?.ok) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: ownerMode ? "no-route" : "no-target",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
-  }
-
-  // Chat type belongs to the stored channel/account/destination, not a later wake route.
-  // A dropped reply thread still shares its parent conversation's chat type.
-  const sessionChatTypeHint =
-    ((target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute) &&
-    channelRouteTargetsMatchExact({
-      left: { ...sessionDelivery, threadId: undefined },
-      right: {
-        channel: resolvedTarget.channel,
-        to: resolvedTarget.to,
+    if (!resolvedTarget.channel || !resolvedTarget.to) {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: target === "last" || ownerMode ? "no-route" : "no-target",
         accountId: effectiveAccountId,
-      },
-    })
-      ? normalizeChatType(entry?.chatType)
-      : undefined;
-  const deliveryChatType =
-    sessionChatTypeHint ??
-    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
-  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
-  }
-  if (
-    ownerMode &&
-    !ownerTurnSource &&
-    !isPositivelyDirectHeartbeatOwnerTarget({
-      plugin,
-      to: resolved.to,
-      chatType: deliveryChatType,
-    })
-  ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
-  }
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
+    }
 
-  let reason: string | undefined;
-  if (plugin?.config.resolveAllowFrom) {
-    const explicit = resolveOutboundTargetWithPlugin({
+    // Bootstrap once after a concrete route exists, then carry the prepared plugin
+    // through account validation, target policy, and allow-from comparison.
+    const preparedPlugin = preparedExplicitPlugin ?? ownerRoute?.plugin;
+    const plugin =
+      resolveOutboundChannelPlugin({
+        channel: resolvedTarget.channel,
+        cfg,
+        agentId: params.agentId,
+        allowBootstrap: true,
+      }) ?? preparedPlugin;
+
+    if (heartbeatAccountId) {
+      const listAccountIds = plugin?.config.listAccountIds;
+      const accountIds = listAccountIds ? listAccountIds(cfg) : [];
+      if (accountIds.length > 0) {
+        const normalizedAccountId = normalizeAccountId(heartbeatAccountId);
+        const normalizedAccountIds = new Set(
+          accountIds.map((accountId) => normalizeAccountId(accountId)),
+        );
+        if (!normalizedAccountIds.has(normalizedAccountId)) {
+          return buildNoHeartbeatDeliveryTarget({
+            reason: ownerMode ? "no-route" : "unknown-account",
+            accountId: normalizedAccountId,
+            lastChannel: resolvedTarget.lastChannel,
+            lastAccountId: resolvedTarget.lastAccountId,
+          });
+        }
+        effectiveAccountId = normalizedAccountId;
+      }
+    }
+
+    const resolved = resolveOutboundTargetWithPlugin({
       plugin,
       target: {
         channel: resolvedTarget.channel,
         to: resolvedTarget.to,
+        allowFrom: ownerRoute ? [ownerRoute.ownerId] : undefined,
         cfg,
         accountId: effectiveAccountId,
-        mode: "explicit",
+        mode: "heartbeat",
       },
     });
-    if (explicit?.ok && explicit.to !== resolved.to) {
-      reason = "allowFrom-fallback";
+    if (!resolved?.ok) {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: ownerMode ? "no-route" : "no-target",
+        accountId: effectiveAccountId,
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
     }
-  }
 
-  const inheritedHeartbeatThreadId = shouldReuseHeartbeatRouteThreadId({
-    cfg,
-    target,
-    heartbeat,
-    turnSource: params.turnSource,
-    entry,
-    resolvedTarget,
-    plugin,
-  })
-    ? resolvedTarget.lastThreadId
-    : undefined;
+    // Chat type belongs to the stored channel/account/destination, not a later wake route.
+    // A dropped reply thread still shares its parent conversation's chat type.
+    const sessionChatTypeHint =
+      ((target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute) &&
+      channelRouteTargetsMatchExact({
+        left: { ...sessionDelivery, threadId: undefined },
+        right: {
+          channel: resolvedTarget.channel,
+          to: resolvedTarget.to,
+          accountId: effectiveAccountId,
+        },
+      })
+        ? normalizeChatType(entry?.chatType)
+        : undefined;
+    const deliveryChatType =
+      sessionChatTypeHint ??
+      inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
+    if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "dm-blocked",
+        accountId: effectiveAccountId,
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
+    }
+    if (
+      ownerMode &&
+      !ownerTurnSource &&
+      !isPositivelyDirectHeartbeatOwnerTarget({
+        plugin,
+        to: resolved.to,
+        chatType: deliveryChatType,
+      })
+    ) {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "no-route",
+        accountId: effectiveAccountId,
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
+    }
 
-  return {
-    channel: resolvedTarget.channel,
-    to: resolved.to,
-    chatType: deliveryChatType,
-    reason,
-    accountId: effectiveAccountId,
-    // Heartbeats normally avoid inheriting session reply-thread IDs, but some
-    // plugins encode thread/topic ids as part of the destination identity.
-    threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
-    lastChannel: resolvedTarget.lastChannel,
-    lastAccountId: resolvedTarget.lastAccountId,
-    ...(implicitDefaultRoute ? { implicitDefaultRoute: true as const } : {}),
-  };
+    let reason: string | undefined;
+    if (plugin?.config.resolveAllowFrom) {
+      const explicit = resolveOutboundTargetWithPlugin({
+        plugin,
+        target: {
+          channel: resolvedTarget.channel,
+          to: resolvedTarget.to,
+          cfg,
+          accountId: effectiveAccountId,
+          mode: "explicit",
+        },
+      });
+      if (explicit?.ok && explicit.to !== resolved.to) {
+        reason = "allowFrom-fallback";
+      }
+    }
+
+    const inheritedHeartbeatThreadId = shouldReuseHeartbeatRouteThreadId({
+      cfg,
+      target,
+      heartbeat,
+      turnSource: params.turnSource,
+      entry,
+      resolvedTarget,
+      plugin,
+    })
+      ? resolvedTarget.lastThreadId
+      : undefined;
+
+    return {
+      channel: resolvedTarget.channel,
+      to: resolved.to,
+      chatType: deliveryChatType,
+      reason,
+      accountId: effectiveAccountId,
+      // Heartbeats normally avoid inheriting session reply-thread IDs, but some
+      // plugins encode thread/topic ids as part of the destination identity.
+      threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
+      lastChannel: resolvedTarget.lastChannel,
+      lastAccountId: resolvedTarget.lastAccountId,
+      ...(implicitDefaultRoute ? { implicitDefaultRoute: true as const } : {}),
+    };
+  });
 }
 
 function isPositivelyDirectHeartbeatOwnerTarget(params: {
@@ -516,118 +523,120 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   turnSource?: DeliveryContext;
   currentSessionKey?: string;
 }): Promise<OutboundTarget> {
-  const delivery = resolveHeartbeatDeliveryTarget(params);
-  const heartbeat = params.heartbeat ?? params.cfg.agents?.defaults?.heartbeat;
-  const ownerRouteMustBeDirect =
-    (heartbeat?.target === undefined || heartbeat.target === "owner") &&
-    !hasDeliverableHeartbeatTurnSource(params.turnSource);
-  if (delivery.channel === "none" || !delivery.to) {
-    return delivery;
-  }
-  const rejectDelivery = (reason: string) =>
-    buildNoHeartbeatDeliveryTarget({
-      reason,
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const delivery = resolveHeartbeatDeliveryTarget(params);
+    const heartbeat = params.heartbeat ?? params.cfg.agents?.defaults?.heartbeat;
+    const ownerRouteMustBeDirect =
+      (heartbeat?.target === undefined || heartbeat.target === "owner") &&
+      !hasDeliverableHeartbeatTurnSource(params.turnSource);
+    if (delivery.channel === "none" || !delivery.to) {
+      return delivery;
+    }
+    const rejectDelivery = (reason: string) =>
+      buildNoHeartbeatDeliveryTarget({
+        reason,
+        accountId: delivery.accountId,
+        lastChannel: delivery.lastChannel,
+        lastAccountId: delivery.lastAccountId,
+      });
+    const deliveryTo = delivery.to;
+    const plugin = resolveOutboundChannelPlugin({
+      channel: delivery.channel,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowBootstrap: true,
     });
-  const deliveryTo = delivery.to;
-  const plugin = resolveOutboundChannelPlugin({
-    channel: delivery.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
-  if (
-    ownerRouteMustBeDirect &&
-    !isPositivelyDirectHeartbeatOwnerTarget({
-      plugin,
-      to: deliveryTo,
-      chatType: delivery.chatType,
-    })
-  ) {
-    return rejectDelivery("no-route");
-  }
-  if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
-    return delivery;
-  }
-  let routeResolvedTarget: ResolvedMessagingTarget | undefined;
-  const targetResolution = await (async () => {
-    try {
-      return await resolveChannelTarget({
-        cfg: params.cfg,
-        channel: delivery.channel as ChannelId,
-        input: deliveryTo,
-        accountId: delivery.accountId,
-        unknownTargetMode: "normalized",
+    const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
+    if (
+      ownerRouteMustBeDirect &&
+      !isPositivelyDirectHeartbeatOwnerTarget({
         plugin,
-      });
-    } catch {
-      // Target normalization failure should not suppress an otherwise deliverable heartbeat.
-      return null;
+        to: deliveryTo,
+        chatType: delivery.chatType,
+      })
+    ) {
+      return rejectDelivery("no-route");
     }
-  })();
-  if (targetResolution?.ok) {
-    routeResolvedTarget = targetResolution.target;
-  } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
-    return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
-  }
-  if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
-  }
-  if (
-    ownerRouteMustBeDirect &&
-    !isPositivelyDirectHeartbeatOwnerTarget({
-      plugin,
-      to: routeResolvedTarget?.to ?? deliveryTo,
-    })
-  ) {
-    return rejectDelivery("no-route");
-  }
-  if (!resolveSessionRoute) {
-    return delivery;
-  }
-  const route = await (async () => {
-    try {
-      return await resolveOutboundSessionRoute({
-        cfg: params.cfg,
-        channel: delivery.channel as ChannelId,
+    if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
+      return delivery;
+    }
+    let routeResolvedTarget: ResolvedMessagingTarget | undefined;
+    const targetResolution = await (async () => {
+      try {
+        return await resolveChannelTarget({
+          cfg: params.cfg,
+          channel: delivery.channel as ChannelId,
+          input: deliveryTo,
+          accountId: delivery.accountId,
+          unknownTargetMode: "normalized",
+          plugin,
+        });
+      } catch {
+        // Target normalization failure should not suppress an otherwise deliverable heartbeat.
+        return null;
+      }
+    })();
+    if (targetResolution?.ok) {
+      routeResolvedTarget = targetResolution.target;
+    } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
+      return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
+    }
+    if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
+      return rejectDelivery("dm-blocked");
+    }
+    if (
+      ownerRouteMustBeDirect &&
+      !isPositivelyDirectHeartbeatOwnerTarget({
         plugin,
-        agentId: params.agentId,
-        accountId: delivery.accountId,
-        target: routeResolvedTarget?.to ?? deliveryTo,
-        resolvedTarget: routeResolvedTarget,
-        currentSessionKey: params.currentSessionKey,
-        threadId: delivery.threadId,
-      });
-    } catch {
-      return null;
+        to: routeResolvedTarget?.to ?? deliveryTo,
+      })
+    ) {
+      return rejectDelivery("no-route");
     }
-  })();
-  if (!route) {
-    return delivery;
-  }
-  if (route.chatType === "direct" && heartbeat?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
-  }
-  if (
-    ownerRouteMustBeDirect &&
-    !isPositivelyDirectHeartbeatOwnerTarget({
-      plugin,
+    if (!resolveSessionRoute) {
+      return delivery;
+    }
+    const route = await (async () => {
+      try {
+        return await resolveOutboundSessionRoute({
+          cfg: params.cfg,
+          channel: delivery.channel as ChannelId,
+          plugin,
+          agentId: params.agentId,
+          accountId: delivery.accountId,
+          target: routeResolvedTarget?.to ?? deliveryTo,
+          resolvedTarget: routeResolvedTarget,
+          currentSessionKey: params.currentSessionKey,
+          threadId: delivery.threadId,
+        });
+      } catch {
+        return null;
+      }
+    })();
+    if (!route) {
+      return delivery;
+    }
+    if (route.chatType === "direct" && heartbeat?.directPolicy === "block") {
+      return rejectDelivery("dm-blocked");
+    }
+    if (
+      ownerRouteMustBeDirect &&
+      !isPositivelyDirectHeartbeatOwnerTarget({
+        plugin,
+        to: route.to,
+        chatType: normalizeChatType(route.chatType),
+      })
+    ) {
+      return rejectDelivery("no-route");
+    }
+    return {
+      ...delivery,
       to: route.to,
-      chatType: normalizeChatType(route.chatType),
-    })
-  ) {
-    return rejectDelivery("no-route");
-  }
-  return {
-    ...delivery,
-    to: route.to,
-    chatType: route.chatType,
-    threadId: route.threadId ?? delivery.threadId,
-    ...(route.recipientSessionExact === true ? { targetSessionKey: route.sessionKey } : {}),
-  };
+      chatType: route.chatType,
+      threadId: route.threadId ?? delivery.threadId,
+      ...(route.recipientSessionExact === true ? { targetSessionKey: route.sessionKey } : {}),
+    };
+  });
 }
 
 function inferChatTypeFromTarget(params: {

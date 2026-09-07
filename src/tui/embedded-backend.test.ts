@@ -11,6 +11,7 @@ import {
   clearEmbeddedPluginApprovalBroker,
   getEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -40,7 +41,8 @@ const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalObjectiveMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
-const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
+const loadAgentRuntimePluginRegistryHandleMock =
+  vi.fn<typeof import("../agents/runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<(...args: unknown[]) => Promise<void>>(
   async () => undefined,
@@ -178,8 +180,7 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
-    loadAgentRuntimePluginRegistryHandleMock(...args),
+  loadAgentRuntimePluginRegistryHandle: loadAgentRuntimePluginRegistryHandleMock,
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -393,6 +394,10 @@ describe("EmbeddedTuiBackend", () => {
       tokensUsed: 0,
     }));
     loadAgentRuntimePluginRegistryHandleMock.mockReset();
+    loadAgentRuntimePluginRegistryHandleMock.mockImplementation(() => ({
+      registry: createEmptyPluginRegistry(),
+      release: () => {},
+    }));
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();

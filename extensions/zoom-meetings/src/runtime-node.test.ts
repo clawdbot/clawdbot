@@ -1,3 +1,4 @@
+import type { startMeetingAgentRealtimeEngine } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
@@ -7,14 +8,16 @@ const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
   speak: vi.fn(),
-  startAgent: vi.fn(async () => {
+  startAgent: vi.fn(async (params: Parameters<typeof startMeetingAgentRealtimeEngine>[0]) => {
+    const stop = vi.fn(async () => {});
+    await params.onCleanupReady?.(stop);
     const health = { bridgeClosed: false };
     realtimeMocks.healths.push(health);
     return {
       getHealth: () => health,
       providerId: "test",
       speak: realtimeMocks.speak,
-      stop: vi.fn(async () => {}),
+      stop,
     };
   }),
 }));

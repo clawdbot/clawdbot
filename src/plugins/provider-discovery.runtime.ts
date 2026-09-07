@@ -20,7 +20,7 @@ import type {
   ResolveRuntimePluginDiscoveryProvidersParams,
 } from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { acquirePluginProvidersCore } from "./providers.runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
@@ -342,17 +342,19 @@ export function planPluginDiscoveryRuntime(
   return { kind: "runtime", providers: retainedProviders ?? [], pluginIds: fullPluginIds };
 }
 
-export function resolvePluginDiscoveryProvidersRuntime(
+export function acquirePluginDiscoveryProvidersRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
-): ProviderPlugin[] {
+): ReturnType<typeof acquirePluginProvidersCore> {
   const plan = planPluginDiscoveryRuntime(params);
   if (plan.kind === "entries") {
-    return plan.providers;
+    // Entries are direct module exports or manifest-row closures, never borrowed
+    // registration callbacks. The generation supplies artifact policy only.
+    return { providers: plan.providers, release() {} };
   }
-  const fullProviders = resolvePluginProvidersCore({
+  const fullProviders = acquirePluginProvidersCore({
     ...params,
     env: params.env ?? process.env,
     ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  return [...plan.providers, ...fullProviders];
+  return { ...fullProviders, providers: [...plan.providers, ...fullProviders.providers] };
 }

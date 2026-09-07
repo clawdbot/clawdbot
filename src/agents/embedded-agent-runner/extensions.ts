@@ -15,7 +15,7 @@ import {
 } from "../agent-tools.before-tool-call.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
+import { createAgentToolResultMiddlewareRunnerCore } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -45,7 +45,7 @@ function buildAgentToolResultMiddlewareFactory(
   // Snapshot the prepared session once; tool results must never rediscover
   // mutable session identity after a later turn has started.
   const sessionId = context.sessionId ?? sessionManager.getSessionId?.();
-  const runner = createAgentToolResultMiddlewareRunner({
+  const runner = createAgentToolResultMiddlewareRunnerCore({
     runtime: "openclaw",
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),

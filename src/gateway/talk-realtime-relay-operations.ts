@@ -43,10 +43,12 @@ import { closeRelayVoiceSession, ensureRelayVoiceSession } from "./talk-realtime
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
-  closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
-import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import {
+  forgetUnifiedTalkSession,
+  markUnifiedTalkSessionClosing,
+} from "./talk-session-registry.js";
 
 const TURN_BOUND_CANCELLATION_DRAIN_MS = 1_000;
 
@@ -83,67 +85,115 @@ function detachRelayAgentRuns(session: RelaySession): void {
   session.activeAgentToolCalls.clear();
 }
 
-export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
-  for (const runId of session.activeAgentRuns.keys()) {
-    if (!session.context.chatAbortControllers.has(runId)) {
-      session.activeAgentRuns.delete(runId);
-    }
-  }
-  for (const [callId, runId] of session.activeAgentToolCalls) {
-    if (!session.activeAgentRuns.has(runId)) {
-      session.activeAgentToolCalls.delete(callId);
-    }
-  }
-  return session.activeAgentRuns.size;
-}
-
 export function closeRelaySession(
   session: RelaySession,
   reason: "completed" | "error",
   options?: RealtimeVoiceCloseOptions,
 ): void {
-  const disposition = options?.disposition ?? "abort";
-  session.harness.close();
-  session.outputOwnership.drain?.resolve();
-  relaySessions.delete(session.id);
-  forgetUnifiedTalkSession(session.id);
-  clearTimeout(session.cleanupTimer);
-  if (disposition === "detach") {
-    detachRelayAgentRuns(session);
-  } else {
-    abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  if (!session.closeState) {
+    const disposition = options?.disposition ?? "abort";
+    session.closeState = { disposition, attempting: false, providerClosed: false };
+    relaySessions.delete(session.id);
+    drainingRelaySessions.add(session);
+    markUnifiedTalkSessionClosing(session.id);
+    clearTimeout(session.cleanupTimer);
+    session.harness.close();
+    session.outputOwnership.drain?.resolve();
+    if (disposition === "detach") {
+      detachRelayAgentRuns(session);
+    } else {
+      abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+    }
+    if (session.creationFailed) {
+      session.voiceTranscriptQueue.seal();
+      session.voiceSessionClose = Promise.resolve();
+    } else {
+      // Terminal state does not depend on whether physical teardown succeeds.
+      void closeRelayVoiceSession(session);
+      broadcastToOwner(session.context, session.connId, {
+        relaySessionId: session.id,
+        type: "close",
+        reason,
+        talkEvent: session.harness.talk.emit({
+          type: "session.closed",
+          payload: { reason },
+          final: true,
+        }),
+      });
+    }
   }
-  try {
-    session.bridge.close({ disposition });
-  } finally {
-    // Provider teardown may throw, but the relay must still reach its durable
-    // voice and owner-visible terminal state before that error is surfaced.
-    void closeRelayVoiceSession(session);
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "close",
-      reason,
-      talkEvent: session.harness.talk.emit({
-        type: "session.closed",
-        payload: { reason },
-        final: true,
-      }),
-    });
+  const closing = session.closeState;
+  if (closing.attempting || closing.completion) {
+    return;
   }
+  if (!closing.providerClosed) {
+    closing.attempting = true;
+    try {
+      session.bridge.close({ disposition: closing.disposition });
+      closing.providerClosed = true;
+    } finally {
+      closing.attempting = false;
+    }
+    forgetUnifiedTalkSession(session.id);
+    const pendingProviderWork = Promise.allSettled([
+      ...session.pendingFinalToolResults.values(),
+      ...session.pendingProviderToolResults.values(),
+      ...session.pendingWorkingToolResults.values(),
+    ]);
+    session.releaseResources(pendingProviderWork);
+  }
+  closing.completion = Promise.all([
+    closeRelayVoiceSession(session),
+    session.resources.releaseCompletion,
+  ]).then(async () => {
+    try {
+      await session.resources.waitForDisposals();
+    } finally {
+      // Resource disposers are attempted once; their errors do not reserve closed relay capacity.
+      drainingRelaySessions.delete(session);
+    }
+  });
+  void closing.completion.catch((error: unknown) => {
+    if (drainingRelaySessions.has(session)) {
+      closing.completion = undefined;
+    }
+    session.context.logGateway.warn(
+      `failed to drain realtime relay session: ${formatError(error)}`,
+    );
+  });
 }
 
 /** Releases every realtime relay session owned by a disconnected gateway connection. */
-export function closeTalkRealtimeRelaySessionsForConnection(connId: string): void {
-  closeTalkRelaySessionsForConnection({
-    sessions: relaySessions.values(),
-    connId,
-    closeSession: (session) => closeRelaySession(session, "completed", { disposition: "detach" }),
-    onCloseError: (error, session) => {
+export async function closeTalkRealtimeRelaySessionsForConnection(connId: string): Promise<void> {
+  const failures: unknown[] = [];
+  const pending: Promise<void>[] = [];
+  for (const session of [...relaySessions.values(), ...drainingRelaySessions]) {
+    if (session.connId !== connId) {
+      continue;
+    }
+    try {
+      closeRelaySession(session, "completed", { disposition: "detach" });
+    } catch (error) {
+      failures.push(error);
       session.context.logGateway.warn(
         `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,
       );
-    },
-  });
+    }
+    pending.push(
+      session.closeState?.completion ??
+        Promise.all([closeRelayVoiceSession(session), session.resources.waitForDisposals()]).then(
+          () => undefined,
+        ),
+    );
+  }
+  for (const result of await Promise.allSettled(pending)) {
+    if (result.status === "rejected") {
+      failures.push(result.reason);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Failed to close realtime relay sessions");
+  }
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
@@ -688,6 +738,9 @@ export function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
 }): void {
-  const session = getRelaySession(params.relaySessionId, params.connId);
+  const draining = [...drainingRelaySessions].find(
+    (session) => session.id === params.relaySessionId && session.connId === params.connId,
+  );
+  const session = draining ?? getRelaySession(params.relaySessionId, params.connId);
   closeRelaySession(session, "completed");
 }

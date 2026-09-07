@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
@@ -57,27 +58,29 @@ export async function runHostedSetup(params: {
     | { keptCurrent: true }
   >;
 }): Promise<HostedSetupCompletion> {
-  const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
-  const snapshot = await readSetupConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-    throw new Error(
-      `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
-    );
-  }
-  const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-  const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
-  const result = await params.run({ baseConfig, runtime });
-  if ("keptCurrent" in result) {
-    return "kept-current";
-  }
-  await params.beforePersistentApply(runtime);
-  const committedConfig = await writeWizardConfigFile(result.nextConfig, {
-    allowConfigSizeDrop: false,
-    baseHash: snapshot.hash,
-    ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
+    const snapshot = await readSetupConfigFileSnapshot();
+    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+      throw new Error(
+        `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
+      );
+    }
+    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+    const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
+    const result = await params.run({ baseConfig, runtime });
+    if ("keptCurrent" in result) {
+      return "kept-current";
+    }
+    await params.beforePersistentApply(runtime);
+    const committedConfig = await writeWizardConfigFile(result.nextConfig, {
+      allowConfigSizeDrop: false,
+      baseHash: snapshot.hash,
+      ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+    });
+    await result.afterWrite?.(committedConfig);
+    return "applied";
   });
-  await result.afterWrite?.(committedConfig);
-  return "applied";
 }
 
 export async function runHostedChannelSetup(

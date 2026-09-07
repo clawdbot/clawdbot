@@ -41,7 +41,10 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadPluginRegistryHandle: hoisted.loadPluginRegistryHandle,
+  loadPluginRegistryHandle: (...args: unknown[]) => ({
+    registry: hoisted.loadPluginRegistryHandle(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
@@ -57,6 +60,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -64,13 +71,46 @@ import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js"
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {
-  createPreparedInboundRegistryLoader,
-  prepareWorkspacePluginRegistries,
+  createPreparedInboundRegistryLoader as createOwnedPreparedInboundRegistryLoader,
+  prepareWorkspacePluginRegistries as prepareOwnedWorkspacePluginRegistries,
 } from "./prepared-model-runtime.inbound-registry.js";
 import {
-  loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandle as loadOwnedAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
 } from "./runtime-plugins.js";
+let testResources = new PluginRegistryResourceScope();
+const inboundOwners = new Set<{ release(): void }>();
+beforeEach(() => {
+  testResources = new PluginRegistryResourceScope();
+});
+afterEach(() => {
+  for (const owner of inboundOwners) {
+    owner.release();
+  }
+  inboundOwners.clear();
+  testResources.release();
+});
+function loadAgentRuntimePluginRegistryHandle(
+  ...args: Parameters<typeof loadOwnedAgentRuntimePluginRegistryHandle>
+) {
+  return testResources.adopt(loadOwnedAgentRuntimePluginRegistryHandle(...args));
+}
+function prepareWorkspacePluginRegistries(
+  ...args: Parameters<typeof prepareOwnedWorkspacePluginRegistries>
+) {
+  return withPluginRegistryResourceScope(testResources, () =>
+    prepareOwnedWorkspacePluginRegistries(...args),
+  );
+}
+function createPreparedInboundRegistryLoader() {
+  const load = createOwnedPreparedInboundRegistryLoader();
+  inboundOwners.add(load);
+  return (...args: Parameters<typeof load>) => {
+    const handle = load(...args);
+    inboundOwners.add(handle);
+    return handle;
+  };
+}
 
 function createMetadataSnapshot(
   workspaceDir = "/tmp/gateway-workspace",
@@ -345,7 +385,7 @@ describe("agent runtime plugin registries", () => {
       metadataSnapshot as never,
     );
 
-    expect(inbound).not.toBe(activeRegistry);
+    expect(inbound.registry).not.toBe(activeRegistry);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
   });
 
@@ -357,10 +397,10 @@ describe("agent runtime plugin registries", () => {
     const load = createPreparedInboundRegistryLoader();
 
     const first = load(input, firstMetadata as never);
-    expect(load(input, firstMetadata as never)).toBe(first);
+    expect(load(input, firstMetadata as never).registry).toBe(first.registry);
     const replacement = load(input, replacementMetadata as never);
-    expect(replacement).not.toBe(first);
-    expect(load(input, replacementMetadata as never)).toBe(replacement);
+    expect(replacement.registry).not.toBe(first.registry);
+    expect(load(input, replacementMetadata as never).registry).toBe(replacement.registry);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 

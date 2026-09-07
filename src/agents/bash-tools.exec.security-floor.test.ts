@@ -26,16 +26,16 @@ const createExecTool = (
 const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
-    vi.fn<typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent>(),
+    vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
   complete:
     vi.fn<
-      typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel
+      typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore
     >(),
 }));
 
 vi.mock("./simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: reviewerRuntime.prepare,
-  completeWithPreparedSimpleCompletionModel: reviewerRuntime.complete,
+  acquireSimpleCompletionModelForAgent: reviewerRuntime.prepare,
+  completeWithPreparedSimpleCompletionModelCore: reviewerRuntime.complete,
 }));
 
 vi.mock("./exec-auto-reviewer.js", async (importOriginal) => {
@@ -617,6 +617,7 @@ describe("exec security floor", () => {
       agents: { entries: { main: { tools: { exec: { reviewer } } } } },
     };
     reviewerRuntime.prepare.mockResolvedValue({
+      release: vi.fn(),
       selection: { provider: "synthetic", modelId: "reviewer", agentDir: tempRoot ?? os.tmpdir() },
       model: makeProviderModelFixture({
         provider: "synthetic",

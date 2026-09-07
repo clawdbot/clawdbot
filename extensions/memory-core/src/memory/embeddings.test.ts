@@ -19,26 +19,14 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
-  DEFAULT_LOCAL_MODEL: "nomic-embed-text",
-  createLocalEmbeddingProvider: async () => {
-    throw new Error("local embedding provider is not used by these tests");
-  },
-  getMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
-    const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
-    if (memoryAdapter) {
-      return memoryAdapter;
+  acquireMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
+    let provider = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+    if (!provider) {
+      mockEmbeddingRegistry.genericLookupConfigs.push(config);
+      provider = mockEmbeddingRegistry.genericAdapters.find((adapter) => adapter.id === id);
     }
-    mockEmbeddingRegistry.genericLookupConfigs.push(config);
-    const genericAdapter = mockEmbeddingRegistry.genericAdapters.find(
-      (adapter) => adapter.id === id,
-    );
-    if (!genericAdapter) {
-      return undefined;
-    }
-    return genericAdapter;
+    return { provider, release: vi.fn(), run: <T>(operation: () => T) => operation() };
   },
-  listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
-  listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
 }));
 
 const missingBedrockCredentialsError = new Error(

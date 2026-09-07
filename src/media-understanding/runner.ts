@@ -36,6 +36,7 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { logWarn } from "../logger.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { matchesMediaEntryCapability } from "./entry-capabilities.js";
@@ -520,6 +521,16 @@ async function resolveAutoEntries(params: {
 }
 
 export async function resolveAutoImageModel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: ActiveMediaModel;
+}): Promise<ActiveMediaModel | null> {
+  return withPluginRegistryResourceOperationAsync(() => resolveAutoImageModelWithResources(params));
+}
+
+async function resolveAutoImageModelWithResources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;

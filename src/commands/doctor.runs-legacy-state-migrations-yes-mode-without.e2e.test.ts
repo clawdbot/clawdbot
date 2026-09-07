@@ -23,12 +23,12 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
-    resolvePluginProvidersCore: (
-      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
-    ): ProviderPlugin[] =>
+    acquirePluginProvidersCore: (
+      params: Parameters<typeof actual.acquirePluginProvidersCore>[0],
+    ) =>
       providerRuntimeMocks.useMockProviders
-        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
-        : actual.resolvePluginProvidersCore(params),
+        ? { providers: providerRuntimeMocks.resolvePluginProvidersCore(params), release() {} }
+        : actual.acquirePluginProvidersCore(params),
   };
 });
 

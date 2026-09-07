@@ -14,7 +14,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { acquireEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -65,6 +65,11 @@ type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
+
+const embeddingProviderRegistrations = new WeakMap<
+  MemoryEmbeddingProvider,
+  Set<ReturnType<typeof acquireEmbeddingProvider>>
+>();
 
 const EMBEDDING_PROVIDER_RETIREMENTS = new Map<string, Set<MemoryEmbeddingProvider>>();
 const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
@@ -121,7 +126,7 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   let closeFailed = false;
   for (const provider of pending) {
     try {
-      await provider.close?.();
+      await releaseEmbeddingProvider(provider);
       pending.delete(provider);
     } catch (err) {
       if (!closeFailed) {
@@ -147,12 +152,26 @@ function retainEmbeddingProviderForRetirement(
   EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
 }
 
+async function releaseEmbeddingProvider(provider: MemoryEmbeddingProvider): Promise<void> {
+  const registrations = embeddingProviderRegistrations.get(provider);
+  const owner = registrations?.values().next().value;
+  if (owner) {
+    await owner.run(() => provider.close?.());
+  } else {
+    await provider.close?.();
+  }
+  embeddingProviderRegistrations.delete(provider);
+  for (const registration of registrations ?? []) {
+    registration.release();
+  }
+}
+
 async function closeEmbeddingProvider(
   scopeKey: string,
   provider: MemoryEmbeddingProvider,
 ): Promise<void> {
   try {
-    await provider.close?.();
+    await releaseEmbeddingProvider(provider);
   } catch (closeErr) {
     retainEmbeddingProviderForRetirement(scopeKey, provider);
     logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
@@ -238,7 +257,12 @@ function isLocalEmbeddingProvider(params: {
 }): boolean {
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  return getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local";
+  const lease = acquireEmbeddingProvider(providerId, params.cfg);
+  try {
+    return lease.provider?.transport === "local";
+  } finally {
+    lease.release();
+  }
 }
 
 async function createConfiguredEmbeddingProvider(params: {
@@ -252,8 +276,10 @@ async function createConfiguredEmbeddingProvider(params: {
   const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
+  const lease = acquireEmbeddingProvider(providerId, params.cfg);
+  const adapter = lease.provider;
   if (!adapter) {
+    lease.release();
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
   const createOptions = {
@@ -270,11 +296,22 @@ async function createConfiguredEmbeddingProvider(params: {
     fallback: "none",
     acquireLocalService,
   };
-  const { provider } = await adapter.create(createOptions);
-  if (!provider) {
-    throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+  try {
+    const { provider } = await lease.run(() => adapter.create(createOptions));
+    if (!provider) {
+      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+    }
+    let registrations = embeddingProviderRegistrations.get(provider);
+    if (!registrations) {
+      registrations = new Set();
+      embeddingProviderRegistrations.set(provider, registrations);
+    }
+    registrations.add(lease);
+    return provider;
+  } catch (error) {
+    lease.release();
+    throw error;
   }
-  return provider;
 }
 
 // Request model overrides are constrained to the configured memory provider so

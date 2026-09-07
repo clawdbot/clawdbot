@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import {
@@ -193,14 +194,16 @@ describe("prepared model runtime snapshots", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries(
-        {
-          config: {},
-          agentDir: "/tmp/native-provider-probe",
-          readOnly: true,
-          loadRuntimePlugins: true,
-        },
-        mocks.pluginMetadataSnapshot as never,
+      withPluginRegistryResourceOperation(() =>
+        prepareWorkspacePluginRegistries(
+          {
+            config: {},
+            agentDir: "/tmp/native-provider-probe",
+            readOnly: true,
+            loadRuntimePlugins: true,
+          },
+          mocks.pluginMetadataSnapshot as never,
+        ),
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(

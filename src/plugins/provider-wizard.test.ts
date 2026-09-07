@@ -13,7 +13,10 @@ import type { ProviderPlugin } from "./types.js";
 const resolvePluginProvidersCore = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({
   isPluginProvidersLoadInFlight: () => false,
-  resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof resolvePluginProvidersCore>) => ({
+    providers: resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 const DEFAULT_WORKSPACE_DIR = "/tmp/workspace";

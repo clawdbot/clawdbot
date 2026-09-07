@@ -178,6 +178,14 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
     withhold their commands; throwing aborts node startup. Use `watchAvailability`
     for later availability changes and `onDisconnect` for execution cleanup.
 
+    `watchAvailability` registers synchronously. Its cleanup function may return
+    `void` or `Promise<void>`; return asynchronous cleanup work so the node can
+    await it before releasing registration resources. Failed watcher cleanup
+    retains its resources for an explicit retry; watcher cleanup functions that
+    already succeeded are not repeated. `onDisconnect` must likewise return its
+    actual cleanup work. A cleanup failure is reported and prevents new command
+    admission until connection cleanup succeeds.
+
     <Warning>
     The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
     </Warning>

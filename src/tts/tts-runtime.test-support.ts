@@ -106,8 +106,8 @@ vi.mock("./provider-registry.js", async () => {
       providerId?.trim().toLowerCase() || undefined,
     normalizeSpeechProviderId: (providerId: string | undefined) =>
       providerId?.trim().toLowerCase() || undefined,
-    getSpeechProvider: getSpeechProviderMock,
-    listSpeechProviders: listSpeechProvidersMock,
+    getSpeechProviderCore: getSpeechProviderMock,
+    listSpeechProvidersCore: listSpeechProvidersMock,
   };
 });
 

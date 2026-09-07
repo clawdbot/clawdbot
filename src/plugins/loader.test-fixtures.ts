@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "./loader-handles.test-support.js";
 import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 

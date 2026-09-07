@@ -122,8 +122,8 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
 
 vi.mock("../../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
+  getSpeechProviderCore: mocks.getSpeechProvider,
+  listSpeechProvidersCore: mocks.listSpeechProviders,
 }));
 
 vi.mock("../../tts/tts.js", () => ({
@@ -136,22 +136,22 @@ vi.mock("../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synth
 
 vi.mock("../../talk/provider-registry.js", () => ({
   canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider: (providerId: string | undefined) =>
+  getRealtimeVoiceProviderCore: (providerId: string | undefined) =>
     mocks
       .listRealtimeVoiceProviders()
       .find((provider: { id: string }) => provider.id === providerId),
-  listRealtimeVoiceProviders: mocks.listRealtimeVoiceProviders,
+  listRealtimeVoiceProvidersCore: mocks.listRealtimeVoiceProviders,
 }));
 
 vi.mock("../../realtime-transcription/provider-registry.js", () => ({
   canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
-  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderCore: mocks.getRealtimeTranscriptionProvider,
+  listRealtimeTranscriptionProvidersCore: mocks.listRealtimeTranscriptionProviders,
 }));
 
 vi.mock("../../talk/provider-resolver.js", () => ({
   isRealtimeVoiceProviderConfigured: mocks.isRealtimeVoiceProviderConfigured,
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderCore: mocks.resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities: mocks.resolveRealtimeVoiceProviderCapabilities,
 }));
 
@@ -3716,7 +3716,10 @@ describe("talk.client.create handler", () => {
         transcriptCapable: true,
       }),
     );
-    expect(mocks.gatewayControlAdoptProvider).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlAdoptProvider).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(Function),
+    );
     expect(mocks.gatewayControlActivate).toHaveBeenCalledOnce();
     expectRespondOk(respond, {
       ...browserSession,

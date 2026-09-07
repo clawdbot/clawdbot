@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
-import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
+import {
+  MeetingSessionRuntime,
+  type MeetingSessionRuntimeJoinContext,
+  type MeetingSessionRuntimeHandles,
+} from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
@@ -109,6 +114,11 @@ function createTestRuntime(params: {
   durableTranscripts?: { stateDir: string };
   talkBack?: boolean;
   transcribe?: boolean;
+  speechInstructions?: string;
+  ensureRealtimeBridge?(
+    session: TestSession,
+    onCleanupReady: (stop: () => Promise<void>) => Promise<void>,
+  ): Promise<MeetingSessionRuntimeHandles<MeetingBrowserHealth> | undefined>;
   refreshReusableSession?(
     session: TestSession,
     request: TestRequest,
@@ -177,7 +187,7 @@ function createTestRuntime(params: {
       createdSessions.push(session);
       return session;
     },
-    resolveSpeechInstructions: () => undefined,
+    resolveSpeechInstructions: () => params.speechInstructions,
     isBrowserTransport: () => true,
     isTalkBackMode: () => params.talkBack === true,
     isTranscribeMode: () => params.transcribe === true,
@@ -208,7 +218,8 @@ function createTestRuntime(params: {
     refreshStatus: async () => {},
     refreshReusableSession: async (session, request, resolved) =>
       await params.refreshReusableSession?.(session, request, resolved),
-    ensureRealtimeBridge: async () => undefined,
+    ensureRealtimeBridge: async (session, onCleanupReady) =>
+      await params.ensureRealtimeBridge?.(session, onCleanupReady),
     captureTranscript: async (_session, options) => await params.captureTranscript?.(options),
     speakViaTransport: async () => undefined,
     ...(params.durableTranscripts
@@ -535,6 +546,54 @@ describe("MeetingSessionRuntime failed joins", () => {
     expect(runtime.list()).toEqual([]);
   });
 
+  it("keeps failed-join cleanup addressable and blocks replacement until it settles", async () => {
+    const startupError = new Error("provider connect failed");
+    const cleanupError = new Error("provider close failed");
+    let allowClose = false;
+    const stop = vi.fn(async () => {
+      if (!allowClose) {
+        throw cleanupError;
+      }
+    });
+    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+      if (session.browser) {
+        session.browser.tab = undefined;
+      }
+      return true;
+    });
+    const joinTransport = vi.fn(
+      async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "partial-tab", openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        throw startupError;
+      },
+    );
+    const { runtime } = createTestRuntime({ joinTransport, releaseBrowserTab });
+    const request = { url: "https://meeting.example/room", agentId: "main" };
+
+    await expect(runtime.join(request)).rejects.toBe(startupError);
+    const pending = runtime.list();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
+    const sessionId = expectDefined(pending[0], "pending cleanup session").id;
+    await expect(runtime.leave(sessionId)).rejects.toBe(cleanupError);
+    await expect(runtime.join(request)).rejects.toBe(cleanupError);
+    expect(joinTransport).toHaveBeenCalledOnce();
+
+    allowClose = true;
+    await expect(runtime.leave(sessionId)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+    });
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+    const settledAttempts = stop.mock.calls.length;
+    await expect(runtime.leave(sessionId)).resolves.toMatchObject({ found: true });
+    expect(stop).toHaveBeenCalledTimes(settledAttempts);
+  });
+
   it("retries unprocessed retained tabs after settlement rejects", async () => {
     const settlementError = new Error("retained release rejected");
     const oldStop = vi.fn(async () => {});
@@ -733,6 +792,224 @@ describe("MeetingSessionRuntime leave cleanup", () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("MeetingSessionRuntime recovery ownership", () => {
+  it.each(["leave", "different-agent join", "refreshed-ended join"] as const)(
+    "keeps blocked recovery fenced when %s ends the session",
+    async (action) => {
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const stop = vi.fn(async () => {});
+      const speak = vi.fn();
+      const ensureRealtimeBridge = vi.fn(
+        async (
+          session: TestSession,
+          onCleanupReady: (stop: () => Promise<void>) => Promise<void>,
+        ) => {
+          await onCleanupReady(stop);
+          entered.resolve();
+          await finish.promise;
+          if (session.browser) {
+            session.browser.hasAudioBridge = true;
+          }
+          return { stop, speak };
+        },
+      );
+      const joinTransport = vi.fn(async ({ session }: { session: TestSession }) => {
+        session.browser = { launched: true, health: { inCall: true, micMuted: false } };
+        return {};
+      });
+      const { runtime } = createTestRuntime({
+        talkBack: true,
+        joinTransport,
+        refreshReusableSession:
+          action === "refreshed-ended join"
+            ? async (session) => {
+                session.state = "ended";
+              }
+            : undefined,
+        ensureRealtimeBridge,
+        releaseBrowserTab: async () => true,
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/room",
+        agentId: "main",
+      });
+      const speaking = runtime.speak(session.id, "hello");
+      const overlapping = runtime.speak(session.id, "overlapping");
+      try {
+        await entered.promise;
+        if (action === "leave") {
+          await expect(runtime.leave(session.id)).resolves.toMatchObject({ found: true });
+        } else {
+          await expect(
+            runtime.join({
+              url: session.url,
+              agentId: action === "different-agent join" ? "other" : "main",
+            }),
+          ).rejects.toThrow("cleanup remains pending");
+        }
+        expect(joinTransport).toHaveBeenCalledOnce();
+        expect(stop).toHaveBeenCalledOnce();
+        expect(session.notes).toContainEqual(expect.stringContaining("Cleanup remains pending"));
+        await expect(runtime.join({ url: session.url, agentId: "main" })).rejects.toThrow(
+          "cleanup remains pending",
+        );
+        const lateSpeak = runtime.speak(session.id, "late");
+        finish.resolve();
+        await expect(speaking).resolves.toMatchObject({ spoken: false });
+        await expect(overlapping).resolves.toMatchObject({ spoken: false });
+        await expect(lateSpeak).resolves.toMatchObject({ spoken: false });
+        expect(ensureRealtimeBridge).toHaveBeenCalledOnce();
+        expect(speak).not.toHaveBeenCalled();
+        expect(session.notes).not.toContainEqual(
+          expect.stringContaining("Cleanup remains pending"),
+        );
+        await runtime.join({ url: session.url, agentId: "other" });
+        expect(joinTransport).toHaveBeenCalledTimes(2);
+      } finally {
+        finish.resolve();
+        await speaking.catch(() => {});
+        await overlapping.catch(() => {});
+        await Promise.all(runtime.list().map((entry) => runtime.leave(entry.id).catch(() => {})));
+      }
+    },
+  );
+
+  it("keeps late setup addressable after leave before its cleanup handoff", async () => {
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    const stop = vi.fn(async () => {});
+    const providerConnect = vi.fn();
+    const { runtime } = createTestRuntime({
+      talkBack: true,
+      joinTransport: async ({ session }) => {
+        session.browser = { launched: true, health: { inCall: true, micMuted: false } };
+        return {};
+      },
+      ensureRealtimeBridge: async (_session, onCleanupReady) => {
+        entered.resolve();
+        await finish.promise;
+        await onCleanupReady(stop);
+        providerConnect();
+        return { stop };
+      },
+      releaseBrowserTab: async () => true,
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+    const recovery = runtime.speak(session.id, "hello");
+    const result = recovery.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await expect(runtime.leave(session.id)).resolves.toMatchObject({ found: true });
+      expect(stop).not.toHaveBeenCalled();
+      await expect(runtime.join({ url: session.url, agentId: "main" })).rejects.toThrow(
+        "cleanup remains pending",
+      );
+      finish.resolve();
+      await expect(result).resolves.toMatchObject({
+        message: "Meeting session ended before provider setup",
+      });
+      expect(providerConnect).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(session.notes).not.toContainEqual(expect.stringContaining("Cleanup remains pending"));
+    } finally {
+      finish.resolve();
+      await result;
+      await runtime.leave(session.id).catch(() => {});
+    }
+  });
+
+  it("retains both failed recovery cleanups and fences another candidate until they settle", async () => {
+    const cleanupError = new Error("previous provider close failed");
+    const candidateError = new Error("candidate transport stop failed");
+    let allowClose = false;
+    let allowCandidateClose = false;
+    const oldStop = vi.fn(async () => {
+      if (!allowClose) {
+        throw cleanupError;
+      }
+    });
+    const newStop = vi.fn(async () => {
+      if (!allowCandidateClose) {
+        throw candidateError;
+      }
+    });
+    const providerConnect = vi.fn();
+    const createCandidate = vi.fn();
+    const { runtime } = createTestRuntime({
+      talkBack: true,
+      joinTransport: async ({ session, context }) => {
+        session.browser = { launched: true, health: { inCall: true, micMuted: false } };
+        context.attachRuntimeHandles(session, { stop: oldStop });
+        return {};
+      },
+      ensureRealtimeBridge: async (_session, onCleanupReady) => {
+        createCandidate();
+        await onCleanupReady(newStop);
+        providerConnect();
+        return { stop: newStop };
+      },
+      releaseBrowserTab: async () => true,
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+    try {
+      await expect(runtime.speak(session.id, "hello")).rejects.toBe(cleanupError);
+      expect(providerConnect).not.toHaveBeenCalled();
+      expect(session.state).toBe("ended");
+      const candidateAttemptsBeforeLeave = newStop.mock.calls.length;
+      await expect(runtime.leave(session.id)).rejects.toMatchObject({
+        errors: [cleanupError, candidateError],
+      });
+      expect(newStop).toHaveBeenCalledTimes(candidateAttemptsBeforeLeave + 1);
+      await expect(runtime.speak(session.id, "another candidate")).resolves.toMatchObject({
+        spoken: false,
+      });
+      await expect(runtime.join({ url: session.url, agentId: "main" })).rejects.toMatchObject({
+        errors: [cleanupError, candidateError],
+      });
+      expect(createCandidate).toHaveBeenCalledOnce();
+      allowCandidateClose = true;
+      await expect(runtime.leave(session.id)).rejects.toBe(cleanupError);
+      const candidateAttempts = newStop.mock.calls.length;
+      allowClose = true;
+      await expect(runtime.leave(session.id)).resolves.toMatchObject({ found: true });
+      expect(newStop).toHaveBeenCalledTimes(candidateAttempts);
+    } finally {
+      allowClose = true;
+      allowCandidateClose = true;
+      await runtime.leave(session.id).catch(() => {});
+    }
+  });
+
+  it("preserves an initial greeting inside the join transaction", async () => {
+    const speak = vi.fn();
+    const { runtime } = createTestRuntime({
+      talkBack: true,
+      speechInstructions: "hello",
+      joinTransport: async ({ session, context }) => {
+        session.browser = {
+          launched: true,
+          hasAudioBridge: true,
+          health: { inCall: true, micMuted: false },
+        };
+        context.attachRuntimeHandles(session, { stop: async () => {}, speak });
+        return {};
+      },
+      releaseBrowserTab: async () => true,
+    });
+    const joined = await runtime.join({ url: "https://meeting.example/room", agentId: "main" });
+    expect(joined.spoken).toBe(true);
+    expect(speak).toHaveBeenCalledExactlyOnceWith("hello");
+    await runtime.leave(joined.session.id);
   });
 });
 

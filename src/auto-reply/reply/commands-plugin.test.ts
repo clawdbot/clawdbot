@@ -12,7 +12,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "../../plugins/loader-handles.test-support.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandExecutionReplyOptions,

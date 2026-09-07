@@ -36,8 +36,20 @@ vi.mock("./realtime-transcription.runtime.js", () => {
     },
   };
   return {
-    getRealtimeTranscriptionProvider: () => provider,
-    listRealtimeTranscriptionProviders: () => [provider],
+    acquireRealtimeTranscriptionProvider: (): ReturnType<
+      typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProvider
+    > => ({
+      provider,
+      run: (operation) => operation(),
+      release() {},
+    }),
+    acquireRealtimeTranscriptionProviders: (): ReturnType<
+      typeof import("./realtime-transcription.runtime.js").acquireRealtimeTranscriptionProviders
+    > => ({
+      providers: [provider],
+      run: (operation) => operation(),
+      release() {},
+    }),
   };
 });
 
