@@ -106,7 +106,7 @@ overrides:
   "@hono/node-server": 1.19.14
   axios: 1.20.0
   brace-expansion: 5.0.9
-  fast-uri: 3.1.6
+  fast-uri: 3.1.7
   follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.7.0
@@ -128,8 +128,8 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.6.3
   uuid: 14.0.0
-  "undici@>=7.0.0 <8.0.0": 7.29.0
-  "undici@>=8.0.0 <8.9.0": 8.10.0
+  "undici@>=7.0.0 <8.0.0": 7.29.1
+  "undici@>=8.0.0 <8.9.0": 8.10.2
 
 allowBuilds:
   "@openclaw/fs-safe": true
