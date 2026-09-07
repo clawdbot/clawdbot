@@ -1,7 +1,10 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { type Static, Type } from "typebox";
+import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+
+export { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 
 const NodePluginToolNameSchema = Type.String({
   minLength: 1,
@@ -26,15 +29,8 @@ const NodePendingWorkPrioritySchema = Type.String({
 });
 
 /** Reasons a node can report itself alive without implying an operator action. */
-export const NodePresenceAliveReasonSchema = Type.String({
-  enum: [
-    "background",
-    "silent_push",
-    "bg_app_refresh",
-    "significant_location",
-    "manual",
-    "connect",
-  ],
+export const NodePresenceAliveReasonSchema = Type.Enum(NODE_PRESENCE_ALIVE_REASONS, {
+  type: "string",
 });
 
 /** Presence heartbeat payload sent by remote nodes to refresh gateway state. */

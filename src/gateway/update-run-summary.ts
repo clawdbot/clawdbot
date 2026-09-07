@@ -1,4 +1,5 @@
 import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 export const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -9,26 +10,24 @@ export function summarizeUpdateRunResponse(response: unknown) {
   const restart = asRecord(raw.restart);
   const handoff = asRecord(raw.handoff);
   const text = (value: unknown, limit: number) =>
-    typeof value === "string" ? value.slice(0, limit) : undefined;
+    typeof value === "string" ? truncateUtf16Safe(value, limit) : undefined;
   const status = text(result.status, 40) || "error";
   const ok = raw.ok === true && (handoff.status === "started" || status === "ok");
+  const acknowledgementOwned = raw.ackDelivered === true || raw.ackQueued === true;
+  const acknowledgement = readStringField(raw, "acknowledgement");
   const before = text(asRecord(result.before).version, 100);
   const after = text(asRecord(result.after).version, 100);
   const failedSteps = (Array.isArray(result.steps) ? result.steps : [])
-    .flatMap((value) => {
-      const step = asRecord(value);
-      return step.exitCode === 0 || (step.exitCode === null && status !== "error")
-        ? []
-        : [
-            {
-              name: text(step.name, 100) || "update",
-              exitCode: typeof step.exitCode === "number" ? step.exitCode : null,
-              stderrTail: readStringField(step, "stderrTail")?.slice(-500) ?? "",
-            },
-          ];
-    })
+    .map(asRecord)
+    .filter((step) => step.exitCode !== 0 && (step.exitCode !== null || status === "error"))
+    .map((step) => ({
+      name: text(step.name, 100) || "update",
+      exitCode: typeof step.exitCode === "number" ? step.exitCode : null,
+      stderrTail: sliceUtf16Safe(readStringField(step, "stderrTail") ?? "", -500),
+    }))
     .slice(-3);
   const summary = {
+    runId: text(raw.runId, 100),
     ok,
     status,
     reason: text(result.reason, 240),
@@ -53,10 +52,14 @@ export function summarizeUpdateRunResponse(response: unknown) {
             message: readStringField(handoff, "message"),
           },
     ...(typeof raw.ackDelivered === "boolean" ? { ackDelivered: raw.ackDelivered } : {}),
+    ...(typeof raw.ackQueued === "boolean" ? { ackQueued: raw.ackQueued } : {}),
+    acknowledgement,
     failedSteps,
-    next: ok
-      ? "Update handed off. Reply briefly and wait for the automatic completion or failure notice; do not run shell commands or restart anything."
-      : "Tell the user the update did not start and why; relay any exact manual instructions.",
+    next:
+      readStringField(raw, "message") ??
+      (ok
+        ? `${acknowledgementOwned ? "The gateway owns the acknowledgement; do not send another acknowledgement." : `Reply with the update acknowledgement${acknowledgement ? `: ${acknowledgement}` : "."}`} Wait for the automatic restart, verification, and final notices; do not run shell commands or restart anything.`
+        : "Tell the user the update did not start and why; relay any exact manual instructions."),
   };
   if (JSON.stringify(summary, null, 2).length >= 4000) {
     for (const step of failedSteps) {

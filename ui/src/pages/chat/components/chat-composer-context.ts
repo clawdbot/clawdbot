@@ -251,11 +251,13 @@ function renderQuotaLimitRow(limit: QuotaLimitSummary) {
       <div class="context-usage__limit-head">
         <span class="context-usage__limit-label">${label}</span>
         <span class="context-usage__limit-meta">
-          ${reset
-            ? html`<span class="context-usage__limit-reset"
-                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
-              >`
-            : nothing}
+          ${
+            reset
+              ? html`<span class="context-usage__limit-reset"
+                  >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+                >`
+              : nothing
+          }
           <strong>${limit.usedPercent}%</strong>
         </span>
       </div>
@@ -296,11 +298,13 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
         ${icons.externalLink}
       </a>
     </div>
-    ${group.accountEmail
-      ? html`<div class="context-usage__account" data-chat-usage-account="true">
-          ${group.accountEmail}
-        </div>`
-      : nothing}
+    ${
+      group.accountEmail
+        ? html`<div class="context-usage__account" data-chat-usage-account="true">
+            ${group.accountEmail}
+          </div>`
+        : nothing
+    }
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
@@ -402,64 +406,72 @@ export function renderContextNotice(
           </svg>
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          ${model
-            ? html`
-                <div class="context-usage__header">
-                  <span class="context-usage__title"
-                    >${t("chat.composer.contextUsage.contextWindow")}</span
-                  >
-                  <strong class="context-usage__context-value"
-                    >${model.detail} · ${percentage}</strong
-                  >
-                </div>
-                <div
-                  class="context-usage__bar"
-                  role="progressbar"
-                  aria-label=${summary}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow=${model.pct}
-                >
-                  <span style="width: ${model.pct}%"></span>
-                </div>
-              `
-            : nothing}
-          ${model
-            ? html`
-                <div class="context-usage__section-label">
-                  ${t("chat.composer.contextUsage.latestRunTokens")}
-                </div>
-                <dl class="context-usage__stats">
-                  <div>
-                    <dt>${t("usage.breakdown.input")}</dt>
-                    <dd>${formatStat(model.input)}</dd>
+          ${
+            model
+              ? html`
+                  <div class="context-usage__header">
+                    <span class="context-usage__title"
+                      >${t("chat.composer.contextUsage.contextWindow")}</span
+                    >
+                    <strong class="context-usage__context-value"
+                      >${model.detail} · ${percentage}</strong
+                    >
                   </div>
-                  <div>
-                    <dt>${t("usage.breakdown.output")}</dt>
-                    <dd>${formatStat(model.output)}</dd>
+                  <div
+                    class="context-usage__bar"
+                    role="progressbar"
+                    aria-label=${summary}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow=${model.pct}
+                  >
+                    <span style="width: ${model.pct}%"></span>
                   </div>
-                  ${!showCosts || model.cost === null
-                    ? nothing
-                    : html`
-                        <div>
-                          <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                          <dd>${formatCost(model.cost)}</dd>
-                        </div>
-                      `}
-                </dl>
-              `
-            : nothing}
-          ${showCosts && providerCosts && hasProviderCosts
-            ? html`
-                <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats">
-                  ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
-                  ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
-                  ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
-                  ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
-                </dl>
-              `
-            : nothing}
+                `
+              : nothing
+          }
+          ${
+            model
+              ? html`
+                  <div class="context-usage__section-label">
+                    ${t("chat.composer.contextUsage.latestRunTokens")}
+                  </div>
+                  <dl class="context-usage__stats">
+                    <div>
+                      <dt>${t("usage.breakdown.input")}</dt>
+                      <dd>${formatStat(model.input)}</dd>
+                    </div>
+                    <div>
+                      <dt>${t("usage.breakdown.output")}</dt>
+                      <dd>${formatStat(model.output)}</dd>
+                    </div>
+                    ${
+                      !showCosts || model.cost === null
+                        ? nothing
+                        : html`
+                            <div>
+                              <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                              <dd>${formatCost(model.cost)}</dd>
+                            </div>
+                          `
+                    }
+                  </dl>
+                `
+              : nothing
+          }
+          ${
+            showCosts && providerCosts && hasProviderCosts
+              ? html`
+                  <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
+                  <dl class="context-usage__stats">
+                    ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
+                    ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
+                    ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
+                    ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
+                  </dl>
+                `
+              : nothing
+          }
           ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
         </section>
       </details>

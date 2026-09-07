@@ -403,6 +403,46 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("preserves valid Bedrock tool calls while merging appended user turns", () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+    };
+    const baseFn = vi.fn((_model: unknown, _context: unknown) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      validateGeminiTurns: false,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+      appendOnlyRuntimeContext: true,
+    });
+    void wrapped(
+      { api: "bedrock-converse-stream" } as never,
+      {
+        messages: [
+          assistant,
+          { role: "user", content: "earlier" },
+          { role: "user", content: "continue" },
+        ],
+      } as never,
+    );
+    const context = baseFn.mock.calls[0]?.[1] as { messages: AgentMessage[] };
+    expect(context.messages[0]).toBe(assistant);
+    expect(context.messages).toEqual([
+      assistant,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "earlier" },
+          { type: "text", text: "continue" },
+        ],
+        timestamp: undefined,
+      },
+    ]);
+  });
+
   it("keeps valid non-Responses replay inputs pass-through", () => {
     const messages: AgentMessage[] = [
       {
@@ -493,6 +533,70 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 });
 
 describe("sanitizeOpenAIResponsesReplayForStream", () => {
+  it("preserves completed encrypted reasoning after an async tool fragment and steering", () => {
+    const assistant: Omit<AssistantMessage, "content"> = {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      responseId: "resp_async",
+      stopReason: "toolUse",
+      timestamp: 1,
+      usage: {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    };
+    const reasoning: AssistantMessage = {
+      ...assistant,
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_async",
+            summary: [],
+            encrypted_content: "synthetic-completed-reasoning",
+          }),
+        },
+      ],
+    };
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Check the status", timestamp: 0 },
+      {
+        ...assistant,
+        content: [
+          { type: "toolCall", id: "call_async", name: "lookup", arguments: {}, async: true },
+        ],
+      },
+      reasoning,
+      {
+        role: "toolResult",
+        toolCallId: "call_async",
+        toolName: "lookup",
+        content: [{ type: "text", text: "Ready" }],
+        isError: false,
+        timestamp: 2,
+      },
+      { role: "user", content: "Include the queued update", timestamp: 3 },
+    ];
+
+    const replay = sanitizeOpenAIResponsesReplayForStream(messages);
+    expect(replay).toContainEqual(reasoning);
+    expect(replay.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "user",
+    ]);
+  });
+
   it("normalizes live responses continuations before pi-ai splits ids", () => {
     const longCallId = `call_${"x".repeat(120)}`;
     const longItemId = `notfc_${"y".repeat(120)}`;

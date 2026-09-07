@@ -315,6 +315,7 @@ function loadRegistryForMinHostVersionCase(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -341,6 +342,7 @@ function loadRegistryForPluginApiCase(params: {
   idHint?: string;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -1444,6 +1446,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          personalAccount: true,
           appGuidedActionLabel: "Connect account",
           appGuidedDiscovery: true,
         },
@@ -1513,6 +1516,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        personalAccount: true,
         appGuidedActionLabel: "Connect account",
         appGuidedDiscovery: true,
       },
@@ -3020,6 +3024,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
     const registry = loadPluginManifestRegistryCore({
+      installRecords: {},
       candidates: [
         createPluginCandidate({
           idHint: "codex",

@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
-import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spawn.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
@@ -122,6 +121,8 @@ type SpawnAcpParams = {
 };
 
 type SpawnAcpContext = {
+  onSpawnEffectsStart?: () => void;
+  assertActive?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
@@ -393,9 +394,8 @@ export async function spawnAcpDirect(
     preparedBinding = prepared.binding;
   }
 
-  let sessionCreated = false;
   let childCreationEntry: SessionEntry | undefined;
-  let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let closeRuntimeOnFailure: (() => Promise<void>) | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
     ? resolveAgentIdFromSessionKey(parentSessionKey, requesterAgentId)
@@ -470,9 +470,10 @@ export async function spawnAcpDirect(
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
             ...(params.label ? { label: params.label } : {}),
           },
+          { assertCommitAllowed: ctx.assertActive },
         )) ?? undefined;
-      sessionCreated = true;
       const initializedSession = await initializeAcpSpawnRuntime({
+        assertActive: ctx.assertActive,
         cfg,
         sessionKey,
         targetAgentId,
@@ -483,10 +484,12 @@ export async function spawnAcpDirect(
         modelExplicit: runtimeOptionsResult.modelExplicit,
         cwd: runtimeCwd,
       });
-      initializedRuntime = initializedSession.runtimeCloseHandle;
+      closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
+      ctx.assertActive?.();
       const binding = preparedBinding
         ? (
             await bindPreparedAcpThread({
+              assertActive: ctx.assertActive,
               cfg,
               sessionKey,
               targetAgentId,
@@ -539,6 +542,7 @@ export async function spawnAcpDirect(
           : undefined;
       state.parentRelay = startParentRelay(childIdem);
       const response = await launchAcpChildThroughGateway({
+        assertDispatchCurrent: ctx.assertActive,
         task: params.task,
         sessionKey,
         deliveryPlan: state.deliveryPlan,
@@ -578,9 +582,9 @@ export async function spawnAcpDirect(
         cfg,
         sessionKey,
         agentId: targetAgentId,
-        shouldDeleteSession: sessionCreated,
+        sessionEntry: childCreationEntry,
         deleteTranscript: true,
-        runtimeCloseHandle: initializedRuntime,
+        closeRuntimeOnFailure,
       });
     },
   };
@@ -595,9 +599,12 @@ export async function spawnAcpDirect(
   if (admissionReservation && !admissionReservation.ok) {
     return rejectSubagentPolicy(admissionReservation.error);
   }
+  // Admission may already hold a slot; initialization and cleanup can mutate session state.
+  ctx.onSpawnEffectsStart?.();
   let expectsCompletionMessage = false;
   const pipelineResult = await runSpawnPipeline({
     adapter,
+    assertActive: ctx.assertActive,
     admissionReservation,
     hookRunner: getGlobalHookRunner(),
     progressOrigin,

@@ -2,53 +2,14 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { beforeEach, describe, expect, it } from "vitest";
-import { resetContextWindowCacheForTest } from "../../agents/context.js";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
-import {
-  resolveMemoryFlushContextWindowTokens,
-  resolveResponsesServerCompactionThreshold,
-} from "./memory-flush.js";
+import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
-
-describe("memory flush context window resolution", () => {
-  const provider = "synthetic-provider";
-  const modelId = TEST_MODEL_ID;
-
-  beforeEach(() => resetContextWindowCacheForTest());
-
-  it("uses a prepared catalog context window on a cold cache", () => {
-    expect(
-      resolveMemoryFlushContextWindowTokens({
-        provider,
-        modelId,
-        catalog: [{ provider, id: modelId, contextWindow: 1_000_000 }],
-      }),
-    ).toBe(1_000_000);
-  });
-
-  it("keeps an authored context token cap below the prepared catalog context window", () => {
-    const cfg = buildHostConfig({
-      provider,
-      api: "openai-responses",
-      baseUrl: "https://example.invalid/v1",
-      contextTokens: 100_000,
-    });
-
-    expect(
-      resolveMemoryFlushContextWindowTokens({
-        cfg,
-        provider,
-        modelId,
-        catalog: [{ provider, id: modelId, contextWindow: 1_000_000 }],
-      }),
-    ).toBe(100_000);
-  });
-});
 
 function buildModelConfig(
   route: Pick<
@@ -109,6 +70,26 @@ function buildHostConfig(params: {
 
 describe("Responses server compaction host/transport parity", () => {
   it.each([
+    {
+      name: "prepared-only OpenAI window",
+      provider: "openai",
+      api: "openai-responses" as const,
+      resolvedBaseUrl: "https://api.openai.com/v1",
+      preparedWindow: 800_000,
+      expectedEnabled: true,
+      expectedThreshold: 560_000,
+    },
+    {
+      name: "prepared active cap below an authored native window",
+      provider: "openai",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      resolvedBaseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      preparedWindow: 160_000,
+      expectedEnabled: true,
+      expectedThreshold: 112_000,
+    },
     {
       name: "OpenAI default route without an authored base URL",
       provider: "openai",
@@ -220,6 +201,11 @@ describe("Responses server compaction host/transport parity", () => {
       extraParams: testCase.extraParams,
     });
     const hostThreshold = resolveResponsesServerCompactionThreshold({
+      contextWindowTokens:
+        testCase.preparedWindow ??
+        testCase.contextTokens ??
+        testCase.contextWindow ??
+        TEST_CONTEXT_WINDOW,
       cfg,
       provider: testCase.provider,
       modelId: TEST_MODEL_ID,
@@ -232,8 +218,8 @@ describe("Responses server compaction host/transport parity", () => {
         api: testCase.api,
         baseUrl: testCase.resolvedBaseUrl,
         compat: testCase.compat,
-        contextTokens: testCase.contextTokens,
-        contextWindow: testCase.contextWindow ?? TEST_CONTEXT_WINDOW,
+        contextTokens: testCase.contextTokens ?? testCase.preparedWindow,
+        contextWindow: testCase.contextWindow ?? testCase.preparedWindow ?? TEST_CONTEXT_WINDOW,
       },
       {
         storeMode: "provider-policy",
@@ -311,10 +297,33 @@ describe("Anthropic server compaction host threshold", () => {
 
     expect(
       resolveResponsesServerCompactionThreshold({
+        contextWindowTokens: 100_000,
         cfg,
         provider: "anthropic",
         modelId,
       }),
     ).toBe(expected);
   });
+});
+
+it("uses a prepared-only Anthropic window for its enabled server floor", () => {
+  expect(
+    resolveResponsesServerCompactionThreshold({
+      contextWindowTokens: 1_000_000,
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com/v1",
+              models: [],
+            },
+          },
+        },
+        agents: { defaults: { params: { anthropicServerCompaction: true } } },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    }),
+  ).toBe(700_000);
 });

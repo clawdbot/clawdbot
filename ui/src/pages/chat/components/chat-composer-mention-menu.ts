@@ -249,41 +249,45 @@ export class HumanMentionMenu {
           <div class="slash-menu-group__label" role="status">
             ${message ?? t("chat.mentions.menu")}
           </div>
-          ${message
-            ? nothing
-            : result?.users.map(
-                (person, index) => html`<div
-                  id=${paneDomId(host.paneId, `mention-option-${index}`)}
-                  class="slash-menu-item ${index === this.index ? "slash-menu-item--active" : ""}"
-                  role="option"
-                  aria-selected=${index === this.index}
-                  @mousedown=${(event: MouseEvent) => event.preventDefault()}
-                  @click=${() => this.select(person, host, requestUpdate)}
-                  @mouseenter=${() => {
-                    this.index = index;
-                    requestUpdate();
-                  }}
-                >
-                  <span class="slash-menu-icon" aria-hidden="true"
-                    >${renderChatAuthorAvatar({
-                      id: person.profileId,
-                      name: person.displayName,
-                      identity: { type: "profile", id: person.profileId },
-                      profileAvatarUrl: person.avatarUrl,
-                    })}</span
+          ${
+            message
+              ? nothing
+              : result?.users.map(
+                  (person, index) => html`<div
+                    id=${paneDomId(host.paneId, `mention-option-${index}`)}
+                    class="slash-menu-item ${index === this.index ? "slash-menu-item--active" : ""}"
+                    role="option"
+                    aria-selected=${index === this.index}
+                    @mousedown=${(event: MouseEvent) => event.preventDefault()}
+                    @click=${() => this.select(person, host, requestUpdate)}
+                    @mouseenter=${() => {
+                      this.index = index;
+                      requestUpdate();
+                    }}
                   >
-                  <span class="slash-menu-copy">
-                    <span class="slash-menu-name">${person.displayName}</span>
-                    <span class="slash-menu-desc"
-                      >${person.online ? t("chat.mentions.online") : t("chat.mentions.offline")} ·
-                      ${person.profileId.slice(-8)}</span
+                    <span class="slash-menu-icon" aria-hidden="true"
+                      >${renderChatAuthorAvatar({
+                        id: person.profileId,
+                        name: person.displayName,
+                        identity: { type: "profile", id: person.profileId },
+                        profileAvatarUrl: person.avatarUrl,
+                      })}</span
                     >
-                  </span>
-                </div>`,
-              )}
-          ${result?.truncated
-            ? html`<div class="slash-menu-group__label">${t("chat.mentions.truncated")}</div>`
-            : nothing}
+                    <span class="slash-menu-copy">
+                      <span class="slash-menu-name">${person.displayName}</span>
+                      <span class="slash-menu-desc"
+                        >${person.online ? t("chat.mentions.online") : t("chat.mentions.offline")} ·
+                        ${person.profileId.slice(-8)}</span
+                      >
+                    </span>
+                  </div>`,
+                )
+          }
+          ${
+            result?.truncated
+              ? html`<div class="slash-menu-group__label">${t("chat.mentions.truncated")}</div>`
+              : nothing
+          }
         </div>
       </div>
     </div>`;

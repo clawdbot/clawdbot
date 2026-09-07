@@ -1,6 +1,7 @@
 /** Proves paired-node Ollama work stops at every node-local HTTP phase. */
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createOllamaNodeHostCommands, createOllamaNodeInferenceTool } from "./node-inference.js";
 import {
@@ -16,78 +17,67 @@ type AbortTestServer = {
   canceled: string[];
 };
 
-async function withAbortTestServer<T>(
+async function withAbortTestServer(
   stallPath: string,
-  run: (server: AbortTestServer) => Promise<T>,
+  run: (server: AbortTestServer) => Promise<void>,
   options?: { stallCount?: number },
-): Promise<T> {
+): Promise<void> {
   const requests: string[] = [];
   const canceled: string[] = [];
   let stalls = 0;
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    requests.push(requestPath);
-    if (requestPath === stallPath && stalls < (options?.stallCount ?? Number.POSITIVE_INFINITY)) {
-      stalls += 1;
-      response.once("close", () => {
-        if (!response.writableFinished) {
-          canceled.push(requestPath);
-        }
+  await withServer(
+    (request: IncomingMessage, response: ServerResponse) => {
+      const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      requests.push(requestPath);
+      if (requestPath === stallPath && stalls < (options?.stallCount ?? Number.POSITIVE_INFINITY)) {
+        stalls += 1;
+        response.once("close", () => {
+          if (!response.writableFinished) {
+            canceled.push(requestPath);
+          }
+        });
+        return;
+      }
+
+      response.setHeader("Content-Type", "application/json");
+      if (requestPath === "/api/tags") {
+        response.end(
+          JSON.stringify({
+            models: [{ name: "node-local:small", digest: "sha256:node-local-small", size: 512 }],
+          }),
+        );
+        return;
+      }
+      if (requestPath === "/api/show") {
+        response.end(
+          JSON.stringify({
+            capabilities: ["completion", "tools"],
+            model_info: { "test.context_length": 8192 },
+          }),
+        );
+        return;
+      }
+      if (requestPath === "/api/chat") {
+        response.end(
+          JSON.stringify({
+            model: "node-local:small",
+            message: { content: "node-only inference" },
+            done_reason: "stop",
+          }),
+        );
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "not found" }));
+    },
+    async (baseUrl) => {
+      await run({
+        baseUrl,
+        requests,
+        canceled,
       });
-      return;
-    }
-
-    response.setHeader("Content-Type", "application/json");
-    if (requestPath === "/api/tags") {
-      response.end(
-        JSON.stringify({
-          models: [{ name: "node-local:small", digest: "sha256:node-local-small", size: 512 }],
-        }),
-      );
-      return;
-    }
-    if (requestPath === "/api/show") {
-      response.end(
-        JSON.stringify({
-          capabilities: ["completion", "tools"],
-          model_info: { "test.context_length": 8192 },
-        }),
-      );
-      return;
-    }
-    if (requestPath === "/api/chat") {
-      response.end(
-        JSON.stringify({
-          model: "node-local:small",
-          message: { content: "node-only inference" },
-          done_reason: "stop",
-        }),
-      );
-      return;
-    }
-    response.statusCode = 404;
-    response.end(JSON.stringify({ error: "not found" }));
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("node-local Ollama fixture did not expose a TCP address");
-  }
-  try {
-    return await run({
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      requests,
-      canceled,
-    });
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+    },
+  );
 }
 
 function requireNodeChatCommand(baseUrl: string) {

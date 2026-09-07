@@ -96,6 +96,11 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`text-chunking` retains positional `CodeRegion` inputs with `start` and `end`
+offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
+include parser-owned `block` metadata; callers supplying their own ranges do not
+need to provide it.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
@@ -140,9 +145,20 @@ next Plugin SDK major.
 
 ### Plugin state migration declarations
 
-Plugins should declare `doctorContract.stateMigrations: true` in
-`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
-artifact. Plan-based migrations can use
+Bundled plugins should list every migration under
+`doctorContract.stateMigrations` in `openclaw.plugin.json` and export the
+matching `stateMigrations` array from their doctor-contract artifact. Keep the
+IDs, order, `doctorOnly` flags, and phases identical. Read-only Doctor planning
+uses candidate-bundled descriptors to record exact plugin owners without
+loading the plugin.
+
+Installed external plugin artifacts are not part of the copied-state or
+candidate content identity. Copied-state planning refuses their migrations,
+including manifests that contain descriptor arrays, until candidate validation
+binds those artifacts separately. The legacy value `true` continues to locate
+their dynamic contract for non-planning Doctor flows.
+
+Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.

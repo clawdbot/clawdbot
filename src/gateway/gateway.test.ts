@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -271,10 +272,14 @@ describe("gateway e2e", () => {
           callerAuthOverride.rateLimit!.maxAttempts = 99;
           callerTailscaleOverride.preserveFunnel = false;
         }
+        const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
         const nextLoggingSource = {
-          ...initialConfig,
-          logging: { level: "debug" },
+          ...sourceBeforeLoggingEdit,
+          logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
         } satisfies OpenClawConfig;
+        const loggingChanges = new Set<string>();
+        collectChangedPaths(sourceBeforeLoggingEdit, nextLoggingSource, "", loggingChanges);
+        expect([...loggingChanges]).toEqual(["logging.level"]);
         await writeConfigFile(nextLoggingSource);
         await expect
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
@@ -505,9 +510,10 @@ describe("gateway e2e", () => {
         });
         await disconnectGatewayClient(newClient);
 
+        const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
         await writeConfigFile({
-          gateway: { auth: { mode: "token", token: fileToken } },
-          logging: { level: "debug" },
+          ...sourceBeforeLoggingEdit,
+          logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
         });
         const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
           gateway?: { auth?: { token?: unknown } };
@@ -549,9 +555,10 @@ describe("gateway e2e", () => {
       const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
       expect(seededOrigins?.length).toBeGreaterThan(0);
 
+      const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        logging: { level: "debug" },
+        ...sourceBeforeLoggingEdit,
+        logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
@@ -559,20 +566,22 @@ describe("gateway e2e", () => {
       expect(getRuntimeConfig().gateway?.controlUi?.allowedOrigins).toEqual(seededOrigins);
 
       expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
+      const sourceBeforeOverrideWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        ui: { seamColor: "#123456" },
-        logging: { level: "debug" },
+        ...sourceBeforeOverrideWrite,
+        ui: { ...sourceBeforeOverrideWrite.ui, seamColor: "#123456" },
+        logging: { ...sourceBeforeOverrideWrite.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
         .toBe("warn");
 
       resetConfigOverrides();
+      const sourceBeforeOverrideReset = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        ui: { seamColor: "#654321" },
-        logging: { level: "debug" },
+        ...sourceBeforeOverrideReset,
+        ui: { ...sourceBeforeOverrideReset.ui, seamColor: "#654321" },
+        logging: { ...sourceBeforeOverrideReset.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })

@@ -400,17 +400,14 @@ function resolveToolClearingExclusions(
   const excluded = new Set(
     filter?.deny?.map((name) => name.trim()).filter((name) => name && !name.includes("*")),
   );
-  const exposed = new Set<string>();
+  const candidates = new Set<string>();
   for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
     if (isRecord(tool) && typeof tool.name === "string") {
-      exposed.add(tool.name);
+      candidates.add(tool.name);
     }
   }
-  const candidates = new Set(exposed);
-  // Denied historical tools stay protected even after disappearing from the exposed tool set.
-  for (const message of deny.length > 0 && Array.isArray(payload.messages)
-    ? payload.messages
-    : []) {
+  // Pruning filters apply to history too: removing a tool must not make its results clearable.
+  for (const message of Array.isArray(payload.messages) ? payload.messages : []) {
     if (!isRecord(message) || !Array.isArray(message.content)) {
       continue;
     }
@@ -424,7 +421,7 @@ function resolveToolClearingExclusions(
     const name = toolName.trim().toLowerCase();
     if (
       deny.some((pattern) => pattern.test(name)) ||
-      (exposed.has(toolName) && allow.length > 0 && !allow.some((pattern) => pattern.test(name)))
+      (allow.length > 0 && !allow.some((pattern) => pattern.test(name)))
     ) {
       excluded.add(toolName);
     }

@@ -65,9 +65,9 @@ export function renderContextWindowControl(
         ${contextWindow.options.map(
           (option) => html`
             <button
-              class="settings-segmented__btn ${option.id === selectedOption.id
-                ? "settings-segmented__btn--active"
-                : ""}"
+              class="settings-segmented__btn ${
+                option.id === selectedOption.id ? "settings-segmented__btn--active" : ""
+              }"
               data-chat-context-window-option=${option.id}
               type="button"
               aria-pressed=${option.id === selectedOption.id ? "true" : "false"}

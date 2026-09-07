@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -554,7 +555,17 @@ describe("system agent operations", () => {
       },
     });
 
-    await expect(runGatewayLifecycle("restart", "gateway")).resolves.toBe(true);
+    const host = createGatewayHostLifecycle({
+      processOwner: { ownsProcessLifecycle: true, supervisor: null },
+      isCurrent: () => true,
+      isServing: () => true,
+      acceptStop: () => {},
+    });
+    await expect(host.capability.request("restart", () => {})).resolves.toEqual({
+      ok: true,
+      value: { outcome: "scheduled" },
+    });
+    await host.retire();
 
     expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
       reason: "gateway.restart.safe",
@@ -564,32 +575,28 @@ describe("system agent operations", () => {
   });
 
   it("preserves the standalone CLI Gateway restart route", async () => {
-    await runGatewayLifecycle("restart", "cli");
+    await runGatewayLifecycle("restart");
 
     expect(mockDaemonRestart).toHaveBeenCalledExactlyOnceWith();
     expect(mockScheduleGatewayRestart).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
-    { surface: "cli" as const, summary: "Restarted Gateway" },
-  ])("records an approved $surface restart truthfully", async ({ surface, summary }) => {
-    const tempDir = opTempDirs.make("openclaw-restart-scheduled-");
+  it("records an approved standalone restart truthfully", async () => {
+    const tempDir = opTempDirs.make("openclaw-restart-applied-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const { runtime } = createSystemAgentTestRuntime();
     const runGatewayRestart = vi.fn(async () => true);
-
     const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
       approved: true,
-      deps: { runGatewayRestart, setupSurface: surface },
+      deps: { runGatewayRestart },
     });
-
     expect(result.applied).toBe(true);
     expect(runGatewayRestart).toHaveBeenCalledOnce();
-    if (surface === "gateway") {
-      expect(lines.join("\n")).toContain(summary);
-    }
-    expectAuditRecord(readLastAuditEntry(), { operation: "gateway.restart", summary }, {});
+    expectAuditRecord(
+      readLastAuditEntry(),
+      { operation: "gateway.restart", summary: "Restarted Gateway" },
+      {},
+    );
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {

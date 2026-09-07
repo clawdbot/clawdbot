@@ -46,4 +46,9 @@ def read_processes(pids):
 
 
 if __name__ == "__main__":
-    json.dump(read_processes(json.load(sys.stdin)), sys.stdout)
+    print(json.dumps(dict(ready=True)), flush=True)
+    # EOF retires the sampler even if its Node supervisor was killed.
+    for line in sys.stdin:
+        request = json.loads(line)
+        print(json.dumps(dict(id=request["id"],
+                              observations=read_processes(request["pids"]))), flush=True)

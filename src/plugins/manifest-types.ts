@@ -33,6 +33,7 @@ export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
+  | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
@@ -42,6 +43,12 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  sdkCompatibility?: {
+    seam: string;
+    coreVersion: string;
+    builtWithOpenClawVersion?: string;
+    nestedSdk: boolean;
+  };
 };
 
 export type PluginManifestChannelConfig = {
@@ -208,6 +215,17 @@ export type PluginManifestSetupProviderAuthEvidence = {
   source?: string;
 };
 
+export type PluginManifestNativeSessionCatalogSetup = {
+  /** Provider/product name shown in fresh-install consent. */
+  label: string;
+  /** Optional explanation of the native catalog source. */
+  description?: string;
+  /** Node commands that read or resume this native catalog. */
+  nodeCommands?: string[];
+  /** Host-generated upgrade exception for a previously shipped implicit-on catalog. */
+  legacyDefaultEnabled?: boolean;
+};
+
 export type PluginManifestSetup = {
   /** Cheap provider setup metadata exposed before runtime loads. */
   providers?: PluginManifestSetupProvider[];
@@ -215,6 +233,8 @@ export type PluginManifestSetup = {
   cliBackends?: string[];
   /** Config migration ids owned by this plugin's setup surface. */
   configMigrations?: string[];
+  /** Native conversation catalog controlled by config.sessionCatalog.enabled. */
+  nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   /**
    * Whether setup still needs plugin runtime execution after descriptor lookup.
    * Explicit false disables setup runtime; omission preserves the legacy fallback.
@@ -230,7 +250,18 @@ export type PluginManifestDoctorContract = {
    * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
    */
   sessionRouteStateOwners?: boolean;
-  stateMigrations?: boolean;
+  /**
+   * Ordered migration identities that a candidate-bundled manifest exposes to read-only
+   * planning without importing the Doctor contract. External installed artifacts remain
+   * deferred until candidate staging binds their content identity.
+   */
+  stateMigrations?:
+    | boolean
+    | Array<{
+        id: string;
+        doctorOnly?: true;
+        phase?: "after-session-repair";
+      }>;
 };
 
 export type PluginManifestQaRunner = {
@@ -261,6 +292,14 @@ export type PluginManifestDashboardActionVerb = {
 export type PluginManifestDashboard = {
   dataBindings?: PluginManifestDashboardDataBinding[];
   actionVerbs?: PluginManifestDashboardActionVerb[];
+};
+
+/** Built browser assets activated by the trusted native Control UI host. */
+export type PluginManifestControlUi = {
+  /** JavaScript entry in a dedicated dist subdirectory, relative to the plugin root. */
+  entry: string;
+  /** Stylesheets in the same asset directory, loaded before activation. */
+  styles?: string[];
 };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
@@ -323,6 +362,14 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Static transcript setup metadata; runtime registration does not gate configuration. */
+export type PluginManifestTranscriptSource = {
+  name?: string;
+  autoStart?: Partial<
+    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+  >;
+};
+
 /** Declarative backup ownership rooted at host-managed state or each configured agent. */
 export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
@@ -351,6 +398,8 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
+  /** Lightweight capability descriptor collections; omitted families retain register() discovery. */
+  capabilityCatalogEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -413,6 +462,7 @@ export type PluginManifest = {
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
@@ -427,6 +477,8 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
+  transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
   mediaUnderstandingProviderMetadata?: Record<
     string,
@@ -577,6 +629,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Interactive method stages one inline credential without host login imports or persistence. */
+  personalAccount?: boolean;
   /** Short provider-owned command label for starting app-guided setup. */
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */

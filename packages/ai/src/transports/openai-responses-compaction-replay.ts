@@ -8,7 +8,6 @@ import type {
   BaseOpenAIStreamOptions,
   OpenAIResponsesCompactionRejection,
 } from "../provider-options.js";
-import { shortHash } from "../utils/hash.js";
 import {
   isOpenAIResponsesCompactionOutput,
   readOpenAIResponsesCompactionWindow,
@@ -24,7 +23,10 @@ import {
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { providerReplayContextMatches } from "./provider-replay-context.js";
+import {
+  buildProviderReplayContext,
+  providerReplayContextMatches,
+} from "./provider-replay-context.js";
 
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
@@ -34,23 +36,11 @@ type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
   baseUrlHash: string;
 };
 
-function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? shortHash(normalized) : undefined;
-}
-
 export function buildOpenAIResponsesReplayContext(
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
 ): OpenAIResponsesReplayContext {
-  return {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    baseUrlHash: hashOptionalReplayContextValue(model.baseUrl),
-    sessionHash: hashOptionalReplayContextValue(options?.sessionId),
-    authProfileHash: hashOptionalReplayContextValue(options?.authProfileId),
-  };
+  return buildProviderReplayContext(model, options);
 }
 
 export function isOpenAIResponsesReplayContext(

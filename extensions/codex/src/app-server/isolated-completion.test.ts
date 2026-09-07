@@ -1,4 +1,5 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -86,8 +87,7 @@ describe("runCodexIsolatedCompletion", () => {
   });
 
   it("uses native authorization on a ring-zero configured-transport turn", async () => {
-    const params = createParams();
-    params.assertCurrent = vi.fn();
+    const params = { ...createParams(), assertCurrent: vi.fn() };
 
     await expect(runCodexIsolatedCompletion(params, {})).resolves.toEqual({
       assistant: expect.objectContaining({
@@ -118,8 +118,8 @@ describe("runCodexIsolatedCompletion", () => {
         profile: "openai:test",
         authRequirement: "subscription",
         isolation: "configured-transport",
-        requireNoExternalCapabilities: true,
         assertCurrent: params.assertCurrent,
+        requireNoExternalCapabilities: true,
         developerInstructions: "Name the conversation.",
         input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
       }),
@@ -148,6 +148,34 @@ describe("runCodexIsolatedCompletion", () => {
     const boundedParams = mocks.runBoundedTurn.mock.calls[0]?.[0];
     expect(boundedParams).toMatchObject({ preparedAuth });
     expect(boundedParams).not.toHaveProperty("profile");
+  });
+
+  it("does not hand off isolated auth after its caller retires during preparation", async () => {
+    const preparing = createDeferred<void>();
+    const release = createDeferred<void>();
+    mocks.resolveAuthHandoff.mockImplementationOnce(async () => {
+      preparing.resolve();
+      await release.promise;
+      return { authProfileId: "openai:test", nativeAuthProfile: true };
+    });
+    const retired = new Error("isolated completion caller retired");
+    let current = true;
+    const params = {
+      ...createParams(),
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    };
+    const run = runCodexIsolatedCompletion(params, {});
+    const rejection = expect(run).rejects.toBe(retired);
+    await preparing.promise;
+    current = false;
+    release.resolve();
+
+    await rejection;
+    expect(mocks.runBoundedTurn).not.toHaveBeenCalled();
   });
 
   it("rejects any native or tool item outside the passive response surface", async () => {

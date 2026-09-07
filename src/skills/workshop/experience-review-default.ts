@@ -1,10 +1,7 @@
 import {
   createSkillExperienceReviewScheduler,
-  type ExperienceReviewCandidate,
-  prepareSkillExperienceReviewCandidate,
-  runSkillExperienceReview,
   type SkillExperienceReviewParams,
-} from "./experience-review.js";
+} from "./experience-review-scheduler.js";
 
 const defaultScheduler = createSkillExperienceReviewScheduler({
   isSystemActive: async () => {
@@ -12,11 +9,15 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
       await import("../../agents/embedded-agent-runner/active-run-projections.js");
     return getActiveEmbeddedRunCount() > 0;
   },
-  prepareReview: async (candidate: ExperienceReviewCandidate) => {
+  runReview: async (candidate) => {
     const { getRuntimeConfig } = await import("../../config/config.js");
-    return prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
+    const { prepareSkillExperienceReviewCandidate, runSkillExperienceReview } =
+      await import("./experience-review.js");
+    const prepared = await prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
+    if (prepared) {
+      await runSkillExperienceReview(prepared);
+    }
   },
-  runReview: runSkillExperienceReview,
 });
 
 /** Queues a conservative, post-run learning review after the agent system becomes idle. */

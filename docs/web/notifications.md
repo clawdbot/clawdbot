@@ -132,6 +132,6 @@ If the entry is in **Inbox → Mentions**, check this browser's subscription, **
 
 ## Related
 
-- [Control UI PWA and Web Push](/web/control-ui#pwa-install-and-web-push)
+- [Control UI PWA and Web Push](/web/control-ui/connect-and-pair#pwa-install-and-web-push)
 - [iOS push delivery](/platforms/ios)
 - [Node notification commands](/nodes)

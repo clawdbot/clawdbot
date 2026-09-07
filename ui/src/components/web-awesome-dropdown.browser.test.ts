@@ -1,5 +1,6 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import "./web-awesome.ts";
@@ -50,54 +51,6 @@ async function open(f: Fixture) {
   const before = count(f, "wa-after-show");
   f.dropdown.open = true;
   await expect.poll(() => count(f, "wa-after-show")).toBe(before + 1);
-}
-
-// Hold a real CSS animation at an active sample: delayed animationstart events
-// can arrive after native completion has already removed the animation class.
-async function duringElementAnimation(
-  element: HTMLElement,
-  state: "show" | "hide",
-  request: () => unknown,
-  action: () => void | Promise<void>,
-) {
-  const playState = element.style.animationPlayState;
-  let animation: CSSAnimation | undefined;
-  let playbackRate: number | undefined;
-  element.style.animationPlayState = "paused";
-  try {
-    await request();
-    await expect
-      .poll(() => {
-        animation = element.classList.contains(state)
-          ? element.getAnimations().find((entry) => entry instanceof CSSAnimation)
-          : undefined;
-        return animation;
-      })
-      .toBeDefined();
-    const active = animation!;
-    playbackRate = active.playbackRate;
-    await active.ready;
-    expect(active.playState).toBe("paused");
-    const { activeDuration } = active.effect!.getComputedTiming();
-    expect(activeDuration).toBeGreaterThan(0);
-    expect(Number.isFinite(activeDuration)).toBe(true);
-    active.currentTime = Number(activeDuration) / 2;
-    // Zero rate keeps native playState running without advancing the sample.
-    active.playbackRate = 0;
-    active.play();
-    await active.ready;
-    expect(active.pending).toBe(false);
-    expect(active.playState).toBe("running");
-    const { progress } = active.effect!.getComputedTiming();
-    expect(progress).toBeGreaterThan(0);
-    expect(progress).toBeLessThan(1);
-    await action();
-  } finally {
-    element.style.animationPlayState = playState;
-    if (animation && playbackRate !== undefined) {
-      animation.playbackRate = playbackRate;
-    }
-  }
 }
 
 async function duringAnimation(
@@ -307,7 +260,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
   it("keeps a reopened submenu visible after its interrupted hide finishes", async () => {
     const f = await fixture();
     await open(f);
-    f.parent.submenuOpen = true;
+    // Focus precedes the opening animation; settle it before pausing the hide.
+    await f.parent.openSubmenu();
     await expect.poll(() => document.activeElement).toBe(f.nested);
     const submenu = f.parent.submenuElement;
     await duringElementAnimation(
@@ -501,22 +455,17 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       f.host.append(surface);
       await surface.updateComplete;
       const popup = surface.shadowRoot!.querySelector("wa-popup")!;
-      let starts = 0;
       let shown = false;
       let hidden = false;
-      popup.popup.addEventListener(
-        "animationstart",
-        () => {
-          expect(shown).toBe(false);
-          starts++;
-        },
-        { once: true },
-      );
       surface.addEventListener("wa-after-show", () => (shown = true));
       surface.addEventListener("wa-after-hide", () => (hidden = true));
-      surface.open = true;
+      await duringElementAnimation(
+        popup.popup,
+        "show-with-scale",
+        () => (surface.open = true),
+        () => expect(shown).toBe(false),
+      );
       await expect.poll(() => shown).toBe(true);
-      expect(starts).toBe(1);
       surface.open = false;
       await expect.poll(() => hidden).toBe(true);
       expect(popup.active).toBe(false);

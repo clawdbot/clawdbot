@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildCodexAppInventoryCacheKey,
@@ -13,13 +13,13 @@ import {
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
-import {
-  resolveCodexAppServerUserHomeDir,
-  type CodexAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  CodexAppServerStartOptions,
+} from "./config-contracts.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });

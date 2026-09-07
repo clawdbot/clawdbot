@@ -21,7 +21,7 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
 const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
@@ -233,7 +233,6 @@ export async function statusCommand(
     buildStatusCommandReportData,
     buildStatusCommandReportLines,
     buildStatusUpdateSurface,
-    formatTimeAgo,
     formatUsageReportLines,
     getTerminalTableWidth,
     info,
@@ -313,13 +312,12 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
-  const updateRestartValue = formatUpdateRestartStatusValue(
+  const updateRows = buildStatusUpdateRows(
     (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,
       warn,
       muted,
-      formatTimeAgo,
     },
   );
   const lines = await buildStatusCommandReportLines(
@@ -344,7 +342,7 @@ export async function statusCommand(
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
-      updateRestartValue,
+      updateRows,
     }),
   );
   runtime.log(lines.join("\n"));

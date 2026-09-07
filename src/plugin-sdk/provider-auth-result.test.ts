@@ -93,6 +93,15 @@ describe("buildOauthProviderAuthResult", () => {
         },
       },
     });
+
+    expect(
+      buildOauthProviderAuthResult({
+        providerId: "google",
+        defaultModel: "google/gemini-3.1-pro-preview",
+        access: "access-token",
+        configPatch: result.configPatch,
+      }).configPatch,
+    ).toBe(result.configPatch);
   });
 
   it("omits OAuth expiry values outside the Date timestamp range", () => {

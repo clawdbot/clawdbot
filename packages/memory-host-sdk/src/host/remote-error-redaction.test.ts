@@ -76,7 +76,7 @@ function createMemoryRemoteServer(records: RequestRecord[]): Server {
   });
 }
 
-describe.sequential("memory remote error redaction", () => {
+describe("memory remote error redaction", { concurrent: false }, () => {
   beforeEach(() => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
     vi.stubEnv("no_proxy", "127.0.0.1");

@@ -1,15 +1,18 @@
 // Code region helpers expose Markdown Core spans to sanitizer consumers.
 import { findMarkdownCodeRegions } from "../../../packages/markdown-core/src/reasoning-tags.js";
 
+/** Public range inputs need only offsets; parser-owned metadata belongs to discovered regions. */
 export interface CodeRegion {
-  block: boolean;
   start: number;
   end: number;
 }
 
 /** Finds CommonMark block-aware fenced, indented, and inline code regions. */
-export function findCodeRegions(text: string): CodeRegion[] {
-  return findMarkdownCodeRegions(text);
+export function findCodeRegions(
+  text: string,
+  options?: Parameters<typeof findMarkdownCodeRegions>[1],
+): ReturnType<typeof findMarkdownCodeRegions> {
+  return findMarkdownCodeRegions(text, options);
 }
 
 /** Returns true when a character offset falls inside one of the discovered code regions. */

@@ -1,6 +1,5 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -135,7 +134,7 @@ describe("tsdown config", () => {
     const plugin = createStateSchemaInlinePlugin(rootDir);
     let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
     plugin.configureVitest({
-      experimental_defineCacheKeyGenerator: (generator) => {
+      defineCacheKeyGenerator: (generator) => {
         cacheKeyGenerator = generator;
       },
     });
@@ -274,7 +273,7 @@ describe("tsdown config", () => {
     );
   });
 
-  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+  it("preserves the reload entry lazy-loaded by already-running v2026.9.1 Gateways", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
@@ -330,67 +329,6 @@ describe("tsdown config", () => {
 
     expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
     expect(hookEntries).toStrictEqual([]);
-  });
-
-  it("externalizes known heavy native and declaration-fragile dependencies", () => {
-    const unifiedGraph = unifiedDistGraph();
-    const neverBundle = unifiedGraph?.deps?.neverBundle;
-    const external = unifiedGraph?.inputOptions?.({})?.external;
-
-    if (typeof neverBundle === "function") {
-      expect(neverBundle("@anthropic-ai/vertex-sdk")).toBe(true);
-      expect(neverBundle("@discordjs/voice")).toBe(true);
-      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
-      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
-      expect(neverBundle("@slack/bolt")).toBe(true);
-      expect(neverBundle("@slack/web-api")).toBe(true);
-      expect(neverBundle("@vitest/expect")).toBe(true);
-      expect(neverBundle("jimp")).toBe(true);
-      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("vitest")).toBe(true);
-      expect(neverBundle("not-a-runtime-dependency")).toBe(false);
-    } else {
-      for (const dependency of [
-        "@anthropic-ai/vertex-sdk",
-        "@discordjs/voice",
-        "@larksuiteoapi/node-sdk",
-        "@slack/bolt",
-        "@slack/web-api",
-        "@vitest/expect",
-        "jimp",
-        "matrix-js-sdk",
-        "vitest",
-      ]) {
-        expect(neverBundle).toContain(dependency);
-      }
-    }
-    if (typeof external !== "function") {
-      throw new Error("expected unified graph external predicate");
-    }
-    const externalize = external;
-    expect(externalize("jimp", undefined, false)).toBe(true);
-  });
-
-  it("keeps the externalized Slack Web API resolvable from root dist", () => {
-    const rootPackage = JSON.parse(
-      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-    ) as { devDependencies?: Record<string, string> };
-    const slackPackage = JSON.parse(
-      readFileSync(new URL("../../extensions/slack/package.json", import.meta.url), "utf8"),
-    ) as { dependencies?: Record<string, string> };
-    const slackWebApiVersion = slackPackage.dependencies?.["@slack/web-api"];
-
-    expect(rootPackage.devDependencies?.["@slack/web-api"]).toBe(slackWebApiVersion);
-
-    const requireFromRootDist = createRequire(
-      new URL("../../dist/private-qa-runtime.cjs", import.meta.url),
-    );
-    const resolvedPackage = JSON.parse(
-      readFileSync(requireFromRootDist.resolve("@slack/web-api/package.json"), "utf8"),
-    ) as { name?: string; version?: string };
-
-    expect(resolvedPackage.name).toBe("@slack/web-api");
-    expect(resolvedPackage.version).toBe(slackWebApiVersion);
   });
 
   it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {

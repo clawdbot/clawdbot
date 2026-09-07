@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   createPreparedModelCatalogWorker,
@@ -25,6 +26,30 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
 
 const DRIFTED_OWNER_FINGERPRINT = "owner-generation-drifted";
+
+const workerBoundary = vi.hoisted(() => ({ fingerprint: undefined as string | undefined }));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...[filename, options]: ConstructorParameters<typeof actual.Worker>) {
+        const data: unknown = options?.workerData;
+        // Inject only at structured cloning; parent facts and the real worker stay intact.
+        super(
+          filename,
+          workerBoundary.fingerprint && isRecord(data) && data.kind === "catalog"
+            ? {
+                ...options,
+                workerData: { ...data, generationFingerprint: workerBoundary.fingerprint },
+              }
+            : options,
+        );
+      }
+    },
+  };
+});
 
 /** A prepared generation whose owner hands its worker a real lifecycle plan. */
 async function createMismatchFixture() {
@@ -88,7 +113,7 @@ async function createMismatchFixture() {
       undefined,
     ).pending
   )[0]!;
-  const workerInput = createPreparedModelCatalogWorkerInput({
+  const workerParams = {
     agentFacts: {
       input: { agentId: "main", agentDir, workspaceDir, config, env },
       env,
@@ -103,16 +128,21 @@ async function createMismatchFixture() {
     } satisfies PreparedModelRuntimeAgentFacts,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     preferBuiltPluginArtifacts: build.pluginGeneration.preferBuiltPluginArtifacts,
-  });
-  return { agentDir, marker, isCurrent, workerInput };
+  };
+  const fingerprint = createPreparedModelCatalogWorkerInput(workerParams).generationFingerprint;
+  return { agentDir, marker, isCurrent, workerParams, fingerprint };
 }
 
-function trackSpawnedWorkers(run: (spawned: readonly Worker[]) => Promise<void>) {
+function trackSpawnedWorkers(
+  run: (spawned: readonly Worker[]) => Promise<void>,
+  onSpawn?: (worker: Worker) => void,
+) {
   const spawned: Worker[] = [];
   const workerChannel = channel("worker_threads");
   const trackWorker = (message: unknown) => {
     if (isRecord(message) && message.worker instanceof Worker) {
       spawned.push(message.worker);
+      onSpawn?.(message.worker);
     }
   };
   workerChannel.subscribe(trackWorker);
@@ -121,14 +151,16 @@ function trackSpawnedWorkers(run: (spawned: readonly Worker[]) => Promise<void>)
 
 describe("prepared model catalog worker generation mismatch", () => {
   beforeEach(() => {
+    workerBoundary.fingerprint = undefined;
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
 
   it("retires a worker that reconstructs another generation instead of publishing its facts", async () => {
     const fixture = await createMismatchFixture();
+    workerBoundary.fingerprint = DRIFTED_OWNER_FINGERPRINT;
     await trackSpawnedWorkers(async (spawned) => {
       const worker = createPreparedModelCatalogWorker({
-        input: { ...fixture.workerInput, generationFingerprint: DRIFTED_OWNER_FINGERPRINT },
+        ...fixture.workerParams,
         isCurrent: fixture.isCurrent,
       });
 
@@ -140,7 +172,7 @@ describe("prepared model catalog worker generation mismatch", () => {
         name: "PreparedModelCatalogGenerationMismatchError",
         agentDir: fixture.agentDir,
         generationFingerprint: DRIFTED_OWNER_FINGERPRINT,
-        reconstructedFingerprint: fixture.workerInput.generationFingerprint,
+        reconstructedFingerprint: fixture.fingerprint,
       });
       expect(spawned).toHaveLength(1);
 
@@ -158,15 +190,10 @@ describe("prepared model catalog worker generation mismatch", () => {
     const fixture = await createMismatchFixture();
     // Inject a mismatch only at the first worker clone boundary. This drives the real owner,
     // pool, and worker without depending on the production-only environmental trigger.
-    let drifted = true;
-    const transientInput = { ...fixture.workerInput };
-    Object.defineProperty(transientInput, "generationFingerprint", {
-      enumerable: true,
-      get: () => (drifted ? DRIFTED_OWNER_FINGERPRINT : fixture.workerInput.generationFingerprint),
-    });
+    workerBoundary.fingerprint = DRIFTED_OWNER_FINGERPRINT;
     await trackSpawnedWorkers(async (spawned) => {
       const worker = createPreparedModelCatalogWorker({
-        input: transientInput,
+        ...fixture.workerParams,
         isCurrent: fixture.isCurrent,
       });
 
@@ -181,7 +208,7 @@ describe("prepared model catalog worker generation mismatch", () => {
       expect(catalog).toMatchObject({
         agentDir: fixture.agentDir,
         generationFingerprint: DRIFTED_OWNER_FINGERPRINT,
-        reconstructedFingerprint: fixture.workerInput.generationFingerprint,
+        reconstructedFingerprint: fixture.fingerprint,
       });
       expect(spawned).toHaveLength(1);
       // The queued catalog request never ran on the retired worker: no catalog hook executed.
@@ -190,10 +217,10 @@ describe("prepared model catalog worker generation mismatch", () => {
 
       // Not latched: once the injection clears, the same owner rebuilds from its prepared facts
       // and publishes the full catalog.
-      drifted = false;
+      workerBoundary.fingerprint = undefined;
       const recovered = await worker.loadCatalog();
       expect(spawned).toHaveLength(2);
-      expect(recovered.entries).toContainEqual(
+      expect(recovered.modelCatalog.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
       );
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
@@ -202,5 +229,82 @@ describe("prepared model catalog worker generation mismatch", () => {
       });
       expect(spawned).toHaveLength(2);
     });
+  });
+
+  it("keeps a replacement worker alive when an old mismatch finishes retiring", async () => {
+    const fixture = await createMismatchFixture();
+    const stopped = createDeferredCore();
+    const releaseTermination = createDeferredCore();
+    const replacementStarted = createDeferredCore();
+    let restoreTermination: (() => void) | undefined;
+    workerBoundary.fingerprint = DRIFTED_OWNER_FINGERPRINT;
+    await trackSpawnedWorkers(
+      async (spawned) => {
+        const worker = createPreparedModelCatalogWorker({
+          ...fixture.workerParams,
+          isCurrent: fixture.isCurrent,
+        });
+        const auth = worker
+          .loadAuth({ providerIds: [PROVIDER_ID] })
+          .catch((error: unknown) => error);
+        const queued = worker.loadCatalog().catch((error: unknown) => error);
+        let replacement: ReturnType<typeof worker.loadCatalog> | undefined;
+        try {
+          // The queued catch can retire the old pool while the active request still
+          // awaits termination. An independent caller need not await either public result.
+          await Promise.race([
+            stopped.promise,
+            Promise.all([auth, queued]).then(() => {
+              throw new Error("Expected the old worker's held termination");
+            }),
+          ]);
+          workerBoundary.fingerprint = undefined;
+          replacement = worker.loadCatalog();
+          const outcome = replacement.catch((error: unknown) => error);
+          await Promise.race([
+            replacementStarted.promise,
+            outcome.then(() => {
+              throw new Error("Expected an independent replacement worker");
+            }),
+          ]);
+          expect(spawned).toHaveLength(2);
+
+          releaseTermination.resolve();
+          const initial = await Promise.all([auth, queued]);
+          for (const failure of initial) {
+            expect(failure).toMatchObject({ name: "PreparedModelCatalogGenerationMismatchError" });
+          }
+          expect(await outcome).toMatchObject({
+            modelCatalog: {
+              entries: expect.arrayContaining([
+                expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+              ]),
+            },
+          });
+          await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
+            authStore: expect.objectContaining({ version: 1 }),
+          });
+          expect(spawned).toHaveLength(2);
+        } finally {
+          releaseTermination.resolve();
+          await Promise.allSettled([auth, queued, replacement]);
+          restoreTermination?.();
+        }
+      },
+      (worker) => {
+        if (restoreTermination) {
+          replacementStarted.resolve();
+          return;
+        }
+        const terminate = worker.terminate.bind(worker);
+        const spy = vi.spyOn(worker, "terminate").mockImplementation(async () => {
+          const code = await terminate();
+          stopped.resolve();
+          await releaseTermination.promise;
+          return code;
+        });
+        restoreTermination = () => spy.mockRestore();
+      },
+    );
   });
 });

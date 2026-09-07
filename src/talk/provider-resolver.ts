@@ -15,7 +15,10 @@ import {
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
-import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
+import type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderConfig,
+} from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
@@ -55,6 +58,7 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   agentId?: string;
   /** Effective per-session model after request overrides. */
   model?: string;
+  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   surface?: "browser-session" | "gateway-relay" | "bridge";
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   if (params.surface === "browser-session") {

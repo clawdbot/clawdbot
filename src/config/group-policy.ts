@@ -357,6 +357,37 @@ export function resolveChannelGroups(
   }).groups;
 }
 
+/** Locate the authored map selected by the channel owner without changing its inheritance rules. */
+export function resolveChannelGroupsConfigPath(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  accountId?: string | null;
+  groups: Readonly<Record<string, unknown>> | undefined;
+}): string {
+  const rootPath = `channels.${params.channel}.groups`;
+  // SAFETY: Validated channel groups retain the original map reference selected by the caller.
+  const channelConfig = params.cfg.channels?.[params.channel] as
+    | { accounts?: Record<string, { groups?: Readonly<Record<string, unknown>> }> }
+    | undefined;
+  const accounts = channelConfig?.accounts;
+  if (!accounts) {
+    return rootPath;
+  }
+  const accountId = normalizeAccountId(params.accountId);
+  const account = resolveAccountEntry(accounts, accountId);
+  // Account merging preserves map references. Use the owner's selected map so
+  // empty-map inheritance and shallow replacement both retain their exact scope.
+  if (!account || (params.groups !== undefined && params.groups !== account.groups)) {
+    return rootPath;
+  }
+  const accountKey = Object.hasOwn(accounts, accountId)
+    ? accountId
+    : Object.keys(accounts).find((key) => accounts[key] === account);
+  return accountKey
+    ? `channels.${params.channel}.accounts[${JSON.stringify(accountKey)}].groups`
+    : rootPath;
+}
+
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
 
 function resolveChannelGroupPolicyMode(

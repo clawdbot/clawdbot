@@ -3,7 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
+import {
+  testing as extraParamsTesting,
+  type WrapProviderStreamFnParams,
+} from "./embedded-agent-runner/extra-params.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -11,9 +15,8 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
     clearProviderRuntimePluginCacheForTest: vi.fn(),
   },
-  prepareProviderExtraParams: () => undefined,
-  resolveProviderExtraParamsForTransport: () => undefined,
-  wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
+  ensureProviderRuntimePluginHandle: vi.fn(),
+  getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
 const ANTHROPIC_DEFAULT_BETAS = [
@@ -246,10 +249,6 @@ import {
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
 import { log } from "./embedded-agent-runner/logger.js";
-
-type WrapProviderStreamFnParams = Parameters<
-  typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
->[0];
 
 function installFullProviderRuntimeDepsForTest() {
   // Install a test-only provider runtime that composes the same wrapper families
@@ -857,14 +856,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "opencode",
       model: "xiaomi/mimo-v2-pro",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 1,
     } as const;
@@ -1313,18 +1305,18 @@ describe("applyExtraParamsToAgent", () => {
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "inferrs",
-      applyModelId: "google/gemma-4-E2B-it",
+      applyProvider: "llmman",
+      applyModelId: "gemma4",
       model: {
         api: "openai-completions",
-        provider: "inferrs",
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B (inferrs)",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        provider: "llmman",
+        id: "gemma4",
+        name: "Gemma 4 (llmman)",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,
@@ -2230,7 +2222,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("keys prepared extra-param memoization by resolved model transport inputs", () => {
+  it("prepares extra params from each model's transport inputs", () => {
     const resolveProviderExtraParamsForTransport = vi.fn((params) => ({
       patch: {
         transportFamily: params.context.model?.api,
@@ -2303,7 +2295,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(differentModelHeadersParams.baseUrl).toBe("https://api-two.example/v1");
     expect(differentModelHeadersParams.headerAuth).toBe("two");
     expect(repeatedResponsesParams.transportFamily).toBe("openai-responses");
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(3);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(4);
   });
 
   it("passes explicit settings transport to transport extra-param hooks", () => {

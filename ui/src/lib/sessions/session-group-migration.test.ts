@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
 function createGateway(request: ReturnType<typeof vi.fn>, scopes: string[]): SessionGateway {
@@ -64,7 +64,7 @@ describe("legacy session group migration", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.read"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.read"]));
 
     await sessions.groupsLoad();
 
@@ -91,7 +91,7 @@ describe("legacy session group migration", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await sessions.groupsLoad();
 
@@ -123,7 +123,7 @@ describe("session group catalog loading", () => {
         methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
       },
     } as GatewayHelloOk;
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
     expect(sessions.state.groupSettings).toEqual([
@@ -149,7 +149,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await expect(sessions.groupsLoad()).resolves.toBeNull();
 
@@ -180,7 +180,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await expect(sessions.groupsLoad()).resolves.toBeNull();
     expect(sessions.groupsStatus()).toBe("unavailable");
@@ -213,7 +213,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     const backgroundLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
@@ -265,7 +265,7 @@ describe("session group catalog loading", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(request, ["operator.write"]);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
 
     const staleLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(calls).toBe(1));

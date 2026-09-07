@@ -51,7 +51,8 @@ import {
 } from "./tool-activity.ts";
 import { renderActivity } from "./view.ts";
 
-let activityClearBoundary: EventLogEntry | undefined;
+// Clear survives navigation without retaining an evicted or retired payload.
+let activityClearBoundary: WeakRef<EventLogEntry> | undefined;
 
 function selectorKey(selector: RunInspectorSelector | null): string | null {
   return selector ? `${selector.kind}:${selector.id}` : null;
@@ -115,7 +116,18 @@ class ActivityPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
+      let eventLogRevision = gateway.eventLogRevision;
       this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+      const stopEventLog = gateway.subscribeEventLog(() => {
+        const revision = gateway.eventLogRevision;
+        if (this.context.gateway !== gateway || revision === eventLogRevision) {
+          return;
+        }
+        eventLogRevision = revision;
+        activityClearBoundary = undefined;
+        // Log notification precedes event delivery; replay would apply the next event twice.
+        this.resetEntries();
+      });
       const stopEvents = gateway.subscribeEvents((event) => {
         this.applyGatewayEvent(gateway, event, Date.now());
       });
@@ -125,6 +137,7 @@ class ActivityPage extends OpenClawLightDomElement {
       return () => {
         stopGateway();
         stopEvents();
+        stopEventLog();
       };
     },
   );
@@ -188,12 +201,12 @@ class ActivityPage extends OpenClawLightDomElement {
     this.syncSessionActivity();
   }
 
-  private syncSessionActivity(force = false) {
+  private syncSessionActivity(reason: "query" | "retry" = "query") {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
       this.routeData.mode === "sessions" ? this.routeData.filters : null,
-      force,
+      reason,
     );
   }
 
@@ -483,7 +496,8 @@ class ActivityPage extends OpenClawLightDomElement {
   ) {
     let entries: ActivityEntry[] = [];
     const eventLog = gateway.eventLog;
-    const clearIndex = activityClearBoundary ? eventLog.indexOf(activityClearBoundary) : -1;
+    const clearBoundary = activityClearBoundary?.deref();
+    const clearIndex = clearBoundary ? eventLog.indexOf(clearBoundary) : -1;
     const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
     for (const event of visibleEvents.toReversed()) {
       entries = this.reduceGatewayEvent(entries, snapshot, event.event, event.payload, event.ts);
@@ -556,7 +570,12 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   private clearEntries() {
-    activityClearBoundary = this.context.gateway.eventLog[0];
+    const boundary = this.context.gateway.eventLog[0];
+    activityClearBoundary = boundary ? new WeakRef(boundary) : undefined;
+    this.resetEntries();
+  }
+
+  private resetEntries() {
     this.entries = [];
     this.expandedIds = new Set();
     this.streamFollow.atBottom = true;
@@ -576,8 +595,9 @@ class ActivityPage extends OpenClawLightDomElement {
         presenceViewers,
         result: this.sessionActivity.result,
         loading: this.sessionActivity.loading,
+        retrying: this.sessionActivity.retrying,
         error: this.sessionActivity.error,
-        onRetry: () => this.syncSessionActivity(true),
+        onRetry: () => this.syncSessionActivity("retry"),
         onAutomationDayToggle: (dayKey) => {
           const next = new Set(this.expandedAutomationDays);
           if (next.has(dayKey)) {
@@ -656,21 +676,23 @@ class ActivityPage extends OpenClawLightDomElement {
   override render() {
     const mode = this.routeData.mode;
     const body = html`
-      ${mode === "run"
-        ? nothing
-        : renderHubTabs({
-            id: "activity-mode",
-            active: mode,
-            tabs: [
-              { value: "sessions", label: t("activityFeed.sessionsMode") },
-              { value: "live", label: t("activity.runInspector.liveMode") },
-            ],
-            ariaLabel: t("activity.runInspector.activityView"),
-            panelId: "activity-mode-panel",
-            className: "activity-mode-tabs",
-            variant: "sub",
-            onSelect: (selected) => this.selectMode(selected),
-          })}
+      ${
+        mode === "run"
+          ? nothing
+          : renderHubTabs({
+              id: "activity-mode",
+              active: mode,
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              className: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) => this.selectMode(selected),
+            })
+      }
       <div
         id="activity-mode-panel"
         role=${mode === "run" ? nothing : "tabpanel"}
@@ -683,9 +705,9 @@ class ActivityPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          ${mode === "live"
-            ? nothing
-            : html`<div class="page-sub">${t("subtitles.activity")}</div>`}
+          ${
+            mode === "live" ? nothing : html`<div class="page-sub">${t("subtitles.activity")}</div>`
+          }
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}

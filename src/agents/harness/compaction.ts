@@ -208,10 +208,12 @@ async function resolveHarnessCompactApiKey(params: {
   }
   const runtimeAuthProfileStore = isOpenAIProvider(provider)
     ? ensureAuthProfileStore(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const prepareRuntimeAuth = (harness: AgentHarness) =>
@@ -277,6 +279,8 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       config: compactParams.config,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: input.model,
       forceResolve: input.forceResolve,
       rejectMismatchedModel: true,

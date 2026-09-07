@@ -11,9 +11,12 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
   listSetupInferenceAuthOptions,
+  listSetupInferenceEnableOptions,
+  listSetupInferenceInstallOptions,
   listSetupInferenceManualProviders,
   listSetupInferencePrepareOptions,
   supportsSetupTextInference,
@@ -29,6 +32,10 @@ import {
   resolveSetupInferenceWorkspace,
   toProviderAutoSetupKind,
 } from "./setup-inference-core.js";
+import {
+  listSetupNativeSessionCatalogs,
+  requiresSetupNativeSessionCatalogConsent,
+} from "./setup-native-session-catalogs.js";
 
 function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
@@ -68,7 +75,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const workspace = resolveSetupInferenceWorkspace(snapshot);
-  const authChoices = (
+  const allAuthChoices = (
     deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
   )({
     config: cfg,
@@ -76,16 +83,53 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
     metadataSnapshot: pluginMetadataSnapshot,
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
-  }).filter(
+  });
+  const authChoices = allAuthChoices.filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
+  const disabledAuthChoices = allAuthChoices.filter((choice) => !authChoices.includes(choice));
+  const setupComplete = Boolean(resolveAgentEffectiveModelPrimary(cfg, targetAgentId));
+  const installOptions = listSetupInferenceInstallOptions(
+    resolveProviderInstallCatalogEntries({
+      config: cfg,
+      workspaceDir: workspace,
+      includeUntrustedWorkspacePlugins: false,
+    }),
+    authChoices,
+  );
+  const authOptions = [
+    ...listSetupInferenceAuthOptions(authChoices),
+    ...listSetupInferenceEnableOptions(disabledAuthChoices),
+    ...installOptions,
+    {
+      id: "custom-api-key",
+      brandId: "custom",
+      label: "Custom OpenAI/Anthropic-compatible endpoint",
+      hint: "Connect a compatible endpoint running from this Gateway host.",
+      kind: "custom" as const,
+      featured: false,
+    },
+  ].filter(
+    (option, index, options) => options.findIndex((entry) => entry.id === option.id) === index,
+  );
+  const nativeSessionCatalogs = listSetupNativeSessionCatalogs({
+    config: cfg,
+    workspaceDir: workspace,
+    metadataSnapshot: pluginMetadataSnapshot,
+  });
   const manual = {
     manualProviders: listSetupInferenceManualProviders(authChoices),
-    authOptions: listSetupInferenceAuthOptions(authChoices),
+    authOptions,
     prepareOptions: listSetupInferencePrepareOptions(authChoices),
+    nativeSessionCatalogs,
+    nativeSessionCatalogPreferenceRequired: requiresSetupNativeSessionCatalogConsent({
+      configExists: snapshot.exists,
+      config: snapshot.sourceConfig ?? snapshot.config,
+      catalogs: nativeSessionCatalogs,
+    }),
     workspace,
     // Declining discovery must not turn an already configured install into fresh setup.
-    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, targetAgentId)),
+    setupComplete,
   };
   return { cfg, targetAgentId, authChoices, manual };
 }

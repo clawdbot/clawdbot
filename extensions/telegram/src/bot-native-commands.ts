@@ -305,9 +305,6 @@ export const registerTelegramNativeCommands = ({
       });
     });
   }
-  if (pluginCatalog.selectedCommands.length > 0) {
-    pluginCommandRuntime.retainNativeCatalog("telegram");
-  }
 
   if (!handleLoginCallback) {
     return undefined;

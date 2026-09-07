@@ -69,6 +69,12 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const scopeKey = `worker:${sessionId}`;
+  // Worker state owns command completion and exec finalizers; its parent owns
+  // process placement. This lease does not infer remote or PTY tree extinction.
+  const cleanupScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree: "transport-only",
+  });
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   let closing: Promise<void> | undefined;
@@ -76,11 +82,13 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
     stateDir,
     close: () =>
       (closing ??= (async () => {
-        const supervisor = getProcessSupervisor();
-        const scopeKey = `worker:${sessionId}`;
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await supervisor.waitForScope?.(scopeKey);
-        await waitForExecScope(scopeKey);
+        // Even uncertain process cleanup must join the known finalizers before
+        // reporting failure; those callbacks still own this environment's state.
+        const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+        const failed = settled.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") {
+          throw failed.reason;
+        }
         // Exec finalizers can open state; release its handle before Windows removes the file.
         closeOpenClawStateDatabaseByPath(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
@@ -222,6 +230,7 @@ export async function runWorkerDescriptor(
             stateDir,
             runId: descriptor.assignment.runId,
             cwd: workspaceDir,
+            signal: abortController.signal,
           }),
         )
       : undefined;

@@ -1,6 +1,6 @@
 import type { InstallationTarget } from "../infra/installation-target-context.js";
 import { formatCliCommand } from "./command-format.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 /** Bind diagnostic handoffs to their installation in POSIX shells or Windows PowerShell. */
 export function formatInstallationTargetCommand(
@@ -9,9 +9,8 @@ export function formatInstallationTargetCommand(
   options: { stdinPath?: string; env?: NodeJS.ProcessEnv } = {},
 ): string {
   const windows = process.platform === "win32";
-  // PowerShell recognizes typographic single quotes as delimiters too.
   const quote = (value: string) =>
-    `'${windows ? value.replace(/['\u2018-\u201b]/gu, "$&$&") : value.replaceAll("'", "'\\''")}'`;
+    windows ? quotePowerShellArg(value) : `'${value.replaceAll("'", "'\\''")}'`;
   const command = formatCliCommand(
     argv
       .map((value) =>

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
@@ -40,7 +41,6 @@ const mocks = vi.hoisted(() => {
       environment: {},
       environmentValueSources: {},
     })),
-    failIfNixDaemonInstallMode: vi.fn(() => false),
     loadNodeHostConfig: vi.fn(),
     isSystemdUserServiceAvailable: vi.fn(async () => true),
     resolveSystemdUserServiceAccount: vi.fn(() => "pi"),
@@ -125,7 +125,6 @@ vi.mock("../daemon-cli/shared.js", async () => {
     }),
     formatRuntimeStatus: (runtime: GatewayServiceRuntime | undefined) => runtime?.status ?? "",
     resolveRuntimeStatusColor: () => "",
-    failIfNixDaemonInstallMode: mocks.failIfNixDaemonInstallMode,
   };
 });
 
@@ -135,6 +134,7 @@ function useLinuxPlatform(): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("runNodeDaemonInstall", () => {
@@ -143,7 +143,7 @@ describe("runNodeDaemonInstall", () => {
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
-    mocks.failIfNixDaemonInstallMode.mockReset().mockReturnValue(false);
+    vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);
     mocks.buildNodeInstallPlan.mockReset().mockResolvedValue({
@@ -284,13 +284,60 @@ describe("runNodeDaemonInstall", () => {
     );
   });
 
-  it("does not build or install a service in Nix daemon mode", async () => {
-    mocks.failIfNixDaemonInstallMode.mockReturnValue(true);
+  it.each([false, true])(
+    "rejects Nix installs before config or service inspection (json=%s)",
+    async (json) => {
+      await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+        await runNodeDaemonInstall({ json, force: true });
+      });
 
-    await runNodeDaemonInstall({});
+      const message = "Nix mode detected; service install is disabled.";
+      expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+      expect(mocks.service.isLoaded).not.toHaveBeenCalled();
+      expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+      expect(mocks.service.install).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).not.toHaveBeenCalled();
+      if (json) {
+        expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ action: "install", ok: false, error: message }),
+        );
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.service.install).not.toHaveBeenCalled();
+  it.each([
+    {
+      restriction: "external Gateway supervision",
+      env: { OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    {
+      restriction: "noncanonical Gateway state",
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-node-custom-state" },
+    },
+  ])("does not apply $restriction to Node installation", async ({ env }) => {
+    mocks.service.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await withEnvAsync(env, async () => {
+      await runNodeDaemonInstall({ json: true });
+    });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledOnce();
+    expect(mocks.service.install).toHaveBeenCalledOnce();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        action: "install",
+        ok: true,
+        result: "installed",
+        service: expect.objectContaining({ label: "Node service", loaded: true }),
+      }),
+    );
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {

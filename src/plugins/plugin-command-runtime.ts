@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "./manifest-command-aliases.js";
-import { retainPluginCommandCatalogForCurrentAccount } from "./plugin-command-account-start-scope.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandReplyOptions,
@@ -95,6 +94,7 @@ type PluginCommandInvocationMatch = Readonly<{
 
 export type PluginCommandRuntime = Readonly<{
   listNativeCandidates: (provider: string) => readonly PluginCommandNativeCandidate[];
+  /** @deprecated Accounts reload automatically; retained for v2026.9.1 callers until the next breaking SDK. */
   retainNativeCatalog: (provider: string) => void;
 }>;
 
@@ -242,14 +242,7 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
           }),
       );
     },
-    retainNativeCatalog(provider: string): void {
-      assertCurrent();
-      const channel = normalizeOptionalLowercaseString(provider) ?? "";
-      if (!state.commands.some((command) => pluginCommandSupportsChannel(command, channel))) {
-        return;
-      }
-      retainPluginCommandCatalogForCurrentAccount(channel);
-    },
+    retainNativeCatalog: assertCurrent,
   });
   runtimeStates.set(runtime, state);
   return runtime;

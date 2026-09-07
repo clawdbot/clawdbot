@@ -21,7 +21,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -66,7 +66,7 @@ import {
 } from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import {
   resizeExecApprovalContinuationPrompt,
   type ExecApprovalContinuationPromptRange,
@@ -379,6 +379,8 @@ async function persistTextTurnTranscript(
   if (userMessage) {
     messages.push({
       message: userMessage,
+      // Early persistence already owns this row, even when the input has no message key.
+      eventId: params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
       idempotencyLookup: "scan" as const,
       prepareMessageAfterIdempotencyCheck: (message: unknown) =>
         preparePersistedUserTurnMessageForTranscriptWrite(message as PersistedUserTurnMessage, {
@@ -618,11 +620,13 @@ export function runAgentAttempt(params: {
   fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  assistantErrorTranscript?: RunEmbeddedAgentInternalParams["assistantErrorTranscript"];
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
+  onCompactionRequestBudget?: RunEmbeddedAgentInternalParams["onCompactionRequestBudget"];
   onSuccessfulAuthProfile?: (selection: {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
@@ -636,7 +640,7 @@ export function runAgentAttempt(params: {
     }
   };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
+  const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -807,6 +811,25 @@ export function runAgentAttempt(params: {
     (isSubagentAnnounceHandoff &&
       !completionRetainsRequesterTools &&
       !completionNeedsMessageDelivery);
+  const toolContext = {
+    messageChannel: params.messageChannel,
+    messageProvider: params.opts.messageProvider ?? params.messageChannel,
+    agentAccountId: params.runContext.accountId,
+    groupId: params.runContext.groupId,
+    groupChannel: params.runContext.groupChannel,
+    groupSpace: params.runContext.groupSpace,
+    spawnedBy: params.spawnedBy,
+    currentChannelId: params.runContext.currentChannelId,
+    chatId: params.runContext.chatId,
+    channelContext: params.runContext.channelContext,
+    currentThreadTs: params.runContext.currentThreadTs,
+    currentInboundAudio: params.runContext.currentInboundAudio,
+    replyToMode: params.runContext.replyToMode,
+    senderId: params.runContext.senderId,
+    senderIsOwner: params.opts.senderIsOwner,
+    scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
+  };
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -908,7 +931,7 @@ export function runAgentAttempt(params: {
             throw createAgentRunSupersededAbortError();
           }
         }
-        params.deferredLifecycle?.handoffToCli();
+        const diagnosticOwner = params.deferredLifecycle?.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
         const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
         const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -1032,6 +1055,7 @@ export function runAgentAttempt(params: {
               : undefined;
           return await runCliAgent({
             preparedRunAdmission: params.preparedRunAdmission,
+            diagnosticOwner,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionTarget: params.sessionTarget,
@@ -1115,9 +1139,8 @@ export function runAgentAttempt(params: {
             imageOrder: params.opts.imageOrder,
             media: params.opts.media,
             skillsSnapshot: params.skillsSnapshot,
-            messageChannel: params.messageChannel,
+            ...toolContext,
             streamParams: params.opts.streamParams,
-            messageProvider: params.opts.messageProvider ?? params.messageChannel,
             // Completion relays can carry the trusted source only in their
             // delivery target; the restricted CLI grant must retain that owner.
             currentChannelId:
@@ -1125,19 +1148,8 @@ export function runAgentAttempt(params: {
               (completionNeedsMessageDelivery
                 ? (params.opts.replyTo ?? params.opts.to)
                 : undefined),
-            chatId: params.runContext.chatId,
-            channelContext: params.runContext.channelContext,
-            currentThreadTs: params.runContext.currentThreadTs,
-            currentInboundAudio: params.runContext.currentInboundAudio,
             approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-            agentAccountId: params.runContext.accountId,
-            senderId: params.runContext.senderId,
-            senderIsOwner: params.opts.senderIsOwner,
             bashElevated: params.opts.bashElevated,
-            groupId: params.runContext.groupId,
-            groupChannel: params.runContext.groupChannel,
-            groupSpace: params.runContext.groupSpace,
-            spawnedBy: params.spawnedBy,
             toolsAllow: resolveCliRuntimeToolsAllow(
               runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
@@ -1153,7 +1165,6 @@ export function runAgentAttempt(params: {
                 toolsAllow: runtimeToolsAllow,
               }),
             ),
-            scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
@@ -1271,7 +1282,7 @@ export function runAgentAttempt(params: {
           !params.preserveCliSessionBinding &&
           (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
         ) {
-          await persistCliSessionBindingResult({
+          return await persistCliSessionBindingResult({
             provider: cliExecutionProvider,
             result,
             sessionKey: params.sessionKey,
@@ -1312,28 +1323,15 @@ export function runAgentAttempt(params: {
     trigger: "user",
     // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
     terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
+    ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
@@ -1385,7 +1383,6 @@ export function runAgentAttempt(params: {
     trustedInternalHandoff: trustedSubagentAnnounceHandoff
       ? params.opts.trustedInternalHandoff
       : undefined,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,
@@ -1415,10 +1412,12 @@ export function runAgentAttempt(params: {
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,
+    onCompactionRequestBudget: params.onCompactionRequestBudget,
     onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
       ? (successfulProfileId) =>
           params.onSuccessfulAuthProfile?.({

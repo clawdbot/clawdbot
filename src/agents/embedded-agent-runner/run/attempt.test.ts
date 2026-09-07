@@ -3306,58 +3306,63 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
-  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
-    resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
-      });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: {
-          sessionId: "session-123",
-          config: {} as OpenClawConfig,
-          skillsSnapshot: undefined,
-          provider: "openai",
-          modelId: "gpt-5.4",
-          thinkLevel: "off",
-          reasoningLevel: "on",
-          extraSystemPrompt: "extra",
-          ownerNumbers: ["+15555550123"],
-        },
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        activeAgentId: "main",
-      });
-
-      const activeProcessSessions = legacy.activeProcessSessions as
-        | Array<{ sessionId?: string; command?: string; pid?: number }>
-        | undefined;
-      expect(activeProcessSessions).toHaveLength(1);
-      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-      expect(activeSession.sessionId).toBe("sess-session-id");
-      expect(activeSession.command).toBe("sleep 600");
-      expect(activeSession.pid).toBe(1234);
-      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-        false,
-      );
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
+  it.each([undefined, "agent:main:execution"])(
+    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
+    (sessionKey) => {
       resetProcessRegistryForTests();
-    }
-  });
+      try {
+        const active = createProcessSessionFixture({
+          id: "sess-session-id",
+          command: "sleep 600",
+          backgrounded: true,
+          pid: 1234,
+        });
+        active.scopeKey = sessionKey ?? "session-123";
+        addSession(active);
+        const other = createProcessSessionFixture({
+          id: "sess-other",
+          command: "sleep 600",
+          backgrounded: true,
+        });
+        other.scopeKey = "agent:main";
+        addSession(other);
+
+        const legacy = buildAfterTurnRuntimeContext({
+          attempt: {
+            sessionId: "session-123",
+            sessionKey,
+            sandboxSessionKey: "agent:main",
+            config: {} as OpenClawConfig,
+            skillsSnapshot: undefined,
+            provider: "openai",
+            modelId: "gpt-5.4",
+            thinkLevel: "off",
+            reasoningLevel: "on",
+            extraSystemPrompt: "extra",
+            ownerNumbers: ["+15555550123"],
+          },
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          activeAgentId: "main",
+        });
+
+        const activeProcessSessions = legacy.activeProcessSessions as
+          | Array<{ sessionId?: string; command?: string; pid?: number }>
+          | undefined;
+        expect(activeProcessSessions).toHaveLength(1);
+        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+        expect(activeSession.sessionId).toBe("sess-session-id");
+        expect(activeSession.command).toBe("sleep 600");
+        expect(activeSession.pid).toBe(1234);
+        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+          false,
+        );
+        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+      } finally {
+        resetProcessRegistryForTests();
+      }
+    },
+  );
 
   it("uses primary model when compaction.model is not set", () => {
     const runtimeAuthPlan = {

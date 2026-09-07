@@ -4,7 +4,6 @@ import {
   createAccountStatusSink,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   listEnabledIMessageAccounts,
@@ -63,13 +62,6 @@ export async function sendIMessageOutbound(params: {
     ...(result.sentText ? { imessageVisibleText: result.sentText } : {}),
   };
   return Object.keys(meta).length > 0 ? { ...result, meta } : result;
-}
-
-export async function notifyIMessageApproval(params: {
-  cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
-  id: string;
-}): Promise<void> {
-  await sendMessageIMessage(params.id, PAIRING_APPROVED_MESSAGE, { config: params.cfg });
 }
 
 export async function probeIMessageAccount(params?: {

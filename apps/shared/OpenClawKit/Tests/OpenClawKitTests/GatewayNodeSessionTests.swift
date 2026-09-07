@@ -192,6 +192,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
+    private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -210,6 +211,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
+        challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
@@ -218,6 +220,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
+        self.challenge = challenge
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -305,7 +308,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             return current
         }
         if phase == 0 {
-            return .data(Self.connectChallengeData(nonce: "nonce-1"))
+            if self.challenge.delayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: self.challenge.delayNanoseconds)
+            }
+            return .data(Self.connectChallengeData(nonce: self.challenge.nonce))
         }
         if self.helloDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: self.helloDelayNanoseconds)
@@ -377,13 +383,17 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             idempotencyKey: idempotencyKey))))
     }
 
-    func emitResponse(id: String, payload: [String: Any]) {
-        let frame: [String: Any] = [
+    func emitResponse(id: String, payload: [String: Any], error: [String: Any]? = nil) {
+        var frame: [String: Any] = [
             "type": "res",
             "id": id,
-            "ok": true,
-            "payload": payload,
+            "ok": error == nil,
         ]
+        if let error {
+            frame["error"] = error
+        } else {
+            frame["payload"] = payload
+        }
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
         self.emitInbound(.success(.data(data)))
     }
@@ -523,6 +533,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
+    private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     let effectiveTLSFingerprintSHA256: String?
@@ -536,6 +547,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
+        challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil,
         effectiveTLSFingerprintSHA256: String? = nil)
@@ -545,6 +557,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
+        self.challenge = challenge
         self.connectError = connectError
         self.cancelGate = cancelGate
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
@@ -576,6 +589,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloCapabilities: self.helloCapabilities,
                 helloSessionDefaults: self.helloSessionDefaults,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
+                challenge: self.challenge,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -914,12 +928,14 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connectForTest(testURL("wss://gateway.example.invalid"), options: options, session: session)
 
-        async let first = gateway.refreshCanvasHostUrl(replacing: nil)
-        async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
-        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
+        async let first = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         try await waitUntil("single surface refresh sent") {
             session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
+        // Followers may start after the response; retain their original observation
+        // so they reuse that rotation instead of requesting another one.
+        async let second = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", replacing: nil)
         let task = try #require(session.latestTask())
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
         let requestID = try #require(request["id"] as? String)
@@ -958,7 +974,6 @@ struct GatewayNodeSessionTests {
         let shortValue = await shortWait
         #expect(shortValue == nil)
 
-        async let joinedWait = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 8)
         let task = try #require(session.latestTask())
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
@@ -971,9 +986,7 @@ struct GatewayNodeSessionTests {
                 ],
             ])
 
-        let values = await (longWait, joinedWait)
-        #expect(values.0 == values.1)
-        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(await longWait?.hasSuffix("/new-token") == true)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         await gateway.disconnect()
     }
@@ -2303,8 +2316,8 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `route bound request rejects a response after its socket is retired`() async throws {
+    @Test(arguments: [false, true], [false, true])
+    func `route bound requests validate both responses and denials`(retireRoute: Bool, deny: Bool) async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions()
@@ -2314,26 +2327,44 @@ struct GatewayNodeSessionTests {
         let socket = try #require(session.latestTask())
         let request = Task {
             try await gateway.request(
-                method: "sessions.list",
-                paramsJSON: "{}",
+                method: "progressCard.get",
+                paramsJSON: #"{"sessionKey":"agent:main:main"}"#,
                 ifCurrentRoute: route)
         }
         try await waitUntil("route bound request sent") {
-            socket.sentRequestCount(method: "sessions.list") == 1
+            socket.sentRequestCount(method: "progressCard.get") == 1
         }
-        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+        let sent = try #require(socket.sentRequests(method: "progressCard.get").first)
 
-        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        if retireRoute {
+            await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        }
         try socket.emitResponse(
             id: #require(sent["id"] as? String),
-            payload: ["sessions": []])
+            payload: ["card": NSNull()],
+            error: deny ? [
+                "code": "INVALID_REQUEST",
+                "message": "Session access denied",
+                "details": ["code": "SESSION_PARTICIPATION_REQUIRED"],
+            ] : nil)
 
         do {
-            _ = try await request.value
-            Issue.record("late response unexpectedly crossed the retired route")
+            let data = try await request.value
+            #expect(!retireRoute && !deny)
+            #expect(!data.isEmpty)
         } catch is CancellationError {
-            // Expected: the response belongs to the retired admission generation.
+            #expect(retireRoute)
+        } catch let error as GatewayResponseError {
+            #expect(!retireRoute && deny)
+            #expect(error.method == "progressCard.get")
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED")
+        } catch {
+            await gateway.disconnect()
+            throw error
         }
+        #expect(socket.sentRequestCount(method: "progressCard.get") == 1)
+        await gateway.disconnect()
     }
 
     @Test
@@ -2872,8 +2903,8 @@ struct GatewayNodeSessionTests {
             task.hasPendingReceiveHandler()
         }
         task.emitReceiveFailure()
-        try await waitUntil("ownerless reconnect socket created") {
-            session.snapshotMakeCount() == 2
+        try await waitUntil("ownerless reconnect sends connect frame") {
+            session.snapshotMakeCount() == 2 && session.latestTask()?.latestConnectAuth() != nil
         }
         let reconnectAuth = try #require(session.latestTask()?.latestConnectAuth())
         #expect(reconnectAuth["token"] == nil)
@@ -3025,6 +3056,49 @@ struct GatewayNodeSessionTests {
             Issue.record("unexpected error type: \(error)")
         }
 
+        await gateway.disconnect()
+    }
+
+    @Test(arguments: [false, true])
+    func `gateway handshake deadlines are transport timeouts`(waitingForChallenge: Bool) async throws {
+        let session = FakeGatewayWebSocketSession(
+            helloDelayNanoseconds: waitingForChallenge ? 0 : 60_000_000_000,
+            challenge: (waitingForChallenge ? 60_000_000_000 : 0, "nonce-1"))
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                options: operatorConnectOptions(),
+                session: session)
+            Issue.record("A stalled handshake unexpectedly connected")
+        } catch {
+            let failure = error as NSError
+            #expect(failure.domain == NSURLErrorDomain)
+            #expect(failure.code == URLError.timedOut.rawValue)
+        }
+        await gateway.disconnect()
+        #expect(session.latestTask()?.state != .running)
+    }
+
+    @Test(arguments: [false, true])
+    func `delayed valid handshake connects but malformed challenge is not a transport timeout`(
+        malformed: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession(
+            helloDelayNanoseconds: 20_000_000,
+            challenge: (20_000_000, malformed ? "" : "nonce-1"))
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                options: operatorConnectOptions(),
+                session: session)
+            #expect(!malformed)
+            #expect(await gateway.currentRoute() != nil)
+        } catch {
+            #expect(malformed)
+            #expect((error as NSError).domain != NSURLErrorDomain)
+        }
         await gateway.disconnect()
     }
 
@@ -3405,7 +3479,7 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
-        let gateway = URL(string: "wss://gateway.example.com:7443")
+        let gateway = URL(string: "wss://gateway.example.com:7443/control?tenant=a")
 
         #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
             raw: "/plugins/codex/realtime/calls",
@@ -3416,6 +3490,85 @@ struct GatewayNodeSessionTests {
         #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
             raw: "wss://gateway.example.com/realtime",
             against: gateway) == nil)
+    }
+
+    @Test
+    func `watch broker routes preserve the active endpoint context`() async throws {
+        let gateway = GatewayNodeSession()
+        let session = FakeGatewayWebSocketSession()
+        let options = operatorConnectOptions(
+            scopes: ["operator.read", "operator.talk"],
+            clientId: "openclaw-watchos",
+            clientMode: "node")
+        let cases = [
+            ("wss://gateway.example.invalid", "https://gateway.example.invalid/plugins/openai/realtime/calls"),
+            ("wss://gateway.example.invalid/", "https://gateway.example.invalid/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/team-a",
+                "https://gateway.example.invalid/team-a/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/team-a/",
+                "https://gateway.example.invalid/team-a/plugins/openai/realtime/calls"),
+            (
+                "wss://backup.example.invalid:7443/team-b",
+                "https://backup.example.invalid:7443/team-b/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/team%20a",
+                "https://gateway.example.invalid/team%20a/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/team%2Fa",
+                "https://gateway.example.invalid/team%2Fa/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/team%FFa",
+                "https://gateway.example.invalid/team%FFa/plugins/openai/realtime/calls"),
+            (
+                "wss://gateway.example.invalid/plugins",
+                "https://gateway.example.invalid/plugins/plugins/openai/realtime/calls"),
+        ]
+        var capturedRoutes: [GatewayNodeSessionRoute] = []
+        for (endpoint, expected) in cases {
+            try await gateway.connectForTest(testURL(endpoint), options: options, session: session)
+            let route = try #require(await gateway.currentRoute())
+            let resolved = await gateway.resolveGatewayHTTPURL(
+                "/plugins/openai/realtime/calls", relativeToGatewayContextOf: route)
+            #expect(resolved?.absoluteString == expected)
+            capturedRoutes.append(route)
+        }
+        for oldRoute in capturedRoutes.dropLast() {
+            #expect(await gateway.resolveGatewayHTTPURL(
+                "/plugins/openai/realtime/calls", relativeToGatewayContextOf: oldRoute) == nil)
+        }
+        let route = try #require(await gateway.currentRoute())
+        #expect(await gateway.resolveGatewayHTTPURL(
+            "https://api.openai.com/v1/realtime/calls", relativeToGatewayContextOf: route)?.absoluteString
+            == "https://api.openai.com/v1/realtime/calls")
+        await gateway.disconnect()
+        #expect(await gateway.resolveGatewayHTTPURL(
+            "/plugins/openai/realtime/calls", relativeToGatewayContextOf: route) == nil)
+    }
+
+    @Test
+    func `mounted broker references preserve encoding without inheriting socket query or fragment`() throws {
+        let gateway = try testURL("wss://gateway.example.invalid/team%2Fa/?socket=only#socket-fragment")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/tool%2Fv1/calls?reservation=a%2Fb#answer",
+            against: gateway,
+            relativeToGatewayContext: true)?.absoluteString
+            == "https://gateway.example.invalid/team%2Fa/plugins/tool%2Fv1/calls?reservation=a%2Fb#answer")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "plugins/calls", against: gateway, relativeToGatewayContext: true)?.absoluteString
+            == "https://gateway.example.invalid/team%2Fa/plugins/calls")
+        #expect(try GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/calls", against: testURL("wss://127.0.0.1:7443/team"),
+            relativeToGatewayContext: true)?.absoluteString == "https://127.0.0.1:7443/team/plugins/calls")
+    }
+
+    @Test(arguments: ["../calls", "/plugins/../calls", "/%2e%2e/calls", "//other.example/calls", "?query=only"])
+    func `mounted broker references cannot escape the gateway context`(reference: String) throws {
+        #expect(try GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: reference,
+            against: testURL("wss://gateway.example.invalid/team"),
+            relativeToGatewayContext: true) == nil)
     }
 
     @Test

@@ -13,6 +13,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -53,6 +54,177 @@ const suite = createControlUiE2eSuite({
   },
 });
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+let catalogInstance: OpenClawTestInstance | undefined;
+const catalogModels = (id: string) => [
+  { id: "anchor", name: "Anchor" },
+  { id, name: id },
+];
+const catalogSuite = createControlUiE2eSuite({
+  name: "Automation catalog publication with a real Gateway",
+  startServerBeforeBrowser: true,
+  async startServer() {
+    const owner = await createOpenClawTestInstance({
+      name: "automation-catalog-publication",
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      config: {
+        gateway: { controlUi: { enabled: true } },
+        cron: { enabled: false },
+        agents: { defaults: { model: "fixture/anchor" } },
+        models: {
+          providers: {
+            fixture: {
+              api: "openai-completions",
+              apiKey: "synthetic-catalog-key",
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: catalogModels("retiring"),
+            },
+          },
+        },
+      },
+    });
+    catalogInstance = owner;
+    try {
+      await owner.startGateway();
+      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
+    } catch (error) {
+      await owner.cleanup();
+      throw error;
+    }
+  },
+});
+
+catalogSuite.define(() => {
+  it("keeps an open automation draft current through real catalog publication and read recovery", async () => {
+    const owner = catalogInstance;
+    if (!owner) {
+      throw new Error("Catalog Gateway fixture was not started");
+    }
+    const handoff = await owner.cli(["dashboard", "--json"]);
+    expect(handoff.code).toBe(0);
+    const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
+    if (typeof browserUrl !== "string") {
+      throw new Error("Dashboard did not return a browser handoff");
+    }
+    const url = new URL("cron", browserUrl);
+    url.hash = new URL(browserUrl).hash;
+    const frames: unknown[] = [];
+    const catalogRequests = new Set<string>();
+    const commands: unknown[] = [];
+    let rejectCatalogReplies = false;
+    const rejected = new Set<string>();
+    const publish = async (id: string) => {
+      const args = [
+        "config",
+        "set",
+        "models.providers.fixture.models",
+        JSON.stringify(catalogModels(id)),
+        "--strict-json",
+        "--replace",
+      ];
+      const result = await owner.cli(args);
+      commands.push({ args, ...result });
+      expect(result.code, result.stderr).toBe(0);
+    };
+    try {
+      await catalogSuite.withPage(
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+          recordVideo: { dir: catalogSuite.artifactDir },
+        },
+        async ({ page }) => {
+          await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
+            const server = socket.connectToServer();
+            socket.onMessage((message) => {
+              const frame = requireRecord(JSON.parse(message.toString()));
+              if (frame.type === "req" && frame.method !== "connect") {
+                frames.push({ direction: "sent", frame });
+                if (frame.method === "models.list" && typeof frame.id === "string") {
+                  catalogRequests.add(frame.id);
+                }
+              }
+              server.send(message);
+            });
+            server.onMessage((message) => {
+              const frame = requireRecord(JSON.parse(message.toString()));
+              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
+              if (
+                catalogReply ||
+                frame.event === "config.changed" ||
+                frame.event === "chat.metadata.changed"
+              ) {
+                frames.push({
+                  direction: "received",
+                  frame,
+                  transportFailure: catalogReply && rejectCatalogReplies,
+                });
+              }
+              // Inject failure after observing the real reply. Notifications and recovery
+              // still come from the Gateway; no synthetic catalog or event replaces them.
+              if (catalogReply && rejectCatalogReplies && typeof frame.id === "string") {
+                rejected.add(frame.id);
+                socket.send(
+                  JSON.stringify({
+                    type: "res",
+                    id: frame.id,
+                    ok: false,
+                    error: { code: "UNAVAILABLE", message: "Catalog transport unavailable" },
+                  }),
+                );
+              } else {
+                socket.send(message);
+              }
+            });
+          });
+          await page.goto(url.toString());
+          await waitForControlUiGatewayReady(page);
+          await page.locator('[data-test-id="cron-new-task"]').click();
+          await page.locator("#cron-name").fill("Retain this draft");
+          await page.locator("#cron-payload-text").fill("Do not submit this draft");
+          const picker = page.locator("#cron-payload-model-picker");
+          await expect.poll(() => picker.locator('wa-option[value="retiring"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          await publish("published");
+          await expect.poll(() => picker.locator('wa-option[value="published"]').count()).toBe(1);
+          expect(await picker.locator('wa-option[value="retiring"]').count()).toBe(0);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+
+          rejectCatalogReplies = true;
+          await publish("held");
+          await expect.poll(() => rejected.size).toBeGreaterThan(0);
+          const error = page.locator(".cron-error-banner");
+          await error.waitFor({ state: "visible" });
+          expect(await error.textContent()).toContain("Catalog transport unavailable");
+          expect(await picker.locator('wa-option[value="published"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+
+          rejectCatalogReplies = false;
+          await publish("recovered");
+          await expect.poll(() => picker.locator('wa-option[value="recovered"]').count()).toBe(1);
+          await error.waitFor({ state: "hidden" });
+          expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
+          expect(await page.locator("#cron-payload-text").inputValue()).toBe(
+            "Do not submit this draft",
+          );
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+        },
+      );
+    } finally {
+      const redact = (text: string) =>
+        text
+          .replaceAll(owner.gatewayToken, "[synthetic token]")
+          .replaceAll(owner.hookToken, "[synthetic token]");
+      await fs.writeFile(
+        path.join(catalogSuite.artifactDir, "publication.json"),
+        redact(JSON.stringify({ frames, commands }, null, 2)),
+      );
+      await fs.writeFile(path.join(catalogSuite.artifactDir, "gateway.log"), redact(owner.logs()));
+    }
+  }, 120_000);
+});
+
 const requireRecord = createRequireRecord("record", "expected-object-value");
 type CliJson = (args: string[]) => Promise<Record<string, unknown>>;
 type ServedAsset = { path: string; status: number; sha256?: string; error?: string };
@@ -68,7 +240,14 @@ async function capture(page: Page, name: string, observed: unknown) {
   if (!captureEnabled) {
     return;
   }
-  await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), fullPage: true });
+  // The form is taller than the viewport. Preserve the flow's scroll to the
+  // relevant field without resizing Chromium's recording surface.
+  await fs.writeFile(
+    path.join(suite.artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [
+      page.locator("#cron-name"),
+    ]),
+  );
   await fs.writeFile(
     path.join(suite.artifactDir, `${name}.json`),
     `${JSON.stringify(observed, null, 2)}\n`,
@@ -481,6 +660,118 @@ suite.define(() => {
           servedAssets: await Promise.all(servedAssets),
         });
       });
+    });
+  });
+
+  it("clone payload policy: preserves public options through the real Gateway and CLI readback", async () => {
+    await withGatewayCommands("real-clone-policy-commands.json", async (cliJson) => {
+      for (const variant of [
+        { name: "finite-cap", toolsAllow: ["read"], allowUnsafeExternalContent: false },
+        { name: "empty-cap", toolsAllow: [], allowUnsafeExternalContent: true },
+      ]) {
+        const sourceName = `Synthetic clone ${variant.name} source`;
+        const payload = {
+          kind: "agentTurn" as const,
+          message: "node -e \"console.log('synthetic clone fixture')\"",
+          toolsAllow: variant.toolsAllow,
+          fallbacks: [],
+          lightContext: false,
+          allowUnsafeExternalContent: variant.allowUnsafeExternalContent,
+          timeoutSeconds: 0,
+        };
+        const created = await cliJson([
+          "gateway",
+          "call",
+          "cron.add",
+          "--params",
+          JSON.stringify({
+            name: sourceName,
+            agentId: "main",
+            enabled: false,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload,
+            delivery: { mode: "none" },
+          }),
+          "--json",
+        ]);
+        const sourceId = cronJobId(created);
+        const original = await cliJson(["automations", "get", sourceId, "--json"]);
+        expect(original).toMatchObject({ id: sourceId, enabled: false });
+        expect(original.payload).toEqual(payload);
+
+        await withCronJobPage(cliJson, sourceId, async (evidence) => {
+          const { page, servedDocumentSha256, servedAssets } = evidence;
+          await expect
+            .poll(() => page.locator(".cron-detail-title").textContent())
+            .toBe(original.name);
+          await capture(page, `real-clone-policy-${variant.name}-loaded`, {
+            original,
+            servedDocumentSha256,
+          });
+          const menu = page.locator(".cron-detail-actions wa-dropdown");
+          await menu.locator('button[slot="trigger"]').click();
+          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
+          await expect
+            .poll(() => page.locator("#cron-name").inputValue())
+            .toBe(`${sourceName} copy`);
+          const cloneName = `Synthetic clone ${variant.name} copy`;
+          await page.locator("#cron-name").fill(cloneName);
+          const cloned = await submitCronForm(evidence, cliJson, "cron.add");
+          const cloneId = cronJobId(cloned.stored);
+          await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
+          await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(cloneName);
+          const originalAfter = await cliJson(["automations", "get", sourceId, "--json"]);
+          await capture(page, `real-clone-policy-${variant.name}-readback`, {
+            original,
+            originalAfter,
+            ...cloned,
+            servedDocumentSha256,
+            servedAssets: await Promise.all(servedAssets),
+          });
+
+          expect.soft(originalAfter, `${variant.name}: source unchanged`).toEqual(original);
+          expect.soft(cloneId, `${variant.name}: new job identity`).not.toBe(sourceId);
+          expect.soft(cloned.stored, `${variant.name}: new disabled task`).toMatchObject({
+            name: cloneName,
+            agentId: "main",
+            enabled: false,
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+          });
+          expect
+            .soft(cloned.stored.schedule, `${variant.name}: exact schedule`)
+            .toEqual(original.schedule);
+          const params = requireRecord(cloned.request.params);
+          const submittedPayload = requireRecord(params.payload);
+          const storedPayload = requireRecord(cloned.stored.payload);
+          for (const [field, value] of Object.entries(payload)) {
+            expect
+              .soft(submittedPayload[field], `${variant.name}: submitted ${field}`)
+              .toEqual(value);
+            expect.soft(storedPayload[field], `${variant.name}: stored ${field}`).toEqual(value);
+          }
+          for (const field of ["toolsAllowIsDefault", "externalContentSource"]) {
+            expect
+              .soft(submittedPayload, `${variant.name}: omitted ${field}`)
+              .not.toHaveProperty(field);
+          }
+          for (const field of [
+            "createdActor",
+            "toolsAllowProvenance",
+            "toolsAllowExecTarget",
+            "toolsAllowExecTargetRequirement",
+            "runtimeAuthority",
+            "runtimeAuthorityRecoveryRequired",
+            "skillLibrarySelections",
+          ]) {
+            expect.soft(params, `${variant.name}: omitted ${field}`).not.toHaveProperty(field);
+          }
+        });
+      }
     });
   });
 });

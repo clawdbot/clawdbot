@@ -6,9 +6,9 @@ import path from "node:path";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   capCompactionSummary,
+  fitCompactionSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
-  TURN_PREFIX_SUMMARIZATION_PROMPT,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   computeFileLists,
@@ -28,10 +28,7 @@ import {
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-worker.js";
 import { buildHistoryPrunePlan } from "../compaction-planning.js";
-import {
-  hasMeaningfulConversationContent,
-  isRealConversationMessage,
-} from "../compaction-real-conversation.js";
+import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -1037,12 +1034,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const finalized = budgetCompactionSummary(
-        body,
-        suffix,
-        MAX_COMPACTION_SUMMARY_CHARS,
-        qualityRetention,
+      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+        budgetCompactionSummary(body, suffix, maxChars, qualityRetention),
       );
+      if (!fitted.ok) {
+        throw fitted.error;
+      }
+      const finalized = fitted.value;
       const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
         if (typeof section !== "string" && section?.truncatedLoss) {
@@ -1221,7 +1219,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   ...llmSummaryParams,
                   messages: pruned.droppedMessagesList,
                   maxChunkTokens: droppedMaxChunkTokens,
-                  customInstructions: structuredInstructions,
+                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
                   previousSummary,
                 });
               } catch (droppedError) {
@@ -1296,9 +1294,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   ...llmSummaryParams,
                   messages: messagesToSummarize,
                   maxChunkTokens,
-                  customInstructions: [structuredInstructions, correctiveInstructions]
-                    .filter(Boolean)
-                    .join("\n\n"),
+                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                  customInstructions: correctiveInstructions,
                   previousSummary: effectivePreviousSummary,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary);
@@ -1313,11 +1310,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ...llmSummaryParams,
               messages: turnPrefixMessages,
               maxChunkTokens,
-              customInstructions: [
-                TURN_PREFIX_SUMMARIZATION_PROMPT,
-                splitTurnFocus,
-                correctiveInstructions,
-              ]
+              summaryPrompt: { kind: "turn-prefix" },
+              customInstructions: [splitTurnFocus, correctiveInstructions]
                 .filter(Boolean)
                 .join("\n\n"),
               previousSummary: undefined,
@@ -1473,8 +1467,6 @@ const testing = {
   formatFileOperations,
   computeAdaptiveChunkRatio,
   readWorkspaceContextForSummary,
-  hasMeaningfulConversationContent,
-  isRealConversationMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,

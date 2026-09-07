@@ -23,6 +23,86 @@ afterEach(async () => {
   state = undefined;
 });
 
+it.each([true, false])(
+  "promotes installed channel credentials without loading runtime (enabled=%s)",
+  async (enabled) => {
+    state = await createOpenClawTestState({ label: "doctor-installed-promotion", applyEnv: true });
+    const pluginDir = state.statePath("extensions", "promotion");
+    const bundledDir = state.path("empty-bundled");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.mkdir(bundledDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    await fs.writeFile(
+      path.join(pluginDir, "index.js"),
+      "throw new Error('Doctor must not execute the channel runtime');\n",
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "setup-entry.js"),
+      `export default { plugin: {
+        id: "promotion-chat",
+        setupContract: {
+          singleAccountKeysToMove: ["connectionUrl"],
+          namedAccountPromotionKeys: ["connectionUrl", "botToken"]
+        }
+      } };\n`,
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@example/promotion",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+          setupEntry: "./setup-entry.js",
+          setupFeatures: { configPromotion: true },
+          channel: { id: "promotion-chat" },
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "promotion",
+        channels: ["promotion-chat"],
+        configSchema: { type: "object" },
+        channelConfigs: { "promotion-chat": { schema: { type: "object" } } },
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["promotion"], entries: { promotion: { enabled } } },
+      channels: {
+        "promotion-chat": {
+          enabled: true,
+          botToken: "root-token",
+          connectionUrl: "https://root.example.com",
+          dmPolicy: "pairing",
+          accounts: { alerts: { botToken: "alerts-token" } },
+        },
+      },
+    };
+    const before = structuredClone(cfg);
+    const changes: string[] = [];
+    const first = seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes);
+    expect(first.channels?.["promotion-chat"]).toEqual({
+      enabled: true,
+      dmPolicy: "pairing",
+      accounts: {
+        alerts: { botToken: "alerts-token" },
+        default: { botToken: "root-token", connectionUrl: "https://root.example.com" },
+      },
+    });
+    expect(changes).toHaveLength(1);
+    expect(cfg).toEqual(before);
+    clearPluginMetadataLifecycleCaches();
+    resetPluginRuntimeStateForTest();
+    const repeatedChanges: string[] = [];
+    expect(seedMissingDefaultAccountsFromSingleAccountBase(first, repeatedChanges)).toEqual(first);
+    expect(repeatedChanges).toEqual([]);
+  },
+);
+
 it.each([
   { enabled: true, configPromotion: "preserve-root" },
   { enabled: false, configPromotion: "preserve-root" },

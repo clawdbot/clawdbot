@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
+import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 
@@ -117,6 +118,7 @@ function killPortWithFuser(
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: PORT_TOOL_TIMEOUT_MS,
@@ -151,6 +153,7 @@ function killPortWithFuser(
 function listPortListenersWithFuser(port: number): PortProcess[] {
   try {
     const stdout = execFileSync("fuser", [`${port}/tcp`], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: PORT_TOOL_TIMEOUT_MS,
@@ -226,6 +229,7 @@ function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+        env: resolveDiagnosticProcessEnv(),
         encoding: "utf-8",
         timeout: PORT_TOOL_TIMEOUT_MS,
         killSignal: "SIGKILL",
@@ -249,6 +253,7 @@ function listPortListeners(port: number): PortProcess[] {
   try {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       timeout: PORT_TOOL_TIMEOUT_MS,
       killSignal: "SIGKILL",
