@@ -1,5 +1,3 @@
-// Lmstudio plugin module implements runtime behavior.
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -10,6 +8,8 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+// Lmstudio plugin module implements runtime behavior.
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
