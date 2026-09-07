@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 // Discord plugin module implements listeners behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
@@ -471,8 +472,11 @@ export class DiscordPresenceReadyListener extends ReadyListener {
 }
 
 type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+const DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES = 10_000;
 
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
+  private readonly rejoinClaims = new Map<string, symbol>();
+
   constructor(
     private cfg: OpenClawConfig,
     private logger?: Logger,
@@ -480,29 +484,50 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
     super();
   }
 
-  async handle(data: ThreadUpdateEvent) {
+  resetGatewaySession(): void {
+    this.rejoinClaims.clear();
+  }
+
+  async handle(data: ThreadUpdateEvent, client: Client) {
     await runDiscordListenerWithSlowLog({
       logger: this.logger,
       listener: this.constructor.name,
       event: this.type,
       run: async () => {
-        // Discord only fires THREAD_UPDATE when a field actually changes, so
-        // `thread_metadata.archived === true` in this payload means the thread
-        // just transitioned to the archived state.
-        if (!isThreadArchived(data)) {
-          return;
-        }
         const threadId = "id" in data && typeof data.id === "string" ? data.id : undefined;
         if (!threadId) {
           return;
         }
         const logger = this.logger ?? discordEventQueueLog;
-        const count = await closeDiscordThreadSessions({
-          cfg: this.cfg,
-          threadId,
-        });
-        if (count > 0) {
-          logger.info("Discord thread archived — reset sessions", { threadId, count });
+        if (isThreadArchived(data)) {
+          this.rejoinClaims.delete(threadId);
+          const count = await closeDiscordThreadSessions({
+            cfg: this.cfg,
+            threadId,
+          });
+          if (count > 0) {
+            logger.info("Discord thread archived — reset sessions", { threadId, count });
+          }
+          return;
+        }
+        if (this.rejoinClaims.has(threadId)) {
+          return;
+        }
+
+        // Claim before awaiting REST because listener jobs may overlap. Keep the newest claims
+        // bounded across long-lived gateway sessions so ordinary updates cannot grow memory forever.
+        const claim = Symbol(threadId);
+        this.rejoinClaims.set(threadId, claim);
+        pruneMapToMaxSize(this.rejoinClaims, DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES);
+        try {
+          await client.rest.put(`/channels/${threadId}/thread-members/@me`);
+          logger.info("Discord active thread — rejoined thread", { threadId });
+        } catch (err) {
+          // An earlier request may settle after archive or READY; only its own claim may reopen retry.
+          if (this.rejoinClaims.get(threadId) === claim) {
+            this.rejoinClaims.delete(threadId);
+          }
+          logger.warn(danger(`discord thread rejoin failed: ${String(err)}`), { threadId });
         }
       },
       onError: (err) => {
@@ -510,6 +535,16 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
         logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
       },
     });
+  }
+}
+
+export class DiscordThreadReadyListener extends ReadyListener {
+  constructor(private readonly threadUpdateListener: DiscordThreadUpdateListener) {
+    super();
+  }
+
+  handle(): void {
+    this.threadUpdateListener.resetGatewaySession();
   }
 }
 
