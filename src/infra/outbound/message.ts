@@ -94,6 +94,8 @@ type MessageSendParams = {
   reply?: OutboundReplyFacts;
   replyToId?: string;
   threadId?: string | number;
+  /** Explicitly suppress inherited thread placement for gateway-routed sends. */
+  topLevel?: boolean;
   dryRun?: boolean;
   bestEffort?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
@@ -521,6 +523,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       channel,
       replyToId: reply?.replyToId,
       threadId: params.threadId != null ? String(params.threadId) : undefined,
+      topLevel: params.topLevel === true ? true : undefined,
       forceDocument: params.forceDocument,
       silent: params.silent,
       parseMode: params.parseMode,

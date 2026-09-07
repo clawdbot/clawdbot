@@ -609,6 +609,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     bestEffort: sendPayload.bestEffort,
     reply,
     threadId: resolvedThreadId ?? undefined,
+    topLevel: params.topLevel === true ? true : undefined,
   });
 
   // Gateway-relayed core sends return no identified platform result locally;
