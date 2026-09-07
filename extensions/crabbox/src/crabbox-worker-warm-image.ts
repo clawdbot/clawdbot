@@ -15,6 +15,7 @@ import {
   WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import {
+  CrabboxCheckpointCreateError,
   parseCheckpointAvailability,
   parseCheckpointJson,
   parseCreatedCheckpoint,
@@ -114,6 +115,9 @@ export function createCrabboxWarmImageManager(dependencies: {
       ...(input === undefined ? {} : { input }),
     });
     if (result.termination !== "exit" || result.code !== 0) {
+      if (action === "create") {
+        throw new CrabboxCheckpointCreateError(result);
+      }
       throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
     }
     return result.stdout;
@@ -635,9 +639,11 @@ export function createCrabboxWarmImageManager(dependencies: {
             await retireImage(context, key, replacement);
           }
         } catch (error) {
+          const notSubmitted =
+            creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
           if (claimed && key) {
             try {
-              if (creating) {
+              if (creating && !notSubmitted) {
                 openStore().update(key, (current) =>
                   current?.operation?.type === "capture" && current.operation.id === captureId
                     ? { ...current, operation: { ...current.operation, phase: "uncertain" } }
@@ -650,7 +656,9 @@ export function createCrabboxWarmImageManager(dependencies: {
               // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
             }
           }
-          if (preparing) {
+          // Non-submission releases only image uncertainty. Source rollback may
+          // have failed, so provisioning must still fail and clean up its lease.
+          if (preparing || notSubmitted) {
             throw error;
           }
           warnOnce(

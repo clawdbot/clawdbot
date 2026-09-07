@@ -8,7 +8,7 @@ import {
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
-import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
+import { listCrabboxWarmImages, type WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
@@ -16,6 +16,7 @@ import {
   commandResult,
   checkpointResult,
   createWarmProvider,
+  openWarmImageStore,
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
@@ -556,6 +557,125 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
     },
   );
+
+  it.each([
+    { name: "attested failure", accepted: true },
+    { name: "wrong lease", receipt: { leaseId: "cbx_other" } },
+    { name: "wrong provider", receipt: { provider: "aws" } },
+    { name: "unknown schema", receipt: { schema: "unknown" } },
+    { name: "extra field", receipt: { sourceReady: true } },
+    { name: "retained reservation", receipt: { localReservation: "retained" } },
+    { name: "missing checkpoint", receipt: { checkpointId: "" } },
+    { name: "successful exit", command: { code: 0 } },
+    { name: "missing exit code", command: { code: null } },
+    { name: "truncated stdout", command: { stdoutTruncatedBytes: 10 } },
+    { name: "truncated stderr", command: { stderrTruncatedBytes: 10 } },
+    { name: "output limit", command: { outputLimitExceeded: true } },
+    { name: "forced cleanup", command: { cleanup: "forced" as const } },
+    { name: "changed capture owner", captureReplaced: true },
+    {
+      name: "timed out command",
+      command: { code: null, termination: "timeout" as const, killed: true },
+    },
+  ])(
+    "fails without enrollment after $name",
+    async ({ name, accepted, receipt, command, captureReplaced }) => {
+      const events: string[] = [];
+      const { options, observe } = projectOptions(events);
+      const operationId = `unsubmitted-${name}`;
+      const leaseId = operationLeaseId(operationId);
+      const { provider, calls } = createWarmProvider((call) => {
+        observe(call);
+        if (call.argv[2] === "create" && captureReplaced) {
+          const store = openWarmImageStore();
+          const entry = store.entries()[0]!;
+          store.update(entry.key, (record) => ({
+            ...record!,
+            operation: {
+              type: "capture",
+              id: "11111111-1111-4111-8111-111111111111",
+              leaseId,
+              provider: "machine0",
+              startedAtMs: Date.now(),
+              phase: "creating",
+            },
+          }));
+        }
+        return call.argv[2] === "create"
+          ? commandResult({
+              code: 5,
+              stderr: "source rollback failed",
+              stdout: JSON.stringify({
+                schema: "crabbox.checkpoint.create.failure.v1",
+                outcome: "not_submitted",
+                provider: "machine0",
+                leaseId,
+                checkpointId: "chk_0123456789abcdef",
+                localReservation: "removed",
+                ...receipt,
+              }),
+              ...command,
+            })
+          : undefined;
+      });
+
+      await expect(
+        provider.provision({ ...PROFILE, provider: "machine0" }, operationId, options),
+      ).rejects.toThrow();
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(events.filter((event) => event === "capture")).toHaveLength(1);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      const capture = listCrabboxWarmImages()[0]?.capture;
+      if (accepted) {
+        expect(capture).toBeUndefined();
+      } else if (captureReplaced) {
+        expect(capture).toMatchObject({
+          selector: "11111111-1111-4111-8111-111111111111",
+          phase: "creating",
+        });
+      } else {
+        expect(capture?.phase).toBe("uncertain");
+      }
+    },
+  );
+
+  it("preserves the prior image when a replacement was not submitted", async () => {
+    const original = projectOptions([]);
+    let failCapture = false;
+    let previousImage: WarmImageRecord | undefined;
+    const { provider, calls } = createWarmProvider(({ argv }) => {
+      if (failCapture && argv[2] === "create") {
+        previousImage = openWarmImageStore().entries()[0]!.value.image;
+        return commandResult({
+          code: 5,
+          stdout: JSON.stringify({
+            schema: "crabbox.checkpoint.create.failure.v1",
+            outcome: "not_submitted",
+            provider: "aws",
+            leaseId: operationLeaseId("unsubmitted-replacement"),
+            checkpointId: "chk_0123456789abcdef",
+            localReservation: "removed",
+          }),
+        });
+      }
+      return undefined;
+    });
+    await provider.provision(PROFILE, "retained-source", original.options);
+    failCapture = true;
+    const replacement = projectOptions([]);
+    replacement.options.project.baseCommit = "c".repeat(40);
+    await expect(
+      provider.provision(PROFILE, "unsubmitted-replacement", replacement.options),
+    ).rejects.toThrow();
+    expect(replacement.options.beginNodeEnrollment).not.toHaveBeenCalled();
+    const record = openWarmImageStore().entries()[0]!.value;
+    expect(previousImage).toBeDefined();
+    expect(record.image).toEqual(previousImage);
+    expect(record.operation).toBeUndefined();
+    expect(record.allocations[operationLeaseId("retained-source")]).toBeDefined();
+    expect(record.allocations[operationLeaseId("unsubmitted-replacement")]).toBeUndefined();
+    expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+  });
 
   it.each(["aborted", "uncertain", "timed out"] as const)(
     "does not enroll after an %s native capture",
