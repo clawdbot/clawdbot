@@ -27,6 +27,7 @@ import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { resolveOutboundTargetWithPlugin } from "../../infra/outbound/targets-resolve-shared.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -1533,16 +1534,17 @@ describe("gateway send mirroring", () => {
   it.each([false, true])(
     "keeps Telegram plugin action sends bound to their live owner (close during first send: %s)",
     async (closeDuringFirstSend) => {
-      const { telegramMessageActions } =
-        await import("../../../extensions/telegram/runtime-api.js");
+      const { telegramMessageActions } = await loadBundledPluginPublicSurface<{
+        telegramMessageActions: NonNullable<ChannelPlugin["actions"]>;
+      }>({ pluginId: "telegram", artifactBasename: "runtime-api.js" });
       const { dispatchChannelMessageAction } = await vi.importActual<
         typeof import("../../channels/plugins/message-action-dispatch.js")
       >("../../channels/plugins/message-action-dispatch.js");
       const plugin = registerMessageActionPlugin({ registrySuffix: "telegram-live-owner" });
       plugin.actions = telegramMessageActions;
       mocks.dispatchChannelMessageAction.mockImplementationOnce(dispatchChannelMessageAction);
-      const firstSendStarted = createDeferred<void>();
-      const releaseFirstSend = createDeferred<void>();
+      const firstSendStarted = createDeferred();
+      const releaseFirstSend = createDeferred();
       const physicalSends: string[] = [];
       mocks.deliverOutboundPayloads.mockImplementationOnce(
         async (params: {
