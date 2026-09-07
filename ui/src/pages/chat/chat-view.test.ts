@@ -5607,7 +5607,7 @@ describe("chat slash menu accessibility", () => {
     expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
     expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
     expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.hasAttribute("role")).toBe(false);
+    expect(textarea?.getAttribute("role")).toBe("combobox");
     expect(textarea?.getAttribute("aria-expanded")).toBe("true");
     expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
     expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
@@ -5720,7 +5720,7 @@ describe("chat slash menu accessibility", () => {
     ) as HTMLTextAreaElement;
     const initialPlaceholder = textarea.placeholder;
     expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
+    expect(textarea.getAttribute("role")).toBe("combobox");
 
     harness.renderCurrent({
       attachments: [
@@ -5736,7 +5736,7 @@ describe("chat slash menu accessibility", () => {
     expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
     expect(textarea.placeholder).not.toBe(initialPlaceholder);
     expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
+    expect(textarea.getAttribute("role")).toBe("combobox");
 
     harness.renderCurrent({ attachments: [] });
     expect(textarea.placeholder).toBe(initialPlaceholder);
