@@ -8,6 +8,7 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
+let estimateToolSchemaTokenPressure: typeof import("./preemptive-compaction.js").estimateToolSchemaTokenPressure;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
@@ -21,6 +22,7 @@ beforeAll(async () => {
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
     estimateRenderedLlmBoundaryTokenPressure,
+    estimateToolSchemaTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
   } = await import("./preemptive-compaction.js"));
@@ -745,6 +747,103 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
     expect(result.shouldCompact).toBe(false);
     expect(result.overflowTokens).toBe(0);
+  });
+
+  it("includes tool schema tokens in the precheck estimate so large catalogs trigger overflow", () => {
+    const messages = [makeAssistantHistory("short conversation text")];
+    const contextTokenBudget = 150_000;
+    const reserveTokens = 20_000;
+
+    const withoutTools = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+    });
+
+    const toolSchemaTokens = estimateToolSchemaTokenPressure(
+      Array.from({ length: 79 }, (_, i) => ({
+        type: "function",
+        function: {
+          name: `tool_${i}`,
+          description: "x".repeat(4000),
+          parameters: { type: "object", properties: { arg: { type: "string" } } },
+        },
+      })),
+    );
+
+    expect(toolSchemaTokens).toBeGreaterThan(50_000);
+
+    const withTools = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+      toolSchemaTokens,
+    });
+
+    expect(withoutTools.route).toBe("fits");
+    expect(withTools.route).not.toBe("fits");
+    expect(withTools.estimatedPromptTokens).toBeGreaterThan(withoutTools.estimatedPromptTokens);
+    expect(withTools.overflowTokens).toBeGreaterThan(0);
+  });
+
+  it("does not alter the estimate when toolSchemaTokens is zero or undefined", () => {
+    const messages = [makeAssistantHistory("short conversation text")];
+    const baseParams = {
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    };
+
+    const withoutToolSchema = shouldPreemptivelyCompactBeforePrompt(baseParams);
+    const withZeroToolSchema = shouldPreemptivelyCompactBeforePrompt({
+      ...baseParams,
+      toolSchemaTokens: 0,
+    });
+
+    expect(withZeroToolSchema.estimatedPromptTokens).toBe(withoutToolSchema.estimatedPromptTokens);
+    expect(withZeroToolSchema.route).toBe(withoutToolSchema.route);
+  });
+
+  it("does not double-count tool schema tokens when a provider boundary is available", () => {
+    // The provider boundary totalTokens already includes the tool schemas from
+    // its request. Adding toolSchemaTokens again would over-count an unchanged
+    // catalog. This test verifies the fix: when a provider boundary exists,
+    // toolSchemaTokens are not added on top of the boundary total.
+    const providerTotal = 100_000;
+    const messages = [
+      makeProviderAssistant({ promptTokens: 80_000, totalTokens: providerTotal }),
+      makeAssistantHistory("additional conversation after boundary"),
+    ];
+    const toolSchemaTokens = 40_000;
+    const contextTokenBudget = 150_000;
+    const reserveTokens = 20_000;
+
+    const withoutToolSchema = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+    });
+
+    const withToolSchema = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+      toolSchemaTokens,
+    });
+
+    // With a provider boundary, tool schema tokens must not inflate the estimate.
+    expect(withToolSchema.estimatedPromptTokens).toBe(withoutToolSchema.estimatedPromptTokens);
+    expect(withToolSchema.pressureSource).toBe("provider_context_usage");
   });
 
   it("does not throw when tool-result content cannot be serialized", () => {
