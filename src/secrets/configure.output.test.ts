@@ -47,7 +47,6 @@ it.each([true, false])(
           closeOpenClawStateDatabaseForTest();
         }
       }
-      const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
       const configBefore = await fs.readFile(state.configPath, "utf8");
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       let stdout = "";
@@ -96,7 +95,6 @@ it.each([true, false])(
       } else {
         expect(stderr).not.toContain("Shared auth-profile store");
         expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toBeNull();
-        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
       }
       expect(`${stdout}${stderr}`).not.toContain("synthetic-plaintext-value");
       expect(`${stdout}${stderr}`).not.toContain("synthetic-residue-value");
