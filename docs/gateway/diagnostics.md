@@ -96,6 +96,15 @@ hostnames, and local usernames.
 When a log message looks like user, chat, prompt, or tool payload text, the
 export keeps only that a message was omitted plus its byte count.
 
+## WebSocket disconnect logs
+
+Connected webchat and authenticated-user disconnects include `durationMs`
+(connection lifetime in milliseconds) in default info-level file logs. The
+`cause` field contains the Gateway's recorded close cause, when known; otherwise
+it is omitted. `heartbeat-timeout` records the Gateway's missed-pong decision.
+It does not prove that a ping reached the remote peer or that the peer caused
+the transport failure.
+
 ## Stability recorder
 
 The Gateway records a bounded, payload-free stability stream by default when
