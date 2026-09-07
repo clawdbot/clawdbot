@@ -2,6 +2,7 @@
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -15,14 +16,21 @@ const loadOutboundMediaFromUrl = vi.hoisted(() =>
   })),
 );
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   withTrustedEnvProxyGuardedFetchMode: (value: unknown) => value,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
   return { ...actual, loadOutboundMediaFromUrl };
+});
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return { ...actual, getSlackWriteClient: getSlackWriteClientMock };
 });
 
 const { sendMessageSlack } = await import("./send.js");
@@ -38,9 +46,7 @@ type EnterpriseTestClient = WebClient & {
 
 const ENTERPRISE_CFG: OpenClawConfig = {
   channels: {
-    slack: {
-      enterpriseOrgInstall: true,
-    },
+    slack: {},
   },
 };
 
@@ -63,30 +69,18 @@ function createEnterpriseClient(): EnterpriseTestClient {
   } as unknown as EnterpriseTestClient;
 }
 
-function enterpriseEventScope(
-  client: WebClient,
-  teamId = "T1",
-  uploadCompletionClient: WebClient = client,
-) {
+function eventScope(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
   return {
-    apiAppId: "A1",
-    enterpriseId: "E1",
-    isEnterpriseInstall: true as const,
     teamId,
     client,
-    uploadCompletionClient,
+    writeClient,
   };
 }
 
-function enterpriseOptions(
-  client: WebClient,
-  teamId = "T1",
-  uploadCompletionClient: WebClient = client,
-) {
+function enterpriseOptions(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
   return {
     cfg: ENTERPRISE_CFG,
-    client,
-    enterpriseEventScope: enterpriseEventScope(client, teamId, uploadCompletionClient),
+    eventScope: eventScope(client, teamId, writeClient),
   };
 }
 
@@ -111,74 +105,82 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     clearSlackThreadParticipationCache();
     loadOutboundMediaFromUrl.mockClear();
     fetchWithSsrFGuard.mockReset();
+    getSlackWriteClientMock.mockReset();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("keeps ordinary and arbitrarily client-injected Enterprise sends fail closed", async () => {
-    const client = createEnterpriseClient();
+  it("creates a workspace-scoped client for a qualified detached send", async () => {
+    const scopedClient = createEnterpriseClient();
+    const injectedClient = createEnterpriseClient();
+    getSlackWriteClientMock.mockReturnValue(scopedClient);
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
+        cfg: ENTERPRISE_CFG,
+        token: "xoxb-enterprise",
+        client: injectedClient,
+      });
 
-    for (const message of ["hello", "NO_REPLY"]) {
+      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
+        teamId: "T123",
+      });
+      expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
+      );
+      expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("rejects a bare detached target for an authenticated Enterprise install", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
       await expect(
-        sendMessageSlack("channel:C123", message, {
+        sendMessageSlack("C08GQH53EJM", "hello", {
           cfg: ENTERPRISE_CFG,
           token: "xoxb-enterprise",
-          client,
         }),
       ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
     }
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 
-  it("requires the exact validated listener client and an Enterprise account", async () => {
+  it("uses the listener-scoped writer without a token or team_id method payload", async () => {
     const client = createEnterpriseClient();
-    const otherClient = createEnterpriseClient();
-
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
         ...enterpriseOptions(client),
-        client: otherClient,
-      }),
-    ).rejects.toThrow("invalid_enterprise_slack_listener_scope");
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        ...enterpriseOptions(client),
-        cfg: { channels: { slack: { botToken: "xoxb-workspace" } } },
-      }),
-    ).rejects.toThrow("unexpected_enterprise_slack_listener_scope");
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(otherClient.chat.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("uses the exact listener client without a token or team_id method payload", async () => {
-    const client = createEnterpriseClient();
-
-    const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
-      ...enterpriseOptions(client),
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-enterprise",
-            enterpriseOrgInstall: true,
-            unfurlLinks: true,
-            unfurlMedia: true,
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-enterprise",
+              unfurlLinks: true,
+              unfurlMedia: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(postPayload(client)).toEqual({
-      channel: "C08GQH53EJM",
-      text: "hello",
-      unfurl_links: false,
-      unfurl_media: true,
-    });
-    expect(postPayload(client)).not.toHaveProperty("team_id");
-    expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
+      expect(client.chat.postMessage).toHaveBeenCalledOnce();
+      expect(postPayload(client)).toEqual({
+        channel: "C08GQH53EJM",
+        text: "hello",
+        unfurl_links: false,
+        unfurl_media: true,
+      });
+      expect(postPayload(client)).not.toHaveProperty("team_id");
+      expect(client.conversations.open).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
+    } finally {
+      installationState.release();
+    }
   });
 
   it.each(["U123", "user:U123", "#general", "slack:C123", "team:T123:channel:C08GQH53EJM"])(
@@ -217,11 +219,10 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     const replacementClient = createEnterpriseClient();
     const firstDeferred = deferredPostMessage("1.000");
     firstClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
-    const secondScope = enterpriseEventScope(secondClient, "T1");
+    const secondScope = eventScope(secondClient, "T1");
     const secondOptions = {
       cfg: ENTERPRISE_CFG,
-      client: secondClient as WebClient,
-      enterpriseEventScope: secondScope,
+      eventScope: secondScope,
     };
 
     const first = sendMessageSlack("C123", "first", enterpriseOptions(firstClient, "T1"));
@@ -230,8 +231,8 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     await Promise.resolve();
     expect(secondClient.chat.postMessage).not.toHaveBeenCalled();
 
-    secondOptions.client = replacementClient;
     secondScope.client = replacementClient;
+    secondScope.writeClient = replacementClient;
     firstDeferred.release();
     await Promise.all([first, second]);
 
@@ -284,38 +285,40 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
   });
 
-  it("rejects Enterprise media before upload without the one-shot completion client", async () => {
-    const client = createEnterpriseClient();
-    const scope = enterpriseEventScope(client);
-    delete (scope as { uploadCompletionClient?: WebClient }).uploadCompletionClient;
+  it.each([undefined, "https://example.com/image.png"])(
+    "rejects delivery without the one-shot writer (media: %s)",
+    async (mediaUrl) => {
+      const client = createEnterpriseClient();
+      const scope = eventScope(client);
+      delete (scope as { writeClient?: WebClient }).writeClient;
 
-    await expect(
-      sendMessageSlack("C123", "caption", {
-        cfg: ENTERPRISE_CFG,
-        client,
-        enterpriseEventScope: scope,
-        mediaUrl: "https://example.com/image.png",
-      }),
-    ).rejects.toThrow("missing_enterprise_slack_upload_completion_client");
+      await expect(
+        sendMessageSlack("C123", "caption", {
+          cfg: ENTERPRISE_CFG,
+          eventScope: scope,
+          mediaUrl,
+        }),
+      ).rejects.toThrow("missing_enterprise_slack_write_client");
 
-    expect(client.files.getUploadURLExternal).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
+      expect(client.files.getUploadURLExternal).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
 
-  it("uses a completion-only client and keeps remaining posts on the listener client", async () => {
+  it("keeps upload URL reads on the listener and completion plus posts on the one-shot writer", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
       response: { ok: true, status: 200 },
       release,
     });
     const listenerClient = createEnterpriseClient();
-    const uploadCompletionClient = createEnterpriseClient();
-    listenerClient.chat.postMessage
+    const writeClient = createEnterpriseClient();
+    writeClient.chat.postMessage
       .mockResolvedValueOnce({ ok: true, ts: "123.001", channel: "C123" })
       .mockResolvedValueOnce({ ok: true, ts: "123.002", channel: "C123" });
 
     const result = await sendMessageSlack("C123", "12345678abcdefghZ", {
-      ...enterpriseOptions(listenerClient, "T1", uploadCompletionClient),
+      ...enterpriseOptions(listenerClient, "T1", writeClient),
       mediaUrl: "https://example.com/image.png",
       textLimit: 8,
       mediaMaxBytes: 5,
@@ -330,17 +333,17 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
     expect(listenerClient.files.getUploadURLExternal).toHaveBeenCalledOnce();
     expect(listenerClient.files.completeUploadExternal).not.toHaveBeenCalled();
-    expect(uploadCompletionClient.files.getUploadURLExternal).not.toHaveBeenCalled();
-    expect(uploadCompletionClient.files.completeUploadExternal).toHaveBeenCalledWith({
+    expect(writeClient.files.getUploadURLExternal).not.toHaveBeenCalled();
+    expect(writeClient.files.completeUploadExternal).toHaveBeenCalledWith({
       files: [{ id: "F123", title: "image.png" }],
       channel_id: "C123",
       initial_comment: "12345678",
     });
-    expect(listenerClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
+    expect(writeClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
       "abcdefgh",
       "Z",
     ]);
-    expect(uploadCompletionClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(listenerClient.chat.postMessage).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "F123",

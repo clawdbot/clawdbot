@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 
@@ -7,11 +8,10 @@ export type SidebarSessionActivePanels = Record<string, string>;
 const MAX_SIDEBAR_SESSION_LAYOUTS = 50;
 
 export function normalizeSidebarSessionLayouts(value: unknown): SidebarSessionLayouts {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
   const layouts: SidebarSessionLayouts = {};
-  for (const [sessionKey, rawLayout] of Object.entries(value).slice(-MAX_SIDEBAR_SESSION_LAYOUTS)) {
+  for (const [sessionKey, rawLayout] of Object.entries(asNonArrayRecord(value)).slice(
+    -MAX_SIDEBAR_SESSION_LAYOUTS,
+  )) {
     const key = sessionKey.trim();
     if (!key) {
       continue;
@@ -37,11 +37,10 @@ export function updateSidebarSessionLayout(
 }
 
 export function normalizeSidebarSessionActivePanels(value: unknown): SidebarSessionActivePanels {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
   const selections: SidebarSessionActivePanels = {};
-  for (const [sessionKey, panelId] of Object.entries(value).slice(-MAX_SIDEBAR_SESSION_LAYOUTS)) {
+  for (const [sessionKey, panelId] of Object.entries(asNonArrayRecord(value)).slice(
+    -MAX_SIDEBAR_SESSION_LAYOUTS,
+  )) {
     const key = sessionKey.trim();
     const id = typeof panelId === "string" ? panelId.trim() : "";
     if (key && id) {

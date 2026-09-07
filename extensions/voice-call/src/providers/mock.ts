@@ -114,10 +114,14 @@ export class MockProvider implements VoiceCallProvider {
             confidence?: number;
           }
         >;
+        const transcript = payload.transcript ?? "";
+        if (!transcript.trim()) {
+          return null;
+        }
         return {
           ...base,
           type: evt.type,
-          transcript: payload.transcript ?? "",
+          transcript,
           isFinal: payload.isFinal ?? true,
           confidence: payload.confidence,
         };

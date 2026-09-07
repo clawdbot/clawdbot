@@ -13,6 +13,9 @@ const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
+  target?: "host" | "node";
+  node?: string;
+  query?: Record<string, unknown>;
   body?: Record<string, unknown>;
 };
 
@@ -22,16 +25,6 @@ export function setupBrowserPanelTestCleanup(): void {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-}
-
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 export function createBrowserClient(
@@ -64,7 +57,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
-  readonly basePath = "";
+  readonly resourceBasePath = "";
   readonly authToken = null;
   available = true;
   isConnected = true;
@@ -161,8 +154,22 @@ class TestBrowserImage extends EventTarget {
   }
 }
 
+class TestBrowserFileReader extends EventTarget {
+  result: string | ArrayBuffer | null = null;
+  error: DOMException | null = null;
+
+  readAsDataURL(blob: Blob): void {
+    void blob.arrayBuffer().then((buffer) => {
+      const binary = String.fromCharCode(...new Uint8Array(buffer));
+      this.result = `data:${blob.type};base64,${btoa(binary)}`;
+      this.dispatchEvent(new Event("load"));
+    });
+  }
+}
+
 export function stubScreenshotMedia(): void {
   vi.stubGlobal("Image", TestBrowserImage);
+  vi.stubGlobal("FileReader", TestBrowserFileReader);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {

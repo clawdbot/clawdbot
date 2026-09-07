@@ -1,13 +1,11 @@
 // Model list status tests cover status column construction and auth/probe summaries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ModelDefinitionConfig } from "../../config/types.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
@@ -206,9 +204,12 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
+}));
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
-  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
 }));
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
@@ -291,16 +292,17 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+  prepareProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
   resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
 }));
-vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
+vi.mock("../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await mocks.loadModelCatalog(...args);
     return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
@@ -439,6 +441,7 @@ async function withOpenAIStatusFixture<T>(
     providerApiKey?: unknown;
     providerApi?: "openai-chatgpt-responses";
     providerBaseUrl?: string;
+    providerModels?: ModelDefinitionConfig[];
     agentRuntime?: string;
     catalog?: unknown[];
     routeVariants?: unknown[];
@@ -484,14 +487,15 @@ async function withOpenAIStatusFixture<T>(
         params.providerAuth ||
         params.providerApiKey !== undefined ||
         params.providerApi ||
-        params.providerBaseUrl
+        params.providerBaseUrl ||
+        params.providerModels
           ? {
               openai: {
                 ...(params.providerAuth ? { auth: params.providerAuth } : {}),
                 ...(params.providerApiKey !== undefined ? { apiKey: params.providerApiKey } : {}),
                 ...(params.providerApi ? { api: params.providerApi } : {}),
                 ...(params.providerBaseUrl ? { baseUrl: params.providerBaseUrl } : {}),
-                models: [],
+                models: params.providerModels ?? [],
               },
             }
           : {},
@@ -592,6 +596,49 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("shows exact WHAM classification and canonical reason in status JSON", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<
+        string,
+        {
+          cooldownUntil: number;
+          cooldownReason: "auth";
+          cooldownClassification: "wham_token_expired";
+        }
+      >;
+    };
+    store.usageStats = {
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "openai:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "openai:default",
+          reason: "auth",
+          classification: "wham_token_expired",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("cooldown:wham_token_expired");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     const now = Date.now();
     const profileId = "google-gemini-cli:legacy";
@@ -629,14 +676,14 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does not restore over plugin metadata published while status is running", async () => {
+  it("keeps status metadata scoped while another operation publishes metadata", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();
     const workspaceDir = "/tmp/openclaw-agent/workspace";
     const catalogStarted = createDeferred();
     const releaseCatalog = createDeferred();
     let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     mocks.loadModelCatalog.mockImplementationOnce(async () => {
       replacement = getCurrentPluginMetadataSnapshot({
         config,
@@ -652,6 +699,9 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await catalogStarted.promise;
       expect(replacement).toBeDefined();
+      expect(
+        getCurrentPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+      ).toBeUndefined();
       clearPluginMetadataLifecycleCaches();
       setCurrentPluginMetadataSnapshot(replacement!, {
         config,
@@ -671,7 +721,7 @@ describe("modelsStatusCommand auth overview", () => {
     } finally {
       releaseCatalog.resolve();
       await commandPromise.catch(() => {});
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
       if (originalLoadModelCatalog) {
         mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
       } else {
@@ -704,7 +754,6 @@ describe("modelsStatusCommand auth overview", () => {
         readOnly: true,
       }),
     );
-
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
@@ -888,7 +937,7 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
     });
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
@@ -908,7 +957,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
     );
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
@@ -946,6 +995,152 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  async function withConfig<T>(cfg: unknown, run: () => Promise<T>): Promise<T> {
+    const original = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue(cfg);
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        mocks.loadConfig.mockImplementation(original);
+      }
+    }
+  }
+
+  it("resolves a selected agent's bare alias from that agent's model scope", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-default", fallbacks: [] } },
+          entries: {
+            jeremiah: {
+              model: { primary: "jeremiah-choice" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "jeremiah-choice" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "jeremiah-choice" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          expect(payload.defaultModel).toBe("jeremiah-choice");
+          // Resolving the bare alias against global defaults reported
+          // openai/jeremiah-choice while the runtime selected Anthropic, so status,
+          // --check and --probe all inspected the wrong provider route.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({
+            "jeremiah-choice": "anthropic/claude-sonnet-4-6",
+          });
+        });
+      },
+    );
+  });
+
+  it("prefers a per-agent alias row over the same alias in defaults", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-default", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "shared" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          // Per-agent rows are applied after defaults, so the agent's row owns
+          // the alias and the displayed target must follow the same precedence.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({ shared: "anthropic/claude-sonnet-4-6" });
+        });
+      },
+    );
+  });
+
+  it("keeps unscoped status on global defaults when no agent is selected", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "shared", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+        const payload = parseFirstJsonLog(localRuntime);
+        // No --agent still reports unscoped defaults; another agent's rows must
+        // not leak into the global view.
+        expect(payload.resolvedDefault).toBe("openai/gpt-shared");
+        expect(payload.aliases).toMatchObject({ shared: "openai/gpt-shared" });
+      },
+    );
+  });
+
+  it("uses system-agent storage without changing unscoped model output", async () => {
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          systemAgent: { agentId: "jeremiah" },
+        },
+        entries: { main: {}, jeremiah: {} },
+      },
+      models: { providers: {} },
+    });
+    mocks.resolveAgentExplicitModelPrimary.mockClear();
+    mocks.resolveAgentModelFallbacksOverride.mockClear();
+    mocks.loadModelCatalog.mockClear();
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "openai/gpt-5.6-luna",
+          fallbacks: ["openai/gpt-5.6-sol"],
+        },
+        async () => {
+          const localRuntime = createRuntime();
+          await modelsStatusCommand({ json: true }, localRuntime as never);
+
+          expectResolveAgentDirCalledFor("jeremiah");
+          expect(mocks.resolveAgentExplicitModelPrimary).not.toHaveBeenCalled();
+          expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: "jeremiah", readOnly: true }),
+          );
+          expect(parseFirstJsonLog(localRuntime)).toMatchObject({
+            defaultModel: "anthropic/claude-opus-4-6",
+            fallbacks: [],
+          });
+        },
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("rejects API-key auth for subscription-only Codex Spark", async () => {
@@ -1295,6 +1490,55 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.modelRouteIssues).toEqual([]);
     expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["Writer", "rEaDeR"])(
+    "keeps model status independent of %s routes",
+    async (responsesId) => {
+      const localRuntime = createRuntime();
+      const baseUrl = "https://models.example.test/v1";
+      const model = (id: string, api?: ModelDefinitionConfig["api"]): ModelDefinitionConfig => ({
+        id,
+        name: id,
+        api,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      });
+      const providerModels = [
+        model("Reader", "openai-completions"),
+        model(responsesId, "openai-responses"),
+        model("reader"),
+      ];
+      const catalog = providerModels.map((entry) => ({ ...entry, provider: "openai", baseUrl }));
+      const fallbacks = [`openai/${responsesId}`, "openai/reader"];
+      await withOpenAIStatusFixture(
+        {
+          primary: "openai/Reader",
+          fallbacks,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", key: "status-proof" },
+          },
+          providerBaseUrl: baseUrl,
+          providerModels,
+          catalog,
+          routeVariants: catalog,
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        },
+      );
+
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.defaultModel).toBe("openai/Reader");
+      expect(payload.fallbacks).toEqual(fallbacks);
+      expect(payload.auth.modelRouteIssues).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(0);
+    },
+  );
 
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
     const localRuntime = createRuntime();
@@ -1771,12 +2015,18 @@ describe("modelsStatusCommand auth overview", () => {
   it("exits non-zero when auth is missing", async () => {
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {};
-    const localRuntime = createRuntime();
+    const localRuntime = {
+      ...createRuntime(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
       await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
+      expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
+      expect(localRuntime.log).not.toHaveBeenCalled();
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;

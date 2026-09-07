@@ -1,18 +1,18 @@
 // Policy plugin gateway exposure evidence.
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyGatewayExposureEvidence } from "./policy-state-types.js";
 
 export function scanPolicyGatewayExposure(
   cfg: Record<string, unknown>,
 ): readonly PolicyGatewayExposureEvidence[] {
-  const gateway = isRecord(cfg.gateway) ? cfg.gateway : {};
+  const gateway = asNonArrayRecord(cfg.gateway);
   const entries: PolicyGatewayExposureEvidence[] = [];
   const bind = typeof gateway.bind === "string" ? gateway.bind : undefined;
   const customBindHost =
     typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined;
   const hasCustomBindHost = customBindHost !== undefined && customBindHost.trim() !== "";
-  const tailscale = isRecord(gateway.tailscale) ? gateway.tailscale : {};
+  const tailscale = asNonArrayRecord(gateway.tailscale);
   const tailscaleForcesLoopback = tailscale.mode === "serve" || tailscale.mode === "funnel";
   entries.push({
     id: bind === undefined ? "gateway-bind-default" : "gateway-bind",
@@ -37,7 +37,7 @@ export function scanPolicyGatewayExposure(
     });
   }
 
-  const auth = isRecord(gateway.auth) ? gateway.auth : {};
+  const auth = asNonArrayRecord(gateway.auth);
   entries.push({
     id: "gateway-auth-mode",
     kind: "auth",
@@ -53,7 +53,7 @@ export function scanPolicyGatewayExposure(
     explicit: isRecord(auth.rateLimit),
   });
 
-  const controlUi = isRecord(gateway.controlUi) ? gateway.controlUi : {};
+  const controlUi = asNonArrayRecord(gateway.controlUi);
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-enabled",
@@ -100,7 +100,7 @@ export function scanPolicyGatewayExposure(
     });
   }
 
-  const remote = isRecord(gateway.remote) ? gateway.remote : {};
+  const remote = asNonArrayRecord(gateway.remote);
   if (gateway.mode === "remote") {
     entries.push({
       id: "gateway-mode-remote",
@@ -118,11 +118,11 @@ export function scanPolicyGatewayExposure(
     }
   }
 
-  const http = isRecord(gateway.http) ? gateway.http : {};
-  const endpoints = isRecord(http.endpoints) ? http.endpoints : {};
+  const http = asNonArrayRecord(gateway.http);
+  const endpoints = asNonArrayRecord(http.endpoints);
   pushGatewayHttpEndpointEvidence(entries, endpoints, "chatCompletions");
   pushGatewayHttpEndpointEvidence(entries, endpoints, "responses");
-  const nodes = isRecord(gateway.nodes) ? gateway.nodes : {};
+  const nodes = asNonArrayRecord(gateway.nodes);
   pushGatewayNodeCommandEvidence(entries, nodes);
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }

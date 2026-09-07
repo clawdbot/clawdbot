@@ -5,7 +5,8 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
-  extractAssistantText,
+  createAssistantVisibleStreamText,
+  extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   createThinkingTagStreamState,
@@ -15,6 +16,7 @@ import {
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
@@ -73,18 +75,26 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     ...message,
   } as unknown as AssistantMessage;
 }
+
+describe("createAssistantVisibleStreamText", () => {
+  it("keeps interleaved streams independent when one is replaced", () => {
+    const first = createAssistantVisibleStreamText();
+    const second = createAssistantVisibleStreamText();
+
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "Alpha" });
+    expect(second.append("\n\nBravo")).toEqual({ text: "Bravo", delta: "Bravo" });
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "" });
+    expect(second.append(" is here")).toEqual({ text: "Bravo is here", delta: " is here" });
+    expect(first.replace("Reset")).toEqual({ text: "Reset", delta: null });
+    expect(second.append("\n\nBravo is here")).toEqual({ text: "Bravo is here", delta: "" });
+    expect(first.append("!")).toEqual({ text: "Reset!", delta: "!" });
+  });
+});
 
 describe("extractThinkingFromTaggedStream", () => {
   it("matches full-buffer extraction at every randomized chunk boundary", () => {
@@ -103,16 +113,28 @@ describe("extractThinkingFromTaggedStream", () => {
         let prefix = "";
         for (const chunk of randomChunks(text, seed)) {
           prefix += chunk;
-          expect(extractThinkingFromTaggedStream(prefix, state), `${text} (seed ${seed})`).toBe(
-            extractThinkingFromTaggedStreamReference(prefix),
-          );
+          expect(
+            extractThinkingFromTaggedStream(prefix, state, chunk),
+            `${text} (seed ${seed})`,
+          ).toBe(extractThinkingFromTaggedStreamReference(prefix));
         }
       }
     }
   });
+
+  it("resumes from an authoritative checkpoint before consuming later deltas", () => {
+    const state = createThinkingTagStreamState();
+    let text = "<think>Checkpoint";
+    for (const delta of [" continues", "</think>Visible", "", "<think>second</think>"]) {
+      text += delta;
+      expect(extractThinkingFromTaggedStream(text, state, delta)).toBe(
+        extractThinkingFromTaggedStreamReference(text),
+      );
+    }
+  });
 });
 
-describe("extractAssistantText", () => {
+describe("extractEmbeddedAssistantText", () => {
   it("strips tool-only Minimax invocation XML from text", () => {
     const cases = [
       `<invoke name="Bash">
@@ -130,7 +152,7 @@ describe("extractAssistantText", () => {
         content: [{ type: "text", text }],
         timestamp: Date.now(),
       });
-      expect(extractAssistantText(msg)).toBe("");
+      expect(extractEmbeddedAssistantText(msg)).toBe("");
     }
   });
 
@@ -246,7 +268,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe(expected);
   });
 
@@ -262,7 +284,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe(
       `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
     );
@@ -277,7 +299,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
@@ -293,7 +315,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe(
       "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
     );
@@ -309,7 +331,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe(responseText);
   });
 
@@ -336,7 +358,7 @@ Back to the user.`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe("First block.\nThird block.");
   });
 
@@ -366,7 +388,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
@@ -382,7 +404,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantText(msg)).toBe("Let me check.\n\n Done.");
+    expect(extractEmbeddedAssistantText(msg)).toBe("Let me check.\n\n Done.");
   });
 
   it("strips raw <tool_result> XML blocks from assistant text", () => {
@@ -397,7 +419,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+    expect(extractEmbeddedAssistantText(msg)).toBe("Prefix\n\nSuffix");
   });
 
   it("strips raw <function_response> workflow blocks from assistant text", () => {
@@ -419,7 +441,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+    expect(extractEmbeddedAssistantText(msg)).toBe("Prefix\n\nSuffix");
   });
 
   it("strips dangling <tool_call> XML content to end-of-string", () => {
@@ -434,7 +456,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantText(msg)).toBe("Let me run.");
+    expect(extractEmbeddedAssistantText(msg)).toBe("Let me run.");
   });
 
   it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
@@ -454,7 +476,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantText(msg)).toBe(
+    expect(extractEmbeddedAssistantText(msg)).toBe(
       "I will read the file.\n\n\nThe file contains: hello world",
     );
   });
@@ -472,7 +494,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     // The mismatched closing tag should still exit the block, stripping the
     // tool XML while preserving legitimate trailing prose.
     expect(result).not.toContain("<tool_result>");
@@ -493,7 +515,7 @@ File contents here`,
       timestamp: Date.now(),
     });
 
-    const result = extractAssistantText(msg);
+    const result = extractEmbeddedAssistantText(msg);
     // </tool_result> must NOT exit a <tool_call> block; the block should
     // continue until the matching </tool_call>, preventing payload leaks.
     expect(result).not.toContain("LEAK");
@@ -557,7 +579,7 @@ File contents here`,
         content: [{ type: "text", text: testCase.text }],
         timestamp: Date.now(),
       });
-      expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
+      expect(extractEmbeddedAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
   });
 });

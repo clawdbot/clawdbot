@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { asRecord } from "../record-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -20,7 +20,7 @@ function decoratedMarkerPath(userDataDir: string) {
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
-  return asRecord(loadJsonFile(filePath));
+  return asNullableRecord(loadJsonFile(filePath));
 }
 
 function safeWriteJson(filePath: string, data: Record<string, unknown>) {
@@ -28,11 +28,14 @@ function safeWriteJson(filePath: string, data: Record<string, unknown>) {
 }
 
 function readNestedRecord(root: unknown, key: string): Record<string, unknown> | null {
-  return asRecord(asRecord(root)?.[key]);
+  return asNullableRecord(asNullableRecord(root)?.[key]);
 }
 
 function readDefaultProfileInfo(localState: unknown): Record<string, unknown> | null {
-  return readNestedRecord(readNestedRecord(asRecord(localState)?.profile, "info_cache"), "Default");
+  return readNestedRecord(
+    readNestedRecord(asNullableRecord(localState)?.profile, "info_cache"),
+    "Default",
+  );
 }
 
 function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {

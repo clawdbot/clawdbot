@@ -6,9 +6,17 @@ import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
+const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "candidate:claude-cli"));
+vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
@@ -44,6 +52,7 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 }));
 vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -142,6 +151,7 @@ describe("guided onboarding post-inference steps", () => {
     localOnboarding.complete.mockReset();
     localOnboarding.complete.mockReturnValue(true);
     restoreTerminalState.mockClear();
+    promptAuthChoiceGrouped.mockClear();
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -161,7 +171,7 @@ describe("guided onboarding post-inference steps", () => {
     await logPathTracker.cleanup();
   });
 
-  it("auto-connects one credentialed candidate before any workspace prompt", async () => {
+  it("connects the selected candidate before any workspace prompt", async () => {
     const persistedConfig: OpenClawConfig = {
       agents: { defaults: { model: { primary: "claude-cli/opus" } } },
     };
@@ -215,10 +225,14 @@ describe("guided onboarding post-inference steps", () => {
         surface: "cli",
       }),
     );
+    expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.activate.mock.invocationCallOrder[0]!,
+    );
     expect(text).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
+      undefined,
     );
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runAppRecommendations).toHaveBeenCalledWith({

@@ -30,6 +30,9 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "fireworks": "fireworks-ai"
+    },
     "providers": {
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",
@@ -40,7 +43,7 @@
             "id": "accounts/fireworks/routers/glm-5p2-fast",
             "name": "GLM 5.2 Fast",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text"],
             "contextWindow": 256000,
             "maxTokens": 256000,
             "cost": {

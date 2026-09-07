@@ -29,6 +29,8 @@ function recorderParams() {
     prompt: "recall prompt",
     provider: "claude-cli",
     model: "claude-opus-4-8",
+    expectedLifecycleRevision: "revision-a",
+    expectedWriterRunId: "run-transcript-test",
     senderIsOwner: true,
   };
 }
@@ -49,6 +51,8 @@ describe("createCliDispatchTranscriptRecorder", () => {
       sessionKey: "agent:main:recall",
       agentId: "main",
       sessionFile: "sqlite://agents/main/recall-session",
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-transcript-test",
     });
     expect(records[0]?.message).toMatchObject({
       role: "user",
@@ -208,6 +212,10 @@ describe("createCliDispatchTranscriptRecorder", () => {
     expect(assistants[0]?.message).toMatchObject({
       content: [{ type: "text", text: "partial before kill" }],
       stopReason: "aborted",
+    });
+    expect(assistants[0]?.scope).toMatchObject({
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-transcript-test",
     });
   });
 

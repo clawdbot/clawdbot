@@ -1,3 +1,4 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Chat target prefix parsers.
  *
@@ -8,7 +9,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 import { resolveAllowlistMatchByCandidates } from "../allowlist-match.js";
 
 /**

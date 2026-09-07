@@ -1,6 +1,10 @@
 // Covers plugin config policy validation and ownership decisions.
 import { describe, expect, it } from "vitest";
-import { hasExplicitPluginConfig, normalizePluginsConfigWithResolver } from "./config-policy.js";
+import {
+  normalizePluginsConfigWithResolver,
+  resolvePolicyPluginActivationState,
+} from "./config-policy.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 
 describe("normalizePluginsConfigWithResolver", () => {
   it("uses the provided plugin id resolver for allow deny and entry keys", () => {
@@ -23,10 +27,41 @@ describe("normalizePluginsConfigWithResolver", () => {
   });
 });
 
-describe("hasExplicitPluginConfig", () => {
-  it("detects explicit config from slots and entry keys", () => {
-    expect(hasExplicitPluginConfig({ slots: { memory: "none" } })).toBe(true);
-    expect(hasExplicitPluginConfig({ entries: { foo: {} } })).toBe(true);
-    expect(hasExplicitPluginConfig({})).toBe(false);
+describe("resolvePolicyPluginActivationState", () => {
+  it.each([
+    {
+      name: "keeps metadata allowlists strict while runtime honors explicit channel activation",
+      deny: [] as string[],
+      runtime: { enabled: true, source: "explicit", reason: "channel enabled in config" },
+      policy: { enabled: false, source: "disabled", reason: "not in allowlist" },
+    },
+    {
+      name: "keeps denylist precedence in both runtime and metadata channel activation",
+      deny: ["telegram"],
+      runtime: { enabled: false, source: "disabled", reason: "blocked by denylist" },
+      policy: { enabled: false, source: "disabled", reason: "blocked by denylist" },
+    },
+  ])("$name", ({ deny, runtime, policy }) => {
+    const rootConfig = {
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["browser"], deny },
+    };
+    const params = {
+      id: "telegram",
+      origin: "bundled" as const,
+      config: normalizePluginsConfigWithResolver(rootConfig.plugins),
+      rootConfig,
+    };
+
+    expect(resolveEffectivePluginActivationState(params)).toEqual({
+      ...runtime,
+      activated: runtime.enabled,
+      explicitlyEnabled: true,
+    });
+    expect(resolvePolicyPluginActivationState(params)).toEqual({
+      ...policy,
+      activated: policy.enabled,
+      explicitlyEnabled: true,
+    });
   });
 });

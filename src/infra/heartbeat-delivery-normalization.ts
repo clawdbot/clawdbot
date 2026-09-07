@@ -5,6 +5,7 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 
@@ -44,7 +45,7 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
 
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
 
-export function stripTrailingHeartbeatNotifyFalse(text: string): {
+function stripTrailingHeartbeatNotifyFalse(text: string): {
   text: string;
   silent: boolean;
 } {
@@ -58,15 +59,18 @@ export function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
+  mode: "heartbeat" | "message" = "heartbeat",
 ): NormalizedHeartbeatDelivery {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-  const stripped = stripHeartbeatToken(textForStrip, {
-    mode: "heartbeat",
+  const isSilentReply = isSilentReplyPayloadText(textForStrip);
+  const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
+    mode,
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
   const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
+  notifyFalse.silent ||= isSilentReply;
   const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
   if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
     return {

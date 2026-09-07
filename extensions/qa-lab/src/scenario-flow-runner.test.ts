@@ -1,4 +1,6 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
@@ -11,6 +13,7 @@ import {
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import type { QaSuiteStep } from "./suite-types.js";
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -60,10 +63,8 @@ async function runWebchatTranscriptWait(
         }
         throw new Error("test condition was not met");
       },
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
-      formatErrorMessage: (error: unknown) =>
-        error instanceof Error ? error.message : String(error),
+      normalizeLowercaseStringOrEmpty,
+      formatErrorMessage: coerceErrorMessage,
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
@@ -129,7 +130,11 @@ function readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents: unknown[]): 
   };
 }
 
-const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+const planningEvidenceCoverageIds = new Set([
+  "agent-runtime.external-harness-selection-planning",
+  "openai.codex-harness-no-meta-leak",
+  "openai.codex-harness-planning",
+]);
 
 type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
   execution: Extract<QaScenarioExecution, { kind: "flow" }> & { flow?: QaScenarioFlow };
@@ -200,14 +205,11 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText: expectedReply,
-      failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
+      failureMessage: "missing successful current-attempt progress_card update",
       currentSummary: {
         eventCursor: 9,
-        assistantMirrors: [
-          { identity: "current-turn:plan", text: `Codex plan:\n${internalMarker}` },
-          { identity: "current-turn:assistant", text: expectedReply },
-        ],
-        successfulToolCallCounts: {},
+        assistantMirrors: [{ identity: "current-turn:assistant", text: expectedReply }],
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -216,14 +218,11 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText,
-      failureMessage: "missing Codex App Server plan signal",
+      failureMessage: "missing Codex harness progress_card signal",
       currentSummary: {
         eventCursor: 9,
-        assistantMirrors: [
-          { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
-          { identity: "current-turn:assistant", text: outboundText },
-        ],
-        successfulToolCallCounts: {},
+        assistantMirrors: [{ identity: "current-turn:assistant", text: outboundText }],
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -231,10 +230,10 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText: `Built ${artifactFile}`,
-      failureMessage: "missing OpenClaw update_plan signal",
+      failureMessage: "missing OpenClaw progress_card signal",
       currentSummary: {
         eventCursor: 9,
-        successfulToolCallCounts: { update_plan: 1 },
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -250,15 +249,13 @@ function runPlanningEvidenceFixture(
   const summaries = [
     {
       eventCursor: 7,
-      assistantMirrors: [
-        { identity: "old-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
-        { identity: "old-turn:assistant", text: fixture.outboundText },
-      ],
-      successfulToolCallCounts: { update_plan: 1 },
+      assistantMirrors: [{ identity: "old-turn:assistant", text: fixture.outboundText }],
+      successfulToolCallCounts: { progress_card: 1 },
     },
     currentSummary,
   ];
   let readIndex = 0;
+  const cardStep = fixture.scenario.execution.config?.internalMarker;
   const result = runLoadedScenarioFlow(fixture.scenario.id, {
     flow: readPlanningEvidenceFlow(fixture.scenario),
     state,
@@ -273,6 +270,12 @@ function runPlanningEvidenceFixture(
       env: {
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.6-luna",
+        gateway: {
+          call: async (method: string) =>
+            method === "progressCard.get"
+              ? { card: { revision: 1, steps: [{ step: cardStep }] } }
+              : { messages: [{ role: "assistant", content: fixture.outboundText }] },
+        },
       },
       readSessionTranscriptSummary: async (...args: unknown[]) => {
         readOptions.push(args[2]);
@@ -284,8 +287,7 @@ function runPlanningEvidenceFixture(
         return summary;
       },
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       runAgentPrompt: async () => ({ started: { runId: "current-run" }, waited: { status: "ok" } }),
     },
   });
@@ -397,8 +399,7 @@ describe("scenario-flow-runner", () => {
             throw new Error("goal artifact has not been written");
           },
         },
-        normalizeLowercaseStringOrEmpty: (value: unknown) =>
-          typeof value === "string" ? value.trim().toLowerCase() : "",
+        normalizeLowercaseStringOrEmpty,
       },
       onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
         const currentInbound = currentState
@@ -562,8 +563,7 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow(id, {
         state,
         api: {
-          normalizeLowercaseStringOrEmpty: (value: unknown) =>
-            typeof value === "string" ? value.trim().toLowerCase() : "",
+          normalizeLowercaseStringOrEmpty,
           runAgentPrompt: async () => {
             turnCount += 1;
             state.addOutboundMessage({
@@ -744,13 +744,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -817,13 +814,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -882,10 +876,7 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           try {
             await steps[0]?.run();
           } catch (error) {

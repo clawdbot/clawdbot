@@ -6,7 +6,7 @@ import {
   statSync,
   type WriteStream,
 } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import {
   createConnection as createNetConnection,
   createServer as createNetServer,
@@ -15,6 +15,8 @@ import {
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
+import { toStringifiedError } from "../error-format.mts";
+import { terminateManagedChild } from "../managed-child-process.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -194,15 +196,12 @@ export async function stopGateway(gateway: GatewayHandle | null) {
 }
 
 function signalChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child may have exited before its process group was signaled.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 export function registerActiveChildProcessTree(child: ChildProcess) {
@@ -555,12 +554,10 @@ export async function startStaticFileServer(params: {
     url: `http://127.0.0.1:${port}/${fileName}`,
     close: () => {
       closePromise ??= new Promise<void>((resolvePromise, rejectPromise) => {
-        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-              (logError: unknown): Error =>
-                logError instanceof Error ? logError : new Error(String(logError)),
+              (logError: unknown): Error => toStringifiedError(logError),
             );
             if (error) {
               rejectPromise(error);
@@ -577,20 +574,13 @@ export async function startStaticFileServer(params: {
             resolvePromise();
           })();
         });
-        closeStaticFileServerConnections(server, sockets);
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
       return closePromise;
     },
   };
-}
-
-function closeStaticFileServerConnections(server: Server, sockets: Set<Socket>) {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  if (typeof server.closeAllConnections === "function") {
-    server.closeAllConnections();
-  }
 }
 
 function finishStaticFileServerLog(logStream: WriteStream, pendingError: Error | null) {

@@ -698,6 +698,26 @@ class WearProxyClientTest {
   }
 
   @Test
+  fun readOnlyRpcCursorDoesNotInvalidateAnOverlappingModelRequest() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+    val pulseBeforeModel = tracker.beginReadOnlyResponseRequest()
+    val modelRequest = tracker.beginResponseRequest()
+    val pulseRequest = tracker.beginReadOnlyResponseRequest()
+    tracker.beginReadOnlyResponseRequest()
+
+    assertTrue(tracker.isReadOnlyResponseCurrent(pulseBeforeModel, "stream", 10))
+    assertTrue(tracker.isResponseCurrent(modelRequest, "stream", 10))
+    assertTrue(tracker.isReadOnlyResponseCurrent(pulseRequest, "stream", 10))
+
+    val staleLegacyPulse = tracker.beginReadOnlyResponseRequest()
+    assertEquals(WearSequenceDecision.Accepted, tracker.accept("stream", 11))
+    assertFalse(tracker.isReadOnlyResponseCurrent(staleLegacyPulse, null, null))
+    assertFalse(tracker.isReadOnlyResponseCurrent(pulseRequest, "stream", 10))
+  }
+
+  @Test
   fun resyncBufferReplaysEventsNewerThanTheSnapshotWatermark() {
     val tracker = WearEventSequenceTracker()
     val buffer = WearEventResyncBuffer()

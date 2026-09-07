@@ -1,26 +1,34 @@
 import fsp from "node:fs/promises";
-import type {
-  AgentHarnessAttemptParams,
-  SandboxContext,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  buildEmbeddedForegroundPromptContext,
   isHostScopedAgentToolActive,
+  resolveAgentDir,
   resolveSandboxContext as defaultResolveSandboxContext,
-  resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readResolvedAttemptPath, readString, resolveModelRef } from "./attempt-config.js";
-import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { readNonEmptyString, readResolvedAttemptPath, resolveModelRef } from "./attempt-config.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptDeps,
+  CopilotAttemptParams,
+} from "./attempt-types.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 export function prepareCopilotAttemptContext(
-  params: AgentHarnessAttemptParams,
+  params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ) {
   const settledToolFinalization = deps.operation === "settled-tool-finalization";
+  if (!settledToolFinalization) {
+    assertCopilotAttemptHostCapabilities(params);
+  }
+  const { hostCapabilities: _hostCapabilities, ...capabilityFreeParams } = params;
   const input = (
     settledToolFinalization
       ? {
-          ...params,
+          ...capabilityFreeParams,
           disableTools: true,
           images: [],
           imageOrder: [],
@@ -52,13 +60,13 @@ export function prepareCopilotAttemptContext(
   const resolvedWorkspaceForSandbox =
     readResolvedAttemptPath(input.workspaceDir) ?? readResolvedAttemptPath(input.cwd);
   const sandboxSessionKey =
-    readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
-    readString((input as { sessionKey?: unknown }).sessionKey) ??
-    readString(input.sessionId);
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+    readNonEmptyString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
+    readNonEmptyString((input as { sessionKey?: unknown }).sessionKey) ??
+    readNonEmptyString(input.sessionId);
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
+    sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
-    agentId: readString(params.agentId),
+    agentId: readNonEmptyString(params.agentId),
   });
   const hookContextWindowFields = {
     ...(input.contextWindowInfo?.tokens
@@ -77,12 +85,16 @@ export function prepareCopilotAttemptContext(
     runId: input.runId,
     jobId: input.jobId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: readNonEmptyString(input.sessionKey) ?? sandboxSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+      { ...input, agentId: sessionAgentId },
+      input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),
+    ),
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
@@ -108,11 +120,15 @@ export async function resolveCopilotAttemptSandbox(params: {
   sandboxSessionKey: string | undefined;
 }): Promise<{ sandbox: SandboxContext | null; effectiveWorkspaceDir: string }> {
   const resolveSandbox = params.deps.resolveSandboxContextOverride ?? defaultResolveSandboxContext;
-  const sandbox = await resolveSandbox({
-    config: params.input.config,
-    sessionKey: params.sandboxSessionKey,
-    workspaceDir: params.resolvedWorkspaceForSandbox,
-  });
+  const sandbox =
+    params.input.sandbox !== undefined
+      ? params.input.sandbox
+      : await resolveSandbox({
+          config: params.input.config,
+          agentId: params.input.sandboxAgentId,
+          sessionKey: params.sandboxSessionKey,
+          workspaceDir: params.resolvedWorkspaceForSandbox,
+        });
   const effectiveWorkspaceDir = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? params.resolvedWorkspaceForSandbox

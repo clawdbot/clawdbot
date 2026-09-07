@@ -5,9 +5,12 @@
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../reply-payload.js";
+import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import {
   captureReplyDispatchDeliveryOutcome,
   type ReplyDispatchDeliveryOutcome,
+  waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -17,8 +20,8 @@ const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
 
 type LedgerQueuedSend = {
   queued: boolean;
-  /** Present only when the core dispatcher exposes this payload's settlement. */
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
+  hasPendingDelivery?: () => boolean;
 };
 
 type LedgerSettleResult = "settled" | "aborted" | "timed-out";
@@ -27,23 +30,51 @@ type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (payload: ReplyPayload, delivered: boolean) => void;
+  recordRoutedDelivery: (
+    payload: ReplyPayload,
+    result: {
+      delivered: boolean;
+      queueCustody?: "held" | "released";
+      ambiguous?: boolean;
+    },
+  ) => void;
   /** Resolve every admitted payload's outcome so the fallback gate decides after
    * beforeDeliver hooks and transport delivery, not at admission. Only a
    * "settled" result proves the visibility verdict is complete. */
   settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
   /** True once any settled, contentful, non-suppressed delivery exists. */
   hasVisibleDelivery: () => boolean;
-  /** True when the dispatcher admitted payloads the dispatch pipeline never sent
-   * (channel-owned sends). Their settlement is unknown, so the fallback gate
-   * treats them conservatively as visible: silence over a double-send. */
-  hasForeignQueuedAdmissions: () => boolean;
+  hasPendingDelivery: () => boolean;
 };
+
+export async function requireQueuedReplyDelivery(params: {
+  delivery: LedgerQueuedSend;
+  dispatcher: Pick<ReplyDispatcher, "supportsSettledReceipt" | "waitForIdle">;
+  abortSignal: AbortSignal | undefined;
+}): Promise<void> {
+  if (!params.delivery.queued) {
+    throw new Error("queued reply delivery failed");
+  }
+  const outcome = params.delivery.outcome;
+  if (!outcome) {
+    const receipt = await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+    if (
+      params.dispatcher.supportsSettledReceipt === true &&
+      receipt?.anyVisibleDelivered !== true
+    ) {
+      throw new Error("queued reply delivery failed");
+    }
+    return;
+  }
+  const settledOutcome = await runWithDispatchAbortSignal(params.abortSignal, () => outcome);
+  if (settledOutcome !== "delivered") {
+    throw new ReplyDispatchDeliveryError(settledOutcome);
+  }
+}
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   let visibleDeliveries = 0;
-  let queuedAdmissions = 0;
-  const pendingOutcomes: Array<Promise<void>> = [];
+  let pendingDelivery = false;
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
     if (kind === "tool") {
       return dispatcher.sendToolResult(payload);
@@ -55,49 +86,39 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
   };
   return {
     sendQueued(kind, payload) {
-      const capture = captureReplyDispatchDeliveryOutcome(payload);
+      const capture =
+        dispatcher.supportsSettledReceipt === true
+          ? captureReplyDispatchDeliveryOutcome(payload)
+          : undefined;
       const queued = enqueue(kind, payload);
       if (!queued) {
         return { queued: false };
       }
-      queuedAdmissions += 1;
-      // Core dispatchers drop contentless payloads at normalization using this
-      // same predicate, so the check matters for untracked dispatchers that
-      // admit without normalizing; hooks suppress visibility via the cancel
-      // path (beforeDeliver -> null), never by emptying an admitted payload.
-      const contentful = hasOutboundReplyContent(payload, { trimText: true });
-      if (!capture.isTracked()) {
-        // Non-core dispatchers expose no settlement; admission stays their
-        // strongest visibility fact (legacy trust level).
-        if (contentful) {
-          visibleDeliveries += 1;
-        }
+      if (!capture) {
+        // Legacy dispatchers expose admission only. Treat an accepted send as
+        // potentially visible so the fallback cannot duplicate its delivery.
+        visibleDeliveries += 1;
         return { queued: true };
       }
-      pendingOutcomes.push(
-        capture.promise.then((outcome) => {
-          // "failed-deliver" means the transport send started and then rejected;
-          // chunked sends may already have shown partial content, so only
-          // outcomes that never reached the transport ("cancelled",
-          // "failed-before-deliver") count as proven-invisible.
-          if (contentful && outcome !== "cancelled" && outcome !== "failed-before-deliver") {
-            visibleDeliveries += 1;
-          }
-        }),
-      );
-      return { queued: true, outcome: capture.promise };
+      if (!capture.isTracked()) {
+        return { queued: true };
+      }
+      return {
+        queued: true,
+        outcome: capture.promise,
+        hasPendingDelivery: capture.hasPendingDelivery,
+      };
     },
-    recordRoutedDelivery(payload, delivered) {
-      if (delivered && hasOutboundReplyContent(payload, { trimText: true })) {
+    recordRoutedDelivery(payload, result) {
+      pendingDelivery ||= result.queueCustody === "held" || result.ambiguous === true;
+      if (result.delivered && hasOutboundReplyContent(payload, { trimText: true })) {
         visibleDeliveries += 1;
       }
     },
     async settleQueued(abortSignal) {
-      // Outcome promises resolve when the dispatcher send chain settles each
-      // payload, normally bounded by the per-stage beforeDeliver deadlines and
-      // the transport sends the turn's completion barrier already waits for.
-      // Late progress stragglers can admit payloads while earlier deliveries
-      // settle, so drain until no new outcomes appeared mid-wait.
+      if (abortSignal?.aborted) {
+        return "aborted";
+      }
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {
@@ -116,26 +137,21 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
           })
         : undefined;
       try {
-        let settledCount = 0;
-        while (settledCount < pendingOutcomes.length) {
-          if (abortSignal?.aborted) {
-            return "aborted";
-          }
-          if (timedOut) {
-            return "timed-out";
-          }
-          const batch = pendingOutcomes.slice(settledCount);
-          const batchTarget = pendingOutcomes.length;
-          const settled = Promise.all(batch).then(() => undefined);
-          await Promise.race([settled, deadline, ...(aborted ? [aborted] : [])]);
-          if (abortSignal?.aborted) {
-            return "aborted";
-          }
-          if (timedOut) {
-            return "timed-out";
-          }
-          settledCount = batchTarget;
+        const receipt = await Promise.race([
+          dispatcher.waitForIdle(),
+          deadline,
+          ...(aborted ? [aborted] : []),
+        ]);
+        if (abortSignal?.aborted) {
+          return "aborted";
         }
+        if (timedOut) {
+          return "timed-out";
+        }
+        if (dispatcher.supportsSettledReceipt === true && receipt?.anyVisibleDelivered === true) {
+          visibleDeliveries += 1;
+        }
+        pendingDelivery ||= receipt?.hasPendingDelivery === true;
         return "settled";
       } finally {
         if (timer) {
@@ -145,9 +161,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
     },
     hasVisibleDelivery: () => visibleDeliveries > 0,
-    hasForeignQueuedAdmissions: () => {
-      const counts = dispatcher.getQueuedCounts();
-      return counts.tool + counts.block + counts.final > queuedAdmissions;
-    },
+    hasPendingDelivery: () => pendingDelivery,
   };
 }

@@ -12,7 +12,7 @@ import {
   buildMusicGenerationTaskStatusText,
   findActiveMusicGenerationTaskForSession,
   findDuplicateGuardMusicGenerationTaskForSession,
-} from "../music-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskActions,
@@ -87,7 +87,8 @@ export const {
   createDuplicateGuardResult: createMusicGenerateDuplicateGuardResult,
 } = createMediaGenerateTaskActions({
   inactiveText: "No active music generation task is currently running for this session.",
-  findActiveTask: findActiveMusicGenerationTaskForSession,
+  findActiveTask: (sessionKey, agentId) =>
+    findActiveMusicGenerationTaskForSession(sessionKey, { agentId }),
   // Prompt-only imports must not resolve duplicate guards until an action runs.
   findDuplicateTask: (sessionKey, request) =>
     findDuplicateGuardMusicGenerationTaskForSession(sessionKey, request),

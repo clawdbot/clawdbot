@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
@@ -70,14 +71,6 @@ function resolveQaCleanupRoots(env: NodeJS.ProcessEnv): string[] {
   );
 }
 
-function pathContains(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 export function installQaParentWatchdog(
   deps: QaParentWatchdogDeps = {},
 ): QaParentWatchdogHandle | null {
@@ -133,7 +126,7 @@ export function installQaParentWatchdog(
         void (async () => {
           const currentCwd = path.resolve(cwd());
           const activeCwdRoot = qaCleanupRoots.find((cleanupRoot) =>
-            pathContains(cleanupRoot, currentCwd),
+            isPathInside(cleanupRoot, currentCwd),
           );
           if (activeCwdRoot) {
             const safeCwd = path.dirname(activeCwdRoot);

@@ -9,6 +9,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
 import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { ProviderModelAuthSourcePlan } from "./provider-model-auth-source-plan.js";
 import { selectProviderModelRouteAuth } from "./provider-model-route-auth.js";
@@ -58,12 +59,21 @@ export function selectOpenAIModelRouteAuth(params: {
   sourcePlan: ProviderModelAuthSourcePlan;
   configuredAuthMode?: string;
   runtimeAuthOwner?: { id: string };
+  allowNativeAuthOnSingleRoute?: boolean;
 }) {
   return selectProviderModelRouteAuth({ provider: OPENAI_PROVIDER_ID, ...params });
 }
 
 export const openAIModelCatalogRoutePolicy =
   createProviderModelCatalogRoutePolicy(OPENAI_PROVIDER_ID);
+
+/** Canonical catalog identity without ambiguity between provider and model segments. */
+export function resolveModelCatalogIdentityKey(
+  entry: Pick<ModelCatalogEntry, "provider" | "id">,
+): string {
+  const id = openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.id ?? entry.id;
+  return JSON.stringify([normalizeProviderId(entry.provider), id]);
+}
 
 /** Resolves provider-owned OpenAI route state without loading the full provider runtime. */
 export function resolveOpenAIModelRoutes(params: {

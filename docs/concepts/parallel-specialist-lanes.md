@@ -64,7 +64,6 @@ Tune queue and model capacity around the business value of each lane:
   messages: {
     queue: {
       mode: "collect",
-      debounceMs: 1000,
       cap: 20,
       drop: "summarize",
     },

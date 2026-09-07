@@ -33,7 +33,11 @@ import {
   collectDisabledCodexPluginRouteIssues,
   enableCodexPluginForRequiredRoutes,
 } from "./codex-route-config-scan.js";
-import { parseModelRef } from "./codex-route-model-ref.js";
+import {
+  isBlockedLegacyCodexModelRef,
+  parseCodexRouteModelRef,
+  toCanonicalOpenAIModelRef,
+} from "./codex-route-model-ref.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
   CodexRouteHit,
@@ -45,6 +49,24 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   type BlockedLegacyOpenAICodexProviderPlan,
 } from "./legacy-config-migrations.runtime.models.js";
+import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
+
+export function resolveKnownModelRefMigrationTarget(
+  cfg: OpenClawConfig,
+  ref: string,
+): string | undefined {
+  const blockedModelIdentities = new Set(
+    collectBlockedLegacyOpenAICodexProviderPlan(cfg).blockedModelIdentities,
+  );
+  if (isBlockedLegacyCodexModelRef({ modelRef: ref, blockedModelIdentities })) {
+    return undefined;
+  }
+  const providerRef =
+    migrateLegacyRuntimeModelRef(ref)?.ref ?? toCanonicalOpenAIModelRef(ref) ?? ref;
+  const migrated = rewriteKnownModelRefs(providerRef, "model", []).value;
+  return typeof migrated === "string" && migrated !== ref ? migrated : undefined;
+}
 
 function formatCodexRouteChange(hit: CodexRouteHit): string {
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}.`;
@@ -152,7 +174,7 @@ function ownValues(record: Record<string, unknown>, keys: readonly string[]): un
 }
 
 function modelUsesCodexForEveryAgent(cfg: OpenClawConfig, modelRef: string): boolean {
-  const parsed = parseModelRef(modelRef);
+  const parsed = parseCodexRouteModelRef(modelRef);
   if (!parsed || parsed.modelId === "*") {
     return false;
   }
@@ -179,7 +201,7 @@ function collectCodexModelParamHits(
     listMutableCodexRouteAgentEntries(cfg).map(({ agentId, path }) => [agentId, path]),
   );
   for (const route of collectCodexRuntimeRouteHits(cfg, env)) {
-    const parsed = parseModelRef(route.canonicalModel);
+    const parsed = parseCodexRouteModelRef(route.canonicalModel);
     if (!parsed || parsed.provider !== "openai") {
       continue;
     }

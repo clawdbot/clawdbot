@@ -20,30 +20,15 @@ import {
  */
 export function projectSessionTree(params: {
   roots: readonly GatewaySessionRow[];
-  agentRows: readonly GatewaySessionRow[];
-  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
   knownSessionAttention: readonly SidebarKnownSessionAttention[];
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
-  const {
-    roots,
-    agentRows,
-    childRowsByParent,
-    loadingChildKeys,
-    knownSessionAttention,
-    toSidebarSession,
-  } = params;
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  for (const rows of Object.values(childRowsByParent)) {
-    for (const row of rows) {
-      rowsByKey.set(row.key, row);
-    }
-  }
-  for (const row of agentRows) {
-    rowsByKey.set(row.key, row);
-  }
+  const { roots, rowsByKey, loadingChildKeys, knownSessionAttention, toSidebarSession } = params;
   const childKeysByParent = new Map<string, string[]>();
+  const hasExplicitCategory = (row: GatewaySessionRow | undefined) =>
+    typeof row?.category === "string" && row.category.trim().length > 0;
   const appendChild = (parentKey: string, childKey: string) => {
     const keys = childKeysByParent.get(parentKey) ?? [];
     if (!keys.includes(childKey)) {
@@ -54,6 +39,12 @@ export function projectSessionTree(params: {
   for (const row of rowsByKey.values()) {
     for (const childKey of row.childSessions ?? []) {
       const child = rowsByKey.get(childKey);
+      // Manual category placement is a first-class sidebar destination. Once
+      // a child is explicitly categorized, render it as a section root rather
+      // than hiding it behind its lineage parent.
+      if (hasExplicitCategory(child)) {
+        continue;
+      }
       const navigationParentKey = resolveUiSessionNavigationParentKey(child);
       // Runtime control and sidebar navigation can have different parents;
       // known children belong to their explicit navigation parent only.
@@ -64,7 +55,7 @@ export function projectSessionTree(params: {
   }
   for (const row of rowsByKey.values()) {
     const parentKey = resolveUiSessionNavigationParentKey(row);
-    if (parentKey) {
+    if (parentKey && !hasExplicitCategory(row)) {
       appendChild(parentKey, row.key);
     }
   }
@@ -147,6 +138,9 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
+      if (hasExplicitCategory(row)) {
+        return true;
+      }
       const parentKey = resolveUiSessionNavigationParentKey(row);
       return !parentKey || !rootKeys.has(parentKey);
     })

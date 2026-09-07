@@ -113,6 +113,24 @@ vi.mock("../../config/sessions.js", () => ({
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
 type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
 type ExecuteSendContext = ExecuteSendInput["ctx"];
+type ContextOverrides = Omit<Partial<ExecuteSendContext>, "input"> & {
+  input?: Partial<ExecuteSendContext["input"]>;
+};
+
+function createContext(overrides: ContextOverrides): ExecuteSendContext {
+  const { input, ...ctx } = overrides;
+  const cfg = ctx.cfg ?? {};
+  const params = ctx.params ?? {};
+  return {
+    channelPlugin: defaultPlugin,
+    channel: "demo-outbound",
+    dryRun: false,
+    ...ctx,
+    cfg,
+    params,
+    input: { cfg, action: "send", params, ...input },
+  };
+}
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
@@ -122,6 +140,7 @@ type MockCalls = {
 };
 
 const requireRecord = createRequireRecord("object", "expected-label");
+const defaultPlugin = createChannelTestPluginBase({ id: "demo-outbound" });
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBe(true);
@@ -192,36 +211,31 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
         mirror: {
           sessionKey: "agent:main:demo-outbound:channel:123",
           ...params.mirror,
         },
-      },
+      }),
       to: "channel:123",
       message: "hello",
       mediaUrls: params.mediaUrls,
     });
   }
 
-  function createPluginMediaSendContext(
-    overrides: Partial<ExecuteSendContext>,
-  ): ExecuteSendContext {
-    return {
-      cfg: {},
-      channel: "demo-outbound",
+  function createPluginMediaSendContext(overrides: ContextOverrides): ExecuteSendContext {
+    return createContext({
       params: { media: "/tmp/host.png" },
-      sessionKey: "agent:main:directchat:group:ops",
-      dryRun: false,
       ...overrides,
-    } as ExecuteSendContext;
+      input: {
+        sessionKey: "agent:main:directchat:group:ops",
+        ...overrides.input,
+      },
+    });
   }
 
-  async function executePluginMediaSend(ctx: Partial<ExecuteSendContext>) {
+  async function executePluginMediaSend(ctx: ContextOverrides) {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -257,13 +271,9 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
+      ctx: createContext({
         agentId: "work",
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -296,12 +306,9 @@ describe("executeSendAction", () => {
     });
 
     const result = await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -311,26 +318,36 @@ describe("executeSendAction", () => {
 
   it("makes required queue persistence force core delivery and lifecycle callbacks", async () => {
     const onDeliveryIntent = vi.fn();
-    const onDeliveryResult = vi.fn();
+    const order: string[] = [];
+    const onSendAccepted = vi.fn(async () => {
+      order.push("route");
+    });
+    const onDeliveryResult = vi.fn(async () => {
+      order.push("receipt");
+    });
+    const evidence = { channel: "demo-outbound", messageId: "sent-1" };
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-      deliveryStatus: "sent",
+    mocks.sendMessage.mockImplementationOnce(async (params) => {
+      await params.onDeliveryResult(evidence);
+      return {
+        channel: "demo-outbound",
+        to: "channel:123",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "sent",
+      };
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-        requireQueuePersistence: true,
-        onDeliveryIntent,
-        onDeliveryResult,
-      },
+        onSendAccepted,
+        input: {
+          requireQueuePersistence: true,
+          onDeliveryResult,
+          onDeliveryIntent,
+        },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -340,8 +357,9 @@ describe("executeSendAction", () => {
       queuePolicy: "required",
       requireUnknownSendReconciliation: false,
       onDeliveryIntent,
-      onDeliveryResult,
     });
+    expect(order).toEqual(["route", "receipt"]);
+    expect(onDeliveryResult).toHaveBeenCalledWith(evidence);
   });
 
   it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
@@ -354,14 +372,12 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
-        sessionKey: "agent:main:directchat:group:ops",
-        requesterSenderId: "attacker",
-        dryRun: false,
-      },
+      ctx: createContext({
+        input: {
+          sessionKey: "agent:main:directchat:group:ops",
+          requesterSenderId: "attacker",
+        },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -381,16 +397,14 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
-        sessionKey: "agent:main:directchat:group:ops",
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-        dryRun: false,
-      },
+      ctx: createContext({
+        input: {
+          sessionKey: "agent:main:directchat:group:ops",
+          requesterSenderName: "Alice",
+          requesterSenderUsername: "alice_u",
+          requesterSenderE164: "+15551234567",
+        },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -412,17 +426,15 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
-        sessionKey: "agent:main:directchat:group:ops",
+      ctx: createContext({
         conversationType: "channel",
-        requesterAccountId: "source-account",
-        requesterSenderId: "attacker",
         accountId: "destination-account",
-        dryRun: false,
-      },
+        input: {
+          sessionKey: "agent:main:directchat:group:ops",
+          requesterAccountId: "source-account",
+          requesterSenderId: "attacker",
+        },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -437,9 +449,7 @@ describe("executeSendAction", () => {
   });
 
   it("forwards requesterSenderId into outbound media access resolution", async () => {
-    await executePluginMediaSend({
-      requesterSenderId: "attacker",
-    });
+    await executePluginMediaSend({ input: { requesterSenderId: "attacker" } });
 
     expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
       requesterSenderId: "attacker",
@@ -448,9 +458,11 @@ describe("executeSendAction", () => {
 
   it("forwards non-id requester sender fields into outbound media access resolution", async () => {
     await executePluginMediaSend({
-      requesterSenderName: "Alice",
-      requesterSenderUsername: "alice_u",
-      requesterSenderE164: "+15551234567",
+      input: {
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      },
     });
 
     expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
@@ -461,9 +473,7 @@ describe("executeSendAction", () => {
   });
 
   it("keeps requester session channel authoritative for media policy", async () => {
-    await executePluginMediaSend({
-      requesterSenderId: "attacker",
-    });
+    await executePluginMediaSend({ input: { requesterSenderId: "attacker" } });
 
     expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
       sessionKey: "agent:main:directchat:group:ops",
@@ -473,9 +483,8 @@ describe("executeSendAction", () => {
 
   it("uses requester account for media policy when session context is present", async () => {
     await executePluginMediaSend({
-      requesterAccountId: "source-account",
-      requesterSenderId: "attacker",
       accountId: "destination-account",
+      input: { requesterAccountId: "source-account", requesterSenderId: "attacker" },
     });
 
     expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
@@ -486,8 +495,8 @@ describe("executeSendAction", () => {
 
   it("falls back to destination account for media policy when requester account is missing", async () => {
     await executePluginMediaSend({
-      requesterSenderId: "attacker",
       accountId: "destination-account",
+      input: { requesterSenderId: "attacker" },
     });
 
     expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
@@ -506,15 +515,13 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
-        sessionKey: "agent:main:directchat:group:ops",
-        requesterSenderId: "attacker",
+      ctx: createContext({
         accountId: "destination-account",
-        dryRun: false,
-      },
+        input: {
+          sessionKey: "agent:main:directchat:group:ops",
+          requesterSenderId: "attacker",
+        },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -536,7 +543,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -546,16 +552,18 @@ describe("executeSendAction", () => {
     });
 
     const result = await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", presentation },
-        dryRun: false,
         mirror: {
           sessionKey: "agent:main:discord:channel:123",
           agentId: "main",
         },
-      },
+        input: {
+          runId: "run-presentation-delivery",
+        },
+      }),
       to: "channel:123",
       message: "",
       payload: { text: "", presentation },
@@ -565,6 +573,7 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       content: "",
+      runId: "run-presentation-delivery",
       mirror: {
         sessionKey: "agent:main:discord:channel:123",
         agentId: "main",
@@ -592,7 +601,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -602,12 +610,11 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", message: "Deployment trend", presentation },
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "Deployment trend",
       payload: { text: "Deployment trend", presentation },
@@ -638,21 +645,19 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", components: nativeComponents, presentation },
-        dryRun: false,
         mirror: {
           sessionKey: "agent:main:discord:channel:123",
           agentId: "main",
           text: "Summary",
         },
-      },
+      }),
       to: "channel:123",
       message: "Summary",
       payload: { text: "Summary", presentation },
@@ -698,7 +703,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "whatsapp", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "whatsapp",
       to: "+15551234567",
@@ -707,12 +711,11 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "whatsapp",
         params: { to: "+15551234567", message: "Deployment trend", presentation },
-        dryRun: false,
-      },
+      }),
       to: "+15551234567",
       message: "Deployment trend",
       payload: { text: "Deployment trend", presentation },
@@ -746,16 +749,14 @@ describe("executeSendAction", () => {
         handleAction: async () => ({ content: [], details: { ok: true } }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", presentation },
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "",
       payload: { text: "", presentation },
@@ -774,12 +775,9 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
       payload: { text: "hello" },
@@ -791,16 +789,67 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+    },
+  ])("passes the host-owned $label through direct plugin fallback", async ({ reply }) => {
+    const prepareSendPayload = vi.fn(({ ctx }) => {
+      expect(ctx.reply).toEqual(reply);
+      return null;
+    });
+    const handleAction = vi.fn(async (ctx) => {
+      expect(ctx.params.components).toBeTypeOf("function");
+      return { content: [], details: { ok: true } };
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "unused-core-send" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+        prepareSendPayload,
+        handleAction,
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockImplementation(async (ctx) => {
+      return await plugin.actions?.handleAction?.(ctx);
+    });
+
+    const components = () => [];
+    const result = await executeSendAction({
+      ctx: createContext({
+        channelPlugin: plugin,
+        channel: "discord",
+        params: { to: "channel:123", message: "hello", components, replyTo: reply.replyToId },
+      }),
+      to: "channel:123",
+      message: "hello",
+      reply,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ components, replyTo: reply.replyToId }),
+        reply,
+      }),
+    );
+  });
+
   it("uses plugin poll action when available", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
 
     const result = await executePollAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
-        dryRun: false,
-      },
+      ctx: createContext({}),
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
@@ -820,17 +869,14 @@ describe("executeSendAction", () => {
     });
 
     const result = await executePollAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: {
           pollQuestion: "Lunch?",
           pollOption: ["Pizza", "Sushi"],
           pollDurationSeconds: 90,
           pollPublic: true,
         },
-        dryRun: false,
-      },
+      }),
       resolveCorePoll,
     });
 
@@ -843,13 +889,10 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
         agentId: "agent-1",
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -869,17 +912,14 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: {
           to: "channel:123",
           message: "hello",
           media: "/Users/peter/Pictures/photo.png",
         },
         agentId: "agent-1",
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
       mediaUrl: "/Users/peter/Pictures/photo.png",
@@ -896,9 +936,7 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: {
           to: "channel:123",
           message: "hello",
@@ -906,8 +944,7 @@ describe("executeSendAction", () => {
           attachments: [{ filePath: "/workspace/Documents/report.md" }],
         },
         agentId: "agent-1",
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
       mediaUrls: ["/workspace/Pictures/chart.png"],
@@ -925,9 +962,7 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: {
           to: "channel:123",
           message: "hello",
@@ -938,8 +973,7 @@ describe("executeSendAction", () => {
           readFile: explicitReadFile,
         },
         agentId: "agent-1",
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
       mediaUrls: ["/workspace/Pictures/chart.png"],
@@ -999,9 +1033,7 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
+      ctx: createContext({
         params: { to: "channel:123", message: "hello" },
         idempotencyKey: "stable-send-key",
         dryRun: true,
@@ -1013,7 +1045,7 @@ describe("executeSendAction", () => {
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
-      },
+      }),
       to: "channel:123",
       message: "hello",
     });
@@ -1050,7 +1082,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1059,20 +1090,20 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-        sessionKey: "discord-session",
-        inboundEventKind: "room_event",
-        conversationReadOrigin: "delegated",
-      },
+        input: {
+          sessionKey: "discord-session",
+          inboundEventKind: "room_event",
+          conversationReadOrigin: "delegated",
+        },
+      }),
       to: "channel:123",
       message: "hello",
       payload: { text: "hello", presentation },
-      replyToId: "reply-1",
-      replyToIdSource: "explicit",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
     });
 
@@ -1089,10 +1120,11 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
-      replyToId: "reply-1",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
       conversationReadOrigin: "delegated",
     });
+    expect(sendArgs.preparedPlugin).toBe(plugin);
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {
       channelData: { prepared: true },
@@ -1114,7 +1146,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1123,12 +1154,11 @@ describe("executeSendAction", () => {
     });
 
     await executeSendAction({
-      ctx: {
-        cfg: {},
+      ctx: createContext({
+        channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-      },
+      }),
       to: "channel:123",
       message: "hello",
       bestEffort: false,
@@ -1154,16 +1184,17 @@ describe("executeSendAction", () => {
     });
 
     await executePollAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
+      ctx: createContext({
         accountId: "acc-1",
-        dryRun: false,
-      },
+        input: {
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          inboundEventKind: "room_event",
+        },
+      }),
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
+        content: "Vote now",
         options: ["Pizza", "Sushi"],
         maxSelections: 1,
         durationSeconds: 300,
@@ -1177,11 +1208,14 @@ describe("executeSendAction", () => {
       accountId: "acc-1",
       to: "channel:123",
       question: "Lunch?",
+      content: "Vote now",
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
       durationSeconds: 300,
       threadId: "thread-1",
       isAnonymous: true,
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      inboundEventKind: "room_event",
     });
   });
 
@@ -1198,10 +1232,7 @@ describe("executeSendAction", () => {
     });
 
     await executePollAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: {},
+      ctx: createContext({
         idempotencyKey: "stable-poll-key",
         dryRun: true,
         silent: true,
@@ -1212,7 +1243,7 @@ describe("executeSendAction", () => {
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
-      },
+      }),
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",

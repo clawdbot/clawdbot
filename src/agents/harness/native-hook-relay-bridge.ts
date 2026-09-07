@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   isNativeHookRelayBridgeStaleRegistrationError,
+  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
@@ -19,15 +21,11 @@ import type {
   ActiveNativeHookRelayRegistration,
   InvokeNativeHookRelayParams,
   NativeHookRelayBridgeRegistration,
+  NativeHookRelayBridgeReplacement,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
-  RetiredNativeHookRelayBridge,
 } from "./native-hook-relay-types.js";
-import {
-  isJsonObject,
-  normalizePositiveInteger,
-  readNonEmptyString,
-} from "./native-hook-relay-utils.js";
+import { isJsonObject, readNonEmptyString } from "./native-hook-relay-utils.js";
 
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
@@ -38,7 +36,7 @@ export {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
-const { relays, relayBridges, retiredRelayBridges } = nativeHookRelayState;
+const { relays, relayBridges, relayBridgeReplacements, closingRelayBridges } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
@@ -53,12 +51,27 @@ type NativeHookRelayBridgeRequestAuth = {
   invokeRelay: InvokeNativeHookRelay;
 };
 
-function isNativeHookRelayBridgePidDead(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+/** Transfer outstanding predecessor cleanup to this exact replacement attempt. */
+export function beginNativeHookRelayBridgeReplacement(
+  relayId: string,
+): NativeHookRelayBridgeReplacement {
+  const replacement: NativeHookRelayBridgeReplacement = {
+    retired: relayBridgeReplacements.get(relayId)?.retired ?? new Set(),
+  };
+  const bridge = relayBridges.get(relayId);
+  if (bridge) {
+    replacement.retired.add(bridge);
+  }
+  relayBridgeReplacements.set(relayId, replacement);
+  return replacement;
+}
+
+export function assertNativeHookRelayBridgeReplacementCurrent(
+  relayId: string,
+  replacement: NativeHookRelayBridgeReplacement,
+): void {
+  if (relayBridgeReplacements.get(relayId) !== replacement) {
+    throw new Error("native hook relay bridge replacement is no longer current");
   }
 }
 
@@ -66,13 +79,15 @@ export function registerNativeHookRelayBridge(
   registration: ActiveNativeHookRelayRegistration,
   stateDbPath: string,
   invokeRelay: InvokeNativeHookRelay,
+  replacement: NativeHookRelayBridgeReplacement,
 ): void {
+  assertNativeHookRelayBridgeReplacementCurrent(registration.relayId, replacement);
   // Liveness checks stay outside the write transaction. The store rereads each
   // authoritative row before deletion so renewal or replacement wins the race.
   try {
     const pruned = pruneNativeHookRelayBridgeRecords({
       currentPid: process.pid,
-      isPidDead: isNativeHookRelayBridgePidDead,
+      isPidDead: isPidDefinitelyDead,
       stateDbPath,
     });
     for (const row of pruned) {
@@ -86,7 +101,6 @@ export function registerNativeHookRelayBridge(
   } catch (error) {
     log.debug("native hook relay bridge record prune skipped", { error });
   }
-  unregisterNativeHookRelayBridge(registration.relayId);
   const token = randomUUID();
   const server = createServer();
   const bridge: NativeHookRelayBridgeRegistration = {
@@ -94,6 +108,7 @@ export function registerNativeHookRelayBridge(
     stateDbPath,
     token,
     server,
+    replacement,
   };
   server.on("request", (req, res) => {
     void handleNativeHookRelayBridgeRequest(req, res, {
@@ -108,18 +123,35 @@ export function registerNativeHookRelayBridge(
   relayBridges.set(registration.relayId, bridge);
   server.on("error", (error) => {
     log.debug("native hook relay bridge server error", { error, relayId: registration.relayId });
+    unregisterNativeHookRelayBridge(registration.relayId, { expectedBridge: bridge });
   });
   server.listen(0, "127.0.0.1", () => {
     if (relayBridges.get(registration.relayId) !== bridge) {
+      // Closing before asynchronous listen completes does not cancel every
+      // pending start. A canceled bridge must never publish or retain a port.
+      closeNativeHookRelayBridge(bridge);
       return;
     }
     try {
       writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
+      // Publication owns handoff; this interval drains already-read locators,
+      // rather than guessing how long successor startup will take.
+      for (const retired of replacement.retired) {
+        if (closingRelayBridges.has(retired)) {
+          continue;
+        }
+        retired.closeTimer ??= setTimeout(
+          () => closeNativeHookRelayBridge(retired),
+          NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+        );
+        retired.closeTimer.unref();
+      }
     } catch (error) {
       log.debug("failed to publish native hook relay bridge record", {
         error,
         relayId: registration.relayId,
       });
+      disposeNativeHookRelayBridgeReplacement(registration.relayId, replacement);
     }
   });
   server.unref();
@@ -131,7 +163,7 @@ function writeNativeHookRelayBridgeRecordForRegistration(
 ): void {
   const record = resolveNativeHookRelayBridgeRecord(registration, bridge);
   if (!record) {
-    return;
+    throw new Error("native hook relay bridge address unavailable during publication");
   }
   writeNativeHookRelayBridgeRecord({ record, stateDbPath: bridge.stateDbPath });
 }
@@ -177,35 +209,62 @@ export function renewNativeHookRelayBridgeRecord(
 
 export function unregisterNativeHookRelayBridge(
   relayId: string,
-  options?: { deferBridgeRecordRemovalMs?: number },
+  options?: {
+    bridgeReplacement?: NativeHookRelayBridgeReplacement;
+    expectedBridge?: NativeHookRelayBridgeRegistration;
+  },
 ): void {
-  const bridge = relayBridges.get(relayId);
+  const replacement = options?.bridgeReplacement;
+  if (replacement && relayBridgeReplacements.get(relayId) !== replacement) {
+    return;
+  }
+  const bridge = options?.expectedBridge ?? relayBridges.get(relayId);
   if (!bridge) {
     return;
   }
-  relayBridges.delete(relayId);
-  const deferBridgeRecordRemovalMs = normalizePositiveInteger(
-    options?.deferBridgeRecordRemovalMs,
-    0,
-  );
-  if (deferBridgeRecordRemovalMs > 0) {
-    // Keep the stale endpoint semantic until its locator grace expires; the
-    // token-scoped delete cannot remove a successor bridge record.
-    let retiredBridge: RetiredNativeHookRelayBridge;
-    const closeTimer = setTimeout(() => {
-      bridge.server.close(() => retiredRelayBridges.delete(retiredBridge));
-      removeNativeHookRelayBridgeRecord(bridge);
-    }, deferBridgeRecordRemovalMs);
-    retiredBridge = { bridge, closeTimer };
-    retiredRelayBridges.add(retiredBridge);
-    closeTimer.unref();
+  if (relayBridges.get(relayId) === bridge) {
+    relayBridges.delete(relayId);
+  }
+  if (replacement) {
+    if (bridge.server.listening) {
+      replacement.retired.add(bridge);
+    } else {
+      closeNativeHookRelayBridge(bridge);
+    }
     return;
   }
-  bridge.server.close();
-  removeNativeHookRelayBridgeRecord(bridge);
+  closeNativeHookRelayBridge(bridge);
+  disposeNativeHookRelayBridgeReplacement(relayId, bridge.replacement);
 }
 
-function removeNativeHookRelayBridgeRecord(bridge: NativeHookRelayBridgeRegistration): void {
+/** Dispose only the replacement attempt that still owns this relay's cleanup. */
+export function disposeNativeHookRelayBridgeReplacement(
+  relayId: string,
+  replacement: NativeHookRelayBridgeReplacement,
+): void {
+  if (relayBridgeReplacements.get(relayId) !== replacement) {
+    return;
+  }
+  relayBridgeReplacements.delete(relayId);
+  const bridge = relayBridges.get(relayId);
+  if (bridge?.replacement === replacement) {
+    relayBridges.delete(relayId);
+    closeNativeHookRelayBridge(bridge);
+  }
+  for (const retired of replacement.retired) {
+    closeNativeHookRelayBridge(retired);
+  }
+}
+
+function closeNativeHookRelayBridge(bridge: NativeHookRelayBridgeRegistration): void {
+  // Keep closing transports reachable until their connections drain. A late
+  // canceled listen may reopen the server and must still be closed again.
+  if (closingRelayBridges.has(bridge) && !bridge.server.listening) {
+    return;
+  }
+  closingRelayBridges.add(bridge);
+  clearTimeout(bridge.closeTimer);
+  bridge.closeTimer = undefined;
   try {
     deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
   } catch (error) {
@@ -214,6 +273,10 @@ function removeNativeHookRelayBridgeRecord(bridge: NativeHookRelayBridgeRegistra
       relayId: bridge.relayId,
     });
   }
+  bridge.server.close(() => {
+    bridge.replacement.retired.delete(bridge);
+    closingRelayBridges.delete(bridge);
+  });
 }
 
 async function handleNativeHookRelayBridgeRequest(
@@ -234,6 +297,7 @@ async function handleNativeHookRelayBridgeRequest(
       writeNativeHookRelayBridgeJson(res, 410, {
         ok: false,
         error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+        retryable: true,
       });
       return;
     }
@@ -250,6 +314,7 @@ async function handleNativeHookRelayBridgeRequest(
       writeNativeHookRelayBridgeJson(res, 410, {
         ok: false,
         error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+        retryable: true,
       });
       return;
     }
@@ -323,15 +388,12 @@ export function readNativeHookRelayBridgeRecordIfExists(
 }
 
 export function clearNativeHookRelayBridgesForTests(): void {
-  for (const bridge of relayBridges.values()) {
-    unregisterNativeHookRelayBridge(bridge.relayId);
-    bridge.server.closeAllConnections();
+  for (const [relayId, replacement] of relayBridgeReplacements) {
+    disposeNativeHookRelayBridgeReplacement(relayId, replacement);
   }
-  for (const retiredBridge of retiredRelayBridges) {
-    clearTimeout(retiredBridge.closeTimer);
-    retiredBridge.bridge.server.close();
-    retiredBridge.bridge.server.closeAllConnections();
-    retiredRelayBridges.delete(retiredBridge);
+  for (const bridge of closingRelayBridges) {
+    bridge.server.closeAllConnections();
+    closeNativeHookRelayBridge(bridge);
   }
   clearNativeHookRelayBridgeRecordsForTests();
 }

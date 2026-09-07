@@ -13,7 +13,7 @@ function readManifest(name: string): Manifest {
   return parsed as Manifest;
 }
 
-function asRecord(value: unknown, label: string): Record<string, unknown> {
+function assertRecord(value: unknown, label: string): Record<string, unknown> {
   expect(value, label).toBeTypeOf("object");
   expect(value, label).not.toBeNull();
   expect(Array.isArray(value), label).toBe(false);
@@ -58,14 +58,14 @@ describe("k8s manifests", () => {
   it("keeps gateway service selectors and ports aligned with deployment labels", () => {
     const deployment = readManifest("deployment.yaml");
     const service = readManifest("service.yaml");
-    const deploymentSpec = asRecord(deployment.spec, "deployment spec");
-    const selector = asRecord(deploymentSpec.selector, "deployment selector");
-    const matchLabels = asRecord(selector.matchLabels, "deployment match labels");
-    const template = asRecord(deploymentSpec.template, "deployment template");
-    const templateMetadata = asRecord(template.metadata, "deployment template metadata");
-    const templateLabels = asRecord(templateMetadata.labels, "deployment template labels");
-    const serviceSpec = asRecord(service.spec, "service spec");
-    const serviceSelector = asRecord(serviceSpec.selector, "service selector");
+    const deploymentSpec = assertRecord(deployment.spec, "deployment spec");
+    const selector = assertRecord(deploymentSpec.selector, "deployment selector");
+    const matchLabels = assertRecord(selector.matchLabels, "deployment match labels");
+    const template = assertRecord(deploymentSpec.template, "deployment template");
+    const templateMetadata = assertRecord(template.metadata, "deployment template metadata");
+    const templateLabels = assertRecord(templateMetadata.labels, "deployment template labels");
+    const serviceSpec = assertRecord(service.spec, "service spec");
+    const serviceSelector = assertRecord(serviceSpec.selector, "service selector");
     const ports = asRecords(serviceSpec.ports, "service ports");
 
     expect(deployment).toMatchObject({
@@ -86,14 +86,14 @@ describe("k8s manifests", () => {
 
   it("keeps deployment mounts, secrets, and security posture deployable", () => {
     const deployment = readManifest("deployment.yaml");
-    const spec = asRecord(deployment.spec, "deployment spec");
-    const template = asRecord(spec.template, "deployment template");
-    const podSpec = asRecord(template.spec, "pod spec");
+    const spec = assertRecord(deployment.spec, "deployment spec");
+    const template = assertRecord(spec.template, "deployment template");
+    const podSpec = assertRecord(template.spec, "pod spec");
     const containers = asRecords(podSpec.containers, "containers");
     const gateway = findNamed(containers, "gateway");
     const env = asRecords(gateway.env, "gateway env");
     const volumes = asRecords(podSpec.volumes, "pod volumes");
-    const securityContext = asRecord(gateway.securityContext, "gateway security context");
+    const securityContext = assertRecord(gateway.securityContext, "gateway security context");
 
     expect(gateway.command).toEqual(["node", "/app/dist/index.js", "gateway", "run"]);
     expect(findNamed(env, "HOME")).toMatchObject({ value: "/home/node" });
@@ -115,15 +115,15 @@ describe("k8s manifests", () => {
   it("keeps config and persistence manifests aligned with the gateway", () => {
     const configMap = readManifest("configmap.yaml");
     const pvc = readManifest("pvc.yaml");
-    const data = asRecord(configMap.data, "configmap data");
+    const data = assertRecord(configMap.data, "configmap data");
     const config = JSON.parse(String(data["openclaw.json"])) as Record<string, unknown>;
-    const gateway = asRecord(config.gateway, "openclaw config gateway");
-    const auth = asRecord(gateway.auth, "openclaw config auth");
-    const agents = asRecord(config.agents, "openclaw config agents");
-    const defaults = asRecord(agents.defaults, "openclaw config agent defaults");
-    const pvcSpec = asRecord(pvc.spec, "pvc spec");
-    const resources = asRecord(pvcSpec.resources, "pvc resources");
-    const requests = asRecord(resources.requests, "pvc resource requests");
+    const gateway = assertRecord(config.gateway, "openclaw config gateway");
+    const auth = assertRecord(gateway.auth, "openclaw config auth");
+    const agents = assertRecord(config.agents, "openclaw config agents");
+    const defaults = assertRecord(agents.defaults, "openclaw config agent defaults");
+    const pvcSpec = assertRecord(pvc.spec, "pvc spec");
+    const resources = assertRecord(pvcSpec.resources, "pvc resources");
+    const requests = assertRecord(resources.requests, "pvc resource requests");
 
     expect(configMap).toMatchObject({
       apiVersion: "v1",

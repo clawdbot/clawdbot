@@ -1,3 +1,4 @@
+import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 
@@ -6,6 +7,26 @@ const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too l
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
   "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
+
+export function createChatHistoryByteCounter() {
+  const sizes = new Map<unknown, number>();
+  const messageBytes = (message: unknown): number => {
+    const cached = sizes.get(message);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const bytes = jsonUtf8Bytes(message);
+    sizes.set(message, bytes);
+    return bytes;
+  };
+  return {
+    messageBytes,
+    messagesBytes: (messages: unknown[]) =>
+      2 +
+      messages.reduce<number>((bytes, message) => bytes + messageBytes(message), 0) +
+      Math.max(0, messages.length - 1),
+  };
+}
 
 function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
@@ -41,6 +62,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
+  const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
   return {
     role,
     timestamp,
@@ -50,6 +72,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
+      ...(transcriptPosition ? { transcriptPosition } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -57,44 +80,27 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
 }
 
 export function replaceOversizedChatHistoryMessages(params: {
+  byteCounter?: ReturnType<typeof createChatHistoryByteCounter>;
   messages: unknown[];
   maxSingleMessageBytes: number;
 }): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
+  const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
   if (messages.length === 0) {
     return { messages, replacedCount: 0 };
   }
   let replacedCount = 0;
   const next = messages.map((message) => {
-    if (jsonUtf8Bytes(message) <= maxSingleMessageBytes) {
+    if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {
       return message;
     }
     replacedCount += 1;
-    return buildOversizedHistoryPlaceholder(message);
+    const placeholder = buildOversizedHistoryPlaceholder(message);
+    return byteCounter.messageBytes(placeholder) <= maxSingleMessageBytes
+      ? placeholder
+      : buildChatHistoryUnavailableSentinel();
   });
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
-}
-
-// Preserve a visible terminal record when the complete projected history cannot fit.
-export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
-  messages: unknown[];
-} {
-  const { messages, maxBytes } = params;
-  if (messages.length === 0) {
-    return { messages };
-  }
-  if (jsonUtf8Bytes(messages) <= maxBytes) {
-    return { messages };
-  }
-  const last = messages.at(-1);
-  if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    return { messages: [last] };
-  }
-  const placeholder = buildOversizedHistoryPlaceholder(last);
-  if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
-    return { messages: [placeholder] };
-  }
-  return { messages: [buildChatHistoryUnavailableSentinel()] };
 }
 
 export function reportOmittedChatHistory(params: {

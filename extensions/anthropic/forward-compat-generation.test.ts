@@ -36,15 +36,38 @@ describe("unreleased Claude generations", () => {
   it("does not stamp a canonical id onto released models", () => {
     // Released ids already carry their own contract; re-pointing them would
     // silently change shaping for models that work today.
-    expect(resolveModel("claude-opus-5")?.params?.canonicalModelId).toBeUndefined();
-    expect(resolveModel("claude-opus-4-8")?.params?.canonicalModelId).toBeUndefined();
+    for (const id of ["claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-fable-5-1"]) {
+      const model = resolveModel(id);
+      expect(model?.id).toBe(id);
+      expect(model?.params?.canonicalModelId).toBeUndefined();
+    }
   });
 
-  it("leaves pre-4.6 and snapshot-dated ids alone", () => {
+  it("does not mistake snapshot dates for minor versions", () => {
     // claude-opus-4-20250514 is 4.0; a naive parse reads 4.20 and would treat it
     // as newer than every released generation.
     expect(resolveModel("claude-opus-4-20250514")?.params?.canonicalModelId).toBeUndefined();
     expect(supportsClaudeAdaptiveThinking({ id: "claude-haiku-4-5-20251001" })).toBe(false);
+  });
+
+  it("clones released snapshot ids from their dateless manifest template", () => {
+    expect(resolveModel("claude-haiku-4-5-20251001")).toEqual({
+      id: "claude-haiku-4-5-20251001",
+      name: "claude-haiku-4-5-20251001",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+      compat: { codeMode: "preferred" },
+    });
+    expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();
   });
 
   it("carries manifest catalog compat onto hand-built modern rows", () => {
@@ -52,8 +75,9 @@ describe("unreleased Claude generations", () => {
     // runtime prefers plugin-resolved modern models. Dropping compat here
     // silently disables catalog-driven behavior such as codeMode "auto",
     // including on env-key-only runs whose model registry is empty.
-    expect(resolveModel("claude-opus-5")?.compat).toEqual({ codeMode: "preferred" });
-    expect(resolveModel("claude-sonnet-5")?.compat).toEqual({ codeMode: "preferred" });
+    for (const id of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-fable-5-1"]) {
+      expect(resolveModel(id)?.compat, id).toEqual({ codeMode: "preferred" });
+    }
     // The Claude CLI provider rows are intentionally unflagged: those runs use
     // the CLI harness where OpenClaw code mode does not apply.
     expect(resolveModel("claude-opus-5", "claude-cli")?.compat).toBeUndefined();

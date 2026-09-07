@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   isOffsetInProtectedRanges,
   type PlainTextToolCallNameMatcher,
@@ -549,15 +550,7 @@ function parseJsonArguments(
   text: string,
   payload: PlainTextJsonToolCallSpan,
 ): Record<string, unknown> | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(text.slice(payload.start, payload.end)) as unknown;
-  } catch {
-    return null;
-  }
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return safeParseJsonRecord(text.slice(payload.start, payload.end)) ?? null;
 }
 
 function extractXmlishParameterValue(

@@ -60,33 +60,17 @@ describe("extractExplicitGroupId", () => {
       name: "declared inferred shorthand",
       channel: "telegram",
       declaresNumericShorthand: true,
-      path: "inferred" as const,
       expected: "-100200300",
     },
     {
       name: "undeclared inferred shorthand",
       channel: "plainchat",
       declaresNumericShorthand: false,
-      path: "inferred" as const,
-      expected: "-100200300:77",
-    },
-    {
-      name: "declared parser shorthand",
-      channel: "telegram",
-      declaresNumericShorthand: true,
-      path: "parser" as const,
-      expected: "-100200300",
-    },
-    {
-      name: "undeclared parser shorthand",
-      channel: "plainchat",
-      declaresNumericShorthand: false,
-      path: "parser" as const,
       expected: "-100200300:77",
     },
   ])(
     "uses $name metadata after target normalization",
-    ({ channel, declaresNumericShorthand, path, expected }) => {
+    ({ channel, declaresNumericShorthand, expected }) => {
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -99,17 +83,8 @@ describe("extractExplicitGroupId", () => {
               }),
               messaging: {
                 ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
-                ...(path === "inferred"
-                  ? {
-                      normalizeTarget: () => `${channel}:-100200300:77`,
-                      inferTargetChatType: () => "group" as const,
-                    }
-                  : {
-                      parseExplicitTarget: () => ({
-                        to: "group:-100200300:77",
-                        chatType: "group" as const,
-                      }),
-                    }),
+                normalizeTarget: () => `${channel}:-100200300:77`,
+                inferTargetChatType: () => "group" as const,
               },
             },
           },
@@ -119,29 +94,4 @@ describe("extractExplicitGroupId", () => {
       expect(extractExplicitGroupId(`${channel}:-100200300:77`)).toBe(expected);
     },
   );
-
-  it("keeps legacy parser-only group target extraction quarantined", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "legacygroup",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "legacygroup",
-              capabilities: { chatTypes: ["group"] },
-            }),
-            messaging: {
-              parseExplicitTarget: ({ raw }: { raw: string }) =>
-                raw.startsWith("legacygroup:")
-                  ? { to: "group:room-a:topic:77", chatType: "group" as const }
-                  : null,
-            },
-          },
-        },
-      ]),
-    );
-
-    expect(extractExplicitGroupId("legacygroup:room-a:topic:77")).toBe("room-a");
-  });
 });

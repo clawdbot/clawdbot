@@ -1,4 +1,3 @@
-// Openai API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -8,8 +7,10 @@ import type {
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
   ProviderNormalizeModelCatalogIdContext,
+  ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -21,6 +22,8 @@ import {
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
@@ -41,11 +44,7 @@ type OpenAIResolveSingleModelRouteContext = Omit<
 };
 
 function normalizeOptionalRouteApi(value: ModelApi | null | undefined): ModelApi | undefined {
-  return typeof value === "string" && value.trim() ? (value.trim() as ModelApi) : undefined;
-}
-
-function normalizeOptionalRouteBaseUrl(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value) as ModelApi | undefined;
 }
 
 /** Canonical logical id for OpenAI catalog projection. */
@@ -53,6 +52,14 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
   return params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
+}
+
+export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  return (
+    params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
+    params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
+    params.responseModelId === OPENAI_GPT_56_SOL_MODEL_ID
+  );
 }
 
 /** Resolves authored OpenAI provider config without activating the runtime plugin. */
@@ -127,7 +134,7 @@ function firstRouteBaseUrl(...values: unknown[]): unknown {
 }
 
 function concreteBaseUrl(value: unknown, fallback: string): string {
-  return normalizeOptionalRouteBaseUrl(value) ?? fallback;
+  return normalizeOptionalString(value) ?? fallback;
 }
 
 function resolveOpenAIEnvironmentBaseUrl(

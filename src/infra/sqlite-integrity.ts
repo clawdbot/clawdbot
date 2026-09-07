@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readStableSqliteFileGeneration,
@@ -10,6 +11,27 @@ import { isSqliteCorruptionError } from "./sqlite-transaction.js";
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
+
+export type SqliteIntegrityOperation<T> = Generator<
+  { database: DatabaseSync; databaseLabel: string },
+  T,
+  void
+>;
+
+/** Run the same admission steps synchronously when the caller cannot yield. */
+export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      assertSqliteIntegrity(step.value.database, step.value.databaseLabel);
+    } catch (error) {
+      step = operation.throw(error);
+      continue;
+    }
+    step = operation.next();
+  }
+  return step.value;
+}
 
 type UnboundSqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; terminal: boolean }
@@ -142,7 +164,7 @@ function bindSqliteIntegrityConfirmation(
 }
 
 function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegrityConfirmation {
-  const normalized = error instanceof Error ? error : new Error(String(error));
+  const normalized = toStringifiedError(error);
   return {
     status: "failed",
     error: normalized,
@@ -151,7 +173,7 @@ function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegri
 }
 
 function unboundSqliteIntegrityFailure(error: unknown): SqliteIntegrityConfirmation {
-  const normalized = error instanceof Error ? error : new Error(String(error));
+  const normalized = toStringifiedError(error);
   return { status: "failed", error: normalized, terminal: false };
 }
 
@@ -160,7 +182,7 @@ function closeSqliteDatabase(database: DatabaseSync): Error | undefined {
     database.close();
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
+    return toStringifiedError(error);
   }
 }
 

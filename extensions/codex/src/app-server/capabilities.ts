@@ -1,24 +1,31 @@
 /**
  * Capability helpers for optional Codex app-server control-plane methods.
  */
-import { CodexAppServerRpcError } from "./client.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 /** Known app-server methods used by OpenClaw control surfaces. */
 export const CODEX_CONTROL_METHODS = {
   account: "account/read",
-  compact: "thread/compact/start",
+  installedApps: "app/installed",
+  listApps: "app/list",
+  readApps: "app/read",
   feedback: "feedback/upload",
   forkThread: "thread/fork",
+  listHooks: "hooks/list",
   listMcpServers: "mcpServerStatus/list",
+  listPlugins: "plugin/list",
   listSkills: "skills/list",
   listThreads: "thread/list",
   listThreadTurns: "thread/turns/list",
+  listThreadItems: "thread/items/list",
   readThread: "thread/read",
   rateLimits: "account/rateLimits/read",
   archiveThread: "thread/archive",
   renameThread: "thread/name/set",
   resumeThread: "thread/resume",
   review: "review/start",
+  installPlugin: "plugin/install",
+  reloadMcpServers: "config/mcpServer/reload",
   unarchiveThread: "thread/unarchive",
   getThreadGoal: "thread/goal/get",
   setThreadGoal: "thread/goal/set",

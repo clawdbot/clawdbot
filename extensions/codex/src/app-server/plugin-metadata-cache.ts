@@ -44,6 +44,7 @@ type LoadCodexPluginMetadataParams<QueryKind extends CodexPluginMetadataQueryKin
   appCacheKey: string;
   queryKind: QueryKind;
   requestParams: CodexPluginMetadataRequestParams<QueryKind>;
+  catalogScope?: string;
   request: CodexPluginMetadataRequest<QueryKind>;
   /**
    * Guards against fail-open responses: upstream plugin/list only warns when a
@@ -73,8 +74,14 @@ export class CodexPluginMetadataCache {
     appCacheKey: string,
     queryKind: QueryKind,
     requestParams?: CodexPluginMetadataRequestParams<QueryKind>,
+    catalogScope?: string,
   ): CodexPluginMetadataSnapshot<QueryKind> | undefined {
-    const entryKey = buildMetadataCacheEntryKey(appCacheKey, queryKind, requestParams);
+    const entryKey = buildMetadataCacheEntryKey(
+      appCacheKey,
+      queryKind,
+      requestParams,
+      catalogScope,
+    );
     const entry = this.entries.get(entryKey);
     if (!entry) {
       return undefined;
@@ -95,8 +102,14 @@ export class CodexPluginMetadataCache {
       params.appCacheKey,
       params.queryKind,
       params.requestParams,
+      params.catalogScope,
     );
-    const cached = this.read(params.appCacheKey, params.queryKind, params.requestParams);
+    const cached = this.read(
+      params.appCacheKey,
+      params.queryKind,
+      params.requestParams,
+      params.catalogScope,
+    );
     if (cached) {
       return cached;
     }
@@ -186,9 +199,21 @@ function buildMetadataCacheEntryKey(
   appCacheKey: string,
   queryKind: CodexPluginMetadataQueryKind,
   requestParams?: v2.PluginListParams | v2.PluginInstalledParams,
+  catalogScope?: string,
 ): string {
   if (queryKind !== "installed") {
-    return JSON.stringify([appCacheKey, queryKind]);
+    const listParams = requestParams as v2.PluginListParams | undefined;
+    // Repository marketplaces are scoped to the supplied roots, while explicit
+    // marketplace kinds select different remote catalogs. Sharing either
+    // snapshot across requests could expose another workspace's plugins.
+    const entry = [
+      appCacheKey,
+      queryKind,
+      listParams?.cwds ?? [],
+      Array.from(new Set(listParams?.marketplaceKinds ?? [])).toSorted(),
+      ...(catalogScope ? [catalogScope] : []),
+    ];
+    return JSON.stringify(entry);
   }
   const installedParams = requestParams as v2.PluginInstalledParams | undefined;
   // Codex discovers workspace marketplaces from these exact roots. Reusing one

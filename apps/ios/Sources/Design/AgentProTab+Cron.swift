@@ -18,8 +18,8 @@ extension AgentProTab {
                     let jobCount = self.overview?.cronStatus?.jobs
                         ?? self.overview?.cronJobs.count
                         ?? 0
-                    self.detailMetric(label: "Automations", value: "\(jobCount)")
-                    self.detailMetric(label: "Next", value: self.cronNextRunLabel)
+                    agentProDetailMetric(label: "Automations", value: "\(jobCount)")
+                    agentProDetailMetric(label: "Next", value: self.cronNextRunLabel)
                 }
                 if let cronActionStatusText {
                     Text(cronActionStatusText)

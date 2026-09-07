@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { seedClawPackageBootstrap } from "./bootstrap.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -380,6 +381,7 @@ describe("package-root BOOTSTRAP.md", () => {
     );
 
     const removed = await applyClawRemovePlan(removePlan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env,
       config: {},
       consentPlanIntegrity: removePlan.planIntegrity,
@@ -475,6 +477,7 @@ describe("package-root BOOTSTRAP.md", () => {
       expect.objectContaining({ kind: "workspace", action: "trash" }),
     );
     const removed = await applyClawRemovePlan(removePlan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env,
       config,
       consentPlanIntegrity: removePlan.planIntegrity,
@@ -525,6 +528,7 @@ describe("package-root BOOTSTRAP.md", () => {
       expect.objectContaining({ kind: "bootstrap", action: "delete", blocked: false }),
     );
     const removed = await applyClawRemovePlan(removePlan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env,
       config,
       consentPlanIntegrity: removePlan.planIntegrity,
@@ -574,6 +578,7 @@ describe("package-root BOOTSTRAP.md", () => {
       expect.objectContaining({ kind: "workspace", action: "retain" }),
     );
     const removed = await applyClawRemovePlan(removePlan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env,
       config,
       consentPlanIntegrity: removePlan.planIntegrity,
@@ -602,21 +607,24 @@ describe("package-root BOOTSTRAP.md", () => {
     });
   });
 
-  it("reserves root BOOTSTRAP.md for the native seed-once lifecycle", () => {
-    const result = parseClawManifest({
-      schemaVersion: 1,
-      agent: { id: "bootstrap-worker" },
-      workspace: {
-        files: [{ source: "assets/BOOTSTRAP.md", path: "BOOTSTRAP.md" }],
-      },
-    });
+  it.each(["BOOTSTRAP.md", "BOOTSTRAP.md/notes.md", "bootstrap.md/notes.md"])(
+    "reserves %s for the native seed-once lifecycle",
+    (path) => {
+      const result = parseClawManifest({
+        schemaVersion: 1,
+        agent: { id: "bootstrap-worker" },
+        workspace: {
+          files: [{ source: "assets/BOOTSTRAP.md", path }],
+        },
+      });
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({
-        path: "$.workspace.files[0].path",
-        message: expect.stringContaining("native seed-once lifecycle"),
-      }),
-    );
-  });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          path: "$.workspace.files[0].path",
+          message: expect.stringContaining("native seed-once lifecycle"),
+        }),
+      );
+    },
+  );
 });

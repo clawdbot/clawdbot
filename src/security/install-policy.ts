@@ -1,7 +1,6 @@
 // Checks install policy constraints for package and plugin operations.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -9,14 +8,18 @@ import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/share
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectPathPermissions, safeStat } from "./audit-fs.js";
+import {
+  createInstallPolicyFailure,
+  parseInstallPolicyResponse,
+  type InstallPolicyResult,
+} from "./install-policy-response.js";
 import { isPathInside } from "./scan-paths.js";
+
+export type { InstallPolicyFinding } from "./install-policy-response.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_MAX_REQUEST_BYTES = 256 * 1024;
-const MAX_REASON_CHARS = 1000;
-const MAX_FINDINGS = 100;
-const MAX_FINDING_TEXT_CHARS = 1000;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 const POLICY_INTERPRETER_NAMES = new Set([
@@ -68,15 +71,6 @@ export type InstallPolicySource = {
   network: boolean;
 };
 
-export type InstallPolicyFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-  evidence?: string;
-};
-
 type InstallPolicyRequest = {
   targetType: InstallPolicyTarget;
   targetName: string;
@@ -117,22 +111,9 @@ type InstallPolicyRequest = {
   };
 };
 
-type InstallPolicyResult =
-  | { blocked?: undefined; findings?: InstallPolicyFinding[] }
-  | {
-      blocked: {
-        code: "security_scan_blocked" | "security_scan_failed";
-        reason: string;
-      };
-      findings?: InstallPolicyFinding[];
-    };
-
 type InstallPolicyExecConfig = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
 
-type InstallPolicyValidationIssue = {
-  severity: "error" | "warning";
-  message: string;
-};
+type InstallPolicyValidationIssue = { severity: "error" | "warning"; message: string };
 
 export type InstallPolicyStaticValidation = {
   enabled: boolean;
@@ -342,12 +323,7 @@ async function assertSecurePolicyScriptArg(params: {
   }
 }
 
-function truncateText(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${truncateUtf16Safe(value, maxChars)}...`;
-}
-
-function createPolicyChildEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  void sourceEnv;
+function createPolicyChildEnv(_sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {};
 }
 
@@ -359,25 +335,6 @@ function readPassEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefin
   const lowerKey = key.toLowerCase();
   const matchedKey = Object.keys(env).find((candidate) => candidate.toLowerCase() === lowerKey);
   return matchedKey ? env[matchedKey] : undefined;
-}
-
-function blockedByFailure(message: string): InstallPolicyResult {
-  return {
-    blocked: {
-      code: "security_scan_failed",
-      reason: `install policy failed closed: ${truncateText(message, MAX_REASON_CHARS)}`,
-    },
-  };
-}
-
-function blockedByPolicy(reason: string, findings?: InstallPolicyFinding[]): InstallPolicyResult {
-  return {
-    blocked: {
-      code: "security_scan_blocked",
-      reason: `blocked by install policy: ${truncateText(reason, MAX_REASON_CHARS)}`,
-    },
-    ...(findings && findings.length > 0 ? { findings } : {}),
-  };
 }
 
 function isTargetEnabled(params: {
@@ -408,7 +365,7 @@ function resolvePolicy(
   if (!policy.exec) {
     return {
       kind: "failure",
-      result: blockedByFailure(
+      result: createInstallPolicyFailure(
         "security.installPolicy is enabled but security.installPolicy.exec is not configured",
       ),
     };
@@ -474,74 +431,6 @@ export async function validateInstallPolicyStatic(
   return { enabled: true, targets, issues };
 }
 
-function normalizeFinding(value: unknown): InstallPolicyFinding | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const ruleId = typeof record.ruleId === "string" ? record.ruleId.trim() : "";
-  const severity = record.severity;
-  const file = typeof record.file === "string" ? record.file.trim() : "";
-  const lineNumber =
-    typeof record.line === "number" && Number.isFinite(record.line)
-      ? Math.max(1, Math.floor(record.line))
-      : undefined;
-  const message = typeof record.message === "string" ? record.message.trim() : "";
-  if (
-    !ruleId ||
-    !message ||
-    (severity !== "info" && severity !== "warn" && severity !== "critical")
-  ) {
-    return null;
-  }
-  const evidence = typeof record.evidence === "string" ? record.evidence.trim() : "";
-  return {
-    ruleId: truncateText(ruleId, MAX_FINDING_TEXT_CHARS),
-    severity,
-    message: truncateText(message, MAX_FINDING_TEXT_CHARS),
-    ...(file ? { file: truncateText(file, MAX_FINDING_TEXT_CHARS) } : {}),
-    ...(lineNumber ? { line: lineNumber } : {}),
-    ...(evidence ? { evidence: truncateText(evidence, MAX_FINDING_TEXT_CHARS) } : {}),
-  };
-}
-
-function parsePolicyResponse(stdout: string): InstallPolicyResult {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return blockedByFailure("policy command returned empty stdout");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed) as unknown;
-  } catch (err) {
-    return blockedByFailure(`policy command returned invalid JSON (${formatErrorMessage(err)})`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return blockedByFailure("policy response must be a JSON object");
-  }
-  const record = parsed as Record<string, unknown>;
-  if (record.protocolVersion !== 1) {
-    return blockedByFailure("policy response protocolVersion must be 1");
-  }
-  const decision = record.decision;
-  if (decision !== "allow" && decision !== "block") {
-    return blockedByFailure('policy response decision must be "allow" or "block"');
-  }
-  const findings = Array.isArray(record.findings)
-    ? record.findings.slice(0, MAX_FINDINGS).map(normalizeFinding).filter(Boolean)
-    : [];
-  const normalizedFindings = findings as InstallPolicyFinding[];
-  if (decision === "allow") {
-    return normalizedFindings.length > 0 ? { findings: normalizedFindings } : {};
-  }
-  const reason = typeof record.reason === "string" ? record.reason.trim() : "";
-  if (!reason) {
-    return blockedByFailure('policy response decision "block" requires a non-empty reason');
-  }
-  return blockedByPolicy(reason, normalizedFindings);
-}
-
 export async function runInstallPolicy(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -555,12 +444,12 @@ export async function runInstallPolicy(params: {
   const decisionContext = formatDecisionContext(params.request);
   const logBlocked = (result: InstallPolicyResult): InstallPolicyResult => {
     if (result.blocked) {
-      params.logger?.warn?.(`Install policy ${decisionContext}: ${result.blocked.reason}`);
+      params.logger?.debug?.(`Install policy ${decisionContext}: ${result.blocked.reason}`);
     }
     return result;
   };
   const failClosed = (message: string): InstallPolicyResult =>
-    logBlocked(blockedByFailure(message));
+    logBlocked(createInstallPolicyFailure(message));
 
   let config = params.config;
   if (!config) {
@@ -660,9 +549,13 @@ export async function runInstallPolicy(params: {
     return failClosed(`policy command exited with code ${String(result.code)}`);
   }
 
-  const parsed = parsePolicyResponse(result.stdout);
+  const parsed = parseInstallPolicyResponse(result.stdout);
   if (parsed.blocked) {
     return logBlocked(parsed);
+  }
+  if (parsed.warning) {
+    params.logger?.debug?.(`Install policy ${decisionContext}: warned`);
+    return parsed;
   }
   params.logger?.debug?.(`Install policy ${decisionContext}: allowed`);
   return parsed;

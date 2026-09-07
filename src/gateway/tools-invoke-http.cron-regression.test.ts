@@ -14,7 +14,6 @@ const runBeforeToolCallHook = async (args: { params: unknown }) => ({
 let cfg: Record<string, unknown> = {};
 const alwaysAuthorized = async () => ({ ok: true as const });
 const disableDefaultMemorySlot = () => false;
-const noPluginToolMeta = () => undefined;
 const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
@@ -25,9 +24,13 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: () => "agent:main:main",
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: alwaysAuthorized,
@@ -52,10 +55,6 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
     isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
   };
 });
-
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: noPluginToolMeta,
-}));
 
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
@@ -154,6 +153,24 @@ describe("tools invoke HTTP denylist", () => {
 
     expect(cronRes.status).toBe(200);
   });
+
+  it.each(["cron", " CRON ", "CrOn"])(
+    "keeps deny spelling %j authoritative over a canonical allow",
+    async (deniedTool) => {
+      cfg = {
+        gateway: {
+          tools: {
+            allow: ["automations"],
+            deny: [deniedTool],
+          },
+        },
+      };
+
+      const cronRes = await invoke("cron", "operator.admin");
+
+      expect(cronRes.status).toBe(404);
+    },
+  );
 
   it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {

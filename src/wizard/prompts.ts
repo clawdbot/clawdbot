@@ -50,6 +50,14 @@ export type WizardProgress = {
   stop: (message?: string) => void;
 };
 
+/**
+ * Device-code phishing gets the victim to enter the attacker's code, so warning
+ * only against sharing the code misses the actual attack. Wording tracks the
+ * Codex CLI prompt so operators see one story across both tools.
+ */
+export const DEVICE_CODE_PHISHING_WARNING =
+  "Continue only if you started this sign-in yourself. If a website or another person gave you this code, cancel.";
+
 type WizardDeviceCodeParams = {
   title: string;
   code: string;
@@ -58,6 +66,8 @@ type WizardDeviceCodeParams = {
 };
 
 export type WizardPrompter = {
+  /** End a hosted flow after a required choice is declined. */
+  cancel?: (message: string) => never;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

@@ -6,7 +6,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
@@ -83,7 +83,7 @@ export async function withOperatorApprovalsGatewayClient<T>(
   },
   run: (client: GatewayClient) => Promise<T>,
 ): Promise<T> {
-  const ready = createDeferred();
+  const ready = createDeferredCore();
 
   const gatewayClient = await createOperatorApprovalsGatewayClient({
     config: params.config,

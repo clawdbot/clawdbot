@@ -24,8 +24,19 @@ vi.mock("../loader.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  }),
 }));
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
@@ -99,7 +110,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: false,
     });
-    expect(loadOptions.env).toBe(process.env);
+    expect(loadOptions.env === process.env).toBe(true);
     expect(loadOptions.logger).toBeDefined();
   });
 
@@ -116,12 +127,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       workspaceDir: "/workspace",
     });
 
-    expect(getOnlyLoadOpenClawPluginsOptions()).toMatchObject({
+    const { env, ...loadOptions } = getOnlyLoadOpenClawPluginsOptions();
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: {} },
       autoEnabledReasons: {},
       workspaceDir: "/workspace",
-      env: process.env,
       logger,
       throwOnLoadError: true,
       cache: false,
@@ -129,6 +140,10 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
     });
+    // Preserve the env subset check without handing its values to the matcher.
+    expect(
+      env !== undefined && Object.entries(process.env).every(([key, value]) => env[key] === value),
+    ).toBe(true);
   });
 
   it("honors explicit load options when reusing a resolved runtime context", () => {
@@ -195,7 +210,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       loadModules: undefined,
       onlyPluginIds: [],
     });
-    expect(loadOptions.env).toBe(process.env);
+    expect(loadOptions.env === process.env).toBe(true);
     expect(loadOptions.logger).toBeDefined();
   });
 });

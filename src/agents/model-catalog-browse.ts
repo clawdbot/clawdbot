@@ -17,7 +17,7 @@ import {
  * Loads the model catalog shape used by browse/list commands without letting optional
  * provider discovery stall the CLI path.
  */
-const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
+export const MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 /** Visible model subset requested by model browse callers. */
 export type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
@@ -65,41 +65,49 @@ export function modelCatalogBrowseRequiresFullDiscovery(params: {
 }
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
-  return (
-    clampTimerTimeoutMs(value, 1) ??
-    resolveTimerTimeoutMs(DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1)
-  );
+  return clampTimerTimeoutMs(value, 1) ?? resolveTimerTimeoutMs(MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1);
 }
 
-async function loadCatalogForBrowse<T>(params: {
+/** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
+export async function loadPreparedModelCatalogSnapshotForBrowse(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   view?: ModelCatalogBrowseView;
-  loadCatalog: (params: { readOnly: boolean }) => Promise<T>;
-  empty: T;
+  /** Never starts provider discovery; a completed generation cache may still be reused. */
+  preparedOnly?: boolean;
+  /** Replaces the completed full-catalog generation. */
+  refresh?: boolean;
+  loadCatalog: (params: { readOnly: boolean; refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   timeoutFullDiscovery?: boolean;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
-}): Promise<T> {
+}): Promise<ModelCatalogSnapshot> {
   const view = params.view ?? "default";
-  const requiresFullDiscovery = modelCatalogBrowseRequiresFullDiscovery({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    view,
-  });
-  // Provider-policy wildcards newly escalate ordinary inventory views to live discovery.
-  // Keep those implicit loads within the browse deadline; explicit all/configured loads retain
-  // their existing completion semantics unless the caller requests a timeout.
+  const requiresFullDiscovery =
+    params.preparedOnly !== true &&
+    (params.refresh === true ||
+      modelCatalogBrowseRequiresFullDiscovery({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        view,
+      }));
+  // Implicit inventory reads stay bounded; explicit refreshes complete unless their caller
+  // explicitly requests a full-discovery deadline.
   const shouldTimeoutFullDiscovery =
-    params.timeoutFullDiscovery ||
-    (requiresFullDiscovery && (view === "default" || view === "provider-config"));
-  if (requiresFullDiscovery && !shouldTimeoutFullDiscovery) {
-    return await params.loadCatalog({ readOnly: false });
+    params.timeoutFullDiscovery === true ||
+    (params.refresh !== true &&
+      requiresFullDiscovery &&
+      (view === "default" || view === "provider-config"));
+  const catalogPromise = params.loadCatalog({
+    readOnly: !requiresFullDiscovery,
+    ...(requiresFullDiscovery && params.refresh ? { refresh: true } : {}),
+  });
+  if ((requiresFullDiscovery || params.refresh === true) && !shouldTimeoutFullDiscovery) {
+    return await catalogPromise;
   }
 
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveModelCatalogBrowseTimeoutMs(params.timeoutMs);
-  const catalogPromise = params.loadCatalog({ readOnly: !requiresFullDiscovery });
   const catalogResult = catalogPromise.then((value) => ({ kind: "catalog" as const, value }));
   const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
     timeout = globalThis.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
@@ -112,7 +120,7 @@ async function loadCatalogForBrowse<T>(params: {
       // The browse path may return partial/empty results; keep late catalog failures off stderr.
       catalogPromise.catch(() => undefined);
       params.onTimeout?.(timeoutMs);
-      return params.empty;
+      return { entries: [], routeVariants: [] };
     }
     return result.value;
   } finally {
@@ -120,17 +128,4 @@ async function loadCatalogForBrowse<T>(params: {
       globalThis.clearTimeout(timeout);
     }
   }
-}
-
-/** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
-export function loadPreparedModelCatalogSnapshotForBrowse(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  view?: ModelCatalogBrowseView;
-  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;
-  timeoutFullDiscovery?: boolean;
-  timeoutMs?: number;
-  onTimeout?: (timeoutMs: number) => void;
-}): Promise<ModelCatalogSnapshot> {
-  return loadCatalogForBrowse({ ...params, empty: { entries: [], routeVariants: [] } });
 }

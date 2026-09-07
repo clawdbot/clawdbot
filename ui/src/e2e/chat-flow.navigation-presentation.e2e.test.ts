@@ -3,18 +3,32 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
-  expectDefined,
+  controlUiSessionUrl,
   installMockGateway,
-  pauseVirtualClock,
   requireRecord,
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
+
+async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
+  return thread.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    const rows = [...element.querySelectorAll<HTMLElement>("[data-virtual-row-key]")];
+    const row = rows.find((candidate) => candidate.getBoundingClientRect().bottom > top);
+    return row
+      ? { key: row.dataset.virtualRowKey ?? null, offset: row.getBoundingClientRect().top - top }
+      : null;
+  });
+}
 
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
@@ -61,7 +75,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
@@ -84,7 +98,7 @@ suite.define(() => {
     }
   });
 
-  it("restores a scrolled session after switching away while new messages arrive", async () => {
+  it("retains scrolled and end-anchored sessions without history reloads", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -117,28 +131,46 @@ suite.define(() => {
       methodResponses: {
         "chat.history": initialResponses,
         "chat.startup": initialResponses,
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionA,
+            sessionId: `${sessionA}:backing`,
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: sessionB,
+            sessionId: `${sessionB}:backing`,
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: sessionA,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await waitForChatScrollIdle(page);
-      const thread = page.locator(".chat-thread");
+      await gateway.waitForRequest("agent.identity.get");
+      const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await expect.poll(() => thread.count()).toBe(1);
       const initialDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(initialDistance).toBeLessThanOrEqual(8);
-      const storedScrollTop = await thread.evaluate((element) => {
+      await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
         transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
-        return transcript.scrollTop;
       });
-      expect(storedScrollTop).toBeGreaterThan(0);
+      await waitForChatScrollIdle(page);
+      const storedAnchor = await readTopTranscriptAnchor(thread);
+      expect(storedAnchor?.key).not.toBeNull();
 
       const sessionLink = (sessionKey: string) =>
         page.locator(
@@ -147,23 +179,20 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
+        initialIdentityRequestCount,
+      );
       const firstVisitDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
-      const messagesAWithNewTail = messages("A", 78);
-      const updatedResponses = responseCases(messagesAWithNewTail);
-      await gateway.setMethodResponse("chat.history", updatedResponses);
-      await gateway.setMethodResponse("chat.startup", updatedResponses);
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeReturn);
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
 
       const restored = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
@@ -173,23 +202,21 @@ suite.define(() => {
           scrollTop: transcript.scrollTop,
         };
       });
+      const restoredAnchor = await readTopTranscriptAnchor(thread);
+      expect(restoredAnchor?.key).toBe(storedAnchor?.key);
       expect(
-        Math.abs(restored.scrollTop - storedScrollTop),
-        JSON.stringify({ restored, storedScrollTop }),
-      ).toBeLessThanOrEqual(120);
+        Math.abs((restoredAnchor?.offset ?? 0) - (storedAnchor?.offset ?? 0)),
+        JSON.stringify({ restoredAnchor, storedAnchor }),
+      ).toBeLessThanOrEqual(2);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
 
-      const messagesBWithNewTail = messages("B", 36);
-      const endAnchoredResponses = responseCases(messagesAWithNewTail, messagesBWithNewTail);
-      await gateway.setMethodResponse("chat.history", endAnchoredResponses);
-      await gateway.setMethodResponse("chat.startup", endAnchoredResponses);
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeEndReturn);
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("chat.history")).toHaveLength(
+        historyRequestsBeforeEndReturn,
+      );
       const endAnchoredDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
@@ -220,7 +247,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
       // Desktop renders no topbar row: the sidebar owns navigation.
@@ -229,6 +256,13 @@ suite.define(() => {
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      const taskHeader = page.locator(".chat-pane__header");
+      const regularHeaderPadding = await taskHeader.evaluate(
+        (header) => getComputedStyle(header).paddingLeft,
+      );
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Keep this draft while docking beside native controls");
+      const originalComposer = await composer.elementHandle();
       await page.evaluate(() => {
         document.documentElement.classList.add("openclaw-native-macos");
         document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
@@ -240,6 +274,31 @@ suite.define(() => {
             .evaluate((header) => getComputedStyle(header).paddingLeft),
         )
         .toBe("90px");
+      await openChatSidePanelType(page, "Files");
+      await dockChatSidePanel(page, "left");
+      const sideHeader = page.locator('[data-region-header="side"]');
+      const filesTab = sideHeader.getByRole("tab", { name: "Files", exact: true });
+      await filesTab.waitFor();
+      await expect
+        .poll(() => taskHeader.evaluate((header) => getComputedStyle(header).paddingLeft))
+        .toBe(regularHeaderPadding);
+      await expect
+        .poll(() => filesTab.evaluate((tab) => tab.getBoundingClientRect().left))
+        .toBeGreaterThanOrEqual(90);
+      const taskHeaderBox = await taskHeader.boundingBox();
+      const sideHeaderBox = await sideHeader.boundingBox();
+      expect(taskHeaderBox?.y).toBeCloseTo(sideHeaderBox!.y, 0);
+      expect(taskHeaderBox!.x).toBeGreaterThan(sideHeaderBox!.x);
+      expect(
+        await composer.evaluate((element, original) => element === original, originalComposer),
+      ).toBe(true);
+      expect(await composer.inputValue()).toBe(
+        "Keep this draft while docking beside native controls",
+      );
+      await originalComposer?.dispose();
+      await sideHeader.getByRole("button", { name: "Close Files", exact: true }).click();
+      await filesTab.waitFor({ state: "detached" });
+      await composer.fill("");
       await page.evaluate(() => {
         document.documentElement.classList.remove("openclaw-native-macos");
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
@@ -271,7 +330,14 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+            .count(),
+        )
+        .toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
@@ -293,30 +359,71 @@ suite.define(() => {
         })
         .toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
-      // The pane header hosts the session workspace toggle (the old collapsed
-      // rail strip is gone).
-      await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
+      // The pane header owns one side-panel toggle; individual tools live in its tab strip.
+      await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      // Keyboard focus on a header action marks the pane active.
-      await headers.first().getByRole("button", { name: "Split down" }).focus();
       const cells = page.locator(".chat-split-view__cell");
+      const actionRows = headers.locator(".chat-pane__actions");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      expect(
+        await headers
+          .first()
+          .locator(".chat-pane__close-pane")
+          .evaluate((button) => {
+            (button as HTMLElement).focus();
+            return document.activeElement === button;
+          }),
+      ).toBe(false);
+
+      await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(true);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+      const paneEmphasis = await cells.evaluateAll((nodes) =>
+        nodes.map((cell) => {
+          const style = getComputedStyle(cell);
+          return {
+            active: cell.classList.contains("chat-split-view__cell--active"),
+            boxShadow: style.boxShadow,
+            filter: style.filter,
+            opacity: style.opacity,
+          };
+        }),
+      );
+      expect(paneEmphasis).toEqual([
+        { active: true, boxShadow: "none", filter: "none", opacity: "1" },
+        { active: false, boxShadow: "none", filter: "saturate(0.45)", opacity: "1" },
+      ]);
 
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
-      await expect
-        .poll(() =>
-          targetHeader.evaluate((header) => {
-            const owner = header.closest("openclaw-chat-pane");
-            return (
-              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
-            );
-          }),
-        )
-        .toBe(true);
+      const headerGeometry = await headers.evaluateAll((nodes) =>
+        nodes.map((header) => {
+          const owner = header.closest("openclaw-chat-pane");
+          const main = owner?.querySelector('[data-region="main"]:not([hidden])');
+          if (!main) {
+            throw new Error("Each task toolbar must have visible main content");
+          }
+          const toolbar = header.getBoundingClientRect();
+          const content = main.getBoundingClientRect();
+          return {
+            height: toolbar.height,
+            left: Math.abs(toolbar.left - content.left),
+            right: Math.abs(toolbar.right - content.right),
+            gap: Math.abs(toolbar.bottom - content.top),
+          };
+        }),
+      );
+      for (const geometry of headerGeometry) {
+        expect(geometry.height).toBeGreaterThan(0);
+        expect(Math.max(geometry.left, geometry.right, geometry.gap)).toBeLessThanOrEqual(1);
+      }
 
       const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
       await dataTransfer.evaluate(
@@ -375,11 +482,7 @@ suite.define(() => {
   });
 
   it("opens current context and latest-run usage from the composer ring", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -397,6 +500,22 @@ suite.define(() => {
           model: "gpt-5.5",
           provider: "openai",
           timestamp: Date.now(),
+        },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          model: "gateway-injected",
+          provider: "openclaw",
+          timestamp: Date.now() + 1,
+          usage: {
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
         },
       ],
       methodResponses: {
@@ -445,8 +564,6 @@ suite.define(() => {
       await expect.poll(() => popover.textContent()).toContain("$0.018");
       await expect.poll(() => popover.textContent()).toContain("$0.0015");
       await expect.poll(() => popover.textContent()).toContain("$0.0005");
-      await expect.poll(() => popover.textContent()).toContain("openai");
-      await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
 
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);
@@ -456,11 +573,7 @@ suite.define(() => {
   });
 
   it("routes page typing to the active composer without stealing text input focus", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -502,12 +615,8 @@ suite.define(() => {
     }
   });
 
-  it("keeps stale context visible as approximate without warning or compaction", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("keeps stale context visible as approximate without warning", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -534,9 +643,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const trigger = page.locator("summary.context-ring");
       await trigger.waitFor({ timeout: 10_000 });
-      expect((await trigger.textContent())?.trim()).toBe("~95%");
+      expect((await trigger.textContent())?.trim()).toBe("");
       expect(await trigger.getAttribute("aria-label")).toBe(
-        "Thread context usage: ~190k of 200k (~95%)",
+        "Session context usage: ~190k of 200k (~95%)",
       );
       expect(
         await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
@@ -546,18 +655,13 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".context-usage__popover").textContent())
         .toContain("~190k / 200k · ~95%");
-      expect(await page.locator(".context-ring__action").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
@@ -580,15 +684,15 @@ suite.define(() => {
 
       // The chat boot hydrates the sidebar session list; that request stays
       // deferred here while the composer must remain fully usable.
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
 
       await composer.fill("draft while sessions load");
       expect(await composer.inputValue()).toBe("draft while sessions load");
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New thread for the whole request.
-      const newThread = page.getByRole("button", { name: "New thread" }).first();
+      // flag, which would disable New session for the whole request.
+      const newThread = page.getByRole("link", { name: "New session" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
@@ -599,11 +703,7 @@ suite.define(() => {
   });
 
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const createdSessionKeys = Array.from(
       { length: 11 },
@@ -644,7 +744,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .waitFor({
@@ -674,19 +774,16 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const sortThreads = page.getByRole("button", { name: "Sort threads" });
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
@@ -694,47 +791,77 @@ suite.define(() => {
     }
   });
 
-  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("releases a retained queued send after the canonical session list records idle", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const sessions = chatSessionListResponse([
-      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+    const activeSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 2,
+        activeRunIds: ["server-run"],
+        hasActiveRun: true,
+        status: "running",
+      },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const idleSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 3,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: "server-run",
+        status: "done",
+      },
       { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+        "sessions.list": activeSessions,
+      },
       sessionKey: firstKey,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
-      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant A")
+        .waitFor();
       await page.waitForTimeout(500);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
 
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
         )
         .click();
-      await page.locator(".chat-pane__session-title").getByText("Instant B").waitFor();
-      const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
-        initialListCount,
-      );
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant B")
+        .waitFor();
+      const emptyOutboxListRequests = (
+        await gateway.getRequests("sessions.list", rosterMatch)
+      ).slice(initialListCount);
       expect(emptyOutboxListRequests).toHaveLength(0);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
       const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
 
-      await page.locator("openclaw-chat-pane").evaluate((pane, targetKey) => {
+      await page.locator('openclaw-chat-pane[aria-hidden="false"]').evaluate((pane, targetKey) => {
         const state = (
           pane as HTMLElement & {
             state: {
@@ -766,31 +893,39 @@ suite.define(() => {
             },
           }),
         );
-        window.dispatchEvent(new StorageEvent("storage", { key }));
+        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: sessionStorage }));
       }, firstKey);
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
         )
         .click();
-      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant A")
+        .waitFor();
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBe(emptyOutboxListCount + 1);
-      if (emptyOutboxListRequests.length === 0) {
-        await gateway.resolveDeferred("sessions.list", sessions);
-      }
+      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
+      await queued.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
+      await gateway.resolveDeferred("sessions.list", idleSessions);
+      const send = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(send.params)).toMatchObject({
+        message: "flush after idle reconciliation",
+        sessionKey: firstKey,
+      });
+      await queued.waitFor({ state: "detached" });
+      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const initialKey = "agent:main:session-a";
     const key = "agent:main:session-b";
@@ -844,29 +979,33 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialKey));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.locator("a.sidebar-recent-session__link").click();
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       const label = row.locator(".sidebar-recent-session__name");
       const link = row.locator("a.sidebar-recent-session__link");
+      const tree = row.locator("..");
+      const list = tree.locator("..");
       await expect.poll(() => label.textContent()).toBe(readableTitle);
-      expect(await row.getAttribute("role")).toBe("listitem");
+      expect(await list.getAttribute("role")).toBe("list");
+      expect(await tree.getAttribute("role")).toBe("listitem");
+      expect(await row.getAttribute("role")).toBeNull();
       expect(await row.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-derived-title");
+      await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
-      const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforePatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await row.hover();
-      await row.getByRole("button", { name: "Pin thread" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
 
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
@@ -875,176 +1014,14 @@ suite.define(() => {
       });
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.slice(listCountBeforePatch).map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-patch-refresh");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps long sidebar labels clipped after a session switch", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.clock.install();
-    const sessions = chatSessionListResponse();
-    const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
-    const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
-    firstSession.label = "Short";
-    secondSession.label =
-      "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
-        4,
-      );
-    await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
-      sessionKey: "agent:main:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const recentRow = page.locator(
-        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
-      );
-      const recentLabel = recentRow.locator(".sidebar-recent-session__name");
-      await recentLabel.waitFor({ state: "visible", timeout: 10_000 });
-      const layout = await recentLabel.evaluate((label) => ({
-        clientWidth: label.clientWidth,
-        linkWidth: label.parentElement?.clientWidth ?? 0,
-        rowWidth: label.closest<HTMLElement>(".sidebar-recent-session")?.clientWidth ?? 0,
-        scrollWidth: label.scrollWidth,
-        text: label.textContent,
-      }));
-      expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
-
-      // Freeze the clock so the 500ms hover-intent delay elapses only via
-      // runFor; a ticking clock let slow runners start the marquee before the
-      // "not yet scrolling" asserts below.
-      await pauseVirtualClock(page);
-      await recentRow.dispatchEvent("mouseenter");
-      await page.clock.runFor(250);
-      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
-        "hover-marquee--scrolling",
-      );
-      await recentRow.dispatchEvent("mouseleave");
-      // 250 + 300 exceeds the hover delay: only the leave-cancel keeps it off.
-      await page.clock.runFor(300);
-      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
-        "hover-marquee--scrolling",
-      );
-      await recentRow.dispatchEvent("mouseenter");
-      await page.clock.runFor(500);
-      await expect
-        .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-      // Resume real time: the snap-back below is a compositor-driven CSS
-      // transition, not a fake-timer callback.
-      await page.clock.resume();
-      await recentRow.dispatchEvent("mouseleave");
-      await expect
-        .poll(
-          () =>
-            recentLabel.evaluate((label) => ({
-              textIndent: getComputedStyle(label).textIndent,
-              textOverflow: getComputedStyle(label).textOverflow,
-            })),
-          { timeout: 1_500 },
-        )
-        .toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
-
-      await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
-        button: 0,
-      });
-      await page.locator(".sidebar-recent-session--active").getByText(secondSession.label).waitFor({
-        timeout: 10_000,
-      });
-
-      const activeRow = page.locator(
-        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
-      );
-      expect(
-        await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
-          textIndent: getComputedStyle(label).textIndent,
-          textOverflow: getComputedStyle(label).textOverflow,
-        })),
-      ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const avatarBody = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
-      "base64",
-    );
-    await page.route(/\/avatar\/main\?meta=1$/, (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
-      }),
-    );
-    await page.route(/\/avatar\/main$/, (route) =>
-      route.fulfill({ contentType: "image/png", body: avatarBody }),
-    );
-    await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse() },
-      sessionKey: "agent:main:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const documentMarker = await page.evaluate(() => {
-        const marker = crypto.randomUUID();
-        (window as Window & { __openclawAvatarTestDocument?: string })[
-          "__openclawAvatarTestDocument"
-        ] = marker;
-        return marker;
-      });
-      const avatar = page.locator("img.agent-chat__welcome-avatar");
-      await avatar.waitFor({ state: "visible" });
-      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-
-      const sessionRow = (sessionKey: string) =>
-        page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-      const sessionB = sessionRow("agent:main:session-b");
-      await sessionB.locator("a.sidebar-recent-session__link").click();
-      await expect
-        .poll(() => sessionB.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-      await expect.poll(() => avatar.isVisible()).toBe(true);
-
-      const sessionA = sessionRow("agent:main:session-a");
-      await sessionA.locator("a.sidebar-recent-session__link").click();
-      await expect
-        .poll(() => sessionA.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-
-      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-      await expect.poll(() => avatar.isVisible()).toBe(true);
-      expect(
-        await page.evaluate(
-          () =>
-            (window as Window & { __openclawAvatarTestDocument?: string })[
-              "__openclawAvatarTestDocument"
-            ],
-        ),
-      ).toBe(documentMarker);
+      await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);
     }

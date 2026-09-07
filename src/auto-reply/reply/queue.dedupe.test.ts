@@ -1,6 +1,7 @@
 // Tests follow-up queue message-id dedupe and drain scheduling behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -10,11 +11,11 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -31,7 +32,7 @@ function createFollowupCollector(expectedCalls = 1): {
   runFollowup: (run: FollowupRun) => Promise<void>;
 } {
   const calls: FollowupRun[] = [];
-  const done = createDeferred<void>();
+  const done = createDeferred();
   return {
     calls,
     done,
@@ -252,6 +253,47 @@ describe("followup queue deduplication", () => {
     }
   });
 
+  it("does not leave an empty registry entry when rejecting a redelivery after the queue drained", async () => {
+    const key = `test-dedup-registry-leak-${Date.now()}`;
+    const { calls, done, runFollowup } = createFollowupCollector();
+
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(true);
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    // Let the drain finish and self-delete the empty queue from the registry.
+    await vi.waitFor(() => {
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+    });
+    expect(calls).toHaveLength(1);
+
+    // A provider redelivery of the same message must be rejected without
+    // recreating a registry entry that nothing would ever delete again.
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original (redelivery)",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(false);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
   it("does not collide recent message-id keys when routing contains delimiters", async () => {
     const key = `test-dedup-key-collision-${Date.now()}`;
     const { done, runFollowup } = createFollowupCollector();
@@ -377,6 +419,86 @@ describe("followup queue deduplication", () => {
     clearSessionQueues([key]);
   });
 
+  it.each([
+    { storage: "pending", cap: 2, siblings: 1 },
+    { storage: "retained-summary", cap: 1, siblings: 1 },
+    { storage: "elided-summary", cap: 1, siblings: 2 },
+  ])(
+    "releases an aborted $storage source while the reply queue stays dormant",
+    async ({ storage, cap, siblings }) => {
+      const key = `test-dedup-dormant-abort-${storage}`;
+      const controller = new AbortController();
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const runFollowup = vi.fn(async (_run: FollowupRun) => {});
+      const settings: QueueSettings = { ...collectSettings, cap };
+      const first = createRun({
+        prompt: "retry me",
+        messageId: "retry-id",
+        originatingChannel: "discord",
+        originatingTo: "channel:dormant",
+      });
+      first.abortSignal = controller.signal;
+      first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned, onSettled };
+      try {
+        expect(enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false)).toBe(
+          true,
+        );
+        for (let index = 0; index < siblings; index += 1) {
+          expect(
+            enqueueFollowupRun(
+              key,
+              createRun({
+                prompt: `healthy sibling ${index}`,
+                messageId: `healthy-${index}`,
+                originatingChannel: "discord",
+                originatingTo: "channel:dormant",
+              }),
+              settings,
+              "message-id",
+              runFollowup,
+              false,
+            ),
+          ).toBe(true);
+        }
+        const queue = getExistingFollowupQueue(key);
+        const sources =
+          storage === "pending"
+            ? queue?.items
+            : storage === "retained-summary"
+              ? queue?.summarySources
+              : queue?.summaryElisions.flatMap((entry) => entry.sources);
+        expect(
+          sources?.some((run) => run.turnAdoptionLifecycle === first.turnAdoptionLifecycle),
+        ).toBe(true);
+        expect(onAbandoned).not.toHaveBeenCalled();
+        expect(runFollowup).not.toHaveBeenCalled();
+
+        controller.abort(new Error("ingress watchdog released claim"));
+        const retry = createRun({
+          prompt: "retry me",
+          messageId: "retry-id",
+          originatingChannel: "discord",
+          originatingTo: "channel:dormant",
+        });
+        retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+        // No drain, promise join, or owner-clear event may be needed before ingress retries.
+        expect(
+          enqueueFollowupRun(key, retry, collectSettings, "message-id", runFollowup, false),
+        ).toBe(true);
+        expect(onAbandoned).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        await Promise.resolve();
+        expect(runFollowup.mock.calls.map(([run]) => run.messageId)).toEqual(
+          storage === "pending" ? ["retry-id"] : [],
+        );
+        expect(getExistingFollowupQueue(key)?.draining).toBe(false);
+      } finally {
+        clearSessionQueues([key]);
+      }
+    },
+  );
+
   it("allows re-enqueueing a message evicted by old-item queue overflow", () => {
     const key = `test-dedup-evicted-retry-${Date.now()}`;
     const evictSettings: QueueSettings = { mode: "collect", cap: 1, dropPolicy: "old" };
@@ -476,7 +598,7 @@ describe("followup queue deduplication", () => {
     try {
       vi.setSystemTime(new Date("2026-07-30T00:00:00Z"));
       const key = "test-dedup-stale-owner";
-      const stalledAdmission = createDeferred<void>();
+      const stalledAdmission = createDeferred();
       const first = createRun({
         prompt: "first",
         messageId: "same-id",

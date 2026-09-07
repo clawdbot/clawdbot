@@ -13,6 +13,7 @@ export function codexPluginActivationReportState(result: CodexPluginActivationRe
     case "auth_required":
       return { installed: true, enabled: false };
     case "disabled":
+    case "install_failed":
     case "marketplace_missing":
     case "plugin_missing":
       return { installed: false, enabled: false };

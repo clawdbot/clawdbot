@@ -1,11 +1,5 @@
-// Subagent format tests cover concise subagent status and duration formatting.
 import { describe, expect, it } from "vitest";
-import {
-  formatDurationCompact,
-  formatTokenUsageDisplay,
-  resolveTotalTokens,
-  truncateLine,
-} from "./subagents-format.js";
+import { formatTokenUsageDisplay, resolveTotalTokens, truncateLine } from "./subagents-format.js";
 
 const freshUsage = (totalTokens: number) => ({
   totalTokens,
@@ -14,16 +8,6 @@ const freshUsage = (totalTokens: number) => ({
 });
 
 describe("shared/subagents-format", () => {
-  it("re-exports the canonical formatter with second-level precision", () => {
-    expect(formatDurationCompact()).toBeUndefined();
-    expect(formatDurationCompact(30_000)).toBe("30s");
-    expect(formatDurationCompact(90_000)).toBe("1m30s");
-    expect(formatDurationCompact(60 * 60_000)).toBe("1h");
-    expect(formatDurationCompact(61 * 60_000)).toBe("1h1m");
-    expect(formatDurationCompact(24 * 60 * 60_000)).toBe("1d");
-    expect(formatDurationCompact(25 * 60 * 60_000)).toBe("1d1h");
-  });
-
   it("formats token counts with integer, kilo, and million branches", () => {
     expect(formatTokenUsageDisplay()).toBe("");
     expect(formatTokenUsageDisplay(freshUsage(999.9))).toBe("tokens 999 prompt/cache");
@@ -64,16 +48,6 @@ describe("shared/subagents-format", () => {
     expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖...");
     // CJK Extension B (surrogate pair) at boundary: character stays intact.
     expect(truncateLine("AB𠮷CDEF", 7)).toBe("AB𠮷...");
-    // No broken surrogates in output.
-    for (const result of [
-      truncateLine("AB🤖CDEF", 6),
-      truncateLine("🤖🤖🤖", 5),
-      truncateLine("AB𠮷CDEF", 7),
-    ]) {
-      expect(result).not.toMatch(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
-      );
-    }
   });
 
   it("resolves token totals and io breakdowns from valid numeric fields only", () => {

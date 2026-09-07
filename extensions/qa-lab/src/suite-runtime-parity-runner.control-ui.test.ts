@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -146,5 +147,52 @@ describe("runtime parity Control UI ownership", () => {
       { runtime: "codex", controlUiEnabled: testCase.enabled },
     ]);
     expect(result.startedScenarioIds).toEqual([testCase.scenarioId]);
+  });
+
+  it("forwards config mutation to both runtime cells", async () => {
+    const lab = createControlUiTestLab();
+    const mutateConfig = vi.fn((config: OpenClawConfig) => config);
+
+    await runQaFlowSuiteFromRuntime({
+      repoRoot: "/qa-repo",
+      outputDir: "/qa-output",
+      providerMode: "mock-openai",
+      scenarioIds: ["runtime-channel"],
+      runtimePair: ["openclaw", "codex"],
+      lab,
+      startLab: async () => lab,
+      mutateConfig,
+    });
+
+    expect(mocks.runQaFlowSuiteStandard.mock.calls.map(([params]) => params.mutateConfig)).toEqual([
+      mutateConfig,
+      mutateConfig,
+    ]);
+  });
+
+  it("forwards the same candidate command object to both runtime cells", async () => {
+    const lab = createControlUiTestLab();
+    const sutOpenClawCommand = {
+      executablePath: "/qa-repo/dist/index.mjs",
+      argsPrefix: ["--qa"],
+      cwd: "/qa-repo",
+      usePackagedPlugins: true,
+    };
+
+    await runQaFlowSuiteFromRuntime({
+      repoRoot: "/qa-repo",
+      outputDir: "/qa-output",
+      providerMode: "mock-openai",
+      scenarioIds: ["runtime-channel"],
+      runtimePair: ["openclaw", "codex"],
+      sutOpenClawCommand,
+      lab,
+      startLab: async () => lab,
+    });
+
+    expect(mocks.runQaFlowSuiteStandard).toHaveBeenCalledTimes(2);
+    for (const [params] of mocks.runQaFlowSuiteStandard.mock.calls) {
+      expect(params.sutOpenClawCommand).toBe(sutOpenClawCommand);
+    }
   });
 });

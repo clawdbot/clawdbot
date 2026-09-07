@@ -6,32 +6,40 @@ import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/clien
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   isGatewayNativeApprovalMethod,
   type GatewayNativeApprovalMethod,
 } from "./approval-gateway-runtime-methods.js";
+import {
+  normalizeApprovalRequest,
+  type ApprovalRequestInput,
+  type ChannelApprovalKind,
+  type NormalizedApprovalRequest,
+} from "./approval-types.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
-  ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
-  ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 
-type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalRequestEvent = ApprovalRequestInput;
+type ApprovalResolvedEvent =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 type ApprovalReplayMethod = Extract<
   GatewayNativeApprovalMethod,
-  "exec.approval.list" | "plugin.approval.list"
+  "exec.approval.list" | "plugin.approval.list" | "openclaw.approval.list"
 >;
 
 type ApprovalReplayClient = {
@@ -64,12 +72,12 @@ export function isExecApprovalChannelRuntimeTerminalStartError(
 }
 
 type PendingApprovalValue<TPending, TRequest extends ApprovalRequestEvent> = {
-  request: TRequest;
+  request: NormalizedApprovalRequest<TRequest>;
   entries: TPending[];
 };
 
 function resolveApprovalReplayMethods(
-  eventKinds: ReadonlySet<ExecApprovalChannelRuntimeEventKind>,
+  eventKinds: ReadonlySet<ChannelApprovalKind>,
 ): ApprovalReplayMethod[] {
   const methods: ApprovalReplayMethod[] = [];
   if (eventKinds.has("exec")) {
@@ -77,6 +85,9 @@ function resolveApprovalReplayMethods(
   }
   if (eventKinds.has("plugin")) {
     methods.push("plugin.approval.list");
+  }
+  if (eventKinds.has("system-agent")) {
+    methods.push("openclaw.approval.list");
   }
   return methods;
 }
@@ -98,7 +109,7 @@ export function createExecApprovalChannelRuntime<
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const log = createSubsystemLogger(adapter.label);
   const nowMs = adapter.nowMs ?? Date.now;
-  const eventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(adapter.eventKinds ?? ["exec"]);
+  const eventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
   const configuredGatewayRuntime = getGatewayNativeApprovalRuntime();
   const pending = createPendingApprovalRegistry<PendingApprovalValue<TPending, TRequest>>();
   let gatewayClient: GatewayClient | null = null;
@@ -141,12 +152,13 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleRequested = async (
-    request: TRequest,
+    requestInput: TRequest,
     opts?: { ignoreIfInactive?: boolean; alreadyAccepted?: boolean },
   ): Promise<void> => {
     if (opts?.ignoreIfInactive && !shouldKeepRunning()) {
       return;
     }
+    const request = normalizeApprovalRequest(requestInput);
     if (pending.has(request.id)) {
       log.debug(`ignored duplicate request ${request.id}`);
       return;
@@ -183,6 +195,10 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleResolved = async (resolved: TResolved): Promise<void> => {
+    if ("terminalStatus" in resolved && resolved.terminalStatus === "expired") {
+      await handleExpired(resolved.id);
+      return;
+    }
     const settled = pending.settle(resolved.id, async (entry) => {
       log.debug(`resolved ${resolved.id} with ${resolved.decision}`);
       await adapter.finalizeResolved({
@@ -211,11 +227,24 @@ export function createExecApprovalChannelRuntime<
       );
       return;
     }
+    if (evt.event === "openclaw.approval.requested" && eventKinds.has("system-agent")) {
+      spawn(
+        "error handling approval request",
+        // SAFETY: The event name and handled kind select the canonical approval request union.
+        handleRequested(evt.payload as TRequest, { ignoreIfInactive: true }),
+      );
+      return;
+    }
     if (evt.event === "exec.approval.resolved" && eventKinds.has("exec")) {
       spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
       return;
     }
     if (evt.event === "plugin.approval.resolved" && eventKinds.has("plugin")) {
+      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
+      return;
+    }
+    if (evt.event === "openclaw.approval.resolved" && eventKinds.has("system-agent")) {
+      // SAFETY: The event name and handled kind select the canonical approval resolution union.
       spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
     }
   };
@@ -296,8 +325,10 @@ export function createExecApprovalChannelRuntime<
           // Subscribe before replay so a request created during the list calls is not lost.
           unsubscribeGatewayRuntime = gatewayRuntime.subscribe({
             eventKinds,
+            // SAFETY: Gateway-owned subscribers publish the canonical normalized request union.
             shouldHandle: (request) =>
-              shouldKeepRunning() && adapter.shouldHandle(request as TRequest),
+              shouldKeepRunning() &&
+              adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
             onRequested: (request) => {
               spawn(
                 "error handling approval request",
@@ -322,7 +353,7 @@ export function createExecApprovalChannelRuntime<
           return;
         }
 
-        const ready = createDeferred();
+        const ready = createDeferredCore();
         let lastConnectError: unknown = null;
 
         const client = await createOperatorApprovalsGatewayClient({

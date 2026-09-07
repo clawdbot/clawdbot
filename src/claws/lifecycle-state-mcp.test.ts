@@ -3,16 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const sourceServer = {
   command: "uvx",
@@ -98,6 +100,7 @@ describe("Claw MCP removal", () => {
     const unsetMcpServer = vi.fn();
 
     const result = await applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
       consentPlanIntegrity: plan.planIntegrity,
       env: current.env,
       config,
@@ -136,6 +139,7 @@ describe("Claw MCP removal", () => {
       .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
 
     const result = await applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
       consentPlanIntegrity: plan.planIntegrity,
       env: current.env,
       config,
@@ -149,6 +153,7 @@ describe("Claw MCP removal", () => {
     expect(unsetMcpServer).toHaveBeenCalledWith({
       name: "docs",
       expectedServer: sourceServer,
+      recordIndependentOwner: false,
     });
     expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
   });
@@ -164,6 +169,7 @@ describe("Claw MCP removal", () => {
     });
 
     const result = await applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
       consentPlanIntegrity: plan.planIntegrity,
       env: current.env,
       config,
@@ -174,6 +180,32 @@ describe("Claw MCP removal", () => {
     });
 
     expect(result.mcpServers).toEqual([{ name: "docs", action: "missing" }]);
+  });
+
+  it("retains a managed MCP server adopted after remove planning", async () => {
+    const current = await addMcpFixture();
+    await recordManagedMcp(current);
+    const config = current.getConfig();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config,
+      sourceMcpServers: { docs: sourceServer },
+    });
+    markClawMcpServerIndependentlyOwned("docs", { env: current.env });
+    const unsetMcpServer = vi.fn();
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        sourceMcpServers: { docs: sourceServer },
+        unsetMcpServer,
+        commitConfig: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "remove_changed" });
+    expect(unsetMcpServer).not.toHaveBeenCalled();
   });
 
   it("removes a managed MCP server restored while removal is applying", async () => {
@@ -202,6 +234,7 @@ describe("Claw MCP removal", () => {
       let config = current.getConfig();
 
       const result = await applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
         env: current.env,
         listMcpServers,
@@ -214,6 +247,7 @@ describe("Claw MCP removal", () => {
       expect(unsetMcpServer).toHaveBeenCalledWith({
         name: "docs",
         expectedServer: sourceServer,
+        recordIndependentOwner: false,
       });
       expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
     });
@@ -245,6 +279,7 @@ describe("Claw MCP removal", () => {
 
       await expect(
         applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
           consentPlanIntegrity: plan.planIntegrity,
           env: current.env,
           listMcpServers,
@@ -253,7 +288,11 @@ describe("Claw MCP removal", () => {
             config = transform(config);
           },
         }),
-      ).rejects.toMatchObject({ code: "mcp_cleanup_changed" });
+      ).resolves.toMatchObject({
+        status: "partial",
+        agentRemoved: false,
+        error: { code: "mcp_cleanup_changed" },
+      });
       expect(unsetMcpServer).not.toHaveBeenCalled();
     });
   });

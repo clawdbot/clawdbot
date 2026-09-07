@@ -15,7 +15,13 @@ import {
   type ChromeMcpProfileOptions,
   type ChromeMcpTargetOperation,
 } from "./chrome-mcp-contracts.js";
-import { extractJsonMessage, extractSnapshot } from "./chrome-mcp-result.js";
+import {
+  extractJsonMessage,
+  extractSnapshot,
+  extractStructuredPages,
+  extractToolErrorMessage,
+  formatChromeMcpToolErrorMessage,
+} from "./chrome-mcp-result.js";
 import {
   callTargetTool,
   callTool,
@@ -76,7 +82,7 @@ export async function closeChromeMcpTab(
       ...options,
     },
     async (target) => {
-      await callTool(
+      const result = await callTool(
         profileName,
         target.profileOptions,
         "close_page",
@@ -84,6 +90,16 @@ export async function closeChromeMcpTab(
         options,
         target.lease,
       );
+      if (extractStructuredPages(result).some((page) => page.id === target.pageId)) {
+        throw new Error(
+          formatChromeMcpToolErrorMessage({
+            profileName,
+            options: target.profileOptions,
+            toolName: "close_page",
+            message: extractToolErrorMessage(result, "close_page"),
+          }),
+        );
+      }
       // Retire inside the same operation lock so queued work cannot dispatch
       // against a closed page id. A later list gets a new opaque handle even if
       // Chrome reuses that numeric id.
@@ -343,13 +359,13 @@ export async function dragChromeMcpElement(
   }));
 }
 
-/** Upload a local file into a Chrome MCP file input by uid. */
+/** Upload local files into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(
-  params: ChromeMcpTargetOperation & { uid: string; filePath: string },
+  params: ChromeMcpTargetOperation & { uid: string; filePaths: string[] },
 ): Promise<void> {
   await callTargetTool(params, "upload_file", (session) => ({
     uid: resolveChromeMcpSnapshotRef(session, params.targetId, params.uid),
-    filePath: params.filePath,
+    filePaths: params.filePaths,
   }));
 }
 

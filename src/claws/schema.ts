@@ -1,6 +1,11 @@
 // Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
-import { resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  resolveToolProfilePolicy,
+} from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -15,6 +20,10 @@ import {
   isValidClawTimezone,
   portableClawPathKey,
 } from "./schema-portability.js";
+import {
+  isConcreteBundleMcpToolName,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_SCHEMA_VERSION,
@@ -31,6 +40,18 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+
+function isBoundedClawToolGrant(value: string): boolean {
+  const normalized = normalizeToolPolicyName(value);
+  if (
+    /[*?[\]{}]/u.test(normalized) ||
+    normalized === "group:plugins" ||
+    normalized === "bundle-mcp"
+  ) {
+    return false;
+  }
+  return !normalized.startsWith("group:") || expandToolGroups([normalized])[0] !== normalized;
+}
 
 export function clawManifestWorkspaceConflictsWithPath(
   manifest: ClawManifest,
@@ -62,9 +83,11 @@ const clawHubPackageName = nonEmptyString.refine(
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const packageRelativePath = nonEmptyString.refine(isSafeClawRelativePath, {
-  message: "Path must be package-relative and must not contain traversal segments.",
-});
+const packageRelativePath = nonEmptyString
+  .refine(isSafeClawRelativePath, {
+    message: "Path must be package-relative and must not contain traversal segments.",
+  })
+  .transform((value) => value.replaceAll("\\", "/"));
 
 const identitySchema = z
   .object({
@@ -125,8 +148,14 @@ const openClawProfileSchema = z
                 "Tool profile must name a registered OpenClaw built-in profile.",
               )
               .optional(),
-            allow: z.array(nonEmptyString).min(1).optional(),
-            alsoAllow: z.array(nonEmptyString).min(1).optional(),
+            allow: z
+              .array(nonEmptyString.refine(isBoundedClawToolGrant, "Tool grants must be bounded."))
+              .min(1)
+              .optional(),
+            alsoAllow: z
+              .array(nonEmptyString.refine(isBoundedClawToolGrant, "Tool grants must be bounded."))
+              .min(1)
+              .optional(),
             deny: z.array(nonEmptyString).min(1).optional(),
             fs: z
               .object({ workspaceOnly: z.literal(true).optional() })
@@ -135,6 +164,49 @@ const openClawProfileSchema = z
           })
           .strict()
           .superRefine((tools, ctx) => {
+            if (tools.profile === "full" && !tools.allow) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["profile"],
+                message: "The full tool profile requires a bounded explicit allowlist.",
+              });
+            }
+            if (tools.profile && tools.profile !== "full" && tools.allow) {
+              const profileAllow = expandToolGroups(resolveToolProfilePolicy(tools.profile)?.allow);
+              if (
+                tools.allow.some(
+                  (grant) =>
+                    !profileAllow.some((tool) =>
+                      isToolAllowedByPolicyName(tool, { allow: [grant] }),
+                    ) &&
+                    !(profileAllow.includes("bundle-mcp") && isConcreteBundleMcpToolName(grant)),
+                )
+              ) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["allow"],
+                  message: "Every agent tools allow grant must overlap the selected profile.",
+                });
+              }
+            }
+            if (
+              tools.profile &&
+              resolveClawToolProfileSnapshot(tools)?.allow.includes("bundle-mcp")
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["allow"],
+                message:
+                  "Profiles containing bundle-mcp require a bounded allowlist of concrete tool names.",
+              });
+            }
+            if (tools.alsoAllow && !tools.profile) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["alsoAllow"],
+                message: "Agent tools can set alsoAllow only when a bounded profile is selected.",
+              });
+            }
             if (tools.allow && tools.alsoAllow) {
               ctx.addIssue({
                 code: "custom",
@@ -442,6 +514,7 @@ const manifestSchema = z
   .strict()
   .superRefine((manifest, ctx) => {
     const workspaceTargets = new Set<string>();
+    const nativeBootstrapTarget = new Set([portableClawPathKey("BOOTSTRAP.md")]);
     for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
       if (manifest.workspace.bootstrapFiles[name]) {
         workspaceTargets.add(portableClawPathKey(name));
@@ -449,7 +522,7 @@ const manifestSchema = z
     }
     manifest.workspace.files.forEach((file, index) => {
       const destinationKey = portableClawPathKey(file.path);
-      if (destinationKey === portableClawPathKey("BOOTSTRAP.md")) {
+      if (conflictsWithClawPath(nativeBootstrapTarget, destinationKey)) {
         ctx.addIssue({
           code: "custom",
           path: ["workspace", "files", index, "path"],

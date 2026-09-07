@@ -3,6 +3,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
     mocks.events.push("sessions.count");
     return true;
   }),
-  loadCombinedSessionStoreForGateway: vi.fn((_cfg: unknown, options: { agentId: string }) => {
+  loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
       durableStorePath: `/state/${options.agentId}.sqlite`,
@@ -30,7 +31,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
   canPrewarmCombinedSessionStoresForGateway: mocks.canPrewarmCombinedSessionStoresForGateway,
-  loadCombinedSessionStoreForGateway: mocks.loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
 }));
 
 vi.mock("./session-utils-list.js", () => ({
@@ -50,7 +51,7 @@ beforeEach(() => {
     mocks.events.push("sessions.count");
     return true;
   });
-  mocks.loadCombinedSessionStoreForGateway.mockClear();
+  mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listSessionsFromStoreAsync.mockClear();
   mocks.listManagedPlugins.mockClear();
 });
@@ -61,7 +62,7 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it("warms bounded session and process-stable plugin data in dashboard order", async () => {
+  it("warms the sidebar roster page and process-stable plugin data in dashboard order", async () => {
     vi.useFakeTimers();
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "research" }] },
@@ -83,11 +84,11 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       "sessions.rows.research",
       "plugins",
     ]);
-    expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(1, cfg, {
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(1, cfg, {
       agentId: "main",
       projection: "list",
     });
-    expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(2, cfg, {
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(2, cfg, {
       agentId: "research",
       projection: "list",
     });
@@ -101,7 +102,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
           includeDerivedTitles: true,
           includeGlobal: true,
           includeUnknown: true,
-          limit: 60,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         },
       }),
     );
@@ -110,7 +111,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       agentIds: ["main", "research"],
       maxRows: 2_000,
     });
-    sidecar.stop();
+    await sidecar.stop();
   });
 
   it("waits for gateway readiness before warming handler data", async () => {
@@ -134,7 +135,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     releaseGatewayReady();
     await vi.runAllTimersAsync();
     expect(load).toHaveBeenCalledOnce();
-    sidecar.stop();
+    await sidecar.stop();
   });
 
   it("waits for admitted request work before warming handler data", async () => {
@@ -158,7 +159,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     expect(load).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-    sidecar.stop();
+    await sidecar.stop();
   });
 
   it("stays stopped when readiness arrives after shutdown", async () => {
@@ -177,7 +178,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     });
 
     await vi.advanceTimersToNextTimerAsync();
-    sidecar.stop();
+    await sidecar.stop();
     releaseGatewayReady();
     await vi.runAllTimersAsync();
 
@@ -259,8 +260,9 @@ describe("scheduleGatewayHandlerPrewarm", () => {
 
     await vi.advanceTimersToNextTimerAsync();
     expect(first).toHaveBeenCalledOnce();
-    sidecar.stop();
+    const stopping = sidecar.stop();
     releaseFirst();
+    await stopping;
     await vi.runAllTimersAsync();
 
     expect(second).not.toHaveBeenCalled();

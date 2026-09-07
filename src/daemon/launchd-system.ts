@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
   execLaunchctl,
@@ -32,10 +33,6 @@ function formatUnknownError(error: unknown): string {
   return truncateUtf16Safe(sanitizeForLog(raw), 500);
 }
 
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
-
 function quotePosixArgument(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -51,15 +48,21 @@ openclaw_system_launchd_detail=""
 openclaw_system_launchd_target=${quotePosixArgument(serviceTarget)}
 openclaw_system_launchd_dir=${quotePosixArgument(SYSTEM_LAUNCH_DAEMON_DIR)}
 openclaw_system_launchd_label=${quotePosixArgument(label)}
-openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
-openclaw_system_launchd_probe_status=$?
-if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
-  openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-  openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
-elif ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
-  openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-  openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target: $openclaw_system_launchd_probe"
-fi
+openclaw_query_system_launchd() {
+  openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
+  openclaw_system_launchd_probe_status=$?
+  # POSIX shell status 126/127 means execution failed; >128 can represent a signal.
+  # Partial absence output cannot establish that the ownership query completed.
+  if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
+    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
+    openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
+  elif [ "$openclaw_system_launchd_probe_status" -eq 126 ] || [ "$openclaw_system_launchd_probe_status" -eq 127 ] || [ "$openclaw_system_launchd_probe_status" -gt 128 ] ||
+       ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
+    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
+    openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target (exit $openclaw_system_launchd_probe_status): $openclaw_system_launchd_probe"
+  fi
+}
+openclaw_query_system_launchd
 if [ -z "$openclaw_system_launchd_conflict" ]; then
   if [ ! -e "$openclaw_system_launchd_dir" ]; then
     :
@@ -103,15 +106,7 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
   fi
 fi
 if [ -z "$openclaw_system_launchd_conflict" ]; then
-  openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
-  openclaw_system_launchd_probe_status=$?
-  if [ "$openclaw_system_launchd_probe_status" -eq 0 ]; then
-    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-    openclaw_system_launchd_detail="loaded system LaunchDaemon $openclaw_system_launchd_target"
-  elif ! printf '%s' "$openclaw_system_launchd_probe" | /usr/bin/grep -Eiq 'could not find service|no such process|not found'; then
-    openclaw_system_launchd_conflict="$openclaw_system_launchd_target"
-    openclaw_system_launchd_detail="could not verify $openclaw_system_launchd_target: $openclaw_system_launchd_probe"
-  fi
+  openclaw_query_system_launchd
 fi
 `;
 }
@@ -219,7 +214,7 @@ function classifySystemLaunchDaemonQuery(
 
 export async function inspectSystemLaunchDaemonOwnership(
   label: string,
-  options: { scanInstalledPlists?: boolean } = {},
+  options: { scanInstalledPlists?: boolean; timeoutMs?: number } = {},
 ): Promise<SystemLaunchDaemonOwnership> {
   const serviceTarget = `system/${label}`;
   if (process.platform !== "darwin") {
@@ -228,7 +223,7 @@ export async function inspectSystemLaunchDaemonOwnership(
 
   const initialQuery = classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
   if (initialQuery.status !== "absent") {
     return initialQuery;
@@ -254,7 +249,7 @@ export async function inspectSystemLaunchDaemonOwnership(
   // activation paths therefore repeat this complete probe immediately before use.
   return classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
 }
 

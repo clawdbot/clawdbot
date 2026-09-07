@@ -9,7 +9,7 @@ import { resolveBoundAgentIdForSession } from "../session-agent-binding.js";
 type ResolveContextEngineCapabilitiesParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
-  agentId?: string;
+  explicitAgentId?: string;
   authProfileId?: string;
   contextEnginePluginId?: string;
   purpose: string;
@@ -25,7 +25,7 @@ export function resolveContextEngineCapabilities(
   const agentId = resolveBoundAgentIdForSession({
     config: params.config,
     sessionKey,
-    agentId: params.agentId,
+    agentId: params.explicitAgentId,
   });
   const contextEnginePluginId = normalizeOptionalString(params.contextEnginePluginId);
   return {

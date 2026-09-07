@@ -10,10 +10,12 @@ import {
   projectSafeChannelAccountSnapshotFields,
   redactChannelAccountSnapshotBaseUrl,
 } from "../account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../account-summary.js";
 import {
   applyChannelAccountState,
   resolveChannelAccountLinked,
   resolveChannelAccountState,
+  resolveUnavailableChannelAccountSnapshot,
 } from "../status/account-state.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
@@ -90,13 +92,13 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   if (!inspectedAccount) {
     return null;
   }
-  return await buildChannelAccountSnapshotFromAccount({
+  return buildChannelAccountSnapshotFromInspection({
     ...params,
-    account: inspectedAccount as ResolvedAccount,
+    account: inspectedAccount,
   });
 }
 
-export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
+export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
   accountId: string;
@@ -104,11 +106,20 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const inspectedAccount = await inspectChannelAccount(params);
-  const account = (inspectedAccount ??
-    params.plugin.config.resolveAccount(params.cfg, params.accountId)) as ResolvedAccount;
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: params.runtime,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  const inspected = await buildReadOnlySourceChannelAccountSnapshot(params);
+  if (inspected) {
+    return inspected;
+  }
   return await buildChannelAccountSnapshotFromAccount({
     ...params,
-    account,
+    account: params.plugin.config.resolveAccount(params.cfg, params.accountId),
   });
 }

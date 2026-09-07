@@ -18,7 +18,7 @@ scenario:
     - docs/gateway/protocol.md
     - docs/help/testing.md
   codeRefs:
-    - src/gateway/server-methods/agent-dedupe.ts
+    - src/gateway/agent-turn/agent-dedupe.ts
     - src/gateway/server-methods/agent-wait.ts
     - test/e2e/qa-lab/runtime/agent-session-dedup-reconnect.e2e.test.ts
   execution:

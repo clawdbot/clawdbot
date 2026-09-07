@@ -343,12 +343,17 @@ export function extractSessionStatusSessionKey(
   return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
 }
 
-export function isHeartbeatPrompt(text: string) {
+export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
+    return undefined;
   }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+  if (/(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed)) {
+    return "HEARTBEAT_OK";
+  }
+  return /(?:^|[.\n]\s*)If nothing needs attention, reply NO_REPLY\b/i.test(trimmed)
+    ? "NO_REPLY"
+    : undefined;
 }
 
 export function readFirstMediaPath(value: unknown): string {

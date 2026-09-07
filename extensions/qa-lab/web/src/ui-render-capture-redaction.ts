@@ -164,7 +164,7 @@ function redactCaptureJsonishSecretFields(value: string): string {
   return redacted;
 }
 
-export function redactCaptureInlineSecretPairs(value: string): string {
+export function redactSensitiveText(value: string): string {
   return redactCaptureJsonishSecretFields(value).replace(
     /\b([A-Za-z][A-Za-z0-9_-]{0,64})=([^&\s"',}\]]+)/gu,
     (match: string, key: string) => (isSensitiveCaptureField(key) ? `${key}=[redacted]` : match),
@@ -172,7 +172,7 @@ export function redactCaptureInlineSecretPairs(value: string): string {
 }
 
 export function redactCapturePayloadPreview(payload: string): string {
-  return redactCaptureScalar(redactCaptureInlineSecretPairs(payload));
+  return redactCaptureScalar(redactSensitiveText(payload));
 }
 
 export function formatCaptureFieldValue(value: unknown, label?: string): string {

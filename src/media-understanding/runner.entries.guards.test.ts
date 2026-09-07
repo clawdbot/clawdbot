@@ -20,6 +20,8 @@ describe("media-understanding formatDecisionSummary guards", () => {
         capability: "image",
         outcome: "skipped",
         attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
+        attachmentDispositions: {},
+        nativeVisionActive: false,
       }),
     ).toBe("image: skipped");
   });
@@ -135,10 +137,7 @@ describe("media-understanding SecretRef owner isolation", () => {
   it("rejects only the configured media model whose owner is unavailable", async () => {
     const entry = { provider: "openai", capabilities: ["audio" as const] };
     const cfg = { tools: { media: { models: [entry], audio: {} } } };
-    const ownerId = runtimeMediaModelSecretOwnerId({
-      source: "shared",
-      index: 0,
-    });
+    const ownerId = runtimeMediaModelSecretOwnerId(0);
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",

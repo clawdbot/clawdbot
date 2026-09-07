@@ -27,6 +27,9 @@ describe("gateway protocol SecretRef schema", () => {
         id: "/providers/openai/apiKey",
       }),
     ).toBe(true);
+    expect(
+      validateSecretRef.Check({ source: "store", provider: "default", id: "STORED_API_KEY" }),
+    ).toBe(true);
     for (const id of VALID_EXEC_SECRET_REF_IDS) {
       expect(validateSecretRef.Check({ source: "exec", provider: "vault", id }), id).toBe(true);
       expect(validateSecretInput.Check({ source: "exec", provider: "vault", id }), id).toBe(true);
@@ -38,5 +41,11 @@ describe("gateway protocol SecretRef schema", () => {
       expect(validateSecretRef.Check({ source: "exec", provider: "vault", id }), id).toBe(false);
       expect(validateSecretInput.Check({ source: "exec", provider: "vault", id }), id).toBe(false);
     }
+  });
+
+  it("rejects store refs outside the env-name grammar", () => {
+    expect(validateSecretRef.Check({ source: "store", provider: "default", id: "lowercase" })).toBe(
+      false,
+    );
   });
 });

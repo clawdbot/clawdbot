@@ -2,10 +2,11 @@
 // Starts an unauthenticated loopback gateway and opens connected test clients.
 import { WebSocket } from "ws";
 import { captureEnv } from "../test-utils/env.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import {
   connectOk,
-  getFreePort,
-  startGatewayServer,
+  getGatewayTestPort,
+  startTestGatewayServer,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
@@ -16,21 +17,29 @@ type GatewayWsClient = {
 
 export type GatewayServerHarness = {
   port: number;
-  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   openClient: (opts?: Parameters<typeof connectOk>[1]) => Promise<GatewayWsClient>;
   close: () => Promise<void>;
 };
 
 /** Start a loopback Gateway server with a helper for opening authenticated test clients. */
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
+  gatewayFixtureLifetime.assertAdmission();
+  const port = await getGatewayTestPort();
+  gatewayFixtureLifetime.assertAdmission();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const clients = new Set<WebSocket>();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  const port = await getFreePort();
-  const server = await startGatewayServer(port, {
+  const server = await startTestGatewayServer(port, {
     auth: { mode: "none" },
     bind: "loopback",
     controlUiEnabled: false,
+  }).catch((error: unknown) => {
+    // Failed startup has no receipt, but must not restore over another closing owner.
+    if (gatewayFixtureLifetime.canAdmit()) {
+      envSnapshot.restore();
+    }
+    throw error;
   });
 
   const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
@@ -66,7 +75,9 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
       await server.close();
     } finally {
       clearTimeout(forceCloseTimer);
-      envSnapshot.restore();
+      if (gatewayFixtureLifetime.canReleaseState(server)) {
+        envSnapshot.restore();
+      }
     }
   };
 

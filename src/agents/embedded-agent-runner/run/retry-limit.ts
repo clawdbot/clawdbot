@@ -2,8 +2,11 @@
  * Converts retry-limit exhaustion into failover errors or terminal replies.
  */
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
-import type { EmbeddedRunLivenessState } from "../types.js";
-import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type {
+  EmbeddedRunLivenessState,
+  EmbeddedAgentMeta,
+  EmbeddedAgentRunResult,
+} from "../types.js";
 import type { RetryLimitFailoverDecision } from "./failover-policy.js";
 
 /**

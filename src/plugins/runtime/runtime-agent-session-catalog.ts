@@ -19,7 +19,7 @@ type RuntimeSessionCatalogCreateTargetParams = {
  * Resolve a synchronous catalog create target through the same model/runtime
  * policy used by agent turns, without making plugins import that policy graph.
  */
-export function resolveSessionCatalogCreateTarget(
+export function resolveAgentCatalogCreateTarget(
   params: RuntimeSessionCatalogCreateTargetParams,
 ): SessionCatalogCreateTarget | undefined {
   const agentId = params.requestedAgentId ?? resolveDefaultAgentId(params.config);

@@ -1,7 +1,7 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
@@ -369,7 +369,7 @@ export async function collectClawStateHealthFindings(
       } catch (error) {
         cronInventory = {
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: coerceErrorMessage(error),
         };
       }
     }
@@ -384,7 +384,7 @@ export async function collectClawStateHealthFindings(
     return [
       finding({
         severity: "error",
-        message: `Could not inspect Claw lifecycle state: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Could not inspect Claw lifecycle state: ${coerceErrorMessage(error)}`,
         requirement: "Claw doctor diagnostics require readable lifecycle state",
       }),
     ];

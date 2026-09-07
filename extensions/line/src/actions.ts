@@ -1,7 +1,11 @@
-// Line plugin module implements actions behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  LINE_FLEX_BUBBLE_MAX_BYTES,
+  LINE_FLEX_CAROUSEL_MAX_BYTES,
+} from "./flex-templates/message.js";
+import { isHttpsUrl } from "./media-url.js";
 
 export type Action = messagingApi.Action;
 type Message = messagingApi.Message;
@@ -41,6 +45,12 @@ function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
+const UNDELIVERABLE_IMAGE_WARNING = "Image unavailable: URL must use HTTPS.";
+
+function flexWarning(text: string): messagingApi.FlexText {
+  return { type: "text", text, wrap: true, size: "sm", color: "#B45309", margin: "md" };
+}
+
 const unavailableActionMarker = Symbol("lineUnavailableAction");
 type UnavailableAction = Extract<Action, { type: "message" }> & {
   [unavailableActionMarker]: true;
@@ -76,16 +86,18 @@ function isUnavailableAction(action: Action): action is UnavailableAction {
   return (action as Partial<UnavailableAction>)[unavailableActionMarker] === true;
 }
 
-function normalizeNestedActions(value: unknown, labelLimit: number, warnings?: string[]): unknown {
+function normalizeNestedContent(value: unknown, labelLimit: number, warnings?: string[]): unknown {
   if (Array.isArray(value)) {
-    const normalized: unknown[] = [];
-    for (const item of value) {
-      normalized.push(normalizeNestedActions(item, labelLimit, warnings));
-    }
-    return normalized;
+    return value
+      .map((item) => normalizeNestedContent(item, labelLimit, warnings))
+      .filter((item) => item !== undefined);
   }
   if (!isRecord(value)) {
     return value;
+  }
+  if (warnings && (value.type === "image" || value.type === "icon") && !isHttpsUrl(value.url)) {
+    warnings.push(UNDELIVERABLE_IMAGE_WARNING);
+    return undefined;
   }
 
   const normalized: Record<string, unknown> = { ...value };
@@ -112,54 +124,79 @@ function normalizeNestedActions(value: unknown, labelLimit: number, warnings?: s
         isLineAction(action) ? normalizeLineAction(action, labelLimit) : action,
       );
     } else {
-      normalized[key] = normalizeNestedActions(nested, labelLimit, warnings);
+      const content = normalizeNestedContent(nested, labelLimit, warnings);
+      if (content === undefined) {
+        delete normalized[key];
+      } else {
+        normalized[key] = content;
+      }
     }
+  }
+  if (warnings && value.type === "video") {
+    // LINE requires a Box or Image alternative even when the video itself is valid.
+    const altContent = normalized.altContent ?? {
+      type: "box",
+      layout: "vertical",
+      contents: [flexWarning(UNDELIVERABLE_IMAGE_WARNING)],
+    };
+    if (!isHttpsUrl(value.url) || !isHttpsUrl(value.previewUrl)) {
+      warnings.push("Video unavailable: video and preview URLs must use HTTPS.");
+      return altContent;
+    }
+    normalized.altContent = altContent;
   }
   return normalized;
 }
 
-function normalizeFlexBubbleActions(value: unknown): unknown {
+function normalizeFlexBubble(value: unknown, maxBytes = LINE_FLEX_BUBBLE_MAX_BYTES): unknown {
   if (!isRecord(value) || value.type !== "bubble") {
-    return normalizeNestedActions(value, 40);
+    return normalizeNestedContent(value, 40);
   }
 
   const warnings: string[] = [];
-  const normalized = normalizeNestedActions(value, 40, warnings);
+  const normalized = normalizeNestedContent(value, 40, warnings);
   if (!isRecord(normalized) || warnings.length === 0) {
     return normalized;
   }
 
-  const warning = {
-    type: "text",
-    text: [...new Set(warnings)].join("\n"),
-    wrap: true,
-    size: "sm",
-    color: "#B45309",
-    margin: "md",
-  };
+  const warning = flexWarning([...new Set(warnings)].join("\n"));
   const body = normalized.body;
-  if (isRecord(body) && Array.isArray(body.contents)) {
-    normalized.body = { ...body, contents: [...body.contents, warning] };
-  } else {
-    normalized.body = { type: "box", layout: "vertical", contents: [warning] };
-  }
-  return normalized;
+  const withWarning = {
+    ...normalized,
+    body:
+      isRecord(body) && Array.isArray(body.contents)
+        ? { ...body, contents: [...body.contents, warning] }
+        : { type: "box", layout: "vertical", contents: [warning] },
+  };
+  // Removing a short invalid URL can save fewer bytes than its optional warning.
+  // Keep the user's content deliverable within both bubble and carousel limits.
+  return Buffer.byteLength(JSON.stringify(withWarning), "utf8") <=
+    Math.min(maxBytes, LINE_FLEX_BUBBLE_MAX_BYTES)
+    ? withWarning
+    : normalized;
 }
 
-function normalizeFlexContainerActions(value: unknown): unknown {
+function normalizeFlexContainer(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
   if (value.type === "bubble") {
-    return normalizeFlexBubbleActions(value);
+    return normalizeFlexBubble(value);
   }
   if (value.type === "carousel" && Array.isArray(value.contents)) {
+    let remainingBytes =
+      LINE_FLEX_CAROUSEL_MAX_BYTES - Buffer.byteLength(JSON.stringify(value), "utf8");
     return {
       ...value,
-      contents: value.contents.map((bubble) => normalizeFlexBubbleActions(bubble)),
+      contents: value.contents.map((bubble) => {
+        const originalBytes = Buffer.byteLength(JSON.stringify(bubble), "utf8");
+        const normalized = normalizeFlexBubble(bubble, originalBytes + remainingBytes);
+        remainingBytes += originalBytes - Buffer.byteLength(JSON.stringify(normalized), "utf8");
+        return normalized;
+      }),
     };
   }
-  return normalizeNestedActions(value, 40);
+  return normalizeNestedContent(value, 40);
 }
 
 function unavailableImagemapAction(
@@ -233,19 +270,29 @@ function normalizeImagemapVideo(video: ImagemapVideo): {
   return { video: { ...video, externalLink: { ...externalLink, label } } };
 }
 
-export function normalizeLineMessageActions(message: Message): Message {
+export function normalizeLineMessage(message: Message): Message {
   let normalized: Message;
   if (message.type === "flex") {
     normalized = {
       ...message,
-      contents: normalizeFlexContainerActions(message.contents) as messagingApi.FlexContainer,
+      contents: normalizeFlexContainer(message.contents) as messagingApi.FlexContainer,
     };
   } else if (message.type === "template") {
     const labelLimit = message.template.type === "image_carousel" ? 12 : 20;
-    normalized = {
-      ...message,
-      template: normalizeNestedActions(message.template, labelLimit) as messagingApi.Template,
-    };
+    const template = normalizeNestedContent(message.template, labelLimit) as messagingApi.Template;
+    const columns =
+      template.type === "carousel"
+        ? template.columns
+        : template.type === "buttons"
+          ? [template]
+          : [];
+    // Template carousel columns must agree on image presence; a partial strip is invalid.
+    if (columns.some((column) => !isHttpsUrl(column.thumbnailImageUrl))) {
+      for (const column of columns) {
+        delete column.thumbnailImageUrl;
+      }
+    }
+    normalized = { ...message, template };
   } else if (message.type === "imagemap") {
     const actions = message.actions.map(normalizeImagemapAction);
     const videoResult = message.video ? normalizeImagemapVideo(message.video) : undefined;
@@ -268,7 +315,7 @@ export function normalizeLineMessageActions(message: Message): Message {
   if (message.quickReply) {
     normalized = {
       ...normalized,
-      quickReply: normalizeNestedActions(message.quickReply, 20) as messagingApi.QuickReply,
+      quickReply: normalizeNestedContent(message.quickReply, 20) as messagingApi.QuickReply,
     };
   }
 

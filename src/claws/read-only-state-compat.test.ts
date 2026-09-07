@@ -4,11 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMNS } from "../state/openclaw-state-db-maintenance.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { readClawResumeStateReadOnly } from "./package-resume.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -39,8 +39,21 @@ function createBaseShapeState(params: {
       )`,
     )
     .run(params.packageRoot, join(params.packageRoot, "CLAW.md"), params.workspace);
-  for (const column of CLAW_LAZY_ADDITIVE_STATE_COLUMNS) {
+  for (const column of OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns ??
+    []) {
     const [table, name] = column.split(".");
+    if (!table || !name) {
+      continue;
+    }
+    // Additive columns can belong to tables that are stripped from claw-scoped
+    // schemas entirely (e.g. node_worker_launches); base shape only drops
+    // columns whose owning table exists here.
+    const tableExists = database.db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(table);
+    if (!tableExists) {
+      continue;
+    }
     database.db.exec(`ALTER TABLE ${table} DROP COLUMN ${name};`);
   }
   closeOpenClawStateDatabaseForTest();
@@ -108,7 +121,7 @@ describe("read-only Claw state compatibility", () => {
     expect(plan.blockers).not.toContainEqual(
       expect.objectContaining({ code: "claw_identity_mismatch" }),
     );
-    await expect(readFile(fixture.databasePath)).resolves.toEqual(before);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 
   it("resumes a base-shape database without mutating it", async () => {
@@ -121,6 +134,6 @@ describe("read-only Claw state compatibility", () => {
 
     expect(state?.record).toMatchObject({ agentId: "legacy-worker", status: "complete" });
     expect(state?.record.bootstrap).toBeUndefined();
-    await expect(readFile(fixture.databasePath)).resolves.toEqual(before);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 });

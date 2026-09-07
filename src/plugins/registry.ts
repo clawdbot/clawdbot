@@ -50,13 +50,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
+    runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );
     const gatewayMethods = state.registry.gatewayMethodDescriptors
       .filter((entry) => entry.owner.kind === "plugin" && entry.owner.pluginId === pluginId)
       .map((entry) => entry.name);
-    for (const value of Object.values(state.registry)) {
+    for (const [registryKey, value] of Object.entries(state.registry)) {
+      // Plugin records and diagnostics are operator-visible load outcomes, not registrations.
+      if (registryKey === "plugins" || registryKey === "diagnostics") {
+        continue;
+      }
       if (Array.isArray(value)) {
         for (let index = value.length - 1; index >= 0; index -= 1) {
           const entry = value[index] as
@@ -118,44 +123,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     createApi,
     rollbackPluginGlobalSideEffects,
     pushDiagnostic: state.pushDiagnostic,
-    registerTool: registrars.registerTool,
-    registerChannel: registrars.registerChannel,
-    registerHostedMediaResolver: registrars.registerHostedMediaResolver,
-    registerMcpServerConnectionResolver: registrars.registerMcpServerConnectionResolver,
-    registerProvider: registrars.registerProvider,
-    registerWorkerProvider: registrars.registerWorkerProvider,
-    registerModelCatalogProvider: registrars.registerModelCatalogProvider,
-    registerAgentHarness: registrars.registerAgentHarness,
-    registerCliBackend: registrars.registerCliBackend,
-    registerTextTransforms: registrars.registerTextTransforms,
-    registerEmbeddingProvider: registrars.registerEmbeddingProvider,
-    registerSpeechProvider: registrars.registerSpeechProvider,
-    registerRealtimeTranscriptionProvider: registrars.registerRealtimeTranscriptionProvider,
-    registerRealtimeVoiceProvider: registrars.registerRealtimeVoiceProvider,
-    registerMediaUnderstandingProvider: registrars.registerMediaUnderstandingProvider,
-    registerTranscriptSourceProvider: registrars.registerTranscriptSourceProvider,
-    registerImageGenerationProvider: registrars.registerImageGenerationProvider,
-    registerVideoGenerationProvider: registrars.registerVideoGenerationProvider,
-    registerMusicGenerationProvider: registrars.registerMusicGenerationProvider,
-    registerWebSearchProvider: registrars.registerWebSearchProvider,
-    registerMigrationProvider: registrars.registerMigrationProvider,
-    registerGatewayMethod: registrars.registerGatewayMethod,
-    registerSessionCatalog: registrars.registerSessionCatalog,
-    registerCli: registrars.registerCli,
-    registerReload: registrars.registerReload,
-    registerNodeHostCommand: registrars.registerNodeHostCommand,
-    registerSecurityAuditCollector: registrars.registerSecurityAuditCollector,
-    registerService: registrars.registerService,
-    registerCommand: registrars.registerCommand,
-    registerSessionExtension: registrars.registerSessionExtension,
-    registerTrustedToolPolicy: registrars.registerTrustedToolPolicy,
-    registerToolMetadata: registrars.registerToolMetadata,
-    registerControlUiDescriptor: registrars.registerControlUiDescriptor,
-    registerRuntimeLifecycle: registrars.registerRuntimeLifecycle,
-    registerAgentEventSubscription: registrars.registerAgentEventSubscription,
-    registerSessionSchedulerJob: registrars.registerSessionSchedulerJob,
-    registerSessionAction: registrars.registerSessionAction,
-    registerHook: registrars.registerHook,
-    registerTypedHook: registrars.registerTypedHook,
+    ...registrars,
   };
 }

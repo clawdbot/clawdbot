@@ -30,8 +30,12 @@ const bundledUnitExcludePatterns = unitTestAdditionalExcludePatterns.filter(
     ),
 );
 
-export default createUnitVitestConfigWithOptions(process.env, {
-  includePatterns: bundledPluginDependentUnitTestFiles,
-  extraExcludePatterns: bundledUnitExcludePatterns,
-  name: "bundled",
-});
+export function createBundledVitestConfig(env: Record<string, string | undefined> = process.env) {
+  return createUnitVitestConfigWithOptions(env, {
+    includePatterns: bundledPluginDependentUnitTestFiles,
+    extraExcludePatterns: bundledUnitExcludePatterns,
+    name: "bundled",
+  });
+}
+
+export default createBundledVitestConfig();

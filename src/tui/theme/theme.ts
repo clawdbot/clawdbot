@@ -146,7 +146,7 @@ function highlightCode(code: string): string[] {
   return code.split("\n").map((line) => fg(palette.code)(line));
 }
 
-export const theme = {
+export const tuiTheme = {
   fg: fg(palette.text),
   assistantText: (text: string) => text,
   dim: fg(palette.dim),

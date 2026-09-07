@@ -154,6 +154,7 @@ function createTextEvent(params: {
   text: string;
   senderId?: string;
   mentions?: FeishuMention[];
+  threadId?: string;
 }): FeishuMessageEvent {
   const senderId = params.senderId ?? "ou_sender";
   return {
@@ -168,6 +169,7 @@ function createTextEvent(params: {
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
       mentions: params.mentions,
+      ...(params.threadId ? { thread_id: params.threadId } : {}),
     },
   };
 }
@@ -227,9 +229,16 @@ function expectSingleDispatchedEvent(): FeishuMessageEvent {
 
 function expectParsedFirstDispatchedEvent(botOpenId = "ou_bot") {
   const dispatched = expectSingleDispatchedEvent();
+  const { preparedContent } = mockCallAt(
+    handleFeishuMessageMock,
+    0,
+    "Feishu message dispatch",
+  )[0] as {
+    preparedContent?: string;
+  };
   return {
     dispatched,
-    parsed: parseFeishuMessageEvent(dispatched, botOpenId),
+    parsed: parseFeishuMessageEvent(dispatched, botOpenId, undefined, preparedContent),
   };
 }
 
@@ -601,6 +610,43 @@ describe("Feishu inbound debounce regressions", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps root-less topic threads in separate debounce buckets", async () => {
+    setDedupPassThroughMocks();
+    const onMessage = await setupDebounceMonitor();
+
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_topic_a",
+        text: "topic alpha",
+        threadId: "omt_topic_a",
+      }),
+    );
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_topic_b",
+        text: "topic beta",
+        threadId: "omt_topic_b",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+    const dispatched = handleFeishuMessageMock.mock.calls.map(
+      ([params]) => params.event as FeishuMessageEvent,
+    );
+    expect(
+      dispatched.map((event) => ({
+        threadId: event.message.thread_id,
+        text: JSON.parse(event.message.content).text,
+      })),
+    ).toEqual([
+      { threadId: "omt_topic_a", text: "topic alpha" },
+      { threadId: "omt_topic_b", text: "topic beta" },
+    ]);
+  });
+
   it("releases pending text before a bare abort trigger instead of debouncing it", async () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
@@ -739,6 +785,43 @@ describe("Feishu inbound debounce regressions", () => {
     expect(parsed.mentionedBot).toBe(true);
   });
 
+  it("normalizes each debounced message once without mixing per-message mention keys", async () => {
+    setDedupPassThroughMocks();
+    const onMessage = await setupDebounceMonitor();
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_literal_first",
+        text: "@_bot @_user_1 first",
+        mentions: [
+          createMention({ key: "@_bot", openId: "ou_bot", name: "Bot" }),
+          createMention({ key: "@_user_1", openId: "ou_alice", name: "Alice @_user_10" }),
+        ],
+      }),
+    );
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({
+        messageId: "om_literal_last",
+        text: "@_bot @_user_1 @_user_10thanks",
+        mentions: [
+          createMention({ key: "@_bot", openId: "ou_bot", name: "Bot" }),
+          createMention({ key: "@_user_1", openId: "ou_bob", name: "Bob" }),
+          createMention({ key: "@_user_10", openId: "ou_carol", name: "Carol" }),
+        ],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
+    expect(dispatched.message.message_id).toBe("om_literal_last");
+    expect(parsed.content).toBe(
+      '<at user_id="ou_alice">Alice @_user_10</at> first\n<at user_id="ou_bob">Bob</at> <at user_id="ou_carol">Carol</at>thanks',
+    );
+    expect(parsed.mentionedBot).toBe(true);
+    expect(parsed.mentionTargets?.map((target) => target.openId)).toEqual(["ou_bob", "ou_carol"]);
+  });
+
   it("excludes previously processed retries from combined debounce text", async () => {
     vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue(
       createClaimedFeishuDedupeResult(),
@@ -760,10 +843,9 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
-    const dispatched = expectSingleDispatchedEvent();
+    const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
     expect(dispatched.message.message_id).toBe("om_new_2");
-    const combined = JSON.parse(dispatched.message.content) as { text?: string };
-    expect(combined.text).toBe("first\nsecond");
+    expect(parsed.content).toBe("first\nsecond");
   });
 
   it("uses latest fresh message id when debounce batch ends with stale retry", async () => {
@@ -787,10 +869,9 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
-    const dispatched = expectSingleDispatchedEvent();
+    const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
     expect(dispatched.message.message_id).toBe("om_new_latest_fresh");
-    const combined = JSON.parse(dispatched.message.content) as { text?: string };
-    expect(combined.text).toBe("fresh");
+    expect(parsed.content).toBe("fresh");
     expect(staleCommit).toHaveBeenCalledTimes(1);
   });
 

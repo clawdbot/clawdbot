@@ -115,21 +115,23 @@
       "tab": "代理",
       "groups": [
         {
-          "group": "基础",
+          "group": "代理运行时",
           "pages": [
             "zh-CN/pi",
             "zh-CN/concepts/architecture",
             "zh-CN/concepts/agent",
             "zh-CN/concepts/agent-loop",
             "zh-CN/concepts/system-prompt",
-            "zh-CN/concepts/context",
-            "zh-CN/concepts/agent-workspace",
-            "zh-CN/concepts/oauth"
+            "zh-CN/concepts/context"
           ]
         },
         {
-          "group": "引导",
-          "pages": ["zh-CN/start/bootstrapping"]
+          "group": "代理工作区",
+          "pages": [
+            "zh-CN/concepts/agent-workspace",
+            "zh-CN/concepts/oauth",
+            "zh-CN/start/bootstrapping"
+          ]
         },
         {
           "group": "会话与记忆",
@@ -142,7 +144,6 @@
               "pages": [
                 "zh-CN/concepts/memory",
                 "zh-CN/concepts/memory-builtin",
-                "zh-CN/concepts/memory-qmd",
                 "zh-CN/concepts/memory-honcho",
                 "zh-CN/concepts/memory-search",
                 "zh-CN/concepts/active-memory",
@@ -508,8 +509,28 @@
       "tab": "发布与 CI",
       "groups": [
         {
-          "group": "发布策略",
-          "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+          "group": "发布说明",
+          "pages": [
+            "zh-CN/releases/index",
+            "zh-CN/releases/2026.7.1",
+            "zh-CN/releases/2026.6.11"
+          ]
+        },
+        {
+          "group": "成熟度",
+          "pages": ["zh-CN/maturity/scorecard", "zh-CN/maturity/taxonomy"]
+        },
+        {
+          "group": "发布流程",
+          "pages": [
+            "zh-CN/reference/RELEASING",
+            "zh-CN/reference/full-release-validation",
+            "zh-CN/reference/release-performance-sweep"
+          ]
+        },
+        {
+          "group": "测试与 CI",
+          "pages": ["zh-CN/reference/test", "zh-CN/ci", "zh-CN/help/scripts"]
         }
       ]
     },

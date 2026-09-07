@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { isScalar, parseDocument, visit } from "yaml";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -21,6 +20,7 @@ import type {
   ClawSourceIdentity,
   ClawWorkspaceSourceSnapshot,
 } from "./types.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 type PackageJson = {
   name: string;
@@ -101,6 +101,8 @@ async function buildDevelopmentSnapshot(params: {
       ok: true;
       integrity: string;
       byteLength: number;
+      manifest: { byteLength: number; digest: string };
+      openClawProfile?: { sourcePath: string; byteLength: number; digest: string };
       workspaceSources: ClawWorkspaceSourceSnapshot[];
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
     }
@@ -112,6 +114,17 @@ async function buildDevelopmentSnapshot(params: {
     updateSnapshotHash(hash, label, bytes);
     byteLength += bytes.byteLength;
   };
+  const snapshotFile = (bytes: Buffer) => ({
+    byteLength: bytes.byteLength,
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  });
+  const manifest = snapshotFile(params.manifestRaw);
+  const openClawProfile = params.openClawProfile
+    ? {
+        sourcePath: params.openClawProfile.path.replaceAll("\\", "/"),
+        ...snapshotFile(params.openClawProfile.raw),
+      }
+    : undefined;
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
   add("manifest", params.manifestRaw);
   if (params.openClawProfile) {
@@ -272,6 +285,8 @@ async function buildDevelopmentSnapshot(params: {
     ok: true,
     integrity: `sha256:${hash.digest("hex")}`,
     byteLength,
+    manifest,
+    ...(openClawProfile ? { openClawProfile } : {}),
     workspaceSources,
     ...(packageBootstrap ? { packageBootstrap } : {}),
   };
@@ -372,57 +387,8 @@ export function parseClawMarkdown(
       ],
     };
   }
-  const document = parseDocument(frontmatter, { prettyErrors: false, uniqueKeys: true });
-  if (document.errors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: document.errors.map((error) =>
-        fileDiagnostic("invalid_claw_frontmatter", `Could not parse ${path}: ${error.message}`),
-      ),
-    };
-  }
-  let unsupportedFeature: string | undefined;
-  visit(document, {
-    Alias() {
-      unsupportedFeature ??= "aliases";
-    },
-    Node(_key, node) {
-      if (node.anchor) {
-        unsupportedFeature ??= "anchors";
-      } else if (node.tag) {
-        unsupportedFeature ??= "explicit tags";
-      }
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<") {
-        unsupportedFeature ??= "merge keys";
-      }
-    },
-  });
-  if (unsupportedFeature) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "unsupported_claw_yaml_feature",
-          `${path} uses ${unsupportedFeature}; CLAW.md frontmatter must map directly to JSON data.`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, value: document.toJSON(), body };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "invalid_claw_frontmatter",
-          `Could not parse ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
+  const parsed = parseClawYaml(frontmatter, path, "frontmatter");
+  return parsed.ok ? { ...parsed, body } : parsed;
 }
 
 function parseClawManifestDocument(
@@ -582,7 +548,19 @@ async function resolveSource(
   };
 }
 
-export async function readClawManifestFile(path: string): Promise<ClawReadResult> {
+export async function readClawManifestFile(
+  path: string,
+  options: {
+    allowLegacyDynamicToolProfile?: boolean;
+    authorizeLegacyDynamicToolProfile?: (params: {
+      manifest: ClawManifest;
+      source: Pick<
+        ClawSourceIdentity,
+        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
+      >;
+    }) => boolean | Promise<boolean>;
+  } = {},
+): Promise<ClawReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -613,9 +591,24 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
       ],
     };
   }
+  const allowLegacyDynamicToolProfile =
+    options.allowLegacyDynamicToolProfile === true ||
+    (options.authorizeLegacyDynamicToolProfile
+      ? await options.authorizeLegacyDynamicToolProfile({
+          manifest: parsed.manifest,
+          source: {
+            kind: sourceResult.source.kind,
+            name: sourceResult.source.name,
+            version: sourceResult.source.version,
+            packageRoot: sourceResult.source.packageRoot,
+            manifestPath: sourceResult.source.manifestPath,
+          },
+        })
+      : false);
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
     metadata: parsed.manifest.metadata,
+    ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
   });
   if (!profile.ok) {
     return profile;
@@ -648,8 +641,11 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
     ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
     ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
+    ...(profile.legacyProfile ? { legacyOpenClawProfile: profile.legacyProfile } : {}),
     source,
     snapshot: {
+      manifest: snapshot.manifest,
+      ...(snapshot.openClawProfile ? { openClawProfile: snapshot.openClawProfile } : {}),
       workspaceSources: snapshot.workspaceSources,
       ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     },

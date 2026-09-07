@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { CONFIG_DIR, ensureDir } from "../utils.js";
+import { CONFIG_DIR } from "../utils.js";
+import { replaceFileAtomicSync } from "./replace-file.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -64,6 +65,20 @@ export function getWideAreaZonePath(domain: string): string {
   return zonePath;
 }
 
+/** Durably replace the CoreDNS zone only after its complete sibling write succeeds. */
+export function replaceWideAreaZoneFile(zonePath: string, content: string): void {
+  replaceFileAtomicSync({
+    filePath: zonePath,
+    content,
+    dirMode: 0o700,
+    mode: 0o644,
+    preserveExistingMode: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    tempPrefix: ".openclaw-dns-zone",
+  });
+}
+
 function dnsLabel(raw: string, fallback: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^a-z0-9-]+/g, "-")
@@ -86,16 +101,13 @@ function formatYyyyMmDd(date: Date): string {
 }
 
 function nextSerial(existingSerial: number | null, now: Date): number {
-  const today = formatYyyyMmDd(now);
-  const base = Number.parseInt(`${today}01`, 10);
-  if (!existingSerial || !Number.isFinite(existingSerial)) {
+  const base = Number.parseInt(`${formatYyyyMmDd(now)}01`, 10);
+  if (existingSerial === null || !Number.isFinite(existingSerial)) {
     return base;
   }
-  const existing = String(existingSerial);
-  if (existing.startsWith(today)) {
-    return existingSerial + 1;
-  }
-  return base;
+  // RFC 1982 accepts only advances smaller than half the unsigned serial space.
+  const distance = (base - existingSerial) >>> 0;
+  return distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
 }
 
 function extractSerial(zoneText: string): number | null {
@@ -212,7 +224,6 @@ export async function writeWideAreaGatewayZone(
   }
   const normalizedOpts = { ...opts, domain };
   const zonePath = getWideAreaZonePath(domain);
-  await ensureDir(path.dirname(zonePath));
 
   const existing = (() => {
     try {
@@ -233,6 +244,6 @@ export async function writeWideAreaGatewayZone(
   const existingSerial = existing ? extractSerial(existing) : null;
   const serial = nextSerial(existingSerial, new Date());
   const next = renderWideAreaGatewayZoneText({ ...normalizedOpts, serial });
-  fs.writeFileSync(zonePath, next, "utf-8");
+  replaceWideAreaZoneFile(zonePath, next);
   return { zonePath, changed: true };
 }

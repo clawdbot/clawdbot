@@ -27,13 +27,6 @@ export function findInlineApproval(
   );
 }
 
-export function modalApprovalQueue(
-  queue: readonly ExecApprovalRequest[],
-  inlineApprovalId: string | null | undefined,
-): readonly ExecApprovalRequest[] {
-  return inlineApprovalId ? queue.filter((entry) => entry.id !== inlineApprovalId) : queue;
-}
-
 export function deriveApprovalBadgeSnapshot(
   queue: readonly ExecApprovalRequest[],
 ): ApprovalBadgeSnapshot {

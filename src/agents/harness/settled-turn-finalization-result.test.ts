@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
@@ -17,14 +19,7 @@ function assistantMessage(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason,
     timestamp: 0,
   };
@@ -77,20 +72,28 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("returned a tool call");
   });
 
-  it("rejects an empty answer", () => {
-    expect(() =>
-      assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "  " }]),
-      }),
-    ).toThrow("without a visible answer");
+  it("classifies a normally completed empty answer", () => {
+    const result = {
+      assistant: assistantMessage([{ type: "text", text: "  " }]),
+    };
+
+    try {
+      assertSettledTurnFinalizationResult(result);
+      throw new Error("expected completed-empty classification");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
+      expect((error as EmptySettledTurnFinalizationError).result).toBe(result);
+    }
   });
 
-  it("rejects an intentionally silent answer", () => {
-    expect(() =>
-      assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
-      }),
-    ).toThrow("without a visible answer");
+  it("classifies an intentionally silent answer as completed-empty", () => {
+    const result = {
+      assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
+    };
+
+    expect(() => assertSettledTurnFinalizationResult(result)).toThrow(
+      EmptySettledTurnFinalizationError,
+    );
   });
 
   it.each(["length", "error", "aborted"] as const)(

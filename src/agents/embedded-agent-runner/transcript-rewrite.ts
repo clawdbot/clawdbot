@@ -1,4 +1,6 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
+import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -9,6 +11,10 @@ import { SessionManager } from "../sessions/index.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
+
+function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
+  return message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message;
+}
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -56,15 +62,21 @@ function appendBranchEntry(params: {
 }): string {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
-    return appendMessage(entry.message as Parameters<typeof sessionManager.appendMessage>[0]);
+    const message = stripStalePrefixReplay(entry.message) as Parameters<
+      typeof sessionManager.appendMessage
+    >[0];
+    return withSessionPendingInputRelocation(entry.id, message, () => appendMessage(message));
   }
   if (entry.type === "compaction") {
+    const { __openclaw: identity } = entry;
     return sessionManager.appendCompaction(
       entry.summary,
       remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
       entry.tokensBefore,
       entry.details,
       entry.fromHook,
+      // An unknown historical run must not inherit the rewriting run's identity.
+      { runId: identity?.runId, ...identity },
     );
   }
   if (entry.type === "reset") {
@@ -119,6 +131,8 @@ function appendBranchEntry(params: {
 export function rewriteTranscriptEntriesInSessionManager(params: {
   sessionManager: SessionManagerLike;
   replacements: TranscriptRewriteReplacement[];
+  /** Preserve a checkpoint freshly captured on an explicit replacement. */
+  preserveReplacementCompactionReplay?: boolean;
 }): TranscriptRewriteResult {
   const replacementsById = new Map(
     params.replacements
@@ -176,8 +190,12 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 
   // Maintenance rewrites should preserve the exact requested history without
   // re-running persistence hooks or size truncation on replayed messages.
-  const appendMessage = getRawSessionAppendMessage(params.sessionManager);
+  const rawAppendMessage = getRawSessionAppendMessage(params.sessionManager);
+  // Deliberate copies retain ingress keys without adopting their old branch entries.
+  const appendMessage: SessionManagerLike["appendMessage"] = (message) =>
+    rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
   const rewrittenEntryIds = new Map<string, string>();
+  // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
     const newEntryId =
@@ -188,7 +206,16 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             rewrittenEntryIds,
             appendMessage,
           })
-        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
+        : (() => {
+            const message = (
+              params.preserveReplacementCompactionReplay
+                ? replacement
+                : stripStalePrefixReplay(replacement)
+            ) as Parameters<typeof params.sessionManager.appendMessage>[0];
+            return withSessionPendingInputRelocation(entry.id, message, () =>
+              appendMessage(message),
+            );
+          })();
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
 

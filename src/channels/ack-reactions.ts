@@ -3,9 +3,6 @@ import { toErrorObject } from "../infra/errors.js";
 
 export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
 
-/** WhatsApp group-mode policy; direct-message ack reactions are configured separately. */
-export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
-
 /** Sent ack reaction state plus the cleanup hook callers can run after reply delivery. */
 export type AckReactionHandle = {
   ackReactionPromise: Promise<boolean>;
@@ -65,44 +62,6 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
     return params.effectiveWasMentioned || params.shouldBypassMention === true;
   }
   return false;
-}
-
-/** Resolves WhatsApp ack policy while preserving the shared mention-only group gate. */
-export function shouldAckReactionForWhatsApp(params: {
-  emoji: string;
-  isDirect: boolean;
-  isGroup: boolean;
-  directEnabled: boolean;
-  groupMode: WhatsAppAckReactionMode;
-  wasMentioned: boolean;
-  groupActivated: boolean;
-}): boolean {
-  if (!params.emoji) {
-    return false;
-  }
-  if (params.isDirect) {
-    return params.directEnabled;
-  }
-  if (!params.isGroup) {
-    return false;
-  }
-  if (params.groupMode === "never") {
-    return false;
-  }
-  if (params.groupMode === "always") {
-    return true;
-  }
-  // WhatsApp "mentions" mode shares the generic group-mentions path so activation bypass and
-  // mention detection semantics stay aligned with other channels.
-  return shouldAckReaction({
-    scope: "group-mentions",
-    isDirect: false,
-    isGroup: true,
-    isMentionableGroup: true,
-    canDetectMention: true,
-    effectiveWasMentioned: params.wasMentioned,
-    shouldBypassMention: params.groupActivated,
-  });
 }
 
 /** Starts sending an ack reaction and returns the success-tracking cleanup handle. */

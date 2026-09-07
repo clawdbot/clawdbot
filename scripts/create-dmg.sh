@@ -162,15 +162,13 @@ mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
 cp -R "$APP_PATH" "$DMG_SOURCE/"
 ln -s /Applications "$DMG_SOURCE/Applications"
 
-APP_SIZE_MB=$(du -sm "$APP_PATH" | awk '{print $1}')
-DMG_SIZE_MB=$((APP_SIZE_MB + 80))
-
+# Let -srcfolder account for filesystem overhead; du plus fixed slack can
+# underallocate bundles containing many small runtime files.
 hdiutil create \
   -volname "$DMG_VOLUME_NAME" \
   -srcfolder "$DMG_SOURCE" \
   -ov \
   -format UDRW \
-  -size "${DMG_SIZE_MB}m" \
   "$DMG_RW_PATH"
 
 hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse

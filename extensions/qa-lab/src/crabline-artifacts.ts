@@ -3,17 +3,16 @@ import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline"
 
 type QaCrablineChannelDriverArtifactPaths = {
   capabilityMatrixPath: string;
-  providerReadinessArtifactPath?: string;
-  smokeArtifactPath: string;
+  providerReadinessArtifactPath: string;
 };
 
 export type QaSuiteChannelDriverSelection = Omit<
   OpenClawCrablineChannelDriverSelection,
-  "capabilityMatrixPath" | "providerReadinessArtifactPath" | "smokeArtifactPath"
+  "capabilityMatrixPath" | "providerReadinessArtifactPath"
 > &
   QaCrablineChannelDriverArtifactPaths;
 
-export function hasQaCrablineArtifactPath(value: unknown): value is string {
+function hasQaCrablineArtifactPath(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
@@ -25,24 +24,18 @@ export function resolveQaCrablineChannelDriverArtifactPaths(params: {
   result?: {
     capabilityMatrixPath?: unknown;
     providerReadinessArtifactPath?: unknown;
-    smokeArtifactPath?: unknown;
   };
   selection?: OpenClawCrablineChannelDriverSelection | null;
 }): QaCrablineChannelDriverArtifactPaths | undefined {
   if (!params.selection) {
     return undefined;
   }
-  const smokeArtifactPath = readArtifactPath(params.result?.smokeArtifactPath);
   return {
     capabilityMatrixPath:
       readArtifactPath(params.result?.capabilityMatrixPath) ??
       params.selection.capabilityMatrixPath,
     providerReadinessArtifactPath:
       readArtifactPath(params.result?.providerReadinessArtifactPath) ??
-      // Legacy results expose the completed readiness generation through smokeArtifactPath.
-      smokeArtifactPath ??
-      params.selection.providerReadinessArtifactPath ??
-      params.selection.smokeArtifactPath,
-    smokeArtifactPath: smokeArtifactPath ?? params.selection.smokeArtifactPath,
+      params.selection.providerReadinessArtifactPath,
   };
 }

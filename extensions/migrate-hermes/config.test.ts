@@ -1,15 +1,17 @@
 // Migrate Hermes tests cover config plugin behavior.
 import path from "node:path";
+import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildHermesMigrationProvider } from "./provider.js";
 import {
-  cleanupTempRoots,
-  makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
-  writeFile,
-} from "./test/provider-helpers.js";
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildHermesMigrationProvider } from "./provider.js";
+import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
   return items.find((item) => item.id === id);
@@ -27,7 +29,7 @@ function modelProviderValues(
 }
 
 async function makeHermesPaths(sourceName = "hermes") {
-  const root = await makeTempRoot();
+  const root = testWorkspace.dir;
   return {
     root,
     source: path.join(root, sourceName),
@@ -37,9 +39,16 @@ async function makeHermesPaths(sourceName = "hermes") {
 }
 
 describe("Hermes migration config mapping", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {
@@ -128,13 +137,10 @@ describe("Hermes migration config mapping", () => {
       },
     });
 
-    const skillEntries = itemById(plan.items, "config:skill-entries");
-    expect(skillEntries?.details?.value).toEqual({
-      "ship-it": {
-        config: {
-          mode: "fast",
-        },
-      },
+    const skillEntry = itemById(plan.items, "config:skill-entry:ship-it");
+    expect(skillEntry?.details).toEqual({
+      path: ["skills", "entries", "ship-it"],
+      value: { config: { mode: "fast" } },
     });
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",
@@ -166,6 +172,7 @@ describe("Hermes migration config mapping", () => {
         "",
       ].join("\n"),
     );
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
 
     const provider = buildHermesMigrationProvider();
     const result = await provider.apply(
@@ -189,6 +196,18 @@ describe("Hermes migration config mapping", () => {
     );
     expect(config.mcp?.servers?.time?.command).toBe("npx");
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
+    expect(config.plugins?.slots?.memory).toBe("memory-core");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeFile(configPath, JSON.stringify(config));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      isolateEnv: true,
+      pluginValidation: "core-only",
+    });
+    expect(snapshot.issues).toEqual([]);
+    expect(snapshot.valid).toBe(true);
   });
 
   it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
@@ -389,14 +408,14 @@ describe("Hermes migration config mapping", () => {
     expect(itemById(plan.items, "config:mcp-server:utilities_only")?.details?.value).toEqual({
       utilities_only: {
         command: "utilities-only",
-        toolFilter: { exclude: ["resources_list", "resources_read"] },
+        toolFilter: { include: ["prompts_list", "prompts_get"] },
       },
     });
     expect(itemById(plan.items, "config:mcp-server:no_tools")?.details?.value).toEqual({
       no_tools: {
         command: "no-tools",
         toolFilter: {
-          exclude: ["resources_list", "resources_read", "prompts_list", "prompts_get"],
+          exclude: ["*"],
         },
       },
     });

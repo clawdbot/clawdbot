@@ -37,7 +37,8 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(script).toContain("continue on this browser");
     expect(script).toContain("someone will let you in shortly");
     expect(script).toContain("setSinkId");
-    expect(script).toContain("BlackHole");
+    expect(script).toContain("blackhole 2ch");
+    expect(script).toContain("openclaw meeting audio");
   });
 
   it("enables live captions and captures the validated Teams caption row DOM", async () => {
@@ -803,8 +804,10 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       sessionMatched: true,
       urlMatched: true,
     });
-    expect(() =>
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({ result: "not-json" }),
-    ).toThrow("Microsoft Teams browser status JSON is malformed.");
+    for (const result of ["not-json", "null", "[]"]) {
+      expect(() => TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({ result })).toThrow(
+        "Microsoft Teams browser status JSON is malformed.",
+      );
+    }
   });
 });

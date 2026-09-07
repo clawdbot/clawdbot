@@ -10,6 +10,7 @@ import type {
   TtsProvider,
 } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -22,7 +23,6 @@ import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
   asProviderConfigMap,
-  hasOwnProperty,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
@@ -65,14 +65,7 @@ function sortSpeechProvidersForAutoSelection(
   cfg?: OpenClawConfig,
   providers?: readonly SpeechProviderPlugin[],
 ) {
-  return [...(providers ?? listSpeechProviders(cfg))].toSorted((left, right) => {
-    const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.id.localeCompare(right.id);
-  });
+  return [...(providers ?? listSpeechProviders(cfg))].toSorted(compareSpeechProviderOrder);
 }
 
 function canonicalizeSpeechProviderIdFromInventory(
@@ -164,10 +157,10 @@ export function resolvePersonaProviderConfig(
     return undefined;
   }
   const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-  if (hasOwnProperty(persona.providers, normalized)) {
+  if (Object.hasOwn(persona.providers, normalized)) {
     return persona.providers[normalized];
   }
-  if (hasOwnProperty(persona.providers, providerId)) {
+  if (Object.hasOwn(persona.providers, providerId)) {
     return persona.providers[providerId];
   }
   return undefined;

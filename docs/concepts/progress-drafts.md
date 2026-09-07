@@ -12,14 +12,18 @@ Progress drafts turn one channel message into a live status line while an
 agent works, instead of a stack of temporary "still working" replies. Set
 `channels.<channel>.streaming.mode: "progress"` and OpenClaw creates the
 message once real work starts, edits it as the agent reads, plans, calls
-tools, or waits for approval, then turns it into the final answer.
+tools, or waits for approval, then delivers the final answer.
 
 ```text
-Working...
-📖 from docs/concepts/progress-drafts.md
-🔎 Web Search: for "discord edit message"
-🛠️ Bash: run tests
+Checking the streaming behavior and running the focused tests.
+✅ Read the channel docs
+▸ Run the focused tests
+▢ Summarize the result
 ```
+
+The default draft shows a status headline, authored plan steps, and approval
+or failure lines. Set `streaming.progress.toolProgress: true` to add a rolling
+tool log, with rows such as `🛠️ Bash: run tests`.
 
 <Note>
   Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
@@ -43,7 +47,7 @@ Working...
 }
 ```
 
-Defaults from here: a start delay of 1.5 seconds, compact progress lines while
+Defaults from here: a start delay of 1.5 seconds, a quiet status draft while
 useful work happens, and suppression of the older standalone progress messages
 for that turn. Raw tool-line drafts use
 an automatic one-word label; a status headline omits that redundant title
@@ -55,14 +59,15 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                           |
-| --------------- | --------------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
-| Label           | Optional starter/status line such as `Working`.                                   |
-| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
+| Part            | Purpose                                                                       |
+| --------------- | ----------------------------------------------------------------------------- |
+| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.   |
+| Label           | Optional starter/status line such as `Working`.                               |
+| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval or failure lines. |
+| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`.   |
 
-The status headline sits above the rolling progress lines and both stay visible,
-so one message answers what the agent is doing and how far it has got.
+The status headline sits above the progress lines. With
+`progress.toolProgress: true`, tool rows remain visible underneath it.
 
 For raw tool progress, the label appears once the agent starts meaningful work
 and stays busy for the initial delay.
@@ -73,9 +78,9 @@ replies never show a progress draft; a line appears only for real work updates,
 for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
 or `✍️ Write: to /tmp/file`.
 
-The final answer replaces the draft in place when the channel can safely do
-that; otherwise OpenClaw sends the final answer through normal delivery and
-cleans up or stops updating the draft (see [Finalization](#finalization)).
+Final delivery depends on the channel and transport. OpenClaw either finalizes
+the draft or sends a separate answer and cleans up or stops updating the draft
+(see [Finalization](#finalization)).
 
 ## Choose a mode
 
@@ -161,9 +166,17 @@ Hide the label and show only progress lines:
 
 Progress lines come from real run events: tool starts, item updates, task
 plans, approvals, command output, patch summaries, and similar agent activity.
-They are enabled by default (`progress.toolProgress`, default `true`) and stay
-visible underneath the status headline. Set `progress.toolProgress: false` to
-keep the headline alone.
+`progress.toolProgress` decides whether ordinary tool calls become rolling
+rows underneath the status headline. It defaults to `false` on every channel,
+which keeps the draft quiet: the headline, enabled commentary and reasoning,
+plan milestones, and any approval request or failed command still appear. Set
+it to `true` for the full rolling tool log.
+
+Native subagent spawn and activity events follow the same policy. They start
+the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
+row for each worker. Messages to workers get separate entries because sending a
+message does not prove that a worker started running. Delegation prompts are not
+included in these progress rows.
 
 Tools can also emit typed progress while a single call is still running. That
 is how a slow fetch or search updates the visible draft before the tool
@@ -225,9 +238,9 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 ```
 
 `"explain"` is the default and keeps drafts stable with concise labels.
-`"raw"` appends the underlying command when available, which is useful while
-debugging but noisier in chat. For example, a `node --check /tmp/app.js` call
-renders differently by mode:
+`"raw"` appends underlying tool detail when available. Command text also
+requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
+With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
 | Mode      | Progress line                                                   |
 | --------- | --------------------------------------------------------------- |
@@ -236,10 +249,10 @@ renders differently by mode:
 
 ### Command/exec text
 
-`streaming.progress.commandText` (default `"raw"`) controls how much command
+`streaming.progress.commandText` (default `"status"`) controls how much command
 detail shows next to exec/bash progress lines, independent of the detail mode
-above. Set it to `"status"` to keep a tool-progress line visible while hiding
-the command text entirely:
+above. Set it to `"raw"` to opt into command text; keep `"status"` to show only
+the tool-progress status:
 
 ```json5
 {
@@ -248,7 +261,8 @@ the command text entirely:
       streaming: {
         mode: "progress",
         progress: {
-          commandText: "status",
+          toolProgress: true,
+          commandText: "raw",
         },
       },
     },
@@ -278,7 +292,7 @@ enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
+[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds
@@ -292,8 +306,8 @@ it up. One agent listing call failed and is being retried.
 Utility narration is on by default (`streaming.progress.narration`, default
 `true`) and never falls back to the primary model: it runs only with an explicit
 `utilityModel` or a provider-declared default for the agent's primary
-provider. Set `utilityModel: ""` to disable utility routing entirely. Tool lines
-keep accumulating underneath and return if both status sources stop. Draft
+provider. Set `utilityModel: ""` to disable utility routing entirely. When
+`progress.toolProgress` is enabled, tool lines keep accumulating underneath. Draft
 edits still wait for the normal activity gate and an actual
 text change, which avoids flashes on fast turns and reduces edit churn in busy
 channels. Set `narration: false` to disable only the utility-model filler; model
@@ -319,6 +333,11 @@ inbound request text plus the same compact, redacted tool summaries the draft
 would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.
+
+Narration belongs to the current turn. Ending or replacing that turn cancels its
+pending utility-model request and prevents late results from updating the draft.
+Tool activity that accumulates during a narration request is reconsidered when
+that request finishes, so an eligible status update needs no additional event.
 
 ### Line limits
 
@@ -362,33 +381,11 @@ Tune the per-line budget:
 }
 ```
 
-### Rich rendering (Slack)
+<a id="hide-tooltask-lines" />
 
-Slack can render progress lines as structured Block Kit fields instead of
-plain text:
+### Show the tool log
 
-```json5
-{
-  channels: {
-    slack: {
-      streaming: {
-        mode: "progress",
-        progress: {
-          render: "rich",
-        },
-      },
-    },
-  },
-}
-```
-
-Rich rendering always sends the same plain-text body alongside the Block Kit
-fields, so clients that cannot render the richer shape still show the compact
-progress text.
-
-### Hide tool/task lines
-
-Keep the single progress draft but hide tool and task lines:
+Add the rolling tool log to the single progress draft:
 
 ```json5
 {
@@ -397,7 +394,7 @@ Keep the single progress draft but hide tool and task lines:
       streaming: {
         mode: "progress",
         progress: {
-          toolProgress: false,
+          toolProgress: true,
         },
       },
     },
@@ -405,18 +402,18 @@ Keep the single progress draft but hide tool and task lines:
 }
 ```
 
-With `toolProgress: false`, OpenClaw still suppresses the older standalone
-tool-progress messages for that turn — the channel stays visually quiet until
-the final answer, except for the label if one is configured.
+With the default `toolProgress: false`, OpenClaw still suppresses the older
+standalone tool-progress messages for that turn; the draft shows the headline,
+authored text, plan milestones, and attention lines only.
 
 ## Channel behavior
 
 | Channel         | Progress transport                     | Notes                                                                                                                                                     |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the final answer carries a `-#` activity receipt and the status draft is deleted after the answer lands.                   |
+| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
 | Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
-| Slack           | Native stream or editable draft post.  | Needs a reply thread target; top-level DMs without one still get draft preview posts and edits.                                                           |
+| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
 | Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
 | Mattermost      | Editable draft post.                   | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post.                       |
 
@@ -429,13 +426,14 @@ full runtime-behavior breakdown per channel.
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
 - In `progress` mode on Discord, the final answer is sent as a fresh message
-  with a small `-#` activity receipt appended (for example
-  `-# 🧠 2 thoughts · 🛠️ 5 tool calls · ⏱️ 12s`), and the status draft is
-  deleted once that answer is delivered. Busy channels keep no orphaned tool
-  log above the reply; error finals keep the draft as the visible record of
-  the failed turn.
+  and the status draft is deleted once that answer is delivered. Busy channels
+  keep no orphaned tool log above the reply; error finals keep the draft as the
+  visible record of the failed turn.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
+- Slack's compact progress style posts the final answer as a new message and
+  deletes its temporary drafts after confirmed delivery. Failed delivery keeps
+  the draft visible.
 - If the channel uses native progress streaming, OpenClaw finalizes that
   stream when the native transport accepts the final text.
 - Otherwise (media, an approval prompt, an explicit reply target, too many
@@ -457,8 +455,9 @@ message.
 
 **I see the label but no tool lines.**
 
-Check `streaming.progress.toolProgress`. If it is `false`, OpenClaw keeps the
-single draft behavior but hides tool and task progress lines.
+Check `streaming.progress.toolProgress`. It defaults to `false`, which keeps
+the single draft but hides the rolling tool rows; set it to `true` for the
+full tool log.
 
 **I see a fresh final message instead of an edited draft.**
 

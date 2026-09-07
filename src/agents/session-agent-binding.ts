@@ -7,13 +7,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  parseAgentSessionKey,
-  normalizeAgentId,
-  normalizeMainKey,
-} from "../routing/session-key.js";
-import { resolveDefaultAgentId } from "./agent-scope.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
 
 /**
  * Resolve the trusted active agent bound to a host-owned session reference.
@@ -23,25 +20,23 @@ export function resolveBoundAgentIdForSession(params: {
   sessionKey?: string;
   agentId?: string;
 }): string | undefined {
-  const explicitAgentId = normalizeOptionalString(params.agentId);
-  if (explicitAgentId) {
-    return normalizeAgentId(explicitAgentId);
-  }
-
-  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
-  if (!normalizedSessionKey) {
+  const config = params.config ?? {};
+  const agentId = normalizeOptionalString(params.agentId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!agentId && !sessionKey) {
     return undefined;
   }
-
-  const parsed = parseAgentSessionKey(normalizedSessionKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
+  if (agentId) {
+    return resolveSessionAgentId({ config, sessionKey, agentId });
   }
 
-  const loweredSessionKey = normalizeLowercaseStringOrEmpty(normalizedSessionKey);
-  const mainKey = normalizeMainKey(params.config?.session?.mainKey);
-  if (loweredSessionKey === "main" || loweredSessionKey === mainKey) {
-    return resolveDefaultAgentId(params.config ?? {});
-  }
-  return undefined;
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
+  const loweredSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const mainKey = normalizeMainKey(config.session?.mainKey);
+  const hasTrustedBinding =
+    Boolean(parseAgentSessionKey(sessionKey)?.agentId) ||
+    persistedOwner.kind !== "none" ||
+    loweredSessionKey === "main" ||
+    loweredSessionKey === mainKey;
+  return hasTrustedBinding ? resolveSessionAgentId({ config, sessionKey }) : undefined;
 }

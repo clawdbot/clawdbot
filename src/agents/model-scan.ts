@@ -20,14 +20,15 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
-import { readResponseWithLimit } from "../infra/http-body.js";
 import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { readProviderJsonArrayFieldResponse } from "./provider-http-errors.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -35,8 +36,7 @@ const DEFAULT_CONCURRENCY = 3;
 // The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
 // (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
 // faulty or hostile provider cannot stream an unbounded document and exhaust
-// process memory. Keep this aligned with the runtime capability cache for the
-// same endpoint so scan and runtime discovery fail at the same boundary.
+// process memory. OpenRouter capability data is cached within its provider.
 const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const BASE_IMAGE_PNG =
@@ -184,26 +184,6 @@ function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
-// Reads the OpenRouter /models success body under a byte cap before JSON.parse.
-// The success path was previously buffered with an unbounded res.json(); a faulty
-// or hostile provider could stream an effectively endless document and exhaust
-// memory. readResponseWithLimit caps the read, cancels the stream on overflow,
-// and bounds idle stalls with the call's existing timeout.
-async function readOpenRouterModelsJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, OPENROUTER_MODELS_BODY_MAX_BYTES, {
-    chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(`OpenRouter /models response too large: ${size} bytes (limit ${maxBytes} bytes)`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
-  });
-  try {
-    return JSON.parse(buffer.toString("utf8")) as unknown;
-  } catch (cause) {
-    throw new Error("OpenRouter /models response is malformed JSON", { cause });
-  }
-}
-
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
@@ -212,7 +192,7 @@ async function fetchOpenRouterModels(
   try {
     // fetch resolves after headers, so keep the shared timeout active until
     // the provider-controlled catalog body has been consumed.
-    return await withTimeout(
+    return await runAbortableTimeout(
       async (signal) => {
         res = await fetchImpl(OPENROUTER_MODELS_URL, {
           headers: { Accept: "application/json" },
@@ -221,8 +201,17 @@ async function fetchOpenRouterModels(
         if (!res.ok) {
           throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
         }
-        const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
-        const entries = Array.isArray(payload.data) ? payload.data : [];
+        const entries = await readProviderJsonArrayFieldResponse(
+          res,
+          "OpenRouter /models",
+          "data",
+          {
+            maxBytes: OPENROUTER_MODELS_BODY_MAX_BYTES,
+            chunkTimeoutMs: timeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
+          },
+        );
 
         return entries
           .map((entry) => {
@@ -284,9 +273,7 @@ async function fetchOpenRouterModels(
       "OpenRouter model scan",
     );
   } finally {
-    if (res && !res.bodyUsed) {
-      await res.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
   }
 }
 
@@ -308,7 +295,7 @@ async function probeTool(
   };
   const startedAt = Date.now();
   try {
-    const message = await withTimeout(
+    const message = await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,
@@ -360,7 +347,7 @@ async function probeImage(
   };
   const startedAt = Date.now();
   try {
-    await withTimeout(
+    await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,

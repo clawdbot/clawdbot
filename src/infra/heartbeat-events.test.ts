@@ -79,6 +79,16 @@ describe("heartbeat events", () => {
     });
   });
 
+  it("adds route setup guidance to no-route events", () => {
+    emitHeartbeatEvent({ status: "skipped", reason: "no-route" });
+
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      reason: "no-route",
+      message:
+        "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.",
+    });
+  });
+
   it("delivers events to listeners, isolates listener failures, and supports unsubscribe", () => {
     const seen: string[] = [];
     const unsubscribeFirst = onHeartbeatEvent((evt) => {

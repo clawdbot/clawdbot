@@ -1,4 +1,6 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { ClientOptions, RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   openAIQuicksilverAuthHeaders,
   type OpenAIQuicksilverAuth,
@@ -128,52 +130,23 @@ function waitForSocketOpen(params: {
   });
 }
 
-function waitForRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Typed as Error so the rejection reason is provably an Error at the call site;
-    // onAbort normalizes a non-Error AbortSignal reason before it reaches here.
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onAbort = () => {
-      const reason = signal.reason;
-      finish(
-        reason instanceof Error
-          ? reason
-          : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
-              cause: reason,
-            }),
-      );
-    };
-    const timer = setTimeout(() => finish(), ms);
-    timer.unref?.();
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
-}
-
-export async function connectOpenAIQuicksilverSideband(params: {
-  auth: OpenAIQuicksilverAuth;
-  createSocket: OpenAIQuicksilverSocketFactory;
-  requestIds: OpenAIQuicksilverRequestIds;
-  signal: AbortSignal;
-  url: string;
-}): Promise<OpenAIQuicksilverConnectedSideband> {
+export async function connectOpenAIQuicksilverSideband(
+  params: {
+    auth: OpenAIQuicksilverAuth;
+    createSocket: OpenAIQuicksilverSocketFactory;
+    requestIds: OpenAIQuicksilverRequestIds;
+    signal: AbortSignal;
+    url: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIQuicksilverConnectedSideband> {
   let lastError: unknown = new Error("GPT-Live sideband connection failed");
   for (let attempt = 0; attempt < SIDEBAND_CONNECT_ATTEMPTS; attempt += 1) {
     if (params.signal.aborted) {
       throw params.signal.reason;
     }
     const socket = params.createSocket(params.url, {
-      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds),
+      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime),
       maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
     });
     const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];
@@ -226,7 +199,16 @@ export async function connectOpenAIQuicksilverSideband(params: {
         throw params.signal.reason;
       }
       if (attempt + 1 < SIDEBAND_CONNECT_ATTEMPTS) {
-        await waitForRetryDelay(SIDEBAND_RETRY_BASE_MS * 2 ** attempt, params.signal);
+        await sleepWithAbort(SIDEBAND_RETRY_BASE_MS * 2 ** attempt, params.signal, {
+          ref: false,
+        }).catch(() => {
+          const reason = params.signal.reason;
+          throw reason instanceof Error
+            ? reason
+            : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
+                cause: reason,
+              });
+        });
       }
     }
   }

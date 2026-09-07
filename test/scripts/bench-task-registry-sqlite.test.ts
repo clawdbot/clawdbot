@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -148,36 +147,31 @@ describe("durable task registry churn benchmark", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
   });
 
-  it("always launches a fresh expose-gc worker for one size", () => {
+  it("launches an expose-gc worker and removes its state directory after a timeout", () => {
     const options = testing.parseOptions(["--sizes", "8", "--cycles", "2", "--warmup", "1"]);
-    const stateDir = path.join(os.tmpdir(), "benchmark-state");
-    expect(testing.buildWorkerArgs(options, 8, stateDir)).toEqual([
-      "--expose-gc",
-      "--import",
-      "tsx",
-      "scripts/bench-task-registry-sqlite-worker.ts",
-      "--size",
-      "8",
-      "--cycles",
-      "2",
-      "--warmup",
-      "1",
-      "--state-dir",
-      stateDir,
-    ]);
-  });
-
-  it("removes the parent-owned worker state directory after a timeout", () => {
-    const options = testing.parseOptions(["--sizes", "2", "--cycles", "1", "--warmup", "0"]);
     let stateDir: string | undefined;
     expect(() =>
-      testing.runWorker(options, 2, {
+      testing.runWorker(options, 8, {
         spawnWorker: (_command, args) => {
           const stateDirIndex = args.indexOf("--state-dir");
           stateDir = args[stateDirIndex + 1];
           if (!stateDir) {
             throw new Error("missing worker state directory");
           }
+          expect(args).toEqual([
+            "--expose-gc",
+            "--import",
+            "tsx",
+            "scripts/bench-task-registry-sqlite-worker.ts",
+            "--size",
+            "8",
+            "--cycles",
+            "2",
+            "--warmup",
+            "1",
+            "--state-dir",
+            stateDir,
+          ]);
           fs.writeFileSync(path.join(stateDir, "openclaw.sqlite"), "timeout fixture");
           return {
             status: null,

@@ -1,7 +1,7 @@
 // Release preflight tests keep generated-artifact checks fail-closed for operators.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -11,12 +11,11 @@ const CHECK_COMMANDS = [
   "node scripts/generate-npm-package-lock.mjs --all",
   "node --import tsx scripts/sync-plugin-versions.ts --check",
   "pnpm channels:catalog:check",
-  "node scripts/generate-plugin-inventory-doc.mjs --check",
+  "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
   "pnpm config:schema:check",
   "pnpm config:channels:check",
   "pnpm config:docs:check",
   "pnpm plugin-sdk:check-exports",
-  "pnpm plugin-sdk:api:check",
   "pnpm plugin-sdk:surface:check",
   "pnpm ui:i18n:check",
   "pnpm native:i18n:check",
@@ -24,12 +23,11 @@ const CHECK_COMMANDS = [
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
   "pnpm channels:catalog:gen",
-  "node scripts/generate-plugin-inventory-doc.mjs --write",
+  "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
   "pnpm config:schema:gen",
   "pnpm config:channels:gen",
   "pnpm config:docs:gen",
   "pnpm plugin-sdk:sync-exports",
-  "pnpm plugin-sdk:api:gen",
   "pnpm ui:i18n:sync",
 ];
 
@@ -39,7 +37,11 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function makeFakePnpm(): { binDir: string; eventsPath: string; logPath: string } {
+function makeFakePnpm(waitFor?: { command: string; event: string }): {
+  binDir: string;
+  eventsPath: string;
+  logPath: string;
+} {
   const root = makeTempDir(tempDirs, "openclaw-release-preflight-");
   const binDir = join(root, "bin");
   const eventsPath = join(root, "pnpm-events.log");
@@ -50,11 +52,22 @@ function makeFakePnpm(): { binDir: string; eventsPath: string; logPath: string }
     writeFileSync(
       binPath,
       `#!${process.execPath}
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 const command = ${JSON.stringify(bin)} + " " + process.argv.slice(2).join(" ");
 appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG, command + "\\n");
 appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "start " + command + "\\n");
+const waitFor = ${JSON.stringify(waitFor ?? null)};
+if (waitFor?.command === command) {
+  const deadline = Date.now() + 3000;
+  while (!readFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "utf8").split("\\n").includes(waitFor.event)) {
+    if (Date.now() >= deadline) {
+      console.error("Ready work did not start while another command held a worker");
+      process.exit(9);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 const delayMs = Number(process.env.OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS ?? "0");
 if (delayMs > 0) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
@@ -123,11 +136,82 @@ function makeReleaseFixture(
   return root;
 }
 
+function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixture>[0] = {}): {
+  root: string;
+  script: string;
+} {
+  const root = makeReleaseFixture(params);
+  const files = [
+    "scripts/release-preflight.mjs",
+    "scripts/release-preflight.mts",
+    "scripts/tsx.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/error-format.mts",
+    "scripts/lib/failed-trailer.mts",
+    "scripts/lib/local-check-runtime.mts",
+    "scripts/lib/managed-child-process.mts",
+    "scripts/lib/vitest-resource-ownership.mts",
+    "scripts/lib/release-version.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/windows-taskkill.mjs",
+  ];
+  for (const file of files) {
+    const destination = join(root, file);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(file, destination);
+  }
+  return { root, script: join(root, "scripts", "release-preflight.mjs") };
+}
+
+function runIsolatedPreflight(
+  args: string[],
+  params: Parameters<typeof makeReleaseFixture>[0] = {},
+) {
+  const fixture = makeIsolatedPreflightFixture(params);
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  delete env.NODE_PATH;
+  delete env.PNPM_CONFIG_MODULES_DIR;
+  delete env.npm_config_modules_dir;
+  return spawnSync(process.execPath, [fixture.script, ...args], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    env,
+  });
+}
+
 function readPnpmLog(logPath: string): string[] {
   return readFileSync(logPath, "utf8").trimEnd().split("\n").filter(Boolean);
 }
 
 describe("scripts/release-preflight.mjs", () => {
+  it("checks valid macOS metadata without node_modules", () => {
+    const result = runIsolatedPreflight(["--macos-versions-only"]);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("[release-preflight] macOS app version metadata OK");
+  });
+
+  it("reports stale macOS metadata without node_modules", () => {
+    const result = runIsolatedPreflight(["--macos-versions-only"], {
+      shortVersion: "2026.6.10",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
+    );
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe("[release-preflight] FAILED (exit 1)");
+  });
+
+  it("keeps multi-argument invocations on the tsx shim", () => {
+    const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Cannot find module 'tsx/esm'");
+    expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
+  });
+
   it("rejects unknown arguments before running release checks", () => {
     const result = runPreflight(["--fiix"]);
 
@@ -162,7 +246,7 @@ describe("scripts/release-preflight.mjs", () => {
       env: {
         ...process.env,
         OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
-          "node scripts/generate-plugin-inventory-doc.mjs --write",
+          "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
         PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
@@ -172,7 +256,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(1);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
-      "- plugin inventory: exit 7 (node scripts/generate-plugin-inventory-doc.mjs --write)",
+      "- plugin inventory: exit 7 (node --import tsx scripts/generate-plugin-inventory-doc.mts --write)",
     );
   });
 
@@ -197,8 +281,52 @@ describe("scripts/release-preflight.mjs", () => {
       events.indexOf("start pnpm channels:catalog:gen"),
     );
     expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
-      events.indexOf("start node scripts/generate-plugin-inventory-doc.mjs --write"),
+      events.indexOf("start node --import tsx scripts/generate-plugin-inventory-doc.mts --write"),
     );
+  });
+
+  it.each([
+    {
+      args: ["--check", "--scope", "config", "--jobs", "2"],
+      command: "pnpm config:schema:check",
+      event: "start pnpm config:docs:check",
+    },
+    {
+      args: ["--fix", "--jobs", "4"],
+      command: "pnpm ui:i18n:sync",
+      event: "start pnpm plugin-sdk:sync-exports",
+    },
+  ])(
+    "starts ready work without waiting for an unrelated command: $command",
+    ({ args, command, event }) => {
+      const fakePnpm = makeFakePnpm({ command, event });
+      const result = runPreflight(args, fakePnpm, {}, makeReleaseFixture());
+      expect(result.status, result.stderr).toBe(0);
+      const events = readPnpmLog(fakePnpm.eventsPath);
+      expect(events.indexOf(event)).toBeLessThan(events.indexOf(`end ${command}`));
+    },
+  );
+
+  it("skips failed generator descendants while completing unrelated generators", () => {
+    const fakePnpm = makeFakePnpm();
+    const result = runPreflight(
+      ["--fix", "--jobs", "4"],
+      fakePnpm,
+      {
+        OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
+          "node --import tsx scripts/sync-plugin-versions.ts",
+      },
+      makeReleaseFixture(),
+    );
+    expect(result.status).toBe(1);
+    const commands = readPnpmLog(fakePnpm.logPath);
+    expect(commands).toContain("pnpm config:docs:gen");
+    expect(commands).not.toContain("pnpm channels:catalog:gen");
+    expect(commands).not.toContain("pnpm plugin-sdk:sync-exports");
+    expect(commands).not.toContain(
+      "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
+    );
+    expect(result.stderr).toContain("skipped because plugin-versions failed");
   });
 
   it("runs only version-owned generators and checks for version prep", () => {
@@ -211,12 +339,12 @@ describe("scripts/release-preflight.mjs", () => {
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
         "pnpm channels:catalog:gen",
-        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         "pnpm ui:i18n:sync",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
         "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
-        "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
         "pnpm ui:i18n:check",
         "pnpm native:i18n:check",
       ].toSorted(),
@@ -234,11 +362,11 @@ describe("scripts/release-preflight.mjs", () => {
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
         "pnpm channels:catalog:gen",
-        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
         "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
-        "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(plugins, jobs=4)");
@@ -269,22 +397,63 @@ describe("scripts/release-preflight.mjs", () => {
     );
   });
 
-  it("uses bounded parallelism for independent checks", () => {
+  it.each([1, 2, 3])("uses bounded parallelism for independent checks with jobs=%i", (jobs) => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
-    const env = { OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS: "120" };
+    const commands = [
+      "pnpm config:schema:check",
+      "pnpm config:channels:check",
+      "pnpm config:docs:check",
+    ];
+    const observerPath = join(root, "observe-concurrency.cjs");
+    const resultPath = join(root, "concurrency.json");
+    writeFileSync(
+      observerPath,
+      `const childProcess = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const commands = ${JSON.stringify(commands)};
+const originalSpawn = childProcess.spawn;
+let active = 0;
+let maxActive = 0;
+let total = 0;
+childProcess.spawn = function (...args) {
+  const child = originalSpawn.apply(this, args);
+  if (commands.includes([args[0], ...(args[1] ?? [])].join(" "))) {
+    active += 1;
+    total += 1;
+    maxActive = Math.max(maxActive, active);
+    child.once("close", () => { active -= 1; });
+  }
+  return child;
+};
+syncBuiltinESMExports();
+process.once("exit", () => {
+  if (total > 0) {
+    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ maxActive, total, active }));
+  }
+});
+`,
+    );
 
-    const serialStartedAt = performance.now();
-    const serial = runPreflight(["--scope", "config", "--jobs", "1"], fakePnpm, env, root);
-    const serialMs = performance.now() - serialStartedAt;
+    // Count real managed commands from synchronous admission through close, excluding
+    // loader startup time. Inherited observers with no matching commands write nothing.
+    const result = runPreflight(
+      ["--scope", "config", "--jobs", String(jobs)],
+      fakePnpm,
+      {
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(observerPath)}`,
+      },
+      root,
+    );
 
-    const parallelStartedAt = performance.now();
-    const parallel = runPreflight(["--scope", "config", "--jobs", "3"], fakePnpm, env, root);
-    const parallelMs = performance.now() - parallelStartedAt;
-
-    expect(serial.status).toBe(0);
-    expect(parallel.status).toBe(0);
-    expect(parallelMs).toBeLessThan(serialMs * 0.75);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(resultPath, "utf8"))).toEqual({
+      maxActive: Math.min(jobs, commands.length),
+      total: commands.length,
+      active: 0,
+    });
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(commands.toSorted());
   });
 
   it("accepts base macOS metadata for a beta package version", () => {

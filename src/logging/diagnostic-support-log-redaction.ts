@@ -1,4 +1,5 @@
 // Support log redaction helpers scrub sensitive fields from diagnostic log payloads.
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
@@ -160,11 +161,7 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return undefined;
   }
-  try {
-    return asOptionalRecord(JSON.parse(trimmed));
-  } catch {
-    return undefined;
-  }
+  return safeParseJsonRecord(trimmed);
 }
 
 function addLogObjectFields(

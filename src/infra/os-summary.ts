@@ -10,29 +10,56 @@ type OsSummary = {
   label: string;
 };
 
-const cachedOsSummaryByKey = new Map<string, OsSummary>();
-const cachedRuntimeOsLabelByKey = new Map<string, string>();
+type OsFacts = Omit<OsSummary, "label"> & {
+  productVersion?: string;
+  runtimeLabel?: string;
+  summary?: OsSummary;
+};
+const cachedOsFactsByKey = new Map<string, OsFacts>();
 
-// These synchronous probes run during both gateway startup and first-turn prompt
-// preparation, so keep one hard bound for every macOS system metadata lookup.
+function resolveOsFacts(): OsFacts {
+  const platform = os.platform();
+  const release = os.release();
+  const arch = os.arch();
+  // Preserve the raw OS tuple identity: a product-version update alone does not
+  // invalidate metadata already observed during this process.
+  const cacheKey = `${platform}\0${release}\0${arch}`;
+  let facts = cachedOsFactsByKey.get(cacheKey);
+  if (!facts) {
+    facts = { platform, arch, release };
+    cachedOsFactsByKey.set(cacheKey, facts);
+  }
+  return facts;
+}
+
+// Startup and first-turn probes share one timeout and kill policy. spawnSync
+// still waits for the child to exit after sending the kill signal.
 export const DARWIN_SYSTEM_PROBE_TIMEOUT_MS = 5_000;
 
-/**
- * Resolve Darwin product version via sw_vers.
- *
- * Darwin kernel version and macOS product version are no longer in sync starting
- * with macOS 26 (Tahoe), where Darwin 25.x maps to macOS 26.x instead of the
- * historical Darwin N → macOS N+9 formula. Prefer sw_vers over os.release() on
- * macOS to avoid stale mappings.
- */
-export function resolveDarwinProductVersion(): string {
+function readDarwinProductVersion(facts: OsFacts): string {
+  if (facts.productVersion !== undefined) {
+    return facts.productVersion;
+  }
   const res = spawnSync("sw_vers", ["-productVersion"], {
     encoding: "utf-8",
     timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
     killSignal: "SIGKILL",
   });
   const out = normalizeOptionalString(res.stdout) ?? "";
+  // Share only observed product versions; an early failed probe must not prevent
+  // a later consumer from succeeding. Each label keeps its own first fallback.
+  if (out) {
+    facts.productVersion = out;
+  }
   return out || os.release();
+}
+
+/**
+ * Resolve Darwin product version via sw_vers. Kernel and product versions diverge
+ * starting with macOS 26, so keep the product fact separate from the raw release.
+ */
+export function resolveDarwinProductVersion(): string {
+  return readDarwinProductVersion(resolveOsFacts());
 }
 
 /**
@@ -41,44 +68,23 @@ export function resolveDarwinProductVersion(): string {
  * Darwin this preserves the historical `${os.type()} ${os.release()}` shape.
  */
 export function resolveRuntimeOsLabel(): string {
-  const platform = os.platform();
-  const release = os.release();
-  const arch = os.arch();
-  const cacheKey = `${platform}\0${release}\0${arch}`;
-  const cached = cachedRuntimeOsLabelByKey.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const label =
-    platform === "darwin" ? `macOS ${resolveDarwinProductVersion()}` : `${os.type()} ${release}`;
-  cachedRuntimeOsLabelByKey.set(cacheKey, label);
-  return label;
+  const facts = resolveOsFacts();
+  return (facts.runtimeLabel ??=
+    facts.platform === "darwin"
+      ? `macOS ${readDarwinProductVersion(facts)}`
+      : `${os.type()} ${facts.release}`);
 }
 
 /** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
-  const platform = os.platform();
-  const rawRelease = os.release();
-  const arch = os.arch();
-  // Cache key uses raw os.release() (stable per kernel) so sw_vers drift across
-  // minor macOS updates does not invalidate the cache.
-  const cacheKey = `${platform}\0${rawRelease}\0${arch}`;
-  const cached = cachedOsSummaryByKey.get(cacheKey);
-  if (cached) {
-    return cached;
+  const facts = resolveOsFacts();
+  if (!facts.summary) {
+    const { platform, arch, release } = facts;
+    const label =
+      platform === "darwin"
+        ? `macos ${readDarwinProductVersion(facts)}`
+        : `${platform === "win32" ? "windows" : platform} ${release}`;
+    facts.summary = { platform, arch, release, label: `${label} (${arch})` };
   }
-  const release = rawRelease;
-  const label = (() => {
-    if (platform === "darwin") {
-      const productVersion = resolveDarwinProductVersion();
-      return `macos ${productVersion} (${arch})`;
-    }
-    if (platform === "win32") {
-      return `windows ${release} (${arch})`;
-    }
-    return `${platform} ${release} (${arch})`;
-  })();
-  const summary = { platform, arch, release, label };
-  cachedOsSummaryByKey.set(cacheKey, summary);
-  return summary;
+  return facts.summary;
 }

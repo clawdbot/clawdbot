@@ -95,7 +95,7 @@ describe("worker admission", () => {
     ["environment-mismatch", () => admission({ environmentId: " worker-1 " })],
     ["bundle-mismatch", () => admission({ handshake: { ...RECEIPT, bundleHash: "b".repeat(64) } })],
     ["version-mismatch", () => admission({ handshake: { ...RECEIPT, openclawVersion: "other" } })],
-    ["session-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
+    ["placement-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
     ["owner-epoch-mismatch", () => admission({ ownerEpoch: 2 })],
     ["rpc-set-mismatch", () => admission({ rpcSetVersion: 2 })],
     [
@@ -109,6 +109,15 @@ describe("worker admission", () => {
   it("rejects expiry, unavailable state, and the previous gateway build", () => {
     nowMs = credential.expiresAtMs;
     expect(admit()).toEqual({ ok: false, reason: "credential-expired" });
+    expect(
+      admitWorkerConnection({
+        store,
+        admission: admission(),
+        expectedBuild: RECEIPT,
+        nowMs,
+        allowExpiredCredential: true,
+      }),
+    ).toMatchObject({ ok: true });
     nowMs = 1_000;
     environment = { ...environment, destroyRequestedAtMs: nowMs };
     expect(admit()).toEqual({ ok: false, reason: "environment-unavailable" });

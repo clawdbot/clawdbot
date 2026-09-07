@@ -12,6 +12,7 @@ import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 
 const ONEPASSWORD_PROVIDER_ALIAS = "onepassword";
+type PluginSecretRefSetupCli = ReturnType<typeof createPluginSecretRefSetupCli>;
 
 function normalizeOnePasswordSecretId(label: string, value: string): string {
   try {
@@ -22,7 +23,7 @@ function normalizeOnePasswordSecretId(label: string, value: string): string {
   }
 }
 
-const onePasswordSecretRefSetupCli = createPluginSecretRefSetupCli({
+const onePasswordSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSetupCli({
   productName: "1Password",
   secretIdLabel: "1Password SecretRef id",
   secretIdPlaceholder: "1password-secret-id",

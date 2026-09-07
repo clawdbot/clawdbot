@@ -7,7 +7,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type TestContext,
+} from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
@@ -15,11 +24,13 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -28,18 +39,19 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
-  projectRecentChatDisplayMessages,
+  projectChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import type { HealthSummary } from "../health/types.js";
+import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
-import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -141,9 +153,15 @@ function projectedSessionsSendHistoryMessage(
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
+  const provenance = (fields.provenance ?? sessionsSendProvenance()) as {
+    sourceSessionKey?: string;
+  };
+  const sessionKey = provenance.sourceSessionKey;
+  const agentId = sessionKey?.split(":")[1];
   return assistantHistoryMessage(text, {
     senderLabel: "Forwarded from main",
     provenance: sessionsSendProvenance(),
+    ...(sessionKey ? { senderSession: { sessionKey, ...(agentId ? { agentId } : {}) } } : {}),
     timestamp,
     ...fields,
   });
@@ -153,6 +171,7 @@ function assistantAudioAttachmentHistoryMessage(
   text: string,
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
+  includeLocalUrl = true,
 ): ChatHistoryTestMessage {
   return {
     role: "assistant",
@@ -161,7 +180,7 @@ function assistantAudioAttachmentHistoryMessage(
       {
         type: "attachment",
         attachment: {
-          url: "/tmp/tts.mp3",
+          ...(includeLocalUrl ? { url: "/tmp/tts.mp3" } : {}),
           kind: "audio",
           label: "tts.mp3",
           mimeType: "audio/mpeg",
@@ -181,6 +200,19 @@ function ttsSupplementHistoryMessage(
   return assistantAudioAttachmentHistoryMessage(text, timestamp, {
     openclawTtsSupplement: marker,
   });
+}
+
+function projectedTtsSupplementHistoryMessage(
+  marker: { textSha256: string; spokenText?: string },
+  timestamp: number,
+  text = "Audio reply",
+): ChatHistoryTestMessage {
+  return assistantAudioAttachmentHistoryMessage(
+    text,
+    timestamp,
+    { openclawTtsSupplement: marker },
+    false,
+  );
 }
 
 function deliveryMirrorHistoryMessage(
@@ -887,7 +919,12 @@ describe("sanitizeChatHistoryMessages", () => {
     );
 
     expect(result).toEqual([
-      assistantHistoryMessage(`${prefix}\n...(truncated)...`, { timestamp: 1 }),
+      assistantHistoryMessage(`${prefix}\n...(truncated)...`, {
+        timestamp: 1,
+        // The display cap is recorded structurally so consumers need not sniff
+        // the in-band sentinel to know the row is a bounded preview.
+        __openclaw: { truncated: true, reason: "display-cap" },
+      }),
     ]);
   });
 
@@ -1019,31 +1056,126 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
-    const result = sanitizeChatHistoryMessages([
-      userHistoryMessage("hello", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "thinking like caveman",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-        ],
-        timestamp: 2,
-      },
-      assistantHistoryMessage("real reply", { timestamp: 3 }),
-    ]);
+  it("projects keyed commentary entries into durable preamble rows", () => {
+    const result = sanitizeChatHistoryMessages(
+      [
+        userHistoryMessage("hello", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "thinking like caveman",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+          ],
+          timestamp: 2,
+        },
+        assistantHistoryMessage("real reply", { timestamp: 3 }),
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
 
     expect(result).toEqual([
       userHistoryMessage("hello", { timestamp: 1 }),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "thinking like caveman",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
       assistantHistoryMessage("real reply", { timestamp: 3 }),
+    ]);
+  });
+
+  it("uses one capped text value for commentary content and fallback metadata", () => {
+    const fullText = "A long commentary message that must be capped";
+    const [fallback] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: fullText,
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg_commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      12,
+      { includeCommentaryFallbacks: true },
+    ) as Array<{
+      content: Array<{ text: string }>;
+      openclawStreamFallback: { replacementText: string };
+    }>;
+
+    expect(fallback?.openclawStreamFallback.replacementText).toBe(fallback?.content[0]?.text);
+    expect(fallback?.openclawStreamFallback.replacementText).not.toBe(fullText);
+  });
+
+  it("splits commentary from final text and tool history", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    };
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Checking the file",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+            toolCall,
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the file" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Checking the file",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
+      {
+        role: "assistant",
+        content: [toolCall, { type: "text", text: "Done." }],
+        timestamp: 2,
+      },
     ]);
   });
 });
 
-describe("projectRecentChatDisplayMessages", () => {
+describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
@@ -1063,6 +1195,26 @@ describe("projectRecentChatDisplayMessages", () => {
       name: "projects empty text-block assistant errors as a generic safe failure",
       message: { content: [{ type: "text", text: "" }], errorMessage: "Connection error." },
       content: safeFailureContent,
+    },
+    {
+      name: "projects provider refusals before classifying their explanation text",
+      message: {
+        content: [],
+        errorMessage: "Anthropic refusal: prompt is too long.",
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 1,
+            details: { category: "reasoning_extraction", explanation: "private upstream" },
+          },
+        ],
+      },
+      content: [
+        {
+          type: "text",
+          text: "The provider refused this request (category: reasoning_extraction). Revise the request and try again.",
+        },
+      ],
     },
     {
       name: "preserves visible output_text from a failed assistant turn",
@@ -1214,7 +1366,7 @@ describe("projectRecentChatDisplayMessages", () => {
   ];
 
   it.each(displayErrorCases)("$name", ({ message, content, visibleText }) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       { role: "assistant", stopReason: "error", timestamp: 1, ...message },
     ]);
     expect(result).toEqual([
@@ -1268,7 +1420,7 @@ describe("projectRecentChatDisplayMessages", () => {
   ])(
     "projects empty context-overflow assistant errors with recovery guidance: $name",
     ({ fields }) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         {
           role: "assistant",
           content: [],
@@ -1302,7 +1454,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ["input_text", ""],
     ["input_text", "NO_REPLY"],
   ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [{ type, text }],
@@ -1317,10 +1469,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         {
           role: "assistant",
           content: [{ type: "text", text }],
@@ -1343,7 +1495,7 @@ describe("projectRecentChatDisplayMessages", () => {
   it.each([undefined, ""])(
     "projects repaired stream errors with errorMessage %j as a generic safe failure",
     (errorMessage) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
           stopReason: "error",
           ...(errorMessage === undefined ? {} : { errorMessage }),
@@ -1389,7 +1541,7 @@ describe("projectRecentChatDisplayMessages", () => {
       expected: [{ type: "text", text: "I'm running on ollama-cloud now." }],
     },
   ])("removes an internal stream-error prefix from same-message $name", ({ content, expected }) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content,
@@ -1413,7 +1565,7 @@ describe("projectRecentChatDisplayMessages", () => {
 
   it("keeps intentional mentions of the internal fallback inside a real assistant reply", () => {
     const text = `Diagnostic note: ${STREAM_ERROR_FALLBACK_TEXT}`;
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(text, { stopReason: "error" }),
     ]);
 
@@ -1424,7 +1576,7 @@ describe("projectRecentChatDisplayMessages", () => {
     "keeps literal fallback-prefixed assistant text without error provenance %j",
     (stopReason) => {
       const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         assistantHistoryMessage(text, stopReason ? { stopReason } : {}),
       ]);
 
@@ -1433,7 +1585,7 @@ describe("projectRecentChatDisplayMessages", () => {
   );
 
   it("removes a synthetic error prefix while preserving displayable image content", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [
@@ -1450,7 +1602,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("drops a repaired stream-error placeholder before same-turn assistant content", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("hello", { timestamp: 1 }),
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
         stopReason: "error",
@@ -1467,7 +1619,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a genuine failed turn before a new forwarded inter-session turn", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
         stopReason: "error",
         timestamp: 1,
@@ -1485,7 +1637,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps genuine stream-error failures when a hidden assistant row has text", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, { stopReason: "error" }),
       assistantHistoryMessage("internal-only assistant content", { display: false }),
     ]);
@@ -1498,7 +1650,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a stream-error placeholder when the next user turn starts first", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, { stopReason: "error", timestamp: 1 }),
       userHistoryMessage("retry", { timestamp: 2 }),
       assistantHistoryMessage("fresh answer", { timestamp: 3 }),
@@ -1515,7 +1667,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1545,13 +1697,13 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("projects empty sessions_send inter-session turns before empty user filtering", () => {
-    const result = projectRecentChatDisplayMessages([sessionsSendHistoryMessage("", 1)]);
+    const result = projectChatDisplayMessages([sessionsSendHistoryMessage("", 1)]);
 
     expect(result).toEqual([projectedSessionsSendHistoryMessage("", 1)]);
   });
 
   it("does not let sessions_send inter-session turns clear pending message-tool mirrors", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [
@@ -1616,7 +1768,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps forwarded sessions_send control-token text visible after stripping provenance", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1638,15 +1790,13 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps forwarded sessions_send heartbeat-looking text visible", () => {
-    const result = projectRecentChatDisplayMessages([
-      sessionsSendHistoryMessage("HEARTBEAT_OK", 1),
-    ]);
+    const result = projectChatDisplayMessages([sessionsSendHistoryMessage("HEARTBEAT_OK", 1)]);
 
     expect(result).toEqual([projectedSessionsSendHistoryMessage("HEARTBEAT_OK", 1)]);
   });
 
   it("keeps forwarded sessions_send heartbeat-looking text visible after a heartbeat prompt", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage(HEARTBEAT_PROMPT, { timestamp: 1 }),
       sessionsSendHistoryMessage("HEARTBEAT_OK", 2),
     ]);
@@ -1659,7 +1809,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("marks only the first visible message after each hidden heartbeat input", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage(HEARTBEAT_PROMPT, { __openclaw: { seq: 1 } }),
       assistantHistoryMessage("First run started.", { __openclaw: { seq: 2 } }),
       assistantHistoryMessage("First run finished.", { __openclaw: { seq: 3 } }),
@@ -1696,7 +1846,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("does not project user-authored sessions_send envelope text without provenance", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1733,94 +1883,57 @@ describe("projectRecentChatDisplayMessages", () => {
     const visibleText = "forwarded report";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       sessionsSendHistoryMessage(visibleText, 1),
       ttsSupplementHistoryMessage({ textSha256 }, 2),
     ]);
 
     expect(result).toEqual([
       projectedSessionsSendHistoryMessage(visibleText, 1),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
+      projectedTtsSupplementHistoryMessage({ textSha256 }, 2),
     ]);
   });
 
-  it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectRecentChatDisplayMessages([
-      userHistoryMessage("fix it", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private reasoning" },
-          {
-            type: "text",
-            text: "I will clean that up now.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-progress",
-              phase: "commentary",
-            }),
-          },
-          {
-            type: "toolCall",
-            id: "call-read",
-            name: "read",
-            arguments: { path: "AGENTS.md" },
-          },
-        ],
-        timestamp: 2,
-        __openclaw: { seq: 2 },
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call-read",
-        toolName: "read",
-        content: [{ type: "text", text: "file contents" }],
-        timestamp: 3,
-      },
-    ]);
-
-    expect(result[1]).toEqual({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "private reasoning" },
-        { type: "text", text: "I will clean that up now." },
+  it("projects pure keyed commentary as a durable preamble", () => {
+    const result = projectChatDisplayMessages(
+      [
+        userHistoryMessage("status", { timestamp: 1 }),
         {
-          type: "toolCall",
-          id: "call-read",
-          name: "read",
-          arguments: { path: "AGENTS.md" },
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Working...",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg-commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
         },
       ],
-      timestamp: 2,
-      __openclaw: { seq: 2 },
-    });
-  });
+      { includeCommentaryFallbacks: true },
+    );
 
-  it("keeps pure commentary assistant messages hidden", () => {
-    const result = projectRecentChatDisplayMessages([
+    expect(result).toEqual([
       userHistoryMessage("status", { timestamp: 1 }),
       {
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "Working...",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-commentary",
-              phase: "commentary",
-            }),
-          },
-        ],
+        content: [{ type: "text", text: "Working..." }],
         timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Working...",
+          source: "segment",
+          itemId: "msg-commentary",
+        },
       },
     ]);
-
-    expect(result).toEqual([userHistoryMessage("status", { timestamp: 1 })]);
   });
 
   it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("good morning", { timestamp: 1 }),
       assistantHistoryMessage("Good morning.", {
         provider: "openclaw",
@@ -1846,7 +1959,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: "yo big boy",
@@ -1877,7 +1990,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a channel-final delivery mirror after a filtered user turn", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("Repeated reply", {
         provider: "openai",
         model: "gpt-5.5",
@@ -1902,7 +2015,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       deliveryMirrorHistoryMessage("Repeated reply", "message-1", 1),
       deliveryMirrorHistoryMessage("Repeated reply", "message-2", 2),
     ]);
@@ -1911,7 +2024,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps channel-final mirrors after unmarked assistant replies", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("Repeated reply", {
         provider: "openai",
         model: "gpt-5.5",
@@ -1924,7 +2037,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       sessionsSendHistoryMessage("Forwarded status", 1),
       deliveryMirrorHistoryMessage("Forwarded status", "message-forwarded", 2),
     ]);
@@ -1945,7 +2058,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("First answer.", {
         provider: "openclaw",
         model: "acp-runtime",
@@ -1972,37 +2085,22 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("applies history limits after dropping display-hidden messages", () => {
-    const result = projectRecentChatDisplayMessages(
-      [
-        { role: "user", content: "older visible", timestamp: 1 },
-        { role: "assistant", content: "older answer", timestamp: 2 },
-        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
-        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
-        {
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          content: "hidden runtime context",
-          display: false,
-          timestamp: 5,
-        },
-      ],
-      { maxMessages: 1 },
-    );
-
-    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
-  });
-
   it.each([
     {
       name: "facts-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
-      expectedPath: "/tmp/openclaw/fact.png",
+      message: {
+        __openclaw: { media: [{ path: "/tmp/openclaw/fact.png", contentType: "image/png" }] },
+      },
+      expectedPath: undefined,
     },
     {
       name: "sparse",
-      message: { __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png" }] } },
-      expectedPath: "/tmp/openclaw/sparse.png",
+      message: {
+        __openclaw: {
+          media: [{}, { path: "/tmp/openclaw/sparse.png", contentType: "image/png" }],
+        },
+      },
+      expectedPath: undefined,
       expectedIndex: 1,
     },
     {
@@ -2010,13 +2108,8 @@ describe("projectRecentChatDisplayMessages", () => {
       message: { __openclaw: { media: [{ contentType: "image/png" }] } },
       expectedPath: undefined,
     },
-    {
-      name: "media-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
-      expectedPath: "/tmp/openclaw/media-only.png",
-    },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       { role: "user", content: "", timestamp: 1, ...testCase.message },
       { role: "user", content: "", timestamp: 2 },
     ]);
@@ -2033,7 +2126,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const spokenText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("first", { timestamp: 1 }),
       assistantHistoryMessage(visibleText, { timestamp: 2 }),
       userHistoryMessage("second", { timestamp: 3 }),
@@ -2042,32 +2135,18 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([
       userHistoryMessage("first", { timestamp: 1 }),
-      assistantAudioAttachmentHistoryMessage(visibleText, 2),
+      assistantAudioAttachmentHistoryMessage(visibleText, 2, {}, false),
       userHistoryMessage("second", { timestamp: 3 }),
     ]);
   });
 
-  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
-    const rawVisibleText = "[[reply_to_current]]Visible answer.";
-    const projectedVisibleText = "Visible answer.";
-    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
-
-    const result = projectRecentChatDisplayMessages([
-      assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
-    ]);
-
-    expect(result).toEqual([assistantAudioAttachmentHistoryMessage(projectedVisibleText, 1)]);
-  });
-
   it("merges delayed TTS supplements before display truncation", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
-    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages(
+    const result = projectChatDisplayMessages(
       [
-        assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
+        assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
       ],
       { maxChars: 24 },
@@ -2077,6 +2156,8 @@ describe("projectRecentChatDisplayMessages", () => {
       assistantAudioAttachmentHistoryMessage(
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
+        { __openclaw: { truncated: true, reason: "display-cap" } },
+        false,
       ),
     ]);
   });
@@ -2086,7 +2167,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
     const ttsSupplement = { textSha256 };
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(visibleText, { timestamp: 1 }),
       userHistoryMessage("again", { timestamp: 2 }),
       ttsSupplementHistoryMessage(ttsSupplement, 3, visibleText),
@@ -2095,7 +2176,7 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       assistantHistoryMessage(visibleText, { timestamp: 1 }),
       userHistoryMessage("again", { timestamp: 2 }),
-      ttsSupplementHistoryMessage(ttsSupplement, 3, visibleText),
+      projectedTtsSupplementHistoryMessage(ttsSupplement, 3, visibleText),
     ]);
   });
 });
@@ -2580,8 +2661,8 @@ describe("exec approval handlers", () => {
     });
   }
 
-  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
-    const manager = new ExecApprovalManager();
+  function createExecApprovalFixture(testContext: TestContext, opts?: { config?: OpenClawConfig }) {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const respond = vi.fn();
@@ -2598,16 +2679,24 @@ describe("exec approval handlers", () => {
 
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { id: string; request: Record<string, unknown> } {
+  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     if (!requested) {
       throw new Error("exec approval requested broadcast missing");
     }
-    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    const payload = requested.payload as {
+      approvalKind?: unknown;
+      id?: unknown;
+      request?: Record<string, unknown>;
+    };
+    if (payload.approvalKind !== "exec") {
+      throw new Error("exec approval requested kind missing");
+    }
     if (typeof payload.id !== "string" || payload.id.length === 0) {
       throw new Error("exec approval requested id missing");
     }
     return {
+      approvalKind: payload.approvalKind,
       id: payload.id,
       request: payload.request ?? {},
     };
@@ -2615,7 +2704,7 @@ describe("exec approval handlers", () => {
 
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ id: string; request: Record<string, unknown> }> {
+  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
     await waitForFast(
       () => {
         expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
@@ -2625,11 +2714,14 @@ describe("exec approval handlers", () => {
     return getRequestedExecApprovalPayload(broadcasts);
   }
 
-  async function createAcceptedExecApproval(params: {
-    request: Record<string, unknown>;
-    client?: ExecApprovalRequestArgs["client"];
-  }) {
-    const fixture = createExecApprovalFixture();
+  async function createAcceptedExecApproval(
+    testContext: TestContext,
+    params: {
+      request: Record<string, unknown>;
+      client?: ExecApprovalRequestArgs["client"];
+    },
+  ) {
+    const fixture = createExecApprovalFixture(testContext);
     const requestPromise = requestExecApproval({
       handlers: fixture.handlers,
       respond: fixture.respond,
@@ -2648,13 +2740,14 @@ describe("exec approval handlers", () => {
   }
 
   async function createRequestedExecApproval(
+    testContext: TestContext,
     params: {
       request?: Record<string, unknown>;
       client?: ExecApprovalRequestArgs["client"];
-      fixtureOptions?: Parameters<typeof createExecApprovalFixture>[0];
+      fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1];
     } = {},
   ) {
-    const fixture = createExecApprovalFixture(params.fixtureOptions);
+    const fixture = createExecApprovalFixture(testContext, params.fixtureOptions);
     const requestPromise = requestExecApproval({
       handlers: fixture.handlers,
       respond: fixture.respond,
@@ -2667,10 +2760,11 @@ describe("exec approval handlers", () => {
   }
 
   async function requestExecApprovalForTest(
+    testContext: TestContext,
     request: Record<string, unknown>,
-    fixtureOptions?: Parameters<typeof createExecApprovalFixture>[0],
+    fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1],
   ) {
-    const fixture = createExecApprovalFixture(fixtureOptions);
+    const fixture = createExecApprovalFixture(testContext, fixtureOptions);
     await requestExecApproval({
       handlers: fixture.handlers,
       respond: fixture.respond,
@@ -2681,10 +2775,11 @@ describe("exec approval handlers", () => {
   }
 
   async function expectRejectedExecApprovalRequest(
+    testContext: TestContext,
     params: Record<string, unknown>,
     message: string,
   ) {
-    const { handlers, respond, context } = createExecApprovalFixture();
+    const { handlers, respond, context } = createExecApprovalFixture(testContext);
     await requestExecApproval({ handlers, respond, context, params });
     expect(mockCallArg(respond)).toBe(false);
     expect(mockCallArg(respond, 0, 1)).toBeUndefined();
@@ -2692,10 +2787,11 @@ describe("exec approval handlers", () => {
   }
 
   async function expectUnavailableAllowAlways(
+    testContext: TestContext,
     requestParams: Record<string, unknown>,
     fallbackDecision: "allow-once" | "deny",
   ) {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture(testContext);
     const requestPromise = requestExecApproval({
       handlers,
       respond,
@@ -2725,8 +2821,12 @@ describe("exec approval handlers", () => {
     expect(fallbackRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   }
 
-  async function expectDroppedApprovalCommandSpans(config?: OpenClawConfig) {
+  async function expectDroppedApprovalCommandSpans(
+    testContext: TestContext,
+    config?: OpenClawConfig,
+  ) {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls | python -c 'print(1)'",
@@ -2741,14 +2841,22 @@ describe("exec approval handlers", () => {
     expect(request["commandSpans"]).toBeUndefined();
   }
 
-  function createForwardingExecApprovalFixture(opts?: {
-    iosPushDelivery?: {
-      handleRequested: ReturnType<typeof vi.fn>;
-      handleResolved: ReturnType<typeof vi.fn>;
-      handleExpired: ReturnType<typeof vi.fn>;
-    };
-  }) {
-    const manager = new ExecApprovalManager();
+  function createForwardingExecApprovalFixture(
+    testContext: TestContext,
+    opts?: {
+      webPushDelivery?: {
+        handleRequested: ReturnType<typeof vi.fn>;
+        handleResolved: ReturnType<typeof vi.fn>;
+        handleExpired: ReturnType<typeof vi.fn>;
+      };
+      iosPushDelivery?: {
+        handleRequested: ReturnType<typeof vi.fn>;
+        handleResolved: ReturnType<typeof vi.fn>;
+        handleExpired: ReturnType<typeof vi.fn>;
+      };
+    },
+  ) {
+    const manager = createTestApprovalManager(testContext);
     const forwarder = {
       handleRequested: vi.fn(async () => false),
       handleResolved: vi.fn(async () => {}),
@@ -2763,11 +2871,13 @@ describe("exec approval handlers", () => {
       getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
+      approvalWebPushDelivery: opts?.webPushDelivery,
     };
     return {
       manager,
       handlers,
       forwarder,
+      webPushDelivery: opts?.webPushDelivery,
       iosPushDelivery: opts?.iosPushDelivery,
       respond,
       context,
@@ -2775,6 +2885,16 @@ describe("exec approval handlers", () => {
   }
 
   function createIosPushDelivery(
+    handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+  ) {
+    return {
+      handleRequested,
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+  }
+
+  function createWebPushDelivery(
     handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
   ) {
     return {
@@ -2827,22 +2947,25 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("rejects host=node approval requests without nodeId", async () => {
+  it("rejects host=node approval requests without nodeId", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       { nodeId: undefined },
       "nodeId is required for host=node",
     );
   });
 
-  it("rejects host=node approval requests without systemRunPlan", async () => {
+  it("rejects host=node approval requests without systemRunPlan", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       { systemRunPlan: undefined },
       "systemRunPlan is required for host=node",
     );
   });
 
-  it("rejects whitespace-only approval commands without trimming display text", async () => {
+  it("rejects whitespace-only approval commands without trimming display text", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       {
         command: "   ",
         host: "gateway",
@@ -2853,8 +2976,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("rejects approval requests when the command display would be truncated", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  it("rejects approval requests when the command display would be truncated", async (testContext) => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture(testContext);
     await requestExecApproval({
       handlers,
       respond,
@@ -2878,9 +3001,10 @@ describe("exec approval handlers", () => {
     expect(broadcasts).toEqual([]);
   });
 
-  it("rejects approval registration after the owning run was aborted", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+  it("rejects approval registration after the owning run was aborted", async (testContext) => {
+    const { manager, handlers, broadcasts, respond, context } =
+      createExecApprovalFixture(testContext);
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
     await requestExecApproval({
       handlers,
@@ -2908,8 +3032,9 @@ describe("exec approval handlers", () => {
     expect(broadcasts).toEqual([]);
   });
 
-  it("marks an allowed wait result run-aborted when abort wins before consumption", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
+    const { manager, handlers, broadcasts, respond, context } =
+      createExecApprovalFixture(testContext);
     const requestPromise = requestExecApproval({
       handlers,
       respond,
@@ -2930,7 +3055,8 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+      createChatAbortMarker();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -2948,17 +3074,20 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("returns pending approval details for exec.approval.get", async () => {
-    const { handlers, context, requestPromise, id } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "echo ok",
-        commandArgv: ["echo", "ok"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+  it("returns pending approval details for exec.approval.get", async (testContext) => {
+    const { handlers, context, requestPromise, id } = await createRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          host: "gateway",
+          command: "echo ok",
+          commandArgv: ["echo", "ok"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
       },
-    });
+    );
 
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id, respond: getRespond });
@@ -2983,17 +3112,20 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "echo \uD83D \uDE00 😀",
-        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+  it("escapes unpaired surrogates before broadcasting an exec approval", async (testContext) => {
+    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          host: "gateway",
+          command: "echo \uD83D \uDE00 😀",
+          commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
       },
-    });
+    );
 
     expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
     expect(() => encodeURIComponent(String(request.command))).not.toThrow();
@@ -3002,17 +3134,20 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("attaches shared command analysis to gateway exec approval requests", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "python3 -c 'print(1)'",
-        commandArgv: ["python3", "script.py"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+  it("attaches shared command analysis to gateway exec approval requests", async (testContext) => {
+    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          host: "gateway",
+          command: "python3 -c 'print(1)'",
+          commandArgv: ["python3", "script.py"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
       },
-    });
+    );
     const commandAnalysis = request.commandAnalysis as Record<string, unknown>;
     expect(commandAnalysis.commandCount).toBe(1);
     expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
@@ -3026,8 +3161,8 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("lists pending exec approvals", async () => {
-    const { handlers, context, requestPromise } = await createAcceptedExecApproval({
+  it("lists pending exec approvals", async (testContext) => {
+    const { handlers, context, requestPromise } = await createAcceptedExecApproval(testContext, {
       request: {
         id: "approval-list-1",
         twoPhase: true,
@@ -3043,7 +3178,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(listRespond)).toBe(true);
     const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
     const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
     expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
     expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 
@@ -3055,8 +3190,8 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("lists and resolves only exec approvals owned by the caller", async () => {
-    const manager = new ExecApprovalManager();
+  it("lists and resolves only exec approvals owned by the caller", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const context = {
       broadcast: (_eventValue: string, _payload: unknown) => {},
@@ -3126,7 +3261,7 @@ describe("exec approval handlers", () => {
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
+  it("ignores approval reviewer devices from non-runtime approval request clients", async (testContext) => {
     const requesterClient = createExecApprovalClient({
       connId: "conn-gateway-client",
       clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -3140,7 +3275,7 @@ describe("exec approval handlers", () => {
       scopes: ["operator.approvals"],
     });
 
-    const { manager, handlers, requestPromise } = await createAcceptedExecApproval({
+    const { manager, handlers, requestPromise } = await createAcceptedExecApproval(testContext, {
       client: requesterClient,
       request: {
         id: "approval-reviewer-untrusted",
@@ -3179,7 +3314,7 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async () => {
+  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3191,14 +3326,17 @@ describe("exec approval handlers", () => {
       scopes: ["operator.approvals"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+    );
 
     expect(manager.getSnapshot("approval-reviewer-runtime")?.approvalReviewerDeviceIds).toEqual([
       "device-ios-reviewer",
@@ -3239,7 +3377,7 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
   });
 
-  it("allows admin clients to resolve reviewer-targeted runtime approvals", async () => {
+  it("allows admin clients to resolve reviewer-targeted runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3251,14 +3389,17 @@ describe("exec approval handlers", () => {
       scopes: ["operator.admin"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-admin",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-admin",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+    );
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3272,7 +3413,7 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-reviewer-runtime-admin")?.decision).toBe("allow-once");
   });
 
-  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async () => {
+  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime-requester",
       "device-gateway-runtime-requester",
@@ -3282,14 +3423,17 @@ describe("exec approval handlers", () => {
       "device-gateway-runtime-resolver",
     );
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-runtime",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-runtime",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+    );
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3306,7 +3450,7 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("records matching trusted agent-runtime resolutions with default agent binding", async () => {
+  it("records matching trusted agent-runtime resolutions with default agent binding", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-auto-review-requester",
       "device-auto-review-requester",
@@ -3316,17 +3460,20 @@ describe("exec approval handlers", () => {
       "device-auto-review-resolver",
       { agentId: "main", sessionKey: "agent:main:main" },
     );
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-auto-review",
-        twoPhase: true,
-        systemRunPlan: {
-          ...defaultExecApprovalRequestParams.systemRunPlan,
-          agentId: null,
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-auto-review",
+          twoPhase: true,
+          systemRunPlan: {
+            ...defaultExecApprovalRequestParams.systemRunPlan,
+            agentId: null,
+          },
         },
       },
-    });
+    );
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3343,7 +3490,7 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("rejects auto-review resolution when trusted agent identity mismatches the request", async () => {
+  it("rejects auto-review resolution when trusted agent identity mismatches the request", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-auto-review-mismatch-requester",
       "device-auto-review-mismatch-requester",
@@ -3353,10 +3500,13 @@ describe("exec approval handlers", () => {
       undefined,
       { agentId: "other", sessionKey: "agent:other:main" },
     );
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: { id: "approval-auto-review-mismatch", twoPhase: true },
-    });
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: { id: "approval-auto-review-mismatch", twoPhase: true },
+      },
+    );
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3376,7 +3526,7 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
+  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3388,14 +3538,17 @@ describe("exec approval handlers", () => {
       scopes: ["operator.read"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-no-scope",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-no-scope",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+    );
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3415,10 +3568,13 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("returns not found for stale exec.approval.get ids", async () => {
-    const { handlers, context, requestPromise, id } = await createAcceptedExecApproval({
-      request: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
-    });
+  it("returns not found for stale exec.approval.get ids", async (testContext) => {
+    const { handlers, context, requestPromise, id } = await createAcceptedExecApproval(
+      testContext,
+      {
+        request: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
+      },
+    );
 
     await resolveExecApprovalForTest({
       handlers,
@@ -3437,9 +3593,9 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("broadcasts request + resolve", async () => {
+  it("broadcasts request + resolve", async (testContext) => {
     const { handlers, broadcasts, respond, context, requestPromise, id } =
-      await createRequestedExecApproval({ request: { twoPhase: true } });
+      await createRequestedExecApproval(testContext, { request: { twoPhase: true } });
 
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
@@ -3460,8 +3616,9 @@ describe("exec approval handlers", () => {
     expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
   });
 
-  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async (testContext) => {
+    const { manager, handlers, broadcasts, respond, context } =
+      createExecApprovalFixture(testContext);
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -3514,24 +3671,28 @@ describe("exec approval handlers", () => {
     expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
   });
 
-  it("rejects allow-always when the request ask mode is always", async () => {
-    await expectUnavailableAllowAlways({ twoPhase: true, ask: "always" }, "deny");
+  it("rejects allow-always when the request ask mode is always", async (testContext) => {
+    await expectUnavailableAllowAlways(testContext, { twoPhase: true, ask: "always" }, "deny");
   });
 
-  it("rejects allow-always when the request marks it unavailable", async () => {
+  it("rejects allow-always when the request marks it unavailable", async (testContext) => {
     await expectUnavailableAllowAlways(
+      testContext,
       { twoPhase: true, unavailableDecisions: ["allow-always"] },
       "allow-once",
     );
   });
 
-  it("keeps baseline decisions available when allow-always is unavailable", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        unavailableDecisions: ["allow-always"],
+  it("keeps baseline decisions available when allow-always is unavailable", async (testContext) => {
+    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          unavailableDecisions: ["allow-always"],
+        },
       },
-    });
+    );
 
     expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
 
@@ -3546,8 +3707,8 @@ describe("exec approval handlers", () => {
     expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
-    const manager = new ExecApprovalManager();
+  it("does not reuse a resolved exact id as a prefix for another pending approval", (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
     void manager.register(resolvedRecord, 2_000);
     expect(manager.resolve("abc", "allow-once")).toBe(true);
@@ -3555,12 +3716,12 @@ describe("exec approval handlers", () => {
     const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
     void manager.register(pendingRecord, 2_000);
 
-    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
   });
 
-  it("stores versioned system.run binding and sorted env keys on approval request", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("stores versioned system.run binding and sorted env keys on approval request", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       commandArgv: ["echo", "ok"],
       env: {
@@ -3578,8 +3739,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("includes Windows-compatible env keys in approval env bindings", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("includes Windows-compatible env keys in approval env bindings", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       commandArgv: ["cmd.exe", "/c", "echo", "ok"],
       command: "cmd.exe /c echo ok",
@@ -3600,8 +3761,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("stores sorted env keys for gateway approvals without node-only binding", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       host: "gateway",
       nodeId: undefined,
@@ -3617,8 +3778,8 @@ describe("exec approval handlers", () => {
     expect(request["systemRunBinding"]).toBeNull();
   });
 
-  it("prefers systemRunPlan canonical command/cwd when present", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("prefers systemRunPlan canonical command/cwd when present", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "echo stale",
       commandArgv: ["echo", "stale"],
@@ -3662,8 +3823,8 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("derives a command preview from the fallback command for older node plans", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("derives a command preview from the fallback command for older node plans", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "jq --version",
       commandArgv: ["./env", "sh", "-c", "jq --version"],
@@ -3682,8 +3843,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "bash safe\u200B.sh",
       commandArgv: ["bash", "safe\u200B.sh"],
@@ -3701,8 +3862,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("preserves approval warning line breaks while sanitizing hidden characters", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
     });
@@ -3712,8 +3873,9 @@ describe("exec approval handlers", () => {
     expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
-  it("preserves command analysis and normalizes command spans", async () => {
+  it("preserves command analysis and normalizes command spans", async (testContext) => {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls | python -c 'print(1)'",
@@ -3734,18 +3896,19 @@ describe("exec approval handlers", () => {
     ]);
   });
 
-  it("drops command spans by default", async () => {
-    await expectDroppedApprovalCommandSpans();
+  it("drops command spans by default", async (testContext) => {
+    await expectDroppedApprovalCommandSpans(testContext);
   });
 
-  it("drops command spans when command highlighting is disabled", async () => {
-    await expectDroppedApprovalCommandSpans({
+  it("drops command spans when command highlighting is disabled", async (testContext) => {
+    await expectDroppedApprovalCommandSpans(testContext, {
       tools: { exec: { commandHighlighting: false } },
     });
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans when command display sanitization changes offsets", async (testContext) => {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls\u0000 | python -c 'print(1)'",
@@ -3760,8 +3923,8 @@ describe("exec approval handlers", () => {
     expect(request["commandSpans"]).toBeUndefined();
   });
 
-  it("accepts resolve during broadcast", async () => {
-    const manager = new ExecApprovalManager();
+  it("accepts resolve during broadcast", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const resolveRespond = vi.fn();
@@ -3797,10 +3960,13 @@ describe("exec approval handlers", () => {
     expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
-  it("accepts explicit approval ids", async () => {
-    const { handlers, respond, context, requestPromise, id } = await createRequestedExecApproval({
-      request: { id: "approval-123", host: "gateway" },
-    });
+  it("accepts explicit approval ids", async (testContext) => {
+    const { handlers, respond, context, requestPromise, id } = await createRequestedExecApproval(
+      testContext,
+      {
+        request: { id: "approval-123", host: "gateway" },
+      },
+    );
     expect(id).toBe("approval-123");
 
     const resolveRespond = await resolveExecApprovalForTest({
@@ -3819,7 +3985,7 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it.each([
+  it.for<[label: string, id: string]>([
     ["URL dot segment", ".."],
     ["ANSI escape", "approval-\u001b[31mred"],
     ["ASCII control", "approval-\u0000hidden"],
@@ -3830,31 +3996,36 @@ describe("exec approval handlers", () => {
     ["whitespace-only value", " "],
     ["embedded line feed", "approval-\nunsafe"],
     ["overlong value", "a".repeat(129)],
-  ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  ])(
+    "rejects an unsafe explicit approval id containing an %s",
+    async ([_label, id], testContext) => {
+      const { manager, handlers, broadcasts, respond, context } =
+        createExecApprovalFixture(testContext);
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { id, host: "gateway" },
-    });
+      await requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { id, host: "gateway" },
+      });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expect(mockCallArg(respond, 0, 2)).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: {
-        code: "EXEC_APPROVAL_ID_INVALID",
-        reason: "INVALID_APPROVAL_ID",
-      },
-    });
-    expect(manager.getSnapshot(id)).toBeNull();
-    expect(broadcasts).toEqual([]);
-  });
+      expect(mockCallArg(respond)).toBe(false);
+      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+      expect(mockCallArg(respond, 0, 2)).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: {
+          code: "EXEC_APPROVAL_ID_INVALID",
+          reason: "INVALID_APPROVAL_ID",
+        },
+      });
+      expect(manager.getSnapshot(id)).toBeNull();
+      expect(broadcasts).toEqual([]);
+    },
+  );
 
-  it("accepts an explicit approval id with a leading dash", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  it("accepts an explicit approval id with a leading dash", async (testContext) => {
+    const { manager, handlers, broadcasts, respond, context } =
+      createExecApprovalFixture(testContext);
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -3870,8 +4041,8 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(respond)).toBe(true);
   });
 
-  it("rejects explicit approval ids with the reserved plugin prefix", async () => {
-    const { handlers, respond, context } = createExecApprovalFixture();
+  it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {
+    const { handlers, respond, context } = createExecApprovalFixture(testContext);
 
     await requestExecApproval({
       handlers,
@@ -3888,8 +4059,8 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("accepts unique short approval id prefixes", async () => {
-    const manager = new ExecApprovalManager();
+  it("accepts unique short approval id prefixes", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
@@ -3910,8 +4081,8 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
   });
 
-  it("rejects ambiguous short approval id prefixes without leaking candidate ids", async () => {
-    const manager = new ExecApprovalManager();
+  it("rejects ambiguous short approval id prefixes without leaking candidate ids", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
@@ -3941,8 +4112,8 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("returns deterministic unknown/expired message for missing approval ids", async () => {
-    const { handlers, respond, context } = createExecApprovalFixture();
+  it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
+    const { handlers, respond, context } = createExecApprovalFixture(testContext);
 
     await resolveExecApproval({
       handlers,
@@ -3961,8 +4132,8 @@ describe("exec approval handlers", () => {
     expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
   });
 
-  it("resolves only the targeted approval id when multiple requests are pending", async () => {
-    const manager = new ExecApprovalManager();
+  it("resolves only the targeted approval id when multiple requests are pending", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const context = {
       getRuntimeConfig: () => ({}),
@@ -3986,10 +4157,11 @@ describe("exec approval handlers", () => {
     expect(manager.expire("approval-two", "test-expire")).toBe(true);
   });
 
-  it("forwards turn-source metadata to exec approval forwarding", async () => {
+  it("forwards turn-source metadata to exec approval forwarding", async (testContext) => {
     vi.useFakeTimers();
     try {
-      const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+      const { handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture(testContext);
 
       const requestPromise = requestExecApproval({
         handlers,
@@ -4020,8 +4192,9 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
-    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async (testContext) => {
+    const { handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture(testContext);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const requestContext = {
       ...context,
@@ -4084,9 +4257,9 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
+  it("fast-fails approvals when no approver clients and no forwarding targets", async (testContext) => {
     const { manager, handlers, forwarder, respond, context } =
-      createForwardingExecApprovalFixture();
+      createForwardingExecApprovalFixture(testContext);
     const expireSpy = vi.spyOn(manager, "expire");
 
     await requestExecApproval({
@@ -4106,11 +4279,14 @@ describe("exec approval handlers", () => {
     expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
-  it("keeps approvals pending when iOS push delivery accepted the request", async () => {
+  it("keeps approvals pending when iOS push delivery accepted the request", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery();
-    const { manager, handlers, forwarder, respond, context } = createForwardingExecApprovalFixture({
-      iosPushDelivery,
-    });
+    const { manager, handlers, forwarder, respond, context } = createForwardingExecApprovalFixture(
+      testContext,
+      {
+        iosPushDelivery,
+      },
+    );
     const expireSpy = vi.spyOn(manager, "expire");
 
     const requestPromise = requestExecApproval({
@@ -4142,7 +4318,7 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery(
       vi.fn(
         async (
@@ -4157,9 +4333,12 @@ describe("exec approval handlers", () => {
           }) ?? true,
       ),
     );
-    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
-      iosPushDelivery,
-    });
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture(
+      testContext,
+      {
+        iosPushDelivery,
+      },
+    );
     const expireSpy = vi.spyOn(manager, "expire");
 
     await requestExecApproval({
@@ -4191,9 +4370,11 @@ describe("exec approval handlers", () => {
     expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
-  it("sends iOS cleanup delivery on resolve", async () => {
+  it("sends iOS cleanup delivery on resolve", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery();
-    const { handlers, respond, context } = createForwardingExecApprovalFixture({ iosPushDelivery });
+    const { handlers, respond, context } = createForwardingExecApprovalFixture(testContext, {
+      iosPushDelivery,
+    });
     const requestPromise = requestExecApproval({
       handlers,
       respond,
@@ -4219,11 +4400,41 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("sends iOS cleanup delivery on expiration", async () => {
+  it("sends Web Push terminal replacement on resolve", async (testContext) => {
+    const webPushDelivery = createWebPushDelivery();
+    const { handlers, respond, context } = createForwardingExecApprovalFixture(testContext, {
+      webPushDelivery,
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-web-push-cleanup", host: "gateway" },
+    });
+    await waitForFast(() => {
+      expect(webPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    });
+
+    await resolveExecApprovalForTest({
+      handlers,
+      id: "approval-web-push-cleanup",
+      context,
+    });
+    await requestPromise;
+
+    await waitForFast(() => {
+      expectRecordFields(mockCallArg(webPushDelivery.handleResolved), {
+        id: "approval-web-push-cleanup",
+        decision: "allow-once",
+      });
+    });
+  });
+
+  it("sends iOS cleanup delivery on expiration", async (testContext) => {
     vi.useFakeTimers();
     try {
       const iosPushDelivery = createIosPushDelivery();
-      const { handlers, respond, context } = createForwardingExecApprovalFixture({
+      const { handlers, respond, context } = createForwardingExecApprovalFixture(testContext, {
         iosPushDelivery,
       });
 
@@ -4252,11 +4463,11 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
+  it("keeps approvals pending when the originating chat can handle /approve directly", async (testContext) => {
     vi.useFakeTimers();
     try {
       const { manager, handlers, forwarder, respond, context } =
-        createForwardingExecApprovalFixture();
+        createForwardingExecApprovalFixture(testContext);
       const expireSpy = vi.spyOn(manager, "expire");
 
       const requestPromise = requestExecApproval({
@@ -4292,9 +4503,9 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
+  it("keeps approvals pending when no approver clients but forwarding accepted the request", async (testContext) => {
     const { manager, handlers, forwarder, respond, context } =
-      createForwardingExecApprovalFixture();
+      createForwardingExecApprovalFixture(testContext);
     const expireSpy = vi.spyOn(manager, "expire");
     forwarder.handleRequested.mockResolvedValueOnce(true);
 
@@ -4369,7 +4580,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4392,12 +4603,13 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let restoreContextEngineRegistryState: () => void;
   const contextEngineTestOwner = "plugin:health-test";
 
   function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
@@ -4496,15 +4708,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
+    restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     registerLegacyContextEngine();
-    clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    clearContextEnginesForOwner(contextEngineTestOwner);
-    resetContextEngineRuntimeQuarantineForTests();
+    restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {
@@ -4533,6 +4744,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a cached health snapshot dated after the current clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({ ts: Date.now() + HEALTH_REFRESH_INTERVAL_MS });
+    const fresh = createHealthSnapshot({ ts: Date.now() });
+
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("restarts request-driven health refreshes when the clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -4567,6 +4805,53 @@ describe("gateway healthHandlers.health cache freshness", () => {
       code: "UNAVAILABLE",
       message: "Error: collector failed",
     });
+  });
+
+  it("rejects cached health when runtime inspection and refresh both fail", async () => {
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      refreshHealthSnapshot,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: collector failed",
+      }),
+    );
+  });
+
+  it("refreshes cached health when runtime inspection fails", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -4726,7 +5011,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     }
   });
 
-  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+  it("retains cached ingress pressure while merging live dead letters", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-health-cached-dq-",
@@ -4734,29 +5019,61 @@ describe("gateway healthHandlers.health cache freshness", () => {
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
-      // The cached snapshot was built before this delivery dead-lettered.
-      const cached = createHealthSnapshot({});
+      const cachedPressure = [
+        {
+          channelId: "slack",
+          accountId: "cached",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 500,
+        },
+      ];
+      const cached = createHealthSnapshot({
+        deliveryQueues: { failed: [], ingressPressure: cachedPressure },
+      });
       upsertDeliveryQueueEntry({
         queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
+      const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
+        await import("../../channels/message/ingress-retry-policy.js");
+      const ingressQueue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await ingressQueue.enqueue("dead-inbound", { text: "recover me" });
+      const deadClaim = await ingressQueue.claim("dead-inbound", { ownerId: "worker" });
+      if (!deadClaim) {
+        throw new Error("Expected inbound dead-letter claim");
+      }
+      await ingressQueue.fail(deadClaim, { reason: "handler-error", failedAt: 50_000 });
+      await ingressQueue.enqueue("retry-head", { text: "head" }, { laneKey: "lane" });
+      await ingressQueue.enqueue("retry-follower", { text: "follower" }, { laneKey: "lane" });
+      for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await ingressQueue.claim("retry-head", { ownerId: "worker" });
+        if (!claim) {
+          throw new Error("Expected retry head claim");
+        }
+        await ingressQueue.release(claim, { lastError: "retryable failure" });
+      }
 
       const { respond } = await requestHealthSnapshot({ cached });
 
-      const payload = mockCallArg(respond, 0, 1) as
-        | {
-            deliveryQueues?: {
-              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
-            };
-          }
-        | undefined;
+      const payload = mockCallArg(respond, 0, 1) as HealthSummary | undefined;
       expect(payload?.deliveryQueues?.failed).toHaveLength(1);
       expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
         queueName: "outbound",
         count: 1,
       });
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(payload?.deliveryQueues?.ingressFailed).toEqual([
+        { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
+      ]);
+      expect(payload?.deliveryQueues?.ingressPressure).toEqual(cachedPressure);
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
       await openClawState.cleanup();
@@ -4792,43 +5109,102 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
-  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
-    const cached = createSingleChannelHealthSnapshot({
-      channelId: "discord",
-      label: "Discord",
-      running: true,
-      connected: true,
-    });
-    const fresh = {
-      ...cached,
-      ts: cached.ts + 1,
-      channels: {
-        discord: {
-          ...cached.channels.discord,
-          accounts: {
-            ...cached.channels.discord.accounts,
-            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
-          },
-        },
-      },
-    };
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
-      cached,
-      fresh,
-      runtimeSnapshot: {
-        channels: {},
-        channelAccounts: {
-          discord: { work: { accountId: "work", running: true, connected: true } },
-        },
-      },
-    });
+  it.each([
+    {
+      change: "adds a running account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+    },
+    {
+      change: "adds an uninitialized account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+      uninitializedAccountId: "work",
+    },
+    {
+      change: "removes a runtime account",
+      previousAccountIds: ["default", "work"],
+      nextAccountIds: ["default"],
+    },
+    {
+      change: "removes an entire channel plugin",
+      previousAccountIds: ["default"],
+      nextAccountIds: [],
+    },
+    {
+      change: "re-adds an uninitialized channel plugin",
+      previousAccountIds: [],
+      nextAccountIds: ["default"],
+      uninitializedAccountId: "default",
+    },
+  ])(
+    "refreshes cached health after hot reload $change",
+    async ({ previousAccountIds, nextAccountIds, uninitializedAccountId }) => {
+      const current = createSingleChannelHealthSnapshot({
+        channelId: "discord",
+        label: "Discord",
+        running: true,
+        connected: true,
+      });
+      const account = (accountId: string) =>
+        channelHealthAccount({ accountId, running: true, connected: true });
+      const summary = (accountIds: string[]) =>
+        accountIds.length === 0
+          ? createHealthSnapshot({})
+          : {
+              ...current,
+              channels: {
+                discord: {
+                  ...current.channels.discord,
+                  accounts: Object.fromEntries(accountIds.map((id) => [id, account(id)])),
+                },
+              },
+            };
+      const runtime = (accountIds: string[], uninitialized?: string) => ({
+        channels:
+          previousAccountIds.length === 0 && accountIds.length > 0
+            ? { discord: { accountId: accountIds[0] } }
+            : {},
+        channelAccounts:
+          accountIds.length === 0
+            ? {}
+            : {
+                discord: Object.fromEntries(
+                  accountIds.map((id) => [
+                    id,
+                    id === uninitialized ? { accountId: id } : account(id),
+                  ]),
+                ),
+              },
+      });
+      const cached = summary(previousAccountIds);
+      const fresh = summary(nextAccountIds);
+      const refreshHealthSnapshot = vi
+        .fn()
+        .mockResolvedValueOnce(cached)
+        .mockResolvedValueOnce(fresh);
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
-  });
+      await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(previousAccountIds),
+      });
+      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+
+      const { respond } = await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
+      });
+
+      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
+        probe: false,
+        includeSensitive: false,
+      });
+      expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    },
+  );
 });
 
 describe("logs.tail", () => {

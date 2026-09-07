@@ -1,13 +1,21 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
 export type AgentRunTerminalReplySnapshot =
-  | { disposition: "visible"; text: string }
+  | { disposition: "visible"; text: string; modelRouteChange?: string }
   | { disposition: "silent" }
-  | { disposition: "empty" };
+  | { disposition: "empty"; code?: "message-tool-not-called" };
+
+function isMessageToolNotCalledTerminalReply(
+  reply: AgentRunTerminalReplySnapshot | undefined,
+): boolean {
+  return reply?.disposition === "empty" && reply.code === "message-tool-not-called";
+}
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
 export function sanitizeAgentRunTerminalReplyText(text: string): string {
@@ -26,7 +34,7 @@ export function buildAgentRunTerminalReplySnapshot(params: {
 }): AgentRunTerminalReplySnapshot {
   if (
     params.terminalReplyKind === "silent-empty" ||
-    isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
+    isSilentReplyText(params.rawText ?? params.visibleText, SILENT_REPLY_TOKEN)
   ) {
     return { disposition: "silent" };
   }
@@ -38,22 +46,31 @@ export function buildAgentRunTerminalReplySnapshot(params: {
 export function normalizeAgentRunTerminalReplySnapshot(
   value: unknown,
 ): AgentRunTerminalReplySnapshot | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const disposition = (value as { disposition?: unknown }).disposition;
-  if (disposition === "silent" || disposition === "empty") {
+  const disposition = value.disposition;
+  if (disposition === "silent") {
+    return { disposition };
+  }
+  if (disposition === "empty") {
+    if (value.code === "message-tool-not-called") {
+      return { disposition, code: "message-tool-not-called" };
+    }
     return { disposition };
   }
   if (disposition !== "visible") {
     return undefined;
   }
-  const rawText = (value as { text?: unknown }).text;
+  const rawText = value.text;
   if (typeof rawText !== "string") {
     return undefined;
   }
   const text = sanitizeAgentRunTerminalReplyText(rawText);
-  return text ? { disposition: "visible", text } : { disposition: "empty" };
+  const modelRouteChange = normalizeAgentRunRouteChange(value.modelRouteChange);
+  return text
+    ? { disposition: "visible", text, ...(modelRouteChange ? { modelRouteChange } : {}) }
+    : { disposition: "empty" };
 }
 
 /** Reply evidence merges independently from sticky timeout/cancellation precedence. */
@@ -64,11 +81,17 @@ export function mergeAgentRunTerminalReplySnapshot(
   if (!incoming) {
     return existing;
   }
-  if (!existing || existing.disposition === "empty") {
+  if (!existing) {
     return incoming;
   }
-  if (incoming.disposition === "empty") {
+  if (isMessageToolNotCalledTerminalReply(existing)) {
     return existing;
   }
-  return incoming;
+  if (isMessageToolNotCalledTerminalReply(incoming)) {
+    return incoming;
+  }
+  if (existing.disposition === "empty") {
+    return incoming;
+  }
+  return incoming.disposition === "empty" ? existing : incoming;
 }

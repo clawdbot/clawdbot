@@ -1,6 +1,6 @@
-export function normalizeTranscriptTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+
+export const normalizeTranscriptTimestamp = asFiniteNumber;
 
 export function isWithinTranscriptWindow(
   timestamp: number | undefined,

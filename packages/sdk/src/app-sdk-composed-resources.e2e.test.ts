@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,9 +39,12 @@ import {
   testState,
   writeSessionStore,
 } from "../../../src/gateway/test-helpers.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "../../../src/gateway/worker-environments/service-contract.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
-import { rawDataToString } from "../../../src/infra/ws.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 
@@ -53,8 +57,8 @@ vi.mock("../../../src/infra/device-pairing.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/infra/node-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/node-pairing.js")>();
+vi.mock("../../../src/infra/device-pairing-node.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/infra/device-pairing-node.js")>();
   return {
     ...actual,
     listNodePairing: vi.fn(async () => ({ pending: [], paired: [] })),
@@ -101,17 +105,21 @@ async function closeFakeServer(server: WebSocketServer): Promise<void> {
   });
 }
 
-function workerRecord(state: "requested" | "ready" | "destroyed") {
+function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnvironmentServiceRecord {
   return {
     environmentId: "worker-sdk-e2e",
     providerId: "testbox",
+    profileId: "development",
     leaseId: "lease-sdk-e2e",
+    sharedHost: null,
     state,
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
     attachedSessionIds: ["session-sdk-e2e"],
-    tunnelStatus: "stopped" as const,
+    desktopAvailable: false,
+    desktopApps: [],
+    tunnelStatus: "stopped",
   };
 }
 
@@ -127,6 +135,10 @@ async function createFakeGateway(): Promise<FakeGateway> {
   const workerEnvironmentService = {
     list: () => [worker],
     get: (environmentId: string) => (environmentId === worker.environmentId ? worker : undefined),
+    inventoryVersion: () => 0,
+    supportsExecutionMode: (profileId, mode) =>
+      profileId === "development" && mode === "worker-turn",
+    listMachineOptions: async () => undefined,
     create: async (_profileId: string, _idempotencyKey: string) => {
       const requested = workerRecord("requested");
       worker = workerRecord("ready");
@@ -140,11 +152,17 @@ async function createFakeGateway(): Promise<FakeGateway> {
       worker = workerRecord("destroyed");
       return worker;
     },
+    observeDesktop: async () => {
+      throw new Error("desktop observation is outside the SDK environment RPC proof");
+    },
+    launchDesktopApp: async () => {
+      throw new Error("desktop launch is outside the SDK environment RPC proof");
+    },
     startTunnel: async () => {
       throw new Error("tunnel start is outside the SDK environment RPC proof");
     },
     stopTunnel: async () => {},
-  };
+  } satisfies WorkerEnvironmentServiceContract;
   const environmentContext = {
     logGateway: { warn: vi.fn() },
     nodeRegistry: { listConnectedForPairingStates: () => [] },
@@ -547,7 +565,14 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       },
     });
     const environments = await oc.environments.list();
-    expect(environments.profiles).toEqual([{ id: "development", providerId: "testbox" }]);
+    expect(environments.profiles).toEqual([
+      {
+        id: "development",
+        providerId: "testbox",
+        executionMode: "worker-turn",
+        executionModes: ["worker-turn"],
+      },
+    ]);
     expect(environments.environments).toContainEqual({
       id: "worker-sdk-e2e",
       type: "worker",
@@ -756,6 +781,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       type: "local",
       label: "Gateway local",
       status: "available",
+      platform: process.platform,
+      sessionHost: true,
+      trust: "persistent",
       capabilities: ["agent.run", "sessions", "tools", "workspace"],
     });
     const gatewayEnvironment = await oc.environments.status("gateway");

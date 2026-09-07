@@ -446,18 +446,6 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     pickTailnetHost: pickTailnetIPv4,
     pickLanHost: () => advertisedLanHost,
   });
-  if (bindResult && "url" in bindResult && bindResult.source === "gateway.bind=lan") {
-    const { resolveTailscaleServeGatewayUrlsWithRunner, runPluginCommandWithTimeout } =
-      await loadDevicePairApiModule();
-    const serveUrls = await resolveTailscaleServeGatewayUrlsWithRunner(port, (argv, opts) =>
-      runPluginCommandWithTimeout({ argv, timeoutMs: opts.timeoutMs }),
-    );
-    const urls = [...new Set([bindResult.url, ...serveUrls])].slice(0, 8);
-    return {
-      ...bindResult,
-      ...(urls.length > 1 ? { urls } : {}),
-    };
-  }
   if (bindResult) {
     return bindResult;
   }
@@ -731,6 +719,10 @@ export default definePluginEntry({
       name: "pair",
       description: "Generate setup codes and approve device pairing requests.",
       acceptsArgs: true,
+      clientPresentation: {
+        when: "no-arguments",
+        action: { kind: "device-pairing" },
+      },
       requiredScopes: ["operator.pairing"],
       handler: async (ctx) => {
         const args = normalizeOptionalString(ctx.args) ?? "";

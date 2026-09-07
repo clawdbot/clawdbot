@@ -1,14 +1,16 @@
 // Control UI module owns transient operator question state.
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   Question,
   QuestionAnswers,
   QuestionRecord,
-  QuestionResolveResult,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   publishQuestionClientResolution,
   registerQuestionClientOwner,
@@ -17,6 +19,12 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
+import {
+  clearSecretQuestionDrafts,
+  normalizeQuestionSecretStoreFields,
+  parseQuestionSubmissionResult,
+  prepareQuestionSecretStoreSubmission,
+} from "./question-prompt-secret-store.ts";
 
 type QuestionDraft = {
   selected: Set<string>;
@@ -42,6 +50,7 @@ export type QuestionPrompt = {
   submitting: boolean;
   error: string | null;
   drafts: Map<string, QuestionDraft>;
+  secretStoreAllowedHostsDraft?: string;
   revision: number;
 };
 
@@ -59,16 +68,8 @@ type QuestionAnswerValues = Record<string, string[]>;
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
-function readNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
 function readTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
 const MAX_HEADER_GRAPHEMES = 12;
@@ -124,6 +125,10 @@ function parseQuestion(value: unknown): Question | null {
       return null;
     }
   }
+  const secretStoreFields = normalizeQuestionSecretStoreFields(value);
+  if (!secretStoreFields) {
+    return null;
+  }
   return {
     questionId,
     header: clampedHeader,
@@ -131,6 +136,7 @@ function parseQuestion(value: unknown): Question | null {
     options,
     ...(value.multiSelect === true ? { multiSelect: true } : {}),
     ...(typeof value.isOther === "boolean" ? { isOther: value.isOther } : {}),
+    ...secretStoreFields,
   };
 }
 
@@ -250,17 +256,6 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
-function parseQuestionResolveResult(payload: unknown): QuestionResolveResult | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  if (payload.status === "cancelled") {
-    return { status: "cancelled" };
-  }
-  const answers = parseQuestionAnswers(payload.answers);
-  return payload.status === "answered" && answers ? { status: "answered", answers } : null;
-}
-
 export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
   const state: QuestionPromptState = {
     client: null,
@@ -291,6 +286,7 @@ function scheduleTick(state: QuestionPromptState): void {
     for (const prompt of state.prompts.values()) {
       if (prompt.status === "pending" && prompt.expiresAtMs <= now) {
         prompt.status = "expired";
+        clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
         prompt.locallyExpired = true;
         prompt.submitting = false;
         prompt.error = null;
@@ -311,6 +307,10 @@ function promptFromRecord(
   previous?: QuestionPrompt,
 ): QuestionPrompt {
   const revision = ++state.revision;
+  const drafts = previous?.drafts ?? new Map();
+  if (record.status !== "pending") {
+    clearSecretQuestionDrafts(record.questions, drafts);
+  }
   return {
     id: record.id,
     questions: record.questions,
@@ -334,7 +334,10 @@ function promptFromRecord(
         ? (previous?.submitting ?? false)
         : false,
     error: record.status === "pending" ? (previous?.error ?? null) : null,
-    drafts: previous?.drafts ?? new Map(),
+    drafts,
+    ...(previous?.secretStoreAllowedHostsDraft !== undefined
+      ? { secretStoreAllowedHostsDraft: previous.secretStoreAllowedHostsDraft }
+      : {}),
     revision,
   };
 }
@@ -345,6 +348,7 @@ function applyQuestionResolution(
   resolved: QuestionResolvedEvent,
 ): void {
   prompt.status = resolved.status;
+  clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = resolved.status === "answered" ? resolved.answers : undefined;
   const matchesSubmittedAnswer =
     resolved.status === "answered" &&
@@ -438,6 +442,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.
   prompt.status = "unavailable";
+  clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = undefined;
   prompt.answeredElsewhere = false;
   prompt.localResolutionConfirmed = false;
@@ -661,12 +666,6 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   state.client = null;
 }
 
-function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
-  return {
-    answers: Object.fromEntries(Object.entries(values).map(([id, answers]) => [id, [...answers]])),
-  };
-}
-
 async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
@@ -685,8 +684,13 @@ async function resolveQuestionPrompt(
     return;
   }
   prompt.submitting = true;
-  const submittedAnswers = "answers" in resolution ? buildAnswers(resolution.answers) : undefined;
-  prompt.submittedAnswers = submittedAnswers;
+  const submission = prepareQuestionSecretStoreSubmission(
+    id,
+    prompt.questions,
+    resolution,
+    prompt.secretStoreAllowedHostsDraft,
+  );
+  prompt.submittedAnswers = submission.submittedAnswers;
   prompt.error = null;
   prompt.revision = ++state.revision;
   state.onChange();
@@ -694,11 +698,11 @@ async function resolveQuestionPrompt(
     const result = await requestQuestionGateway(
       client,
       "question.resolve",
-      submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
+      submission.requestParams,
       prompt.expiresAtMs,
     );
-    const resolved = parseQuestionResolveResult(result);
-    if (!resolved || resolved.status !== (submittedAnswers ? "answered" : "cancelled")) {
+    const resolved = parseQuestionSubmissionResult(result, parseQuestionAnswers);
+    if (!resolved || resolved.status !== (submission.submittedAnswers ? "answered" : "cancelled")) {
       throw new Error("invalid question.resolve response");
     }
     if (state.client === client && state.clientGeneration === clientGeneration) {
@@ -720,7 +724,7 @@ async function resolveQuestionPrompt(
     }
     current.submitting = false;
     if (current.status === "pending") {
-      current.error = error instanceof Error ? error.message : String(error);
+      current.error = formatUiError(error);
       current.revision = ++state.revision;
       state.onChange();
       return;

@@ -93,17 +93,33 @@ describe("scripts bounded response reader", () => {
     });
   });
 
-  it("streams responses with non-decimal content-length values", async () => {
+  it.each([
+    { label: "identical", second: "17", combined: "17, 17", readsBody: false },
+    { label: "equivalent", second: "017", combined: "17, 017", readsBody: false },
+    { label: "conflicting", second: "12", combined: "17, 12", readsBody: true },
+    { label: "malformed", second: "1e3", combined: "17, 1e3", readsBody: true },
+    { label: "empty", second: "", combined: "17, ", readsBody: true },
+  ])("handles $label repeated content-length values", async ({ second, combined, readsBody }) => {
+    const headers = new Headers();
+    headers.append("content-length", "17");
+    headers.append("content-length", second);
+    expect(headers.get("content-length")).toBe(combined);
+
     let readStarted = false;
     let canceled = false;
     const response = {
-      headers: new Headers({ "content-length": "1e3" }),
+      headers,
       body: {
+        async cancel() {
+          canceled = true;
+        },
         getReader() {
           return {
             async read() {
               readStarted = true;
-              return { done: false, value: new Uint8Array(17) };
+              return readsBody
+                ? { done: false, value: new Uint8Array(17) }
+                : new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
             },
             async cancel() {
               canceled = true;
@@ -114,10 +130,10 @@ describe("scripts bounded response reader", () => {
       },
     } as unknown as Response;
 
-    await expect(readBoundedResponseText(response, "probe", 16)).rejects.toMatchObject({
-      message: "probe response body exceeded 16 bytes",
-    });
-    expect(readStarted).toBe(true);
+    await expect(readBoundedResponseText(response, "probe", 16)).rejects.toThrow(
+      "probe response body exceeded 16 bytes",
+    );
+    expect(readStarted).toBe(readsBody);
     expect(canceled).toBe(true);
   });
 

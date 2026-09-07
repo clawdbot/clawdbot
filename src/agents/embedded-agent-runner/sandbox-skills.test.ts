@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
@@ -39,7 +39,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   it("keeps snapshots for non-sandboxed runs", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -69,7 +69,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           skillsWorkspaceDir: "/state/sandbox-skills",
           workspaceAccess: "rw",
         },
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -81,11 +81,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
-  it("falls back to the effective workspace for older sandbox contexts", () => {
+  it("uses the skills anchor for sandbox contexts without materialized skills", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
         sandbox: { enabled: true },
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -120,7 +120,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ]);
   });
 
-  it("rebuilds sandbox prompts from materialized skill paths", async () => {
+  it.each([
+    { label: "rebuilds sandbox prompts from materialized skill paths", skillsSnapshot: snapshot },
+    {
+      label: "keeps audited skills out of an explicitly empty sandbox snapshot",
+      skillsSnapshot: { prompt: "", skills: [] },
+    },
+  ])("$label", async ({ skillsSnapshot }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
       const effectiveWorkspace = path.join(root, "workspace");
@@ -163,8 +169,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           skillsWorkspaceDir: materializedWorkspace,
           workspaceAccess: "rw",
         },
-        effectiveWorkspace,
-        skillsSnapshot: snapshot,
+        skillsAnchorWorkspace: effectiveWorkspace,
+        skillsSnapshot,
       });
       const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
         workspaceDir: skillsWorkspaceDir,
@@ -177,14 +183,19 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         skillsWorkspaceDir,
         skillsPromptWorkspaceDir,
       });
-      const prompt = resolveSkillsPromptForRun({
+      const prompt = resolveSkillsPrompt({
         skillsSnapshot: skillsSnapshotForRun,
         entries: promptSkillEntries,
         workspaceDir: skillsPromptWorkspaceDir,
         eligibility: skillsEligibilityForRun,
       });
 
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      if (skillsSnapshot === snapshot) {
+        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      } else {
+        expect(prompt).toBe("");
+        expect(skillEntries).toEqual([]);
+      }
       expect(prompt.replaceAll("\\", "/")).not.toContain(
         materializedWorkspace.replaceAll("\\", "/"),
       );
@@ -228,7 +239,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         eligibility: skillsEligibility,
         workspaceOnly: true,
       });
-      const prompt = resolveSkillsPromptForRun({
+      const prompt = resolveSkillsPrompt({
         entries: shouldLoadSkillEntries ? skillEntries : undefined,
         workspaceDir: root,
         eligibility: skillsEligibility,

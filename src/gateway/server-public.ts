@@ -1,7 +1,8 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
-import type { EffectiveOperatorDeviceIdentity } from "../infra/device-pairing.js";
+import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
+import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
@@ -11,11 +12,38 @@ export type GatewayCloseOptions = {
   drainTimeoutMs?: number | null;
 };
 
+/** A capability for one host iteration; native completion belongs to the host. */
+export type GatewayHostLifecycle = {
+  /** Present only when this host owns process exit; the identity never crosses RPC. */
+  externalRestart?: GatewaySuspendHandoffOwner;
+  request(
+    action: "start" | "stop" | "restart",
+    assertCaller: () => void,
+  ): Promise<Result<{ outcome: "already-running" | "scheduled" }, string>>;
+};
+
+/** Runs resource-owning startup work under the current host's stop-and-cleanup join. */
+export type GatewayStartupOperation = <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+
 export type GatewayServer = {
+  /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
+  getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
+  /** Fences WebSocket ingress and joins received work and connection cleanup before disposal. */
   close: (opts?: GatewayCloseOptions) => Promise<void>;
+  /**
+   * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
+   * Closing never forces settlement. Direct callers may safely ignore this pre-handled promise.
+   */
+  startupSettled: Promise<void>;
 };
 
 export type GatewayServerOptions = {
+  /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
+  hostLifecycle?: GatewayHostLifecycle;
+  /** Internal startup ownership; direct callers own their awaited startup work. */
+  startupOperation?: GatewayStartupOperation;
+  /** Exact lifecycle generation projected to connected clients. */
+  bootId?: string;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
@@ -53,10 +81,14 @@ export type GatewayServerOptions = {
   /** Test-only: override the channel-setup wizard runner (wizard.start flow "channels"). */
   channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
+  /** Internal update rehearsal: load plugins without starting autonomous work. */
+  updateCanary?: boolean;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  /** Internal Node process-origin timestamp used only for initial startup tracing. */
+  processStartedAt?: number;
   /** Optional startup timestamp used for concise readiness logging. */
   startupStartedAt?: number;
   /**
@@ -67,16 +99,3 @@ export type GatewayServerOptions = {
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
 };
-
-export function shouldRetainControlUiDeviceAuthMigrationSession(params: {
-  sessionDevice: { id: string; publicKey: string } | null | undefined;
-  approvedDevice: EffectiveOperatorDeviceIdentity;
-}): boolean {
-  const approvedDeviceId = params.approvedDevice.deviceId.trim();
-  const approvedPublicKey = normalizeDevicePublicKeyBase64Url(params.approvedDevice.publicKey);
-  return Boolean(
-    params.sessionDevice?.id.trim() === approvedDeviceId &&
-    approvedPublicKey &&
-    normalizeDevicePublicKeyBase64Url(params.sessionDevice.publicKey) === approvedPublicKey,
-  );
-}

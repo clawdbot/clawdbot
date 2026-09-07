@@ -7,7 +7,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadBundleFixture,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -37,8 +37,8 @@ afterAll(() => {
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
-    const stateDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
     mkdirSafe(path.join(bundleRoot, "skills"));
@@ -159,7 +159,7 @@ describe("bundle plugins", () => {
   });
 
   it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const registry = loadBundleFixture({
       pluginId: "claude-mcp-url",
       env: {

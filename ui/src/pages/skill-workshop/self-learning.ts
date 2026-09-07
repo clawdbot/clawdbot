@@ -3,10 +3,8 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import {
-  resolveEditableSnapshotConfig,
-  type RuntimeConfigCapability,
-} from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
@@ -83,10 +81,7 @@ export function renderSelfLearningToggle(
     return nothing;
   }
   return html`
-    <label
-      class="sw-revision-session-toggle"
-      title=${t("skillWorkshop.header.selfLearningTooltip")}
-    >
+    <label class="sw-self-learning-toggle" title=${t("skillWorkshop.header.selfLearningTooltip")}>
       <input
         type="checkbox"
         aria-label=${t("skillWorkshop.header.selfLearningAria")}
@@ -94,10 +89,8 @@ export function renderSelfLearningToggle(
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @change=${(event: Event) => onToggle((event.currentTarget as HTMLInputElement).checked)}
       />
-      <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-      <span class="sw-revision-session-toggle__label"
-        >${t("skillWorkshop.header.selfLearning")}</span
-      >
+      <span class="sw-self-learning-toggle__track" aria-hidden="true"></span>
+      <span class="sw-self-learning-toggle__label">${t("skillWorkshop.header.selfLearning")}</span>
     </label>
   `;
 }
@@ -119,9 +112,11 @@ export function renderSelfLearningPitch(
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
-        ${selfLearning.busy
-          ? t("skillWorkshop.selfLearning.enabling")
-          : t("skillWorkshop.selfLearning.enable")}
+        ${
+          selfLearning.busy
+            ? t("skillWorkshop.selfLearning.enabling")
+            : t("skillWorkshop.selfLearning.enable")
+        }
       </button>
     </div>
   `;

@@ -1,21 +1,16 @@
 // Telegram tests cover helpers plugin behavior.
 import type { MessageEntity } from "grammy/types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildTelegramInboundOriginTarget,
-  buildTelegramRoutingTarget,
-  buildTelegramThreadParams,
-  buildTypingThreadParams,
   describeReplyTarget,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resolveTelegramDirectPeerId,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
-  resetTelegramForumFlagCacheForTest,
   shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
@@ -24,6 +19,13 @@ type TelegramMessage = Parameters<typeof normalizeForwardedContext>[0];
 
 function asMalformedTelegramMessage(message: unknown): TelegramMessage {
   return message as TelegramMessage;
+}
+
+let forumChatId = -1_009_000_000_000;
+
+function nextForumChatId(): number {
+  forumChatId += 1;
+  return forumChatId;
 }
 
 describe("resolveTelegramForumThreadId", () => {
@@ -46,19 +48,16 @@ describe("resolveTelegramForumThreadId", () => {
 });
 
 describe("resolveTelegramForumFlag", () => {
-  beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: false }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         isForum: true,
@@ -69,25 +68,27 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("falls back to getChat for supergroups when is_forum is omitted", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100789,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100789);
+    expect(getChat).toHaveBeenCalledWith(chatId);
   });
 
   it("uses supergroup topic-message metadata before getChat lookup", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => {
       throw new Error("lookup should not run");
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100987,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         isTopicMessage: true,
@@ -97,7 +98,7 @@ describe("resolveTelegramForumFlag", () => {
     expect(getChat).not.toHaveBeenCalled();
   });
 
-  it("does not treat private DM topic metadata as forum metadata", async () => {
+  it("does not treat bot-private topic metadata as forum metadata", async () => {
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
@@ -112,9 +113,10 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100456,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -125,9 +127,10 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100654,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -139,10 +142,11 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("drops cached forum metadata when the current clock is not a valid date timestamp", async () => {
+    const chatId = nextForumChatId();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100655,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -154,10 +158,11 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("does not cache forum metadata when the expiry timestamp would exceed the valid date range", async () => {
+    const chatId = nextForumChatId();
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100656,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -168,34 +173,20 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("returns false when forum lookup is unavailable", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => {
       throw new Error("lookup failed");
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100999,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(false);
-  });
-});
-
-describe("buildTelegramThreadParams", () => {
-  it.each([
-    { input: { id: 1, scope: "forum" as const }, expected: undefined },
-    { input: { id: 99, scope: "forum" as const }, expected: { message_thread_id: 99 } },
-    { input: { id: 1, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    { input: { id: 2, scope: "dm" as const }, expected: { message_thread_id: 2 } },
-    { input: { id: 0, scope: "dm" as const }, expected: undefined },
-    { input: { id: -1, scope: "dm" as const }, expected: undefined },
-    { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    // id=0 should be included for forum scope (not falsy).
-    { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 42, scope: "none" as const }, expected: undefined },
-  ])("builds thread params", ({ input, expected }) => {
-    expect(buildTelegramThreadParams(input)).toEqual(expected);
+    expect(getChat).toHaveBeenCalledOnce();
+    expect(getChat).toHaveBeenCalledWith(chatId);
   });
 });
 
@@ -234,100 +225,6 @@ describe("resolveTelegramBotHasTopicsEnabled", () => {
     expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: false })).toBe(false);
     expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: "true" })).toBe(false);
     expect(resolveTelegramBotHasTopicsEnabled(null)).toBe(false);
-  });
-});
-
-describe("buildTelegramRoutingTarget", () => {
-  it.each([
-    {
-      name: "keeps General forum topic chat-scoped",
-      chatId: -100123,
-      thread: { id: 1, scope: "forum" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "falls back to bare chat when thread is missing",
-      chatId: -100123,
-      thread: null,
-      expected: "telegram:-100123",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTelegramInboundOriginTarget", () => {
-  it.each([
-    {
-      name: "keeps DM topic thread ids out of the origin target",
-      chatId: 42,
-      thread: { id: 77, scope: "dm" as const },
-      expected: "telegram:42",
-    },
-    {
-      name: "keeps regular groups chat-scoped",
-      chatId: -100123,
-      thread: { scope: "none" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "keeps General forum topic chat-scoped",
-      chatId: -100123,
-      thread: { id: 1, scope: "forum" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTypingThreadParams", () => {
-  it.each([
-    { input: undefined, expected: undefined },
-    { input: 1, expected: { message_thread_id: 1 } },
-  ])("builds typing params", ({ input, expected }) => {
-    expect(buildTypingThreadParams(input)).toEqual(expected);
-  });
-});
-
-describe("resolveTelegramDirectPeerId", () => {
-  it("prefers sender id when available", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
-      "123456789",
-    );
-  });
-
-  it("falls back to chat id when sender id is missing", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
-      "777777777",
-    );
-  });
-});
-
-describe("thread id normalization", () => {
-  it.each([
-    {
-      build: () => buildTelegramThreadParams({ id: 42.9, scope: "forum" }),
-      expected: { message_thread_id: 42 },
-    },
-    {
-      build: () => buildTypingThreadParams(42.9),
-      expected: { message_thread_id: 42 },
-    },
-  ])("normalizes thread ids to integers", ({ build, expected }) => {
-    expect(build()).toEqual(expected);
   });
 });
 
@@ -599,13 +496,19 @@ describe("describeReplyTarget", () => {
               type: "photo",
               caption: { text: "Chart", credit: "OpenClaw" },
             },
+            {
+              type: "buttons",
+              buttons: [{ text: "Copy result", copy_text: { text: "result" } }],
+            },
           ],
         },
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as never);
 
-    expect(result?.body).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.body).toBe(
+      "Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw\nCopy result",
+    );
     expect(result?.quoteSourceText).toBeUndefined();
   });
 
@@ -820,7 +723,7 @@ describe("isBinaryContent", () => {
 describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
   it("keeps rich-message-only updates out of canonical text", () => {
     const result = getTelegramTextParts({
-      rich_message: { blocks: [{ type: "paragraph" }] },
+      rich_message: { blocks: [{ type: "paragraph", text: "" }] },
     });
 
     expect(result).toEqual({ text: "", entities: [] });
@@ -829,7 +732,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
   it("keeps normal text when Telegram also supplies a rich message", () => {
     const result = getTelegramTextParts({
       text: "normal text",
-      rich_message: { blocks: [{ type: "paragraph" }] },
+      rich_message: { blocks: [{ type: "paragraph", text: "" }] },
     });
 
     expect(result).toEqual({ text: "normal text", entities: [] });
@@ -1060,4 +963,83 @@ describe("renderTelegramTextEntities", () => {
 
     expect(renderTelegramTextEntities(text, entities)).toBe("Hi 😀 **bold**");
   });
+
+  it.each([
+    {
+      description: "an unmatched closing parenthesis",
+      label: "docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "nested and trailing parentheses",
+      label: "docs",
+      url: "https://example.com/quarter(a)b)",
+      expectedHref: "https://example.com/quarter(a)b)",
+    },
+    {
+      description: "a literal destination backslash",
+      label: "docs",
+      url: String.raw`https://example.com/a\b)`,
+      expectedHref: "https://example.com/a%5Cb)",
+    },
+    {
+      description: "angle brackets and whitespace",
+      label: "docs",
+      url: "https://example.com/<report final>",
+      expectedHref: "https://example.com/%3Creport%20final%3E",
+    },
+    {
+      description: "a closing bracket in the linked label",
+      label: "docs]more",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a literal backslash before a bracket in the linked label",
+      label: String.raw`docs\]more`,
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "an opening bracket and UTF-16 emoji in the linked label",
+      label: "😀 [docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a newline in a provider link destination",
+      label: "docs",
+      url: "https://example.com/report\nfinal",
+      expectedHref: "https://example.com/report%0Afinal",
+    },
+    {
+      description: "an already percent-encoded parenthesis",
+      label: "docs",
+      url: "https://example.com/report%29final",
+      expectedHref: "https://example.com/report%29final",
+    },
+  ])(
+    "preserves $description through the actual Markdown parser",
+    ({ label, url, expectedHref }) => {
+      const text = `Read ${label} now`;
+      const offset = "Read ".length;
+      const entities = [
+        { type: "bold", offset, length: label.length },
+        { type: "text_link", offset, length: label.length, url },
+      ] satisfies MessageEntity[];
+
+      const parsed = markdownToIR(renderTelegramTextEntities(text, entities));
+
+      expect(parsed.text).toBe(text);
+      expect(parsed.links).toEqual([
+        { start: offset, end: offset + label.length, href: expectedHref },
+      ]);
+      expect(parsed.styles).toContainEqual({
+        start: offset,
+        end: offset + label.length,
+        style: "bold",
+      });
+    },
+  );
 });

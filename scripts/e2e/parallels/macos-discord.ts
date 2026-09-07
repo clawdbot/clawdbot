@@ -13,18 +13,22 @@ interface MacosDiscordConfig {
   token: string;
 }
 
+type MacosDiscordSmokeInput = {
+  config: MacosDiscordConfig;
+  guest: MacosGuest;
+  guestNode: string;
+  guestOpenClaw: string;
+  guestOpenClawEntry: string;
+  runDir: string;
+  vmName: string;
+};
+
 export class MacosDiscordSmoke {
-  constructor(
-    private input: {
-      config: MacosDiscordConfig;
-      guest: MacosGuest;
-      guestNode: string;
-      guestOpenClaw: string;
-      guestOpenClawEntry: string;
-      runDir: string;
-      vmName: string;
-    },
-  ) {}
+  private input: MacosDiscordSmokeInput;
+
+  constructor(input: MacosDiscordSmokeInput) {
+    this.input = input;
+  }
 
   configure(): void {
     const guilds = JSON.stringify({

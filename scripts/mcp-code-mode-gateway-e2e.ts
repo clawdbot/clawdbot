@@ -56,10 +56,10 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       timeoutPromise,
     ]);
     const text = await readBoundedResponseText(response, url, 1024 * 1024, {
-      createTooLargeError(message) {
+      createTooLargeError(message: string) {
         return Object.assign(new Error(message), { code: "ETOOBIG" });
       },
-      formatTooLargeMessage(targetUrl, byteLimit) {
+      formatTooLargeMessage(targetUrl: string, byteLimit: number) {
         return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
       },
       timeoutPromise,
@@ -85,8 +85,8 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       apiFileList: "API.list",
       apiFileRead: "API.read",
       mcpNamespace: "MCP.fixture",
-      mcpTool: "fixture__lookup_note",
-      toolSearchPollution: 'tools.search("lookup note"',
+      mcpTool: "MCP.fixture.lookupNote",
+      toolSearchPollution: 'catalog.search("lookup note"',
     },
   });
 }

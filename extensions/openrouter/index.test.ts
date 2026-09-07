@@ -582,6 +582,31 @@ describe("openrouter provider hooks", () => {
     expect(contribution?.dynamicSuffix).not.toContain("deepseek/deepseek-v4-pro");
   });
 
+  it("reads per-agent Fusion config from the canonical agent roster", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      agentId: "reviewer",
+      config: {
+        agents: {
+          entries: {
+            reviewer: {
+              params: {
+                extraBody: {
+                  plugins: [{ id: "fusion", analysis_models: ["deepseek/deepseek-v4-pro"] }],
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
+  });
+
   it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const contribution = provider.resolveSystemPromptContribution?.({

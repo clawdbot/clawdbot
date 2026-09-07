@@ -1,28 +1,16 @@
 // Extension import boundary checker tests cover bounded source reads.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createExtensionImportBoundaryChecker } from "../../scripts/lib/extension-import-boundary-checker.mjs";
-import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
+import { createExtensionImportBoundaryChecker } from "../../scripts/lib/extension-import-boundary-checker.mts";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-boundary-"));
-  tempDirs.push(root);
-  return root;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("extension import boundary checker", () => {
   it("rejects oversized TypeScript source files before scanning imports", async () => {
-    const root = makeTempRoot();
+    const root = tempDirs.make("openclaw-extension-boundary-");
     const sourcePath = path.join(root, "large.ts");
     writeFileSync(sourcePath, "x".repeat(33), "utf8");
     const checker = createExtensionImportBoundaryChecker({
@@ -39,7 +27,7 @@ describe("extension import boundary checker", () => {
   });
 
   it("skips declared generated bundles without admitting oversized handwritten JavaScript", async () => {
-    const root = makeTempRoot();
+    const root = tempDirs.make("openclaw-extension-boundary-");
     const pluginRoot = path.join(root, "extensions", "generated-plugin");
     const assetRoot = path.join(pluginRoot, "assets");
     const generatedPath = path.join(assetRoot, "generated.js");
@@ -108,9 +96,27 @@ describe("extension import boundary checker", () => {
       kind: "commonjs-require",
     },
     {
+      name: "import after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; import ' + JSON.stringify(specifier),
+      kind: "import",
+    },
+    {
+      name: "CommonJS require after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; require(' + JSON.stringify(specifier) + ")",
+      kind: "commonjs-require",
+    },
+    {
       name: "import.meta URL",
       createSource: (specifier: string) =>
         "new URL(" + JSON.stringify(specifier) + ", import.meta.url)",
+      kind: "import-meta-url",
+    },
+    {
+      name: "import.meta URL with an escaped meta property",
+      createSource: (specifier: string) =>
+        "new URL(" + JSON.stringify(specifier) + ", import.m\\u0065ta.url)",
       kind: "import-meta-url",
     },
     {
@@ -144,7 +150,7 @@ describe("extension import boundary checker", () => {
       kind: "import",
     },
   ])("rejects $name crossing the real plugin boundary", async ({ createSource, kind }) => {
-    const root = makeTempRoot();
+    const root = tempDirs.make("openclaw-extension-boundary-");
     const sourcePath = path.join(root, "guarded.ts");
     const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
     const specifier = path.relative(root, targetPath).split(path.sep).join("/");

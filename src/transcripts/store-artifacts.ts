@@ -6,6 +6,8 @@ import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
+export const TRANSCRIPT_PATH_SEGMENT_MAX_BYTES = 255;
+
 export const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
   "metadata.json",
   "summary.json",
@@ -14,22 +16,22 @@ export const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
 ]);
 
 export function safeTranscriptPathSegment(value: string): string {
-  const segment = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (segment === ".") {
-    return "%2E";
-  }
-  if (segment === "..") {
-    return "%2E%2E";
-  }
+  let segment = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!segment) {
     return "session";
   }
   if (segment.endsWith(".") || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment)) {
-    return Buffer.from(segment, "utf8")
+    segment = Buffer.from(segment, "utf8")
       .toString("hex")
       .match(/.{2}/gu)!
       .map((byte) => `%${byte.toUpperCase()}`)
       .join("");
+  }
+  // Portable encoding is ASCII and can expand the slug. Bound the final bytes,
+  // hashing the complete raw ID to distinguish IDs with discarded suffixes.
+  if (segment.length > TRANSCRIPT_PATH_SEGMENT_MAX_BYTES) {
+    const suffix = `-${sha256Hex(value)}`;
+    return `${segment.slice(0, TRANSCRIPT_PATH_SEGMENT_MAX_BYTES - suffix.length)}${suffix}`;
   }
   return segment;
 }
@@ -47,9 +49,16 @@ export function transcriptSessionSelector(session: TranscriptSessionDescriptor):
   return `${dateSegment(session.startedAt)}/${safeTranscriptPathSegment(session.sessionId)}`;
 }
 
-export function legacyTranscriptSessionSelector(session: TranscriptSessionDescriptor): string {
+export function legacyTranscriptSessionSelector(
+  session: TranscriptSessionDescriptor,
+): string | undefined {
   const date = dateSegment(session.startedAt);
   const segment = legacyTranscriptPathSegment(session.sessionId);
+  // An oversized component could never hold legacy files; probing it would
+  // reject otherwise valid captures with ENAMETOOLONG before persistence.
+  if (segment.length > TRANSCRIPT_PATH_SEGMENT_MAX_BYTES) {
+    return undefined;
+  }
   // The shipped sanitizer allowed dot components: `.` collapsed to the date
   // directory and `..` collapsed to the transcript root.
   if (segment === ".") {

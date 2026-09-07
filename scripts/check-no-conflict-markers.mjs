@@ -2,65 +2,10 @@
 
 // Rejects unresolved merge conflict markers in tracked files.
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CONFLICT_MARKER_GREP_PATTERN = "^(<<<<<<< |\\|\\|\\|\\|\\|\\|\\| |=======$|>>>>>>> )";
-
-function isBinaryBuffer(buffer) {
-  return buffer.includes(0);
-}
-
-/**
- * Returns one-based line numbers containing merge conflict markers.
- */
-export function findConflictMarkerLines(content) {
-  const lines = content.split(/\r?\n/u);
-  const matches = [];
-  for (const [index, line] of lines.entries()) {
-    if (
-      line.startsWith("<<<<<<< ") ||
-      line.startsWith("||||||| ") ||
-      line === "=======" ||
-      line.startsWith(">>>>>>> ")
-    ) {
-      matches.push(index + 1);
-    }
-  }
-  return matches;
-}
-
-/**
- * Scans a list of files for merge conflict markers, skipping binary content.
- * This is kept for direct, small-scale use (tests); the tracked-files path
- * uses git grep directly to avoid reading large files into memory.
- */
-export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync) {
-  const violations = [];
-  for (const filePath of filePaths) {
-    let content;
-    try {
-      content = readFile(filePath);
-    } catch {
-      continue;
-    }
-    if (!Buffer.isBuffer(content)) {
-      content = Buffer.from(String(content));
-    }
-    if (isBinaryBuffer(content)) {
-      continue;
-    }
-    const lines = findConflictMarkerLines(content.toString("utf8"));
-    if (lines.length > 0) {
-      violations.push({
-        filePath,
-        lines,
-      });
-    }
-  }
-  return violations;
-}
 
 /**
  * Parses output from `git grep -n -z -o -I -E` into violation records.
@@ -119,8 +64,8 @@ function parseGitGrepConflictMarkerOutput(stdout) {
 /**
  * Uses git grep to find exact conflict-marker matches in tracked files.
  */
-export function findConflictMarkersInTrackedFiles(cwd = process.cwd(), run = spawnSync) {
-  const result = run(
+export function findConflictMarkersInTrackedFiles(cwd = process.cwd()) {
+  const result = spawnSync(
     "git",
     ["grep", "--no-color", "-n", "-z", "-o", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
     {

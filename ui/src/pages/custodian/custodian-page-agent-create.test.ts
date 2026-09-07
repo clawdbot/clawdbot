@@ -7,6 +7,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
@@ -96,7 +97,7 @@ async function mountPage(context: ApplicationContext): Promise<TestCustodianPage
 
 describe("custodian new-agent flow", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {
@@ -117,7 +118,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("does not start new-agent chat with read-only operator access", async () => {
+  it("does not misreport limited access as an outdated Gateway", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -125,10 +126,11 @@ describe("custodian new-agent flow", () => {
       auth: { role: "operator", scopes: ["operator.read"] },
     };
 
-    await mountPage(context);
+    const page = await mountPage(context);
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {
@@ -151,5 +153,24 @@ describe("custodian new-agent flow", () => {
       pathname: "/chat/researcher",
       search: "?draft=Wake%20up%2C%20my%20friend!",
     });
+  });
+
+  it("hands model-account setup to the existing human Profile controls", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Open Settings → Profile → Connected accounts to connect your account.",
+      action: "none",
+      handoff: { kind: "model-accounts" },
+    });
+    const { context, refreshList, setAgent, setSessionKey } = createContext(request);
+    const client = context.gateway.snapshot.client;
+    await mountPage(context);
+
+    await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("profile"));
+    expect(context.gateway.snapshot.client).toBe(client);
+    expect(refreshList).not.toHaveBeenCalled();
+    expect(setAgent).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.chat"]);
   });
 });

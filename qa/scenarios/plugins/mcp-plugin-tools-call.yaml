@@ -22,6 +22,7 @@ scenario:
     - src/mcp/plugin-tools-handlers.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
     summary: Registers a fixture plugin, starts the real plugin-tools stdio server, and calls its tool with a real MCP client.
     args:

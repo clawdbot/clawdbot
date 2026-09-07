@@ -14,9 +14,12 @@ import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
-import { applyQaMergePatch, collectQaSuiteGatewayConfigPatch } from "../../suite-planning.js";
+import {
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
+} from "../../suite-planning.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
-import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import {
@@ -58,7 +61,6 @@ const testing = {
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
   resolveWhatsAppQaMessageTargets,
-  resolveWhatsAppQaScenarioIds,
   runWhatsAppApprovalScenario,
   runWhatsAppStructuredInboundChecks,
   unpackWhatsAppAuthArchive,
@@ -303,7 +305,13 @@ const WHATSAPP_GROUP_CAPABILITY_SCENARIO_IDS = [
 
 function findMockWhatsAppScenario(id: WhatsAppScenarioIdFilter) {
   const scenario = getWhatsAppScenario(id);
-  const mockScenarioIds = new Set(resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" }));
+  const mockScenarioIds = new Set(
+    resolveLiveTransportQaScenarioIds({
+      channelId: "whatsapp",
+      providerMode: "mock-openai",
+      supportsModuleFlows: true,
+    }),
+  );
   if (!mockScenarioIds.has(id)) {
     throw new Error(`missing WhatsApp mock-openai scenario ${id}`);
   }
@@ -1035,7 +1043,11 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("derives live-frontier selection from taxonomy and provider eligibility", () => {
-    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" });
+    const scenarioIds = resolveLiveTransportQaScenarioIds({
+      channelId: "whatsapp",
+      providerMode: "live-frontier",
+      supportsModuleFlows: true,
+    });
 
     expect(scenarioIds).toContain("whatsapp-canary");
     expect(scenarioIds).toContain("whatsapp-mention-gating");
@@ -1043,7 +1055,11 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("includes mock-only scenarios when the provider lane supports them", () => {
-    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" });
+    const scenarioIds = resolveLiveTransportQaScenarioIds({
+      channelId: "whatsapp",
+      providerMode: "mock-openai",
+      supportsModuleFlows: true,
+    });
 
     expect(scenarioIds).toContain("whatsapp-audio-preflight");
     expect(scenarioIds).toContain("whatsapp-native-new-command");
@@ -1185,10 +1201,10 @@ describe("WhatsApp QA live runtime", () => {
         const scenario = readQaScenarioById(policyScenario.id);
         const flow = scenario.execution.kind === "flow" ? scenario.execution.flow : undefined;
         expect(JSON.stringify(flow), policyScenario.id).not.toContain('"patchConfig"');
-        const startupPatch = collectQaSuiteGatewayConfigPatch([scenario], accountId);
-        const patchedConfig = applyQaMergePatch(
+        const startupPatches = collectQaSuiteGatewayConfigPatches([scenario], accountId);
+        const patchedConfig = applyQaSuiteGatewayConfigPatches(
           initialConfig,
-          startupPatch ?? {},
+          startupPatches,
         ) as WhatsAppQaConfigBase;
         const effective = resolveWhatsAppAccount({ cfg: patchedConfig, accountId });
         expect(

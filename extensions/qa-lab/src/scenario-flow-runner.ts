@@ -1,26 +1,12 @@
 // Qa Lab plugin module implements scenario flow runner behavior.
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
-
-type QaSuiteStep = {
-  name: string;
-  run: () => Promise<string | void>;
-};
-
-type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    details?: string;
-  }>;
-  details?: string;
-  modelSwitchEvidence?: Record<string, unknown>;
-};
+import type { QaSuiteScenarioResult, QaSuiteStep, QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowApi = Record<string, unknown> & {
+  signal?: AbortSignal;
   state: QaTransportState;
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
@@ -95,6 +81,50 @@ function formatFlowDetails(details: unknown) {
     return String(details);
   }
   return JSON.stringify(details, null, 2);
+}
+
+function resolveFlowRttMeasurement(value: unknown): QaEvidenceRttMeasurement | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const { finalMatchedReplyRttMs, requestStartedAt, responseObservedAt, source } = value;
+  if (
+    typeof finalMatchedReplyRttMs !== "number" ||
+    !Number.isFinite(finalMatchedReplyRttMs) ||
+    finalMatchedReplyRttMs <= 0 ||
+    typeof requestStartedAt !== "string" ||
+    !requestStartedAt.trim() ||
+    typeof responseObservedAt !== "string" ||
+    !responseObservedAt.trim() ||
+    typeof source !== "string" ||
+    !source.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    finalMatchedReplyRttMs,
+    requestStartedAt: requestStartedAt.trim(),
+    responseObservedAt: responseObservedAt.trim(),
+    source: source.trim(),
+  };
+}
+
+function resolveFlowResultRtt(result: unknown) {
+  if (!isPlainObject(result)) {
+    return undefined;
+  }
+  const timing = isPlainObject(result.timing) ? result.timing : undefined;
+  const measurement = resolveFlowRttMeasurement(result.rttMeasurement);
+  const rawMeasurement = isPlainObject(result.rttMeasurement) ? result.rttMeasurement : undefined;
+  const fallbackRttMs = timing?.rttMs ?? rawMeasurement?.finalMatchedReplyRttMs ?? result.rttMs;
+  const rttMs = measurement?.finalMatchedReplyRttMs ?? fallbackRttMs;
+  if (typeof rttMs !== "number" || !Number.isFinite(rttMs) || rttMs <= 0) {
+    return undefined;
+  }
+  return {
+    timing: { rttMs },
+    ...(measurement ? { rttMeasurement: measurement } : {}),
+  } satisfies Pick<QaSuiteStepOutcome, "timing" | "rttMeasurement">;
 }
 
 function getPathWithParent(
@@ -197,7 +227,34 @@ function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   return parent ? value.bind(parent) : value;
 }
 
-async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) {
+type QaFlowActionOptions = { allowAfterAbort?: boolean };
+
+function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
+  if (!options.allowAfterAbort) {
+    api.signal?.throwIfAborted();
+  }
+}
+
+async function runFlowAction(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions = {},
+) {
+  throwIfFlowAborted(api, options);
+  try {
+    await runFlowActionBody(action, api, vars, options);
+  } finally {
+    throwIfFlowAborted(api, options);
+  }
+}
+
+async function runFlowActionBody(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions,
+) {
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
@@ -206,6 +263,8 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const args = Array.isArray(action.args)
       ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
       : [];
+    // Value resolution may cross the deadline, so fence every callable at invocation time.
+    throwIfFlowAborted(api, options);
     const result = await callable(...args);
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
@@ -221,7 +280,9 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
   ] as const) {
     if (name in action) {
       const callable = resolveCallable(`transport.${name}`, api, vars);
-      const result = await callable(await resolveValue(action[name], api, vars));
+      const input = await resolveValue(action[name], api, vars);
+      throwIfFlowAborted(api, options);
+      const result = await callable(input);
       if (typeof action.saveAs === "string" && action.saveAs.trim()) {
         vars[action.saveAs.trim()] = result;
       }
@@ -230,6 +291,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
     await reset();
     return;
   }
@@ -287,7 +349,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const passed = Boolean(await evalExpr(ifAction.expr, api, vars));
     const branch = passed ? ifAction.then : (ifAction.else ?? []);
     for (const nested of branch) {
-      await runFlowAction(nested, api, vars);
+      await runFlowAction(nested, api, vars, options);
     }
     return;
   }
@@ -308,7 +370,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
         vars[forEachAction.index] = index;
       }
       for (const nested of forEachAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     }
     return;
@@ -322,7 +384,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     };
     try {
       for (const nested of tryAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     } catch (error) {
       if (!tryAction.catch && !tryAction.finally) {
@@ -333,7 +395,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
       }
       if (tryAction.catch) {
         for (const nested of tryAction.catch) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, options);
         }
       } else {
         throw error;
@@ -341,7 +403,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     } finally {
       if (tryAction.finally) {
         for (const nested of tryAction.finally) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, { allowAfterAbort: true });
         }
       }
     }
@@ -363,11 +425,27 @@ export async function runScenarioFlow(params: {
       for (const action of step.actions) {
         await runFlowAction(action, params.api, vars);
       }
-      if (!step.detailsExpr) {
+      if (!step.detailsExpr && !step.resultExpr) {
         return undefined;
       }
-      const details = await evalExpr(step.detailsExpr, params.api, vars);
-      return formatFlowDetails(details);
+      throwIfFlowAborted(params.api);
+      try {
+        const details = step.detailsExpr
+          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+          : undefined;
+        const rtt = step.resultExpr
+          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+          : undefined;
+        if (!rtt) {
+          return details === undefined ? undefined : { details };
+        }
+        return {
+          ...(details === undefined ? {} : { details }),
+          ...rtt,
+        } satisfies QaSuiteStepOutcome;
+      } finally {
+        throwIfFlowAborted(params.api);
+      }
     },
   }));
   const result = await params.api.runScenario(params.scenarioTitle, steps);

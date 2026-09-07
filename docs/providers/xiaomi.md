@@ -80,6 +80,9 @@ Onboarding validates the key shape and warns when a `tp-...` key is entered into
 
 ## Token Plan catalog
 
+Token Plan setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 Choose the Token Plan auth choice that matches the regional base URL shown in Xiaomi's subscription UI:
 
 | Auth choice             | Base URL                                   |
@@ -170,7 +173,7 @@ mono Opus with `ffmpeg` before delivery.
 
 ```json5
 {
-  env: { XIAOMI_API_KEY: "your-key" },
+  env: { vars: { XIAOMI_API_KEY: "your-key" } },
   agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5" } } },
   models: {
     mode: "merge",
@@ -210,7 +213,7 @@ Token Plan:
 
 ```json5
 {
-  env: { XIAOMI_TOKEN_PLAN_API_KEY: "tp-your-key" },
+  env: { vars: { XIAOMI_TOKEN_PLAN_API_KEY: "tp-your-key" } },
   agents: { defaults: { model: { primary: "xiaomi-token-plan/mimo-v2.5-pro" } } },
   models: {
     mode: "merge",

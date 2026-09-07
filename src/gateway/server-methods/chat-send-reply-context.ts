@@ -19,9 +19,20 @@ import {
 // reply to a huge transcript entry cannot flood the prompt metadata.
 const REPLY_CONTEXT_BODY_MAX_CHARS = 2000;
 
-type ChatSendReplyContextFields = Partial<
+export type ChatSendReplyContextFields = Partial<
   Pick<MsgContext, "ReplyToId" | "ReplyToBody" | "ReplyToSender">
 >;
+
+type ChatSendReplyContextParams = {
+  replyToId: string | undefined;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey: string;
+  sessionEntry?: SessionTranscriptReadScope["sessionEntry"];
+  storePath: string | undefined;
+  userSenderLabel?: string;
+  warn?: (message: string) => void;
+};
 
 /** Adds hydrated reply metadata to the direct-injection user prompt. */
 export function buildChatSendReplyInjectionText(params: {
@@ -96,16 +107,9 @@ export function applyChatSendReplyContextFields(
  * reply_to_id linkage; body/sender hydrate only when the transcript message
  * still resolves, mirroring Discord's missing-referenced-message tolerance.
  */
-export async function resolveChatSendReplyContext(params: {
-  replyToId: string | undefined;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey: string;
-  sessionEntry?: SessionTranscriptReadScope["sessionEntry"];
-  storePath: string | undefined;
-  userSenderLabel?: string;
-  warn?: (message: string) => void;
-}): Promise<ChatSendReplyContextFields> {
+export async function resolveChatSendReplyContext(
+  params: ChatSendReplyContextParams,
+): Promise<ChatSendReplyContextFields> {
   const replyToId = params.replyToId?.trim();
   if (!replyToId) {
     return {};

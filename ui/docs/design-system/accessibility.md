@@ -8,7 +8,7 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component �
 
 | Context                                   | Minimum Ratio    | Notes                                              |
 | ----------------------------------------- | ---------------- | -------------------------------------------------- |
-| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#d4d4d8) or stronger on `--bg`       |
+| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#bcbcc0) or stronger on `--bg`       |
 | Large text (≥ 18px regular / ≥ 14px bold) | **3:1**          | Headings in chat thread                            |
 | UI component boundaries (inputs, buttons) | **3:1**          | Border colours against adjacent background         |
 | Focus indicators                          | **3:1** (AA)     | `--focus-ring` / `--focus-glow` already compliant  |
@@ -119,7 +119,7 @@ When building a tab interface:
 
 - [ ] No animation plays without being suppressible via `prefers-reduced-motion`
 - [ ] The global reset in `base.css` covers transitions — test with "Reduce motion" enabled in OS settings
-- [ ] Infinite loaders (`shimmer`, spinners) have explicit `animation: none` in reduced-motion context
+- [ ] Infinite loaders rely on the global reduced-motion gate; shadow-root copies must carry the same guard, and opt-in decorative motion is gated to `no-preference`
 
 ### 8. Semantic HTML
 

@@ -1,7 +1,9 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -37,22 +39,6 @@ type ProjectedCodexHistoryMessage = {
   textBytes: number;
 };
 
-function isUtf8ContinuationByte(byte: number | undefined): boolean {
-  return byte !== undefined && (byte & 0xc0) === 0x80;
-}
-
-function truncateUtf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
-    return value;
-  }
-  let end = Math.max(0, maxBytes);
-  while (end > 0 && isUtf8ContinuationByte(bytes[end])) {
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
-}
-
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -69,7 +55,7 @@ function normalizeImportedHistoryText(value: unknown): string | undefined {
   return `${truncateUtf8Prefix(text, contentLimitBytes)}${CODEX_HISTORY_TRUNCATION_SUFFIX}`;
 }
 
-function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
+export function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
   if (!Array.isArray(item.content)) {
     return undefined;
   }
@@ -140,7 +126,7 @@ function projectCodexThreadHistory(params: {
   let itemOffset = 0;
   for (const turn of selectTurnsThroughBoundary(params.thread, params.throughTurnId)) {
     for (const value of turn.items) {
-      const item = value as unknown as Record<string, unknown>;
+      const item = value;
       const itemId = normalizeOptionalString(item.id);
       const identity = `${turn.id}:${itemId ?? itemOffset}`;
       const timestampSeconds =
@@ -167,6 +153,9 @@ function projectCodexThreadHistory(params: {
       if (!text || !role) {
         continue;
       }
+      const phase =
+        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
+      const asyncDelivery = item.delivery === "async";
       const message =
         role === "assistant"
           ? attachCodexMirrorIdentity(
@@ -189,13 +178,13 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
+                ...(phase ? { phase } : {}),
+                ...(asyncDelivery && itemId ? { openclawAsyncDelivery: { itemId } } : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,
             )
           : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      const phase =
-        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       projected.push({
         message,
         responseItem: {
@@ -261,9 +250,63 @@ export function projectBoundedCodexThreadHistory(params: {
       .filter(
         ({ message }) =>
           message.role !== "assistant" ||
-          (message.stopReason !== "aborted" && message.stopReason !== "error"),
+          (message.stopReason !== "aborted" &&
+            message.stopReason !== "error" &&
+            !("openclawAsyncDelivery" in message)),
       )
       .map(({ responseItem }) => responseItem),
     transcriptMessages: selected.map(({ message }) => message),
   };
+}
+
+/** Projects only visible local user/assistant messages through the same bounded history policy. */
+export function projectBoundedCodexVisibleSessionHistory(
+  entries: readonly SessionTranscriptMessageEntry[],
+): JsonValue[] {
+  const projected: ProjectedCodexHistoryMessage[] = [];
+  for (const entry of entries) {
+    if ((entry.role !== "user" && entry.role !== "assistant") || !("content" in entry.message)) {
+      continue;
+    }
+    if (
+      entry.role === "assistant" &&
+      (("stopReason" in entry.message &&
+        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
+        "openclawAsyncDelivery" in entry.message)
+    ) {
+      continue;
+    }
+    const content = entry.message.content;
+    const text = normalizeImportedHistoryText(
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .flatMap((part) =>
+                part && typeof part === "object" && "text" in part && typeof part.text === "string"
+                  ? [part.text]
+                  : [],
+              )
+              .join("\n")
+          : undefined,
+    );
+    if (!text) {
+      continue;
+    }
+    projected.push({
+      message: entry.message,
+      responseItem: {
+        type: "message",
+        role: entry.role,
+        content: [
+          {
+            type: entry.role === "assistant" ? "output_text" : "input_text",
+            text,
+          },
+        ],
+      },
+      textBytes: Buffer.byteLength(text, "utf8"),
+    });
+  }
+  return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
 }

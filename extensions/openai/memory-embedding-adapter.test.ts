@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./embedding-provider.js", () => ({
-  DEFAULT_OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   createOpenAiEmbeddingProvider: mocks.createOpenAiEmbeddingProvider,
 }));
 
@@ -26,8 +25,8 @@ import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 const provider: MemoryEmbeddingProvider = {
   id: "openai",
   model: "text-embedding-3-small",
-  embedQuery: async () => [1, 0],
-  embedBatch: async (texts) => texts.map(() => [1, 0]),
+  embed: async () => [1, 0],
+  embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
 
 describe("OpenAI memory embedding adapter", () => {
@@ -105,50 +104,94 @@ describe("OpenAI memory embedding adapter", () => {
     expect(JSON.stringify(current.cacheKeyData)).not.toContain("fixture-secret");
   });
 
-  it("preserves custom endpoint tenant and version-like cache identity headers", async () => {
-    const createForTenant = async (tenant: string) => {
-      const client = await resolveRemoteEmbeddingBearerClient({
-        provider: "bailian-embedding",
-        defaultBaseUrl: "https://embeddings.example/v1",
-        options: {
-          config: { models: {} } as never,
-          model: "text-embedding-v3",
-          remote: {
-            apiKey: "fixture-secret",
-            headers: {
-              "X-Tenant": tenant,
-              version: "tenant-api-v2",
-              "User-Agent": "tenant-client/2",
+  it.each([
+    {
+      name: "proxy",
+      providerId: "bailian-embedding",
+      baseUrl: "https://embeddings.example/v1",
+      headerName: "X-Api-Key",
+      rotatedHeaderName: "x-aPI-kEY",
+    },
+    {
+      name: "Azure OpenAI",
+      providerId: "openai",
+      baseUrl: "https://qa-resource.openai.azure.com/openai/v1",
+      headerName: "api-key",
+      rotatedHeaderName: "Api-Key",
+    },
+  ])(
+    "keeps rotated $name credentials out of tenant-specific embedding cache identity",
+    async ({ providerId, baseUrl, headerName, rotatedHeaderName }) => {
+      const createForTenant = async (
+        tenant: string,
+        proxyApiKey: string,
+        proxyHeaderName = headerName,
+      ) => {
+        const client = await resolveRemoteEmbeddingBearerClient({
+          provider: providerId,
+          defaultBaseUrl: baseUrl,
+          options: {
+            config: { models: {} } as never,
+            model: "text-embedding-v3",
+            remote: {
+              baseUrl,
+              apiKey: "fixture-secret",
+              headers: {
+                [proxyHeaderName]: proxyApiKey,
+                "X-Deployment": tenant,
+                "X-Tenant": tenant,
+                version: "tenant-api-v2",
+                "User-Agent": "tenant-client/2",
+              },
             },
           },
-        },
-      });
-      mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
-        provider,
-        client: { ...client, model: "text-embedding-v3" },
-      });
-      return await openAiMemoryEmbeddingProviderAdapter.create({
-        config: {} as never,
-        provider: "bailian-embedding",
-        model: "text-embedding-v3",
-        fallback: "none",
-      });
-    };
+        });
+        expect(client.headers).toMatchObject({
+          Authorization: "Bearer fixture-secret",
+          [proxyHeaderName]: proxyApiKey,
+          "X-Deployment": tenant,
+        });
+        mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+          provider,
+          client: { ...client, model: "text-embedding-v3" },
+        });
+        return await openAiMemoryEmbeddingProviderAdapter.create({
+          config: {} as never,
+          provider: providerId,
+          model: "text-embedding-v3",
+          fallback: "none",
+        });
+      };
 
-    const first = await createForTenant("tenant-a");
-    const second = await createForTenant("tenant-b");
-    const headers = first.runtime?.cacheKeyData?.headers;
+      const first = await createForTenant("tenant-a", "proxy-key-before-rotation");
+      const rotated = await createForTenant(
+        "tenant-a",
+        "proxy-key-after-rotation",
+        rotatedHeaderName,
+      );
+      const second = await createForTenant("tenant-b", "proxy-key-after-rotation");
+      const headers = first.runtime?.cacheKeyData?.headers;
 
-    expect(headers).toEqual(
-      expect.arrayContaining([
-        ["X-Tenant", "tenant-a"],
-        ["version", "tenant-api-v2"],
-        ["User-Agent", "tenant-client/2"],
-      ]),
-    );
-    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
-    expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
-  });
+      expect(headers).toEqual(
+        expect.arrayContaining([
+          ["X-Deployment", "tenant-a"],
+          ["X-Tenant", "tenant-a"],
+          ["version", "tenant-api-v2"],
+          ["User-Agent", "tenant-client/2"],
+        ]),
+      );
+      expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
+      expect(hashText(JSON.stringify(first.runtime?.cacheKeyData))).toBe(
+        hashText(JSON.stringify(rotated.runtime?.cacheKeyData)),
+      );
+      expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+      expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
+      expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain(
+        "proxy-key-before-rotation",
+      );
+      expect(first.runtime?.cacheKeyData).toMatchObject({ provider: providerId, baseUrl });
+    },
+  );
 
   it("sends document input_type in OpenAI batch embedding requests", async () => {
     const result = await openAiMemoryEmbeddingProviderAdapter.create({

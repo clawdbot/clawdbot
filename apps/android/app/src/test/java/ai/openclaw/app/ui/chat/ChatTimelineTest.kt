@@ -1,10 +1,14 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatSubagentActivity
+import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -74,6 +78,174 @@ class ChatTimelineTest {
     assertEquals(1, timeline.readAnchorIndex)
     assertEquals(0, timeline.latestContentIndex)
     assertEquals("user-1", timeline.latestUserMessageId)
+  }
+
+  @Test
+  fun internalSystemMessagesBecomeOrderedNoticesWithExactSourceToolMatching() {
+    val messages =
+      listOf(
+        textMessage(id = "user-1", role = "user", text = "before"),
+        textMessage(id = "recovery", role = "user", text = "[System] Continue the interrupted turn.")
+          .copy(
+            timestampMs = 10L,
+            provenance = ChatMessageProvenance("internal_system", "main_session_restart_recovery"),
+          ),
+        textMessage(id = "restart", role = "user", text = "[System] Gateway restarted during update.")
+          .copy(
+            timestampMs = 11L,
+            provenance = ChatMessageProvenance("internal_system", "restart-sentinel"),
+          ),
+        textMessage(id = "fallback", role = "user", text = "[System] Keep the raw fallback copy.")
+          .copy(
+            timestampMs = 12L,
+            provenance = ChatMessageProvenance("internal_system", "session-companion"),
+          ),
+        textMessage(id = "near-match", role = "user", text = "[System] Exact matching matters.")
+          .copy(
+            timestampMs = 13L,
+            provenance = ChatMessageProvenance("internal_system", " restart-sentinel"),
+          ),
+        textMessage(id = "assistant-1", role = "assistant", text = "after"),
+      )
+
+    val timeline =
+      buildChatTimeline(
+        messages = messages,
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    assertEquals(
+      listOf(
+        "message:assistant-1",
+        "system-notice:13:4",
+        "system-notice:12:3",
+        "system-notice:11:2",
+        "system-notice:10:1",
+        "message:user-1",
+      ),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    val notices = timeline.items.filterIsInstance<ChatTimelineItem.SystemNotice>().asReversed()
+    assertEquals(
+      listOf(
+        "System · restart recovery" to
+          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+        "System · gateway restarted" to "Gateway restarted during update.",
+        "System" to "Keep the raw fallback copy.",
+        "System" to "Exact matching matters.",
+      ),
+      notices.map { it.label to it.body },
+    )
+    assertEquals("user-1", timeline.latestUserMessageId)
+  }
+
+  @Test
+  fun transcriptMarkersBecomeStableDividersAndUnknownKindsStayHidden() {
+    val compaction =
+      textMessage(id = "compaction", role = "system", text = "Compaction")
+        .copy(
+          transcriptMarker =
+            ChatTranscriptMarker(
+              kind = "compaction",
+              id = "checkpoint-1",
+              tokensBefore = 900_000.5,
+              tokensAfter = 24_700.25,
+            ),
+        )
+    val unknown =
+      textMessage(id = "unknown", role = "system", text = "Unknown")
+        .copy(transcriptMarker = ChatTranscriptMarker("reset ", "unknown-1", null, null))
+    val plainSystem = textMessage(id = "plain-system", role = "system", text = "Maintenance begins soon")
+    val reset =
+      textMessage(id = "reset", role = "system", text = "Reset")
+        .copy(transcriptMarker = ChatTranscriptMarker("reset", "reset-1", null, null))
+
+    val timeline =
+      buildChatTimeline(
+        messages =
+          listOf(
+            textMessage(id = "user-1", role = "user", text = "before"),
+            compaction,
+            plainSystem,
+            unknown,
+            reset,
+            textMessage(id = "assistant-1", role = "assistant", text = "after"),
+          ),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    assertEquals(
+      listOf(
+        "message:assistant-1",
+        "divider:reset:reset-1",
+        "message:plain-system",
+        "divider:compaction:checkpoint-1",
+        "message:user-1",
+      ),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    assertEquals(
+      "system",
+      timeline.items
+        .filterIsInstance<ChatTimelineItem.Message>()[1]
+        .message.role,
+    )
+    val dividers = timeline.items.filterIsInstance<ChatTimelineItem.SystemDivider>()
+    assertEquals(
+      ChatTimelineItem.SystemDivider(
+        key = "divider:reset:reset-1",
+        kind = SystemDividerKind.Reset,
+        label = "Session reset",
+        secondary = "The earlier conversation was cleared.",
+      ),
+      dividers[0],
+    )
+    assertEquals("saved 875.3k tokens", dividers[1].metric)
+    assertEquals(SystemDividerKind.Compaction, dividers[1].kind)
+
+    val rebuilt =
+      buildChatTimeline(
+        messages = listOf(compaction, reset),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+    assertEquals(
+      listOf("divider:reset:reset-1", "divider:compaction:checkpoint-1"),
+      rebuilt.items.map(::chatTimelineItemKey),
+    )
+  }
+
+  @Test
+  fun compactionMetricsRequireFiniteDecreasingTokenCounts() {
+    val markers =
+      listOf(
+        ChatTranscriptMarker("compaction", "valid", 1_000.9, 200.0),
+        ChatTranscriptMarker("compaction", "equal", 1_000.0, 1_000.0),
+        ChatTranscriptMarker("compaction", "infinite", Double.POSITIVE_INFINITY, 1.0),
+      )
+    val timeline =
+      buildChatTimeline(
+        messages =
+          markers.mapIndexed { index, marker ->
+            textMessage(id = "marker-$index", role = "system", text = "Compaction").copy(transcriptMarker = marker)
+          },
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    val metrics =
+      timeline.items
+        .filterIsInstance<ChatTimelineItem.SystemDivider>()
+        .associate { it.key to it.metric }
+    assertEquals("saved 800 tokens", metrics["divider:compaction:valid"])
+    assertEquals(null, metrics["divider:compaction:equal"])
+    assertEquals(null, metrics["divider:compaction:infinite"])
   }
 
   @Test
@@ -290,6 +462,98 @@ class ChatTimelineTest {
 
     assertEquals(listOf(mismatched), outboxItemsForRecovery(listOf(mismatched)))
   }
+
+  @Test
+  fun subagentRowsStayKeyedByTaskAndParticipateInLiveContentVersion() {
+    val activity = subagentActivity(id = "task-1", snippet = "Reading files", added = 2)
+    val first =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+        subagentActivities = mapOf(activity.id to activity),
+      )
+    val updated = activity.copy(snippet = "Editing files", diffStat = ChatDiffStat(added = 8, removed = 3, files = 2))
+    val second =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+        subagentActivities = mapOf(updated.id to updated),
+      )
+
+    assertEquals(listOf("subagent-activity"), first.items.map(::chatTimelineItemKey))
+    assertEquals(first.items.map(::chatTimelineItemKey), second.items.map(::chatTimelineItemKey))
+    assertTrue(first.latestContentVersion != second.latestContentVersion)
+  }
+
+  @Test
+  fun subagentRowsCapAtFiveAndOverflowCountsOnlyHiddenWorkingRows() {
+    val working = (1..6).map { index -> subagentActivity(id = "task-$index", startedAtMs = index.toLong()) }
+    val queued = subagentActivity(id = "task-queued", status = "queued", startedAtMs = 100)
+    val finished = subagentActivity(id = "task-finished", status = "completed", startedAtMs = 0, endedAtMs = 20)
+
+    val timeline =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = listOf(ChatPendingToolCall(toolCallId = "tool-1", name = "edit", startedAtMs = 1)),
+        streamingAssistantText = null,
+        subagentActivities = (working + queued + finished).associateBy(ChatSubagentActivity::id),
+      )
+
+    assertEquals(
+      listOf("tools", "subagent-activity"),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    val row = timeline.items.filterIsInstance<ChatTimelineItem.SubagentActivity>().single()
+    assertEquals(listOf("task-1", "task-2", "task-3", "task-4", "task-5"), row.activities.map { it.id })
+    assertEquals(1, row.moreWorkingCount)
+  }
+
+  @Test
+  fun liveToolDiffChangesTimelineContentVersion() {
+    val pending = ChatPendingToolCall(toolCallId = "tool-1", name = "edit", startedAtMs = 1)
+    val initial =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = listOf(pending),
+        streamingAssistantText = null,
+      )
+    val updated =
+      buildChatTimeline(
+        messages = emptyList(),
+        pendingRunCount = 0,
+        pendingToolCalls = listOf(pending.copy(liveDiff = ChatDiffStat(added = 4, removed = 1))),
+        streamingAssistantText = null,
+      )
+
+    assertEquals(initial.items.map(::chatTimelineItemKey), updated.items.map(::chatTimelineItemKey))
+    assertTrue(initial.latestContentVersion != updated.latestContentVersion)
+  }
+
+  private fun subagentActivity(
+    id: String,
+    status: String = "running",
+    snippet: String? = null,
+    added: Int = 0,
+    startedAtMs: Long = 1,
+    endedAtMs: Long? = null,
+  ): ChatSubagentActivity =
+    ChatSubagentActivity(
+      id = id,
+      status = status,
+      snippet = snippet,
+      diffStat = ChatDiffStat(added = added, removed = 0, files = 1),
+      terminalSummary = null,
+      error = null,
+      startedAtMs = startedAtMs,
+      endedAtMs = endedAtMs,
+      childSessionKey = "agent:worker:subagent:$id",
+    )
 
   private fun textMessage(
     id: String,

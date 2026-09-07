@@ -3,12 +3,9 @@
  * plugin SQLite; all other tabs remain process-local.
  */
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
-import { closeTrackedCdpTarget, type CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
-import { browserCloseTabByRawTargetId } from "./client.js";
+import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
   type CleanupKind,
@@ -34,14 +31,21 @@ import {
 } from "./session-tab-ephemeral-aliases.js";
 import {
   activeDurableStorageKeys,
+  deleteVolatileRegistrations,
   deleteVolatileSessionTab,
   forgetColdNativeActivity,
+  normalizeBrowserSessionKey,
   readColdNativeActivity,
   rememberColdNativeActivity,
+  sameVolatileSessionTab,
   type SessionTabInteractionIdentity as InteractionIdentity,
   type VolatileSessionTab as VolatileTab,
+  volatileRegistrationsForTarget,
+  volatileSessionTabTargetKey,
+  volatileTabCleanupByTarget,
   volatileTabsBySession,
 } from "./session-tab-process-state.js";
+import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
   browserSessionTabNativeIdentity,
   browserSessionTabStorageKey,
@@ -55,33 +59,38 @@ import {
   withoutBrowserSessionTabCleanup,
   type BrowserSessionTabRecord,
 } from "./session-tab-store.js";
-import { selectStaleTrackedTabs } from "./session-tab-sweep-selection.js";
+import {
+  selectStaleTrackedTabs,
+  selectTrackedTabsForSessions,
+} from "./session-tab-sweep-selection.js";
 import { selectSessionTabToUntrack } from "./session-tab-untrack-selection.js";
 
 type SessionTabParams = {
   sessionKey?: string;
   targetId?: string;
   nativeTargetId?: string;
-  baseUrl?: string;
+  route?: BrowserSessionTabRoute;
   profile?: string;
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
 };
 
-type DurableRecord = BrowserSessionTabRecord;
-
-type DurableTab = DurableRecord & {
+type DurableTab = BrowserSessionTabRecord & {
   kind: "durable";
   storageKey: string;
 };
 
 type TrackedTab = VolatileTab | DurableTab;
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
+type DurableCleanupResult =
+  | CloseTrackedCdpTargetResult
+  | { status: "unavailable"; reason: "extension-relay-unavailable" };
 type CloseTab = (tab: {
   targetId: string;
   nativeTargetId?: string;
   baseUrl?: string;
+  route?: BrowserSessionTabRoute;
   profile?: string;
 }) => Promise<void>;
 type CloseParams = {
@@ -90,12 +99,12 @@ type CloseParams = {
     tab: DurableTab,
     options: { shouldClose: () => boolean },
   ) => Promise<CloseTrackedCdpTargetResult>;
+  getResolvedBrowserConfig?: () =>
+    | ResolvedBrowserConfig
+    | null
+    | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
 };
-
-function normalizeSessionKey(value: string): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
-}
 
 function normalizeProfile(value?: string): string | undefined {
   return normalizeOptionalLowercaseString(value);
@@ -115,23 +124,20 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
   if (!sessionKey || !targetId) {
     return undefined;
   }
-  const baseUrl = params.baseUrl?.trim();
   return {
-    sessionKey: normalizeSessionKey(sessionKey),
+    sessionKey: normalizeBrowserSessionKey(sessionKey) ?? "",
     targetId,
-    ...(baseUrl ? { baseUrl } : {}),
+    route: params.route ?? { kind: "browser-control" },
     ...(normalizeProfile(params.profile) ? { profile: normalizeProfile(params.profile) } : {}),
   };
 }
 
-function durableOwnership(params: SessionTabParams): DurableOwnership | undefined {
-  return params.ownership?.status === "durable" ? params.ownership : undefined;
+function isVolatileRoute(route: BrowserSessionTabRoute): boolean {
+  return route.kind === "node-proxy" || Boolean(route.baseUrl);
 }
 
-function volatileId(
-  identity: Pick<InteractionIdentity, "targetId" | "baseUrl" | "profile">,
-): string {
-  return `${identity.targetId}\u0000${identity.baseUrl ?? ""}\u0000${identity.profile ?? ""}`;
+function durableOwnership(params: SessionTabParams): DurableOwnership | undefined {
+  return params.ownership?.status === "durable" ? params.ownership : undefined;
 }
 
 function deleteInvalidRecord(key: string, onWarn?: (message: string) => void): void {
@@ -169,7 +175,7 @@ function readDurableTabs(onWarn?: (message: string) => void): DurableTab[] {
 }
 
 function deleteVolatileMatching(
-  identity: Pick<InteractionIdentity, "sessionKey" | "targetId" | "baseUrl" | "profile">,
+  identity: Pick<InteractionIdentity, "sessionKey" | "targetId" | "route" | "profile">,
 ): void {
   const state = volatileTabsBySession();
   const tabs = state.get(identity.sessionKey);
@@ -177,11 +183,7 @@ function deleteVolatileMatching(
     return;
   }
   for (const [key, tab] of tabs) {
-    if (
-      tab.targetId === identity.targetId &&
-      tab.baseUrl === identity.baseUrl &&
-      tab.profile === identity.profile
-    ) {
+    if (volatileSessionTabTargetKey(tab) === volatileSessionTabTargetKey(identity)) {
       tabs.delete(key);
       clearVolatileTabAliases(identity.sessionKey, key);
     }
@@ -200,7 +202,7 @@ function resolveVolatile(identity: InteractionIdentity):
   | undefined {
   const state = volatileTabsBySession();
   const tabs = state.get(identity.sessionKey);
-  const exactKey = volatileId(identity);
+  const exactKey = volatileSessionTabTargetKey(identity);
   const exact = tabs?.get(exactKey);
   if (exact) {
     return { tab: exact, tabKey: exactKey, isExact: true };
@@ -232,15 +234,18 @@ function upsertVolatile(
   identity: InteractionIdentity,
   aliases: Array<string | undefined>,
   profileAliases: Array<string | undefined>,
+  ownership: BrowserTabOwnership | undefined,
   now: number,
 ): void {
   const state = volatileTabsBySession();
   const tabs = state.get(identity.sessionKey) ?? new Map<string, VolatileTab>();
-  const key = volatileId(identity);
+  const key = volatileSessionTabTargetKey(identity);
   const existing = tabs.get(key);
   tabs.set(key, {
     ...identity,
     kind: "volatile",
+    registration: {},
+    ...(ownership ? { ownership } : {}),
     trackedAt: existing?.trackedAt ?? now,
     lastUsedAt: now,
   });
@@ -283,15 +288,15 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
   const ownership = durableOwnership(params);
   const profileAliases = normalizeProfileAliases(params.profileAliases);
   const now = params.now ?? Date.now();
-  if (identity.baseUrl) {
-    upsertVolatile(identity, params.aliases ?? [], profileAliases, now);
+  if (isVolatileRoute(identity.route)) {
+    upsertVolatile(identity, params.aliases ?? [], profileAliases, params.ownership, now);
     return;
   }
   if (!ownership) {
     if (!clearDurableForVolatile(identity)) {
       throw new Error("durable browser tab changed during non-durable transition");
     }
-    upsertVolatile(identity, params.aliases ?? [], profileAliases, now);
+    upsertVolatile(identity, params.aliases ?? [], profileAliases, params.ownership, now);
     return;
   }
   if (!identity.profile) {
@@ -373,7 +378,7 @@ export function touchSessionBrowserTab(params: SessionTabParams & { now?: number
       .get(identity.sessionKey)
       ?.set(volatile.tabKey, { ...volatile.tab, lastUsedAt: now });
   }
-  if (identity.baseUrl) {
+  if (isVolatileRoute(identity.route)) {
     return;
   }
   if (!getOptionalBrowserSessionTabStore()) {
@@ -421,7 +426,7 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
     return;
   }
   const volatile = resolveVolatile(identity);
-  if (identity.baseUrl) {
+  if (isVolatileRoute(identity.route)) {
     if (volatile) {
       deleteVolatileSessionTab(identity.sessionKey, volatile.tabKey);
     }
@@ -473,12 +478,30 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
 async function closeCurrentDurableTab(
   tab: DurableTab,
   shouldClose: () => boolean,
-): Promise<CloseTrackedCdpTargetResult> {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, tab.profile);
+  getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
+): Promise<DurableCleanupResult> {
+  // Empty session cleanup must not initialize Browser control or its CDP graph.
+  const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
+    await Promise.all([
+      import("../config/config.js"),
+      import("./cdp-reachability-policy.js"),
+      import("./cdp.helpers.js"),
+      import("./config.js"),
+    ]);
+  let resolved = await getResolvedBrowserConfig?.();
+  if (!shouldClose()) {
+    return { status: "cancelled" };
+  }
+  if (!resolved) {
+    const cfg = getRuntimeConfig();
+    resolved = config.resolveBrowserConfig(cfg.browser, cfg);
+  }
+  const profile = config.resolveProfile(resolved, tab.profile);
   if (!profile?.cdpUrl) {
     return { status: "ownership-mismatch" };
+  }
+  if (profile.driver === "extension" && !resolved.extensionRelayInternalTokens[profile.name]) {
+    return { status: "unavailable", reason: "extension-relay-unavailable" };
   }
   const cdpControlPolicy = resolveCdpControlPolicy(profile, resolved.ssrfPolicy);
   return await closeTrackedCdpTarget({
@@ -493,7 +516,7 @@ async function closeCurrentDurableTab(
   });
 }
 
-async function performDurableCleanup(
+async function closeDurableTab(
   candidate: DurableTab,
   params: CloseParams,
   now: number,
@@ -504,7 +527,7 @@ async function performDurableCleanup(
     return 0;
   }
   const shouldClose = () => ownsCleanupAttempt(tab);
-  let outcome: CloseTrackedCdpTargetResult;
+  let outcome: DurableCleanupResult;
   try {
     if (params.closeDurableTab) {
       outcome = await params.closeDurableTab(tab, { shouldClose });
@@ -519,7 +542,7 @@ async function performDurableCleanup(
       });
       outcome = { status: "closed" };
     } else {
-      outcome = await closeCurrentDurableTab(tab, shouldClose);
+      outcome = await closeCurrentDurableTab(tab, shouldClose, params.getResolvedBrowserConfig);
     }
   } catch (error) {
     if (isIgnorableTabCloseError(error)) {
@@ -533,6 +556,12 @@ async function performDurableCleanup(
     return 0;
   }
   if (outcome.status === "unavailable") {
+    if (outcome.reason === "extension-relay-unavailable") {
+      params.onWarn?.(
+        `deferred tracked browser tab ${tab.nativeTargetId}: extension relay runtime unavailable`,
+      );
+      return 0;
+    }
     // A browser that never comes back leaves its rows unreachable forever: the
     // sweep re-claims them, fails ownership lookup, and defers again. Without an
     // age bound the namespace fills to its reject-new cap and every later
@@ -556,74 +585,106 @@ async function performDurableCleanup(
   return outcome.status === "closed" ? 1 : 0;
 }
 
-async function closeDurableTab(
-  candidate: DurableTab,
-  params: CloseParams,
-  now: number,
-  cleanupKind: CleanupKind,
-): Promise<number> {
-  return await performDurableCleanup(candidate, params, now, cleanupKind);
-}
-
-function sameVolatileTab(left: VolatileTab, right: VolatileTab): boolean {
-  return (
-    volatileId(left) === volatileId(right) &&
-    left.sessionKey === right.sessionKey &&
-    left.trackedAt === right.trackedAt &&
-    left.lastUsedAt === right.lastUsedAt
-  );
-}
-
-function deleteVolatileTarget(tab: VolatileTab): void {
-  const state = volatileTabsBySession();
-  const targetKey = volatileId(tab);
-  for (const [sessionKey, tabs] of state) {
-    for (const [key, candidate] of tabs) {
-      if (volatileId(candidate) === targetKey) {
-        tabs.delete(key);
-        clearVolatileTabAliases(sessionKey, key);
-      }
-    }
-    if (tabs.size === 0) {
-      state.delete(sessionKey);
-    }
-  }
-}
-
 async function performVolatileCleanup(
   candidate: VolatileTab,
   params: CloseParams,
   cleanupKind: CleanupKind,
 ): Promise<number> {
-  const tab = resolveVolatile(candidate)?.tab;
-  if (!tab) {
-    return 0;
-  }
-  if (cleanupKind === "sweep" && !sameVolatileTab(tab, candidate)) {
-    return 0;
-  }
-  try {
-    if (params.closeTab) {
-      await params.closeTab({
-        targetId: tab.targetId,
-        ...(tab.baseUrl ? { baseUrl: tab.baseUrl } : {}),
-        ...(tab.profile ? { profile: tab.profile } : {}),
-      });
-    } else {
-      await browserCloseTabByRawTargetId(tab.baseUrl, tab.targetId, {
-        profile: tab.profile,
-      });
-    }
-  } catch (error) {
-    if (isIgnorableTabCloseError(error)) {
-      deleteVolatileTarget(tab);
+  const inFlight = volatileTabCleanupByTarget();
+  const targetKey = volatileSessionTabTargetKey(candidate);
+  const resolveCurrent = () => {
+    const current = resolveVolatile(candidate)?.tab;
+    return current?.registration === candidate.registration &&
+      (cleanupKind !== "sweep" || sameVolatileSessionTab(current, candidate))
+      ? current
+      : undefined;
+  };
+  while (true) {
+    const current = resolveCurrent();
+    if (!current) {
       return 0;
     }
-    params.onWarn?.(`failed to close tracked browser tab ${tab.targetId}: ${String(error)}`);
-    return 0;
+    const existing = inFlight.get(targetKey);
+    if (existing) {
+      await existing.promise;
+      if (existing.registrations.some((owned) => owned.registration === candidate.registration)) {
+        return 0;
+      }
+      continue;
+    }
+
+    let complete!: (operation: Promise<number>) => void;
+    const cleanup = new Promise<number>((resolve) => {
+      complete = resolve;
+    });
+    // Preparation and dispatch share one reservation, including reentrant closers.
+    // Completion retires only the acquired registrations.
+    const owner = { registrations: volatileRegistrationsForTarget(targetKey), promise: cleanup };
+    const performClose = async () => {
+      let tab = current;
+      let closeTab = params.closeTab;
+      try {
+        if (!closeTab && tab.route.kind === "browser-control") {
+          const { browserCloseTabByRawTargetId } = await import("./client.js");
+          const latest = resolveCurrent();
+          if (!latest) {
+            // No dispatch occurred: a lifecycle joiner may retry a touched sweep.
+            owner.registrations = [];
+            return 0;
+          }
+          tab = latest;
+          closeTab = ({ baseUrl, targetId, profile }) =>
+            browserCloseTabByRawTargetId(baseUrl, targetId, { profile });
+        }
+        if (closeTab) {
+          await closeTab({
+            targetId: tab.targetId,
+            ...(tab.route.kind === "browser-control" && tab.route.baseUrl
+              ? { baseUrl: tab.route.baseUrl }
+              : {}),
+            ...(tab.route.kind === "node-proxy" ? { route: tab.route } : {}),
+            ...(tab.profile ? { profile: tab.profile } : {}),
+          });
+        } else if (tab.route.kind === "node-proxy") {
+          const outcome = await tab.route.closeTarget({
+            targetId: tab.targetId,
+            profile: tab.profile,
+            ownership: tab.ownership,
+          });
+          if (outcome.status === "cancelled" || outcome.status === "unavailable") {
+            params.onWarn?.(
+              `deferred tracked browser tab ${tab.targetId}: ${outcome.status === "unavailable" ? outcome.reason : "cleanup cancelled"}`,
+            );
+            return 0;
+          }
+          if (outcome.status === "ownership-mismatch") {
+            params.onWarn?.(`retired tracked browser tab ${tab.targetId}: ownership mismatch`);
+          }
+          deleteVolatileRegistrations(owner.registrations);
+          return outcome.status === "closed" ? 1 : 0;
+        }
+      } catch (error) {
+        if (closeTab && tab.route.kind === "browser-control" && isIgnorableTabCloseError(error)) {
+          deleteVolatileRegistrations(owner.registrations);
+          return 0;
+        }
+        params.onWarn?.(`failed to close tracked browser tab ${tab.targetId}: ${String(error)}`);
+        return 0;
+      }
+      deleteVolatileRegistrations(owner.registrations);
+      return 1;
+    };
+    inFlight.set(targetKey, owner);
+    try {
+      complete(performClose());
+      return await cleanup;
+    } finally {
+      // Queued handoff callers must see the reservation until its completion settles.
+      if (inFlight.get(targetKey) === owner) {
+        inFlight.delete(targetKey);
+      }
+    }
   }
-  deleteVolatileTarget(tab);
-  return 1;
 }
 
 async function closeTrackedTabs(
@@ -641,28 +702,15 @@ async function closeTrackedTabs(
   return closed;
 }
 
-function normalizeSessionKeys(keys: Array<string | undefined>): Set<string> {
-  return new Set(keys.map((key) => (key?.trim() ? normalizeSessionKey(key) : "")).filter(Boolean));
-}
-
-function volatileTabsForSessions(sessionKeys: Set<string>): VolatileTab[] {
-  const result: VolatileTab[] = [];
-  for (const sessionKey of sessionKeys) {
-    result.push(...(volatileTabsBySession().get(sessionKey)?.values() ?? []));
-  }
-  return result;
-}
-
 /** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
-  const sessionKeys = normalizeSessionKeys(params.sessionKeys);
-  if (sessionKeys.size === 0) {
-    return 0;
-  }
-  const durable = readDurableTabs(params.onWarn).filter((tab) => sessionKeys.has(tab.sessionKey));
-  return await closeTrackedTabs([...durable, ...volatileTabsForSessions(sessionKeys)], {
+  const tabs = selectTrackedTabsForSessions({
+    durable: readDurableTabs(params.onWarn),
+    sessionKeys: params.sessionKeys,
+  });
+  return await closeTrackedTabs(tabs, {
     ...params,
     cleanupKind: "lifecycle",
   });

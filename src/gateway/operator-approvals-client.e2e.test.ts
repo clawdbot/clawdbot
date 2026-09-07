@@ -22,7 +22,7 @@ import { startGatewayServer } from "./server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "./test-helpers.e2e.js";
 import {
   configureManualGatewayBackgroundEnv,
@@ -93,7 +93,7 @@ describe("operator approval gateway client e2e", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const token = "approval-client-e2e-token";
     const url = `ws://127.0.0.1:${port}`;
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
@@ -209,7 +209,7 @@ describe("operator approval gateway client e2e", () => {
     });
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const token = "approval-surfaces-e2e-token";
     const url = `ws://127.0.0.1:${port}`;
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));

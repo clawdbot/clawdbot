@@ -6,7 +6,6 @@ import { validateExternalCodePluginPackageJson } from "../../packages/plugin-pac
 
 const DOCS_ROOT = path.join(process.cwd(), "docs");
 const pluginDocs = [
-  path.join(DOCS_ROOT, "tools", "clawhub.md"),
   path.join(DOCS_ROOT, "plugins", "building-plugins.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-setup.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins.md"),

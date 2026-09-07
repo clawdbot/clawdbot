@@ -1,50 +1,81 @@
 // Verifies Doctor persists legacy gateway bind repairs through the real config writer.
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
-import { migrateLegacyConfig } from "./doctor/shared/legacy-config-migrate.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { repairLegacyConfigForUpdateChannel } from "./doctor/legacy-config-repair.js";
 
 describe("Doctor gateway bind persistence", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it.each([
     ["localhost", "loopback"],
     ["0.0.0.0", "lan"],
   ] as const)("persists gateway bind %s as %s", async (legacyBind, canonicalBind) => {
     await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        gateway: { mode: "local", bind: legacyBind },
+      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        // This core writer regression needs the authoritative empty bundled-plugin inventory.
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", bind: legacyBind },
+        });
+        const ctx = await prepareDoctorContext(configPath);
+
+        await runInitialConfigWriteHealth(ctx);
+
+        const snapshot = await readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.config.gateway?.bind).toBe(canonicalBind);
+        expect(await fs.readFile(configPath, "utf-8")).not.toContain(`"bind": "${legacyBind}"`);
       });
-      const runtime: RuntimeEnv = {
-        error: vi.fn(),
-        exit: vi.fn(),
-        log: vi.fn(),
-      };
-      const options: DoctorOptions = { nonInteractive: true, repair: true };
-      const prompter = createDoctorPrompter({ runtime, options });
-      const migration = migrateLegacyConfig({ gateway: { mode: "local", bind: legacyBind } });
-      expect(migration.config).not.toBeNull();
-      const cfg = migration.config!;
-      const configResult = { cfg, shouldWriteConfig: true };
-      const ctx: DoctorHealthFlowContext = {
-        runtime,
-        options,
-        prompter,
-        configResult,
-        cfg,
-        cfgForPersistence: structuredClone(cfg),
-        sourceConfigValid: true,
-        configPath,
-        stateDirExistedAtStart: true,
-      };
-
-      await runInitialConfigWriteHealth(ctx);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8"));
-      expect(persisted.gateway?.bind).toBe(canonicalBind);
-      expect(persisted.gateway?.bind).not.toBe(legacyBind);
     });
   });
+
+  it.each(["ordinary", "include", "invalid"] as const)(
+    "preserves authored plugin scope during %s update-channel repair",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        const diagnostics = {
+          otel: { enabled: true, endpoint: "http://collector.test:4317", protocol: "grpc" },
+        };
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", ...(scenario === "invalid" ? { port: "invalid" } : {}) },
+          diagnostics: scenario === "include" ? { $include: "diagnostics.json" } : diagnostics,
+          plugins: { entries: { canvas: { enabled: true, config: { host: { enabled: false } } } } },
+        });
+        const includePath = path.join(path.dirname(configPath), "diagnostics.json");
+        if (scenario === "include") {
+          await fs.writeFile(includePath, JSON.stringify(diagnostics));
+        }
+        const before = await fs.readFile(configPath, "utf8");
+        const result = await repairLegacyConfigForUpdateChannel({
+          configSnapshot: await readConfigFileSnapshot(),
+          jsonMode: true,
+        });
+        if (scenario === "invalid") {
+          expect(result.repaired).toBe(false);
+          expect(await fs.readFile(configPath, "utf8")).toBe(before);
+          return;
+        }
+        expect(result.repaired).toBe(true);
+        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(Object.keys(saved.plugins.entries)).toEqual(["canvas"]);
+        expect(result.snapshot.config.diagnostics?.otel).toEqual({
+          enabled: false,
+          endpoint: "http://collector.test:4317",
+        });
+        if (scenario === "include") {
+          expect(saved.diagnostics).toEqual({ $include: "diagnostics.json" });
+          expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+            otel: { enabled: false, endpoint: "http://collector.test:4317" },
+          });
+        }
+      });
+    },
+  );
 });

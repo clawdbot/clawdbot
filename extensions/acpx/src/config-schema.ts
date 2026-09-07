@@ -3,6 +3,7 @@
  * this file as the single source of truth for validation and defaulting.
  */
 import { z } from "zod";
+import type { AcpxAgentCommand } from "./command-line.js";
 
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 /** Permission policy applied to interactive ACPX tool requests. */
@@ -30,23 +31,6 @@ export type AcpxMcpServer = {
   env: Array<{ name: string; value: string }>;
 };
 
-/** User-provided ACPX plugin configuration before defaults are resolved. */
-export type AcpxPluginConfig = {
-  cwd?: string;
-  stateDir?: string;
-  probeAgent?: string;
-  permissionMode?: AcpxPermissionMode;
-  nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
-  pluginToolsMcpBridge?: boolean;
-  openClawToolsMcpBridge?: boolean;
-  strictWindowsCmdWrapper?: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds?: number;
-  piSessionCatalog?: { enabled?: boolean };
-  mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string; args?: string[] }>;
-};
-
 /** Fully resolved ACPX config consumed by the runtime service. */
 export type ResolvedAcpxPluginConfig = {
   cwd: string;
@@ -56,15 +40,9 @@ export type ResolvedAcpxPluginConfig = {
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
   openClawToolsMcpBridge: boolean;
-  strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
-  queueOwnerTtlSeconds: number;
-  legacyCompatibilityConfig: {
-    strictWindowsCmdWrapper?: boolean;
-    queueOwnerTtlSeconds?: number;
-  };
   mcpServers: Record<string, McpServerConfig>;
-  agents: Record<string, string>;
+  agents: Record<string, AcpxAgentCommand>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>
@@ -107,17 +85,10 @@ export const AcpxPluginConfigSchema = z.strictObject({
   openClawToolsMcpBridge: z
     .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
     .optional(),
-  strictWindowsCmdWrapper: z
-    .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
-    .optional(),
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
     .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
-  queueOwnerTtlSeconds: z
-    .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .optional(),
   piSessionCatalog: z
     .strictObject({
       enabled: z.boolean({ error: "piSessionCatalog.enabled must be a boolean" }).default(true),

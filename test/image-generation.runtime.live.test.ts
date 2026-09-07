@@ -5,15 +5,15 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
-import { isBillingErrorMessage } from "../src/agents/embedded-agent-helpers/failover-matches.js";
+import { isBillingErrorMessage } from "../src/agents/failover/classify.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
   parseCaseFilter,
-  parseCsvFilter,
+  parseImageProviderFilter,
   parseProviderModelMap,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
@@ -28,7 +28,9 @@ const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
   isLiveProfileKeyModeEnabled() || isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 const describeLive = LIVE ? describe : describe.skip;
-const providerFilter = parseCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS);
+const providerFilter = parseImageProviderFilter(
+  process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS,
+);
 const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
 const DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
@@ -257,7 +259,7 @@ describeLive("image generation live (provider sweep)", () => {
         });
         let authLabel;
         try {
-          const auth = await resolveApiKeyForProvider({
+          const auth = await resolveApiKeyForProviderCore({
             provider: providerCase.providerId,
             cfg,
             agentDir,

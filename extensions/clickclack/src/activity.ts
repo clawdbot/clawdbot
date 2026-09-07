@@ -33,6 +33,7 @@ type ClickClackItemEventPayload = {
   summary?: string;
   progressText?: string;
   meta?: string;
+  commandBearing?: boolean;
 };
 
 /** Destination for durable activity rows (channel or DM conversation). */
@@ -105,6 +106,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
     summary: payload.summary,
     progressText: payload.progressText,
     meta: payload.meta,
+    commandBearing: payload.commandBearing,
   })?.text?.trim();
   if (line) {
     return line;

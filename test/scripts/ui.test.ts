@@ -1,20 +1,19 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  assertUiBuildOutputRoot,
   isDirectScriptExecution,
+  resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+} from "../../scripts/ui.mts";
+import { mergeProcessEnv } from "../../src/infra/process-env.js";
+import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -59,16 +58,76 @@ async function waitForExit(
 }
 
 describe("scripts/ui windows spawn behavior", () => {
-  it("rejects a symlinked dist root before launching a UI build", () => {
-    const rootDir = tempDirs.make("openclaw-ui-output-root-");
-    const targetDir = path.join(rootDir, "live-gateway-dist");
-    fs.mkdirSync(targetDir);
-    fs.writeFileSync(path.join(targetDir, "sentinel.js"), "keep\n");
-    fs.symlinkSync(targetDir, path.join(rootDir, "dist"), "dir");
+  it("reuses the runtime identity for the documented standalone UI rebuild", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const firstBuild = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit,
+      builtAt: "2026-08-14T23:00:00.000Z",
+    });
 
-    expect(() => assertUiBuildOutputRoot({ rootDir })).toThrow(/symbolic link/u);
-    expect(fs.readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
-    expect(fs.readlinkSync(path.join(rootDir, "dist"))).toBe(targetDir);
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => firstBuild,
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+    const rebuiltUi = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit: env.GIT_COMMIT,
+      builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
+      buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+    });
+
+    expect(rebuiltUi).toMatchObject({
+      builtAt: firstBuild.builtAt,
+      buildId: firstBuild.buildId,
+      commit: firstBuild.commit,
+      version: firstBuild.version,
+    });
+  });
+
+  it("does not reuse build info from a different source revision", () => {
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit: "a".repeat(40),
+        builtAt: "2026-08-14T23:00:00.000Z",
+      }),
+      readGitCommit: () => "b".repeat(40),
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: "b".repeat(40),
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+  });
+
+  it("does not reuse non-release build info for a release UI build", () => {
+    const commit = "a".repeat(40);
+    const env = resolveUiBuildEnvironment({
+      env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" },
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit,
+        builtAt: "2026-08-14T23:00:00.000Z",
+        release: false,
+      }),
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
   });
 
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -218,8 +277,8 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("honors build-all no-pnpm mode before requiring a pnpm runner", () => {
-    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", "--help"], {
+  it.each(["--help", "-h"])("keeps no-pnpm build %s informational", (helpFlag) => {
+    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", helpFlag], {
       cwd: path.resolve("."),
       encoding: "utf8",
       env: {
@@ -233,6 +292,282 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(result.status).toBe(0);
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
+    expect(output).not.toContain("Control UI performance");
+  });
+
+  it.each(
+    ["hoisted", "isolated"].flatMap((layout) =>
+      [
+        { action: "build", args: ["build"], noPnpm: false },
+        { action: "build", args: ["build"], noPnpm: true },
+        { action: "dev", args: [], noPnpm: false },
+        { action: "test", args: ["run", "--config", "vitest.config.ts"], noPnpm: false },
+      ].map(({ action, args, noPnpm }) => ({ layout, action, args, noPnpm })),
+    ),
+  )(
+    "runs $action from $layout dependencies without package shims (noPnpm=$noPnpm)",
+    ({ action, args, layout, noPnpm }) => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-layout-")));
+      const ui = path.join(root, "ui");
+      const modules = path.join(layout === "isolated" ? ui : root, "node_modules");
+      const expectedExit = action === "test" ? 17 : 0;
+      const forwarded = ["--help", "--mode", "fixture with spaces"];
+      try {
+        for (const file of [
+          "scripts/ui.js",
+          "scripts/ui.mts",
+          "scripts/pnpm-runner.mts",
+          "scripts/run-node-package-bin.mts",
+          "scripts/windows-cmd-helpers.mjs",
+          "scripts/lib/build-identity.mts",
+          "scripts/lib/output-root-guard.mjs",
+          "scripts/lib/record-shared.mjs",
+          "ui/package.json",
+          "ui/src/build-info-normalizers.ts",
+          "packages/normalization-core/src/record-coerce.ts",
+          "packages/normalization-core/src/string-coerce.ts",
+          "packages/normalization-core/src/utf16-slice.ts",
+        ]) {
+          const destination = path.join(root, file);
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+          fs.copyFileSync(file, destination);
+        }
+        fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+        for (const name of [
+          "vite",
+          "vitest",
+          "dompurify",
+          "@vitest/browser-playwright",
+          "playwright",
+        ]) {
+          const directory = path.join(modules, name);
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(
+            path.join(directory, "package.json"),
+            JSON.stringify({
+              name,
+              type: "module",
+              exports: { ".": "./entry.mjs", "./package.json": "./package.json" },
+              bin: { [name]: "./entry.mjs" },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(directory, "entry.mjs"),
+            `console.log(JSON.stringify({
+  args: process.argv.slice(2), cwd: process.cwd(),
+  commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP
+}));
+process.exitCode = ${expectedExit};\n`,
+          );
+        }
+        const pnpm = path.join(root, "pnpm.cjs");
+        fs.writeFileSync(
+          pnpm,
+          'throw new Error("Installed UI tools must not need package shims");\n',
+        );
+        const result = spawnSync(process.execPath, ["scripts/ui.js", action, ...forwarded], {
+          cwd: root,
+          encoding: "utf8",
+          env: mergeProcessEnv([
+            process.env,
+            {
+              PATH: "",
+              npm_execpath: pnpm,
+              OPENCLAW_BUILD_ALL_NO_PNPM: noPnpm ? "1" : "0",
+              OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
+              GIT_COMMIT: "a".repeat(40),
+            },
+          ]),
+          timeout: 10_000,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(expectedExit);
+        expect(JSON.parse(result.stdout)).toEqual({
+          args: [...args, ...forwarded],
+          cwd: ui,
+          commit: "a".repeat(40),
+          timestamp: "2026-08-27T00:00:00.000Z",
+        });
+      } finally {
+        fs.rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.each([
+    { noPnpm: false, failValidator: null },
+    { noPnpm: true, failValidator: null },
+    { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
+    { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
+  ])(
+    "reports budgets and enforces asset validity off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
+    ({ noPnpm, failValidator }) => {
+      const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-cache-")));
+      const tempRoot = path.join(tempDir, "temp");
+      const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? os.userInfo().username}`].map(
+        (name) => path.join(tempRoot, name),
+      );
+      const accessLog = path.join(tempDir, "cache-access.log");
+      const guard = path.join(tempDir, "cache-guard.cjs");
+      const capture = path.join(tempDir, "capture-ui-children.cjs");
+      const fixture = path.join(tempDir, "validator.mts");
+      const pnpm = path.join(tempDir, "pnpm.cjs");
+      const validators = [
+        "check-control-ui-precompressed-assets.mts",
+        "check-control-ui-performance.mts",
+      ];
+
+      try {
+        for (const cacheRoot of cacheRoots) {
+          fs.mkdirSync(cacheRoot, { recursive: true });
+          fs.writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
+        }
+        // Record before throwing: tsx catches some cache errors, so exit status alone
+        // cannot prove that the loader left the cache untouched.
+        fs.writeFileSync(
+          guard,
+          `
+const fs = require("node:fs");
+const path = require("node:path");
+const roots = ${JSON.stringify(cacheRoots)};
+function guardAccess(target, operation) {
+  const resolved = path.resolve(String(target));
+  if (roots.some(root => resolved === root || resolved.startsWith(root + path.sep))) {
+    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
+    throw new Error("Unexpected tsx disk cache access: " + operation);
+  }
+}
+for (const operation of ["readdirSync", "readFileSync", "writeFileSync", "openSync"]) {
+  const original = fs[operation];
+  fs[operation] = function(target, ...args) {
+    guardAccess(target, operation);
+    return original.call(this, target, ...args);
+  };
+}
+for (const operation of ["readdir", "readFile", "writeFile", "open", "unlink", "rm", "rmdir", "access"]) {
+  const original = fs.promises[operation];
+  fs.promises[operation] = async function(target, ...args) {
+    guardAccess(target, operation);
+    return original.call(this, target, ...args);
+  };
+}
+require("node:module").syncBuiltinESMExports();
+`,
+        );
+        fs.writeFileSync(pnpm, 'throw new Error("build must be intercepted");\n');
+        fs.writeFileSync(
+          fixture,
+          `
+enum Transformed { Value = "transformed" }
+const validator = process.argv[2];
+const reportOnly = process.argv.includes("--report-only");
+console.log(JSON.stringify({ validator, transformed: Transformed.Value, reportOnly }));
+process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17
+  : validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
+`,
+        );
+        // Run the native launcher, intercept only the build, then replay each real
+        // validator command/environment with a tiny transform-required entrypoint.
+        fs.writeFileSync(
+          capture,
+          `
+const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
+const path = require("node:path");
+const spawnSync = childProcess.spawnSync;
+const validators = ${JSON.stringify(validators)};
+assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
+assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
+childProcess.spawnSync = function(command, args, options) {
+  if (args[0] === ${JSON.stringify(path.join(path.dirname(createRequire(path.resolve("ui/package.json")).resolve("vite/package.json")), "bin/vite.js"))}) {
+    assert.deepEqual(args.slice(1), ["build"]);
+    return { status: 0 };
+  }
+  const validator = path.basename(args[2]);
+  if (!validators.includes(validator)) throw new Error("Unexpected UI subprocess");
+  assert.deepEqual(args.slice(3), validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
+  assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
+  return spawnSync(command, [...args.slice(0, 2), ${JSON.stringify(fixture)}, validator, ...args.slice(3)], options);
+};
+require("node:module").syncBuiltinESMExports();
+`,
+        );
+        // A spread can retain NPM_EXECPATH, which wins over npm_execpath on Windows.
+        const env = mergeProcessEnv([
+          process.env,
+          {
+            TMPDIR: tempRoot,
+            TMP: tempRoot,
+            TEMP: tempRoot,
+            XDG_CACHE_HOME: path.join(tempDir, "xdg-cache"),
+            NODE_COMPILE_CACHE: path.join(tempDir, "node-cache"),
+            NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
+            OPENCLAW_BUILD_ALL_NO_PNPM: noPnpm ? "1" : "0",
+            OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
+            GIT_COMMIT: "a".repeat(40),
+            npm_execpath: pnpm,
+            TSX_DISABLE_CACHE: undefined,
+            TSX_TSCONFIG_PATH: undefined,
+            PNPM_CONFIG_MODULES_DIR: undefined,
+            npm_config_modules_dir: undefined,
+          },
+        ]);
+
+        if (!noPnpm && failValidator === null) {
+          const control = spawnSync(process.execPath, ["--import", "tsx", fixture, "control"], {
+            cwd: path.resolve("."),
+            encoding: "utf8",
+            env,
+            timeout: 10_000,
+          });
+          expect(control.error).toBeUndefined();
+          expect(fs.readFileSync(accessLog, "utf8")).toContain("readdirSync");
+          fs.unlinkSync(accessLog);
+        }
+        const result = spawnSync(
+          process.execPath,
+          ["--require", capture, "scripts/ui.js", "build"],
+          {
+            cwd: path.resolve("."),
+            encoding: "utf8",
+            env,
+            timeout: 10_000,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(fs.existsSync(accessLog), result.stderr).toBe(false);
+        expect(result.status, result.stderr).toBe(failValidator ? 17 : 0);
+        const expectedValidators = failValidator
+          ? validators.slice(0, validators.indexOf(failValidator) + 1)
+          : validators;
+        expect(
+          result.stdout
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toEqual(
+          expectedValidators.map((validator) => ({
+            validator,
+            transformed: "transformed",
+            reportOnly: validator === "check-control-ui-performance.mts",
+          })),
+        );
+        for (const cacheRoot of cacheRoots) {
+          expect(fs.readdirSync(cacheRoot)).toEqual(["0-sentinel"]);
+          expect(fs.readFileSync(path.join(cacheRoot, "0-sentinel"), "utf8")).toBe("keep");
+        }
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("keeps the package script on the canonical UI build wrapper", () => {
+    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["ui:build"]).toBe("node scripts/ui.js build");
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(

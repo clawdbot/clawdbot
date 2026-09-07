@@ -1,26 +1,27 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  normalizeExtraMemoryPathEntries,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  listAgentIds,
+  resolveConfiguredAgentId,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
+  formatCliJsonFailure,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   getMemorySearchManager,
   getRuntimeConfig,
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
   shortenHomePath,
   theme,
   type OpenClawConfig,
   withManager,
 } from "./cli.host.runtime.js";
-import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
@@ -28,9 +29,10 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
-}
+type MemoryCommandUnavailable = { agentId: string } & (
+  | { status: "disabled" }
+  | ReturnType<typeof formatCliJsonFailure>
+);
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -61,7 +63,7 @@ async function loadMemoryCommandConfig(
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
       commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
       ...(mode ? { mode } : {}),
     });
     return { config: resolvedConfig, diagnostics };
@@ -104,8 +106,8 @@ function emitMemorySecretResolveDiagnostics(
   }
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
+  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
+  return asNullableRecord(entry?.config) ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const scriptCoverage = audit.conceptTagScripts
@@ -129,12 +131,12 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
-  if (trimmed) {
-    return trimmed;
+  if (agent !== undefined && !trimmed) {
+    throw new Error("--agent must not be blank");
   }
-  return resolveDefaultAgentId(cfg);
+  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : resolveDefaultAgentId(cfg);
 }
 export function buildCliMemorySearchSessionKey(agentId: string): string {
   return buildAgentSessionKey({
@@ -144,46 +146,17 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
-  if (trimmed) {
-    return [trimmed];
+  if (agent !== undefined && !trimmed) {
+    throw new Error("--agent must not be blank");
   }
-  return listAgentIds(cfg);
+  return trimmed ? [resolveConfiguredAgentId(cfg, trimmed)] : listAgentIds(cfg);
 }
-export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
-  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
-}
-async function withMemoryManagerForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemoryManagerPurpose;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
-  run: (manager: MemoryManager) => Promise<void>;
-}): Promise<void> {
-  const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-  };
-  if (params.purpose) {
-    managerParams.purpose = params.purpose;
-  }
-  if (params.acquireLocalService) {
-    managerParams.acquireLocalService = params.acquireLocalService;
-  }
-  if (params.withLease) {
-    managerParams.withLease = params.withLease;
-  }
-  await withManager<MemoryManager>({
-    getManager: () => getMemorySearchManager(managerParams),
-    onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
-    onCloseError: (err) =>
-      defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
-    close: async (manager) => {
-      await manager.close?.();
-    },
-    run: params.run,
+export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
+  return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
+    const root = shortenHomePath(entry.path);
+    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
   });
 }
 export async function withMemoryCommand(params: {
@@ -191,9 +164,11 @@ export async function withMemoryCommand(params: {
   agent?: string;
   allAgents?: boolean;
   diagnosticsToStderr?: boolean;
+  // Single-command writers opt in; status owns one aggregate document after this scope.
+  onUnavailable?: (result: MemoryCommandUnavailable) => void;
   purpose?: MemoryManagerPurpose;
+  inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
@@ -202,23 +177,47 @@ export async function withMemoryCommand(params: {
   );
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
-    ? resolveAgentIds(cfg, params.agent)
-    : [resolveAgent(cfg, params.agent)];
+    ? resolveMemoryAgentIds(cfg, params.agent)
+    : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
-    await withMemoryManagerForAgent({
+    const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
       cfg,
       agentId,
-      purpose: params.purpose,
-      acquireLocalService: params.acquireLocalService,
-      withLease: params.withLease,
+    };
+    if (params.purpose) {
+      managerParams.purpose = params.purpose;
+    }
+    if (params.inspectSources) {
+      managerParams.inspectSources = true;
+    }
+    if (params.acquireLocalService) {
+      managerParams.acquireLocalService = params.acquireLocalService;
+    }
+    await withManager<MemoryManager>({
+      getManager: () => getMemorySearchManager(managerParams),
+      onMissing: (error) => {
+        if (!error?.trim()) {
+          defaultRuntime.log("Memory search disabled.");
+          params.onUnavailable?.({ agentId, status: "disabled" });
+          return;
+        }
+        const message = `${params.commandName} failed (${agentId}): ${error}`;
+        defaultRuntime.error(message);
+        process.exitCode = 1;
+        params.onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
+      },
+      onCloseError: (err) =>
+        defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+      close: async (manager) => {
+        await manager.close?.();
+      },
       run: async (manager) => params.run({ manager, cfg, agentId }),
     });
   }
   return cfg;
 }
-export type MemorySourceName = "memory" | "sessions";
 type SourceScan = {
-  source: MemorySourceName;
+  source: "memory" | "sessions";
   totalFiles: number | null;
   issues: string[];
 };
@@ -227,143 +226,32 @@ export type MemorySourceScan = {
   totalFiles: number | null;
   issues: string[];
 };
-async function checkReadableFile(pathname: string): Promise<{ exists: boolean; issue?: string }> {
-  try {
-    await fs.access(pathname, fsSync.constants.R_OK);
-    return { exists: true };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      return { exists: false };
-    }
-    return {
-      exists: true,
-      issue: `${shortenHomePath(pathname)} not readable (${code ?? "error"})`,
-    };
+export async function scanMemoryManagerSources(
+  status: ReturnType<MemoryManager["status"]>,
+): Promise<MemorySourceScan | undefined> {
+  if (!status.sourceCounts?.length) {
+    return undefined;
   }
-}
-async function scanSessionFiles(agentId: string): Promise<SourceScan> {
-  const issues: string[] = [];
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  try {
-    const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const totalFiles = entries.filter(
-      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
-    ).length;
-    return { source: "sessions", totalFiles, issues };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
-      return { source: "sessions", totalFiles: 0, issues };
-    }
-    issues.push(
-      `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
-    );
-    return { source: "sessions", totalFiles: null, issues };
-  }
-}
-async function scanMemoryFiles(
-  workspaceDir: string,
-  extraPaths: string[] = [],
-): Promise<SourceScan> {
-  const issues: string[] = [];
-  const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const memoryDir = path.join(workspaceDir, "memory");
-  const primary = await checkReadableFile(memoryFile);
-  if (primary.issue) {
-    issues.push(primary.issue);
-  }
-  const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
-  for (const extraPath of resolvedExtraPaths) {
-    try {
-      const stat = await fs.lstat(extraPath);
-      if (stat.isSymbolicLink()) {
-        continue;
-      }
-      const extraCheck = await checkReadableFile(extraPath);
-      if (extraCheck.issue) {
-        issues.push(extraCheck.issue);
-      }
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        issues.push(`additional memory path missing (${shortenHomePath(extraPath)})`);
-      } else {
-        issues.push(
-          `additional memory path not accessible (${shortenHomePath(extraPath)}): ${code ?? "error"}`,
-        );
-      }
-    }
-  }
-  let dirReadable: boolean | null;
-  try {
-    await fs.access(memoryDir, fsSync.constants.R_OK);
-    dirReadable = true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      issues.push(`memory directory missing (${shortenHomePath(memoryDir)})`);
-      dirReadable = false;
-    } else {
-      issues.push(
-        `memory directory not accessible (${shortenHomePath(memoryDir)}): ${code ?? "error"}`,
-      );
-      dirReadable = null;
-    }
-  }
-  let listed: string[] = [];
-  let listedOk = false;
-  try {
-    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths);
-    listedOk = true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (dirReadable !== null) {
-      issues.push(
-        `memory directory scan failed (${shortenHomePath(memoryDir)}): ${code ?? "error"}`,
-      );
-      dirReadable = null;
-    }
-  }
-  let totalFiles: number | null;
-  if (dirReadable === null) {
-    totalFiles = null;
-  } else {
-    const files = new Set<string>(listedOk ? listed : []);
-    if (!listedOk) {
-      if (primary.exists) {
-        files.add(memoryFile);
-      }
-    }
-    totalFiles = files.size;
-  }
-  if ((totalFiles ?? 0) === 0 && issues.length === 0) {
-    issues.push(`no memory files found in ${shortenHomePath(workspaceDir)}`);
-  }
-  return { source: "memory", totalFiles, issues };
-}
-export async function scanMemorySources(params: {
-  workspaceDir: string;
-  agentId: string;
-  sources: MemorySourceName[];
-  extraPaths?: string[];
-}): Promise<MemorySourceScan> {
-  const scans: SourceScan[] = [];
-  const extraPaths = params.extraPaths ?? [];
-  for (const source of params.sources) {
-    if (source === "memory") {
-      scans.push(await scanMemoryFiles(params.workspaceDir, extraPaths));
-    }
-    if (source === "sessions") {
-      scans.push(await scanSessionFiles(params.agentId));
-    }
-  }
-  const issues = scans.flatMap((scan) => scan.issues);
-  const totals = scans.map((scan) => scan.totalFiles);
-  const numericTotals = totals.filter((total): total is number => total !== null);
-  const totalFiles = totals.some((total) => total === null)
+  const sources = status.sourceCounts.map((entry): SourceScan => ({
+    source: entry.source,
+    totalFiles: entry.eligible ?? null,
+    issues: entry.issues ?? [],
+  }));
+  const totalFiles = sources.some((entry) => entry.totalFiles === null)
     ? null
-    : numericTotals.reduce((sum, total) => sum + total, 0);
-  return { sources: scans, totalFiles, issues };
+    : sources.reduce((total, entry) => total + (entry.totalFiles ?? 0), 0);
+  return { sources, totalFiles, issues: sources.flatMap((entry) => entry.issues) };
+}
+
+export function formatMemoryIndexOutcome(
+  status: ReturnType<MemoryManager["status"]>,
+  scan: MemorySourceScan | undefined,
+  agentId: string,
+): string {
+  const indexedFiles = status.files ?? 0;
+  if (indexedFiles === 0 && status.workspaceDir && scan?.totalFiles === 0) {
+    return `No memory files found in ${shortenHomePath(status.workspaceDir)}; nothing indexed (${agentId}).`;
+  }
+  const fileLabel = indexedFiles === 1 ? "file" : "files";
+  return `Memory index updated (${agentId}): ${indexedFiles} ${fileLabel} indexed.`;
 }

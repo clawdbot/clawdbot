@@ -1,5 +1,6 @@
 // Policy plugin exec approval evidence.
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
@@ -21,7 +22,7 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     return [];
   }
   const evidence: PolicyExecApprovalEvidence[] = [];
-  const defaults = isRecord(parsed.defaults) ? parsed.defaults : {};
+  const defaults = asNonArrayRecord(parsed.defaults);
   evidence.push(
     execApprovalPostureEvidence(
       "defaults",
@@ -225,15 +226,13 @@ function withExecApprovalAllowlistSource(
   value: unknown,
   sourceAgentId: string,
 ): readonly NormalizedExecApprovalAllowlistEntry[] {
-  return execApprovalAllowlistEntries(value).map(
-    (entry): NormalizedExecApprovalAllowlistEntry => ({
-      index: entry.index,
-      pattern: entry.pattern,
-      argPattern: entry.argPattern,
-      entrySource: entry.entrySource,
-      sourceAgentId,
-    }),
-  );
+  return execApprovalAllowlistEntries(value).map((entry): NormalizedExecApprovalAllowlistEntry => ({
+    index: entry.index,
+    pattern: entry.pattern,
+    argPattern: entry.argPattern,
+    entrySource: entry.entrySource,
+    sourceAgentId,
+  }));
 }
 
 function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {

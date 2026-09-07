@@ -30,6 +30,32 @@ class ChatEventTextTest {
   }
 
   @Test
+  fun preservesResponsesTextAndIgnoresTypedNonTextBlocks() {
+    val payload =
+      payload(
+        """
+        {
+          "message": {
+            "role": "assistant",
+            "content": [
+              { "type": "thinking", "text": "private reasoning" },
+              { "type": "output_text", "text": "visible output" },
+              { "type": "input_text", "text": "visible input" },
+              { "type": "tool_result", "text": "tool payload" },
+              { "text": "legacy visible" }
+            ]
+          }
+        }
+        """,
+      )
+
+    assertEquals(
+      "visible output\nvisible input\nlegacy visible",
+      ChatEventText.assistantTextFromPayload(payload),
+    )
+  }
+
+  @Test
   fun extractsPlainStringContent() {
     val payload =
       payload(

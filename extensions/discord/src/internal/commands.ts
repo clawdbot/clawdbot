@@ -7,6 +7,7 @@ import {
 } from "discord-api-types/v10";
 import type { BaseMessageInteractiveComponent } from "./components.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
+import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 type ConditionalCommandOption = (interaction: unknown) => boolean;
 type CommandOption = Record<string, unknown> & {
@@ -18,16 +19,13 @@ type CommandOption = Record<string, unknown> & {
   autocomplete?: boolean | ((interaction: AutocompleteInteraction) => Promise<void>);
 };
 export type CommandOptions = CommandOption[];
+export type DiscordCommand = Command | CommandWithSubcommands;
 
 type RawSubcommandOption = {
   name?: unknown;
   type?: unknown;
   options?: RawSubcommandOption[];
 };
-
-function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
 
 function resolveConditionalCommandOption(
   value: boolean | ConditionalCommandOption,
@@ -75,28 +73,21 @@ function findCommandOption(
   return options?.find((option) => option.name === name);
 }
 
-function hasCommandOptions(
-  command: BaseCommand,
-): command is BaseCommand & { options?: CommandOptions } {
-  return "options" in command;
-}
-
 export function resolveFocusedCommandOptionAutocompleteHandler(
-  command: BaseCommand,
+  command: DiscordCommand,
   interaction: AutocompleteInteraction,
 ): ((interaction: AutocompleteInteraction) => Promise<void>) | undefined {
   const focusedName = interaction.options.getFocused()?.name;
   const options =
-    "subcommands" in command && Array.isArray(command.subcommands)
+    command.commandKind === "group"
       ? findSelectedSubcommand(command.subcommands, interaction)?.options
-      : hasCommandOptions(command)
-        ? command.options
-        : undefined;
+      : command.options;
   const autocomplete = findCommandOption(options, focusedName)?.autocomplete;
   return typeof autocomplete === "function" ? autocomplete : undefined;
 }
 
 export abstract class BaseCommand {
+  abstract readonly commandKind: "leaf" | "group";
   id?: string;
   abstract name: string;
   description?: string;
@@ -136,6 +127,7 @@ export abstract class BaseCommand {
 }
 
 export abstract class Command extends BaseCommand {
+  readonly commandKind = "leaf";
   options?: CommandOptions;
   type = ApplicationCommandType.ChatInput;
   abstract run(interaction: unknown): unknown;
@@ -156,6 +148,7 @@ export abstract class Command extends BaseCommand {
 }
 
 export abstract class CommandWithSubcommands extends BaseCommand {
+  readonly commandKind = "group";
   type = ApplicationCommandType.ChatInput;
   abstract subcommands: Command[];
   async run(interaction: CommandInteraction): Promise<unknown> {

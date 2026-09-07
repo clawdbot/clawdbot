@@ -33,7 +33,7 @@ type IgnoreMatcherState = {
 const ignoreMatcherStates = new WeakMap<IgnoreMatcher, IgnoreMatcherState>();
 
 function normalizeLiteralSubtreePath(pathname: string): string {
-  const posixPath = toPosixPath(pathname);
+  const posixPath = normalizeNativePathSeparators(pathname);
   return posixPath.endsWith("/") ? posixPath.slice(0, -1) : posixPath;
 }
 
@@ -198,7 +198,7 @@ function parseIgnorePatterns(
   return { patterns, chars: patternChars };
 }
 
-export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
+export const normalizeNativePathSeparators = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
 export function addIgnoreRules(dir: string, rootDir: string): IgnoreMatcher;
@@ -222,7 +222,7 @@ export function addIgnoreRules(
   // callers supplying ignorecase:false must carry that fact alongside it.
   const state = getIgnoreMatcherState(matcher, options?.ignoreCase ?? true);
   const relativeDir = relative(rootDir, dir);
-  const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+  const prefix = relativeDir ? `${normalizeNativePathSeparators(relativeDir)}/` : "";
 
   for (const filename of IGNORE_FILE_NAMES) {
     const ignorePath = join(dir, filename);

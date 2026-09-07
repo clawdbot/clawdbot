@@ -1,12 +1,31 @@
 // Delivery-result adapters for channel turn receipts.
 import { formatErrorMessage } from "../../infra/errors.js";
-import { listMessageReceiptPlatformIds } from "../message/receipt.js";
+import {
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptThreadId,
+} from "../message/receipt.js";
 import type { MessageReceipt } from "../message/types.js";
 import type {
   ChannelDeliveryIntent,
   ChannelDeliveryOutcome,
   ChannelDeliveryResult,
 } from "./types.js";
+
+/** Builds a typed non-visible channel outcome without transport identity. */
+export function createSuppressedChannelDeliveryResult(params: {
+  reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"];
+  cancelReason?: string;
+  metadata?: Record<string, unknown>;
+}): ChannelDeliveryResult {
+  return {
+    visibleReplySent: false,
+    suppression: {
+      reason: params.reason,
+      ...(params.cancelReason ? { cancelReason: params.cancelReason } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    },
+  };
+}
 
 const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
@@ -58,10 +77,11 @@ export function createChannelDeliveryResultFromReceipt(params: {
   deliveryIntent?: ChannelDeliveryIntent;
 }): ChannelDeliveryResult {
   const messageIds = listMessageReceiptPlatformIds(params.receipt);
+  const threadId = resolveMessageReceiptThreadId(params.receipt, params.threadId);
   return {
     ...(messageIds.length > 0 ? { messageIds } : {}),
     receipt: params.receipt,
-    ...(params.threadId ? { threadId: params.threadId } : {}),
+    ...(threadId ? { threadId } : {}),
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.visibleReplySent === undefined ? {} : { visibleReplySent: params.visibleReplySent }),
     ...(params.content === undefined ? {} : { content: params.content }),

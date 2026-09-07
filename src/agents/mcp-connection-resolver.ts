@@ -3,6 +3,7 @@
  * Resolved url/headers are credentials — never log, fingerprint, or persist them.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
@@ -14,7 +15,6 @@ import type {
   McpServerConnectionResolveContext,
   OpenClawPluginMcpServerConnectionResolver,
 } from "../plugins/types.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
 
 export type { McpServerConnectionResolved };
 
@@ -154,19 +154,32 @@ function listMcpServerConnectionResolversByServerName(): Map<
   return new Map([...byName.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-/** Partition loaded MCP servers into static vs requester-scoped by registered resolvers. */
+/** Partition loaded MCP servers into static vs requester-scoped connections. */
 export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<string, T>): {
   staticServers: Record<string, T>;
   requesterScopedServerNames: string[];
+  oauthRequesterServerNames: string[];
+  resolverRequesterServerNames: string[];
 } {
   const resolvers = listMcpServerConnectionResolversByServerName();
   const staticServerEntries: Array<[string, T]> = [];
   const requesterScopedServerNames: string[] = [];
+  const oauthRequesterServerNames: string[] = [];
+  const resolverRequesterServerNames: string[] = [];
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
+    const oauth = isRecord(rawServer) && isRecord(rawServer.oauth) ? rawServer.oauth : undefined;
+    if (isRecord(rawServer) && rawServer.auth === "oauth" && oauth?.identity === "per-requester") {
+      // Config-declared requester OAuth must stay out of anonymous/static runs.
+      // Resolver lookup here would erase OAuth and could expose a shared connection.
+      requesterScopedServerNames.push(serverName);
+      oauthRequesterServerNames.push(serverName);
+      continue;
+    }
     if (resolvers.has(serverName)) {
       requesterScopedServerNames.push(serverName);
+      resolverRequesterServerNames.push(serverName);
       continue;
     }
     staticServerEntries.push([serverName, rawServer]);
@@ -174,7 +187,12 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
   // Data-property construction preserves every own key from unvalidated inputs,
   // including "__proto__", without invoking Object.prototype's legacy setter.
   const staticServers = Object.fromEntries(staticServerEntries);
-  return { staticServers, requesterScopedServerNames };
+  return {
+    staticServers,
+    requesterScopedServerNames,
+    oauthRequesterServerNames,
+    resolverRequesterServerNames,
+  };
 }
 
 /**
@@ -250,7 +268,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
           return null;
         }
         const headers =
-          result.headers && isMcpConfigRecord(result.headers)
+          result.headers && isRecord(result.headers)
             ? Object.fromEntries(
                 Object.entries(result.headers)
                   .filter(
@@ -295,7 +313,7 @@ export function applyMcpConnectionOverride(
   rawServer: unknown,
   override: McpServerConnectionResolved,
 ): Record<string, unknown> {
-  const base = isMcpConfigRecord(rawServer) ? { ...rawServer } : {};
+  const base = isRecord(rawServer) ? { ...rawServer } : {};
   base.url = override.url;
   if (override.headers) {
     base.headers = { ...override.headers };
@@ -336,7 +354,7 @@ export function redactMcpServersForFingerprint(
       redacted[serverName] = rawServer;
       continue;
     }
-    if (!isMcpConfigRecord(rawServer)) {
+    if (!isRecord(rawServer)) {
       redacted[serverName] = { connection: "requester-scoped" };
       continue;
     }

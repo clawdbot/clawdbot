@@ -5,7 +5,6 @@ import {
   removeAckReactionHandleAfterReply,
   removeAckReactionAfterReply,
   shouldAckReaction,
-  shouldAckReactionForWhatsApp,
 } from "./ack-reactions.js";
 
 const flushMicrotasks = async () => {
@@ -121,101 +120,16 @@ describe("shouldAckReaction", () => {
       shouldAckReaction({
         ...groupMentionsScope,
         effectiveWasMentioned: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAckReaction({
+        ...groupMentionsScope,
+        effectiveWasMentioned: false,
         shouldBypassMention: true,
       }),
     ).toBe(true);
-  });
-});
-
-describe("shouldAckReactionForWhatsApp", () => {
-  it("acks a mention in a group that does not require mentions", () => {
-    // Regression: the gate used to return false whenever the group did not
-    // require mentions, so an explicitly mentioned message the agent answered
-    // got no ack under the default scope.
-    expect(
-      shouldAckReaction({
-        scope: "group-mentions",
-        isDirect: false,
-        isGroup: true,
-        isMentionableGroup: true,
-        canDetectMention: true,
-        effectiveWasMentioned: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldAckReaction({
-        scope: "group-mentions",
-        isDirect: false,
-        isGroup: true,
-        isMentionableGroup: true,
-        canDetectMention: true,
-        effectiveWasMentioned: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("respects direct and group modes", () => {
-    expect(
-      shouldAckReactionForWhatsApp({
-        emoji: "👀",
-        isDirect: true,
-        isGroup: false,
-        directEnabled: false,
-        groupMode: "mentions",
-        wasMentioned: false,
-        groupActivated: false,
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldAckReactionForWhatsApp({
-        emoji: "👀",
-        isDirect: false,
-        isGroup: true,
-        directEnabled: true,
-        groupMode: "always",
-        wasMentioned: false,
-        groupActivated: false,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldAckReactionForWhatsApp({
-        emoji: "👀",
-        isDirect: false,
-        isGroup: true,
-        directEnabled: true,
-        groupMode: "never",
-        wasMentioned: true,
-        groupActivated: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("honors mentions or activation for group-mentions", () => {
-    expect(
-      shouldAckReactionForWhatsApp({
-        emoji: "👀",
-        isDirect: false,
-        isGroup: true,
-        directEnabled: true,
-        groupMode: "mentions",
-        wasMentioned: false,
-        groupActivated: true,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldAckReactionForWhatsApp({
-        emoji: "👀",
-        isDirect: false,
-        isGroup: true,
-        directEnabled: true,
-        groupMode: "mentions",
-        wasMentioned: false,
-        groupActivated: false,
-      }),
-    ).toBe(false);
   });
 });
 

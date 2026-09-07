@@ -19,9 +19,15 @@ not depend on `tools.toolSearch`.
 For the generic OpenClaw runtime that exposes a QuickJS-WASI `exec`/`wait`
 surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
 
+Local inference routes use structured Tool Search automatically when
+`tools.toolSearch` is unset. This defers tool schemas while keeping the
+policy-approved capabilities available. It does not enable lean mode or remove
+optional tools. The default follows the active model for each run, including
+model switches and fallbacks, without changing another agent's settings.
+
 When enabled for OpenClaw runs, the model automatically receives a bounded
-directory of the available trusted tool names and descriptions. By default, it
-also receives one `tool_search_code` tool, plus any direct-only tools whose
+directory of the available trusted tool names and descriptions. Explicitly
+setting `tools.toolSearch: true` selects one `tool_search_code` tool, plus any direct-only tools whose
 structured results cannot cross the compact bridge. The code tool runs a short
 JavaScript body in an isolated Node subprocess with an `openclaw.tools` bridge:
 
@@ -33,6 +39,17 @@ return await openclaw.tools.call(tool.id, {
   body: "Steps to reproduce...",
 });
 ```
+
+The directory scales with the active model's context window. When space is tight,
+descriptions shorten before tool names are omitted; every authorized catalog
+entry remains searchable and callable. Invalid arguments for OpenClaw-owned
+tools include a bounded expected input signature when one can be rendered, so
+the model can correct the call without another schema lookup.
+If a call mistakes an admitted skill name for a tool ID, the error points back
+to the skill’s complete instructions instead of sending the model through tool search.
+
+The deferred directory omits tools already exposed directly. They remain searchable,
+so discovery can still return their complete schemas without duplicating native guidance.
 
 The catalog can include catalog-eligible OpenClaw tools, plugin tools, MCP
 tools, and client-provided tools. The directory gives the model an idea of
@@ -93,8 +110,9 @@ for the current run while OpenClaw tools, plugin tools, and MCP tools can be
 compacted behind the directory catalog. A direct call to an exact hidden
 directory name is hydrated from that same authorized catalog before execution.
 
-All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
-catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
+All modes are experimental. Local inference defaults to structured `tools` mode;
+other routes keep direct tool exposure unless configured otherwise. Codex harness
+runs use their native surfaces.
 
 There is no separate source-selection config. When Tool Search is enabled, the
 catalog includes catalog-eligible OpenClaw, MCP, and client tools after normal
@@ -118,9 +136,9 @@ Tool Search changes the shape:
   direct-only tools
 - during the turn: the model can load remaining schemas as needed
 
-Direct tool exposure is still the right default for small catalogs. Tool Search
-is best when one run can see many tools, especially from MCP servers or
-client-provided app tools.
+Tool Search is useful when one run can see many tools, especially from MCP
+servers or client-provided app tools. Local inference uses it by default to
+reduce the prompt that the model must process before responding.
 
 The capability directory is sorted by tool name, limited to 18,000 characters,
 and built from the already policy-filtered catalog. OpenClaw reuses the
@@ -195,6 +213,11 @@ local models. It preserves target fields such as `id` and `name`, and rejects
 ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
+The structured control's model-facing text includes only the tool's `id`,
+`name`, and `source` alongside the unchanged target `result`; it does not repeat
+the description and input signature. Its structured `details` retain the full
+call envelope for runtime consumers. Use `tool_describe` for full tool metadata.
+
 ```js
 await openclaw.tools.call(calendarCreate.id, {
   summary: "Planning",
@@ -213,6 +236,12 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_search`
 - `tool_describe`
 - `tool_call`
+
+Deferred names are catalog entries, not directly callable functions in this
+mode. Put the result ID or name in `tool_call.id` and all target parameters in
+`tool_call.args`, including when other instructions refer to the deferred tool
+by name. A compact search signature may be enough to call it; use
+`tool_describe` when the full schema is needed.
 
 `tool_search` accepts either the existing single-query shape or a batch of
 independent queries:
@@ -234,6 +263,21 @@ independent queries:
 ```
 
 Single-query calls continue to return the compact candidate array directly.
+When both shapes contain searches, the non-empty `query` runs first, with the
+top-level `limit` scoped to it. Batch entries follow in request order, including
+repeated query text; each occurrence keeps its own limit and counts toward the
+batch budgets.
+
+Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
+is ignored. In that case, omit the top-level `limit` or set it to `null`; a
+non-null top-level limit is rejected rather than applied to the batch.
+An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
+falls back to the scalar shape when `query` is non-empty. A blank scalar query
+without a batch still returns an empty candidate array. A missing or `null`
+scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
+A scalar `limit: null` uses the default limit, just like an omitted limit.
+Invalid query shapes, invalid limits, and over-budget batches still fail.
+
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.
@@ -273,6 +317,11 @@ network grants, and no child-process or worker grants. OpenClaw enforces a
 parent-process wall-clock timeout and kills the subprocess on timeout, including
 after async continuations.
 
+Outstanding bridged tool calls are canceled when the child settles, including
+fatal exits and final results. Failed exits wait for stderr to drain before
+rendering a bounded diagnostic. The error separately reports bytes discarded
+from the 64 KiB retained tail and bytes omitted from its final text preview.
+
 The runtime exposes only:
 
 - `console.log`, `console.warn`, and `console.error`
@@ -291,7 +340,19 @@ Normal OpenClaw behavior still applies to final calls:
 
 ## Config
 
-Enable Tool Search for OpenClaw runs with the default code bridge:
+With `tools.toolSearch` unset, local Ollama models, LM Studio, and managed local
+services use structured `tools` mode with a default search limit of 5 and a
+maximum of 10. Known hosted Ollama routes (cloud model tags, the cloud provider,
+or the hosted endpoint) are excluded. An untagged alias served by an Ollama
+daemon inherits the daemon's Tool Search default even if that alias forwards to
+a hosted model. Other providers are not classified from model names or a
+loopback URL alone.
+
+An explicit `tools.toolSearch` value takes precedence, including `false`.
+Setting `agents.defaults.experimental.localModelLean: false` restores optional
+tools but does not turn off automatic Tool Search.
+
+Enable Tool Search explicitly for OpenClaw runs with the default code bridge:
 
 ```bash
 openclaw config set tools.toolSearch true
@@ -377,10 +438,10 @@ operation. OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane, not from the runtime.
 
-Regardless of mode, target tool calls are projected into the session transcript
-as normal tool call and tool result pairs, and search, describe, and call
-results carry each tool's `id` and `source`. Session logs therefore still
-answer:
+Regardless of mode, completed target calls persist as bounded, redacted display
+activity in session history without adding synthetic model turns to replay.
+Search, describe, and call results carry each tool's `id` and `source`.
+Session logs therefore still answer:
 
 - how many tool schemas the model saw up front
 - how many search and describe operations it performed

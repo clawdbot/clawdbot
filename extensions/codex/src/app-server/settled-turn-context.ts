@@ -1,210 +1,69 @@
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  embeddedAgentLog,
-  formatErrorMessage,
-  type AgentMessage,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import {
-  readCodexMirroredSessionHistoryMessages,
-  type CodexMirroredSessionHistoryTarget,
-} from "./session-history.js";
-import {
-  readCodexMirrorSourceFingerprint,
-  serializeCodexMirrorSourceEvidence,
-} from "./transcript-mirror-attestation.js";
-import {
-  attachCodexMirrorIdentity,
-  attachUpstreamUserText,
-  readMirrorIdentity,
-  readUpstreamUserText,
-} from "./upstream-prompt-provenance.js";
+  CodexHistoryRejection,
+  codexHistoryRejectionReason,
+  type CodexHistoryRejectionReason,
+} from "./history-rejection.js";
+import type { JsonValue } from "./protocol.js";
+import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
+import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 
-type SettledTurnFinalizationContext = EmbeddedRunAttemptResult["settledTurnFinalizationContext"];
-
-function collectUniqueMessageIdentities(
-  messages: readonly AgentMessage[],
-): Map<string, number> | undefined {
-  const identities = new Map<string, number>();
-  for (const [index, message] of messages.entries()) {
-    const identity = readMirrorIdentity(message);
-    if (!identity) {
-      continue;
+function freezeProjection(value: JsonValue): void {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) {
+      freezeProjection(child);
     }
-    if (identities.has(identity)) {
-      return undefined;
-    }
-    identities.set(identity, index);
+    Object.freeze(value);
   }
-  return identities;
 }
 
-function adoptPersistedHostPrompt(params: {
-  historyMessages: readonly AgentMessage[];
-  mirroredMessages: readonly AgentMessage[];
-  settledMessages: readonly AgentMessage[];
-  turnId: string;
-}): { historyMessages: readonly AgentMessage[]; mirroredMessages: readonly AgentMessage[] } {
-  const promptIdentity = `${params.turnId}:prompt`;
-  if (params.mirroredMessages.some((message) => readMirrorIdentity(message) === promptIdentity)) {
-    return params;
-  }
-  const sourcePrompt = params.settledMessages[0];
-  const sourceKey = (sourcePrompt as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
-  if (
-    sourcePrompt?.role !== "user" ||
-    readMirrorIdentity(sourcePrompt) !== promptIdentity ||
-    typeof sourceKey !== "string" ||
-    sourceKey.trim().length === 0
+type CodexSettledTurnSelection = {
+  model: string;
+  modelProvider?: string;
+  authProfileId?: string;
+};
+
+/** Only the Codex owner interprets this bounded, detached replay projection. */
+export class CodexSettledTurnContext {
+  readonly source = "harness";
+
+  constructor(
+    readonly data: JsonValue[],
+    readonly selection: CodexSettledTurnSelection,
   ) {
-    return params;
+    freezeProjection(data);
+    Object.freeze(selection);
+    Object.freeze(this);
   }
-  const matches = params.historyMessages.flatMap((message, index) =>
-    message.role === "user" &&
-    (message as { idempotencyKey?: unknown }).idempotencyKey === sourceKey
-      ? [{ index, message }]
-      : [],
-  );
-  const persistedPrompt = matches.length === 1 ? matches[0] : undefined;
-  const persistedMetadata = persistedPrompt?.message as
-    | { __openclaw?: { mirrorOrigin?: unknown } }
-    | undefined;
-  if (
-    !persistedPrompt ||
-    readMirrorIdentity(persistedPrompt.message) !== undefined ||
-    readCodexMirrorSourceFingerprint(persistedPrompt.message) !== undefined ||
-    persistedMetadata?.["__openclaw"]?.mirrorOrigin === "codex-app-server"
-  ) {
-    return params;
-  }
-  const sourceUpstreamText = readUpstreamUserText(sourcePrompt);
-  const persistedUpstreamText = readUpstreamUserText(persistedPrompt.message);
-  if (persistedUpstreamText !== undefined && persistedUpstreamText !== sourceUpstreamText) {
-    return params;
-  }
-  let logicalPrompt = attachCodexMirrorIdentity(persistedPrompt.message, promptIdentity);
-  if (sourceUpstreamText !== undefined) {
-    logicalPrompt = attachUpstreamUserText(logicalPrompt, sourceUpstreamText);
-  }
-  if (
-    serializeCodexMirrorSourceEvidence(logicalPrompt) !==
-    serializeCodexMirrorSourceEvidence(sourcePrompt)
-  ) {
-    return params;
-  }
-  // Host-owned prompts are authoritative by durable turn key; adopt their identity
-  // only in verification views so canonical channel metadata remains untouched.
-  const historyMessages = [...params.historyMessages];
-  historyMessages[persistedPrompt.index] = logicalPrompt;
-  return { historyMessages, mirroredMessages: [logicalPrompt, ...params.mirroredMessages] };
 }
 
-/** Freezes one complete active transcript branch through the settled tool-result boundary. */
-function buildCodexSettledTurnFinalizationContext(params: {
-  historyMessages: readonly AgentMessage[];
-  mirroredMessages: readonly AgentMessage[];
-  settledMessages: readonly AgentMessage[];
-  turnId: string;
-}): SettledTurnFinalizationContext | undefined {
-  const { historyMessages, mirroredMessages } = adoptPersistedHostPrompt(params);
-  const boundaryMessage = params.settledMessages.findLast(
-    (message) => message.role === "toolResult",
-  );
-  const boundaryIdentity = boundaryMessage ? readMirrorIdentity(boundaryMessage) : undefined;
-  if (
-    !boundaryMessage ||
-    !boundaryIdentity ||
-    !boundaryIdentity.startsWith(`${params.turnId}:tool:`)
-  ) {
-    return undefined;
-  }
-
-  const settledBoundaryIndex = params.settledMessages.indexOf(boundaryMessage);
-  const requiredIdentities = params.settledMessages
-    .slice(0, settledBoundaryIndex + 1)
-    .map(readMirrorIdentity);
-  if (
-    requiredIdentities.length === 0 ||
-    requiredIdentities.some((identity) => !identity) ||
-    new Set(requiredIdentities).size !== requiredIdentities.length ||
-    !requiredIdentities.includes(`${params.turnId}:prompt`)
-  ) {
-    return undefined;
-  }
-
-  const historyIdentities = collectUniqueMessageIdentities(historyMessages);
-  const mirroredIdentities = collectUniqueMessageIdentities(mirroredMessages);
-  if (!historyIdentities || !mirroredIdentities) {
-    return undefined;
-  }
-  const mirroredBoundaryIndex = mirroredIdentities.get(boundaryIdentity);
-  if (mirroredBoundaryIndex === undefined) {
-    return undefined;
-  }
-  const mirroredThroughBoundary = mirroredMessages.slice(0, mirroredBoundaryIndex + 1);
-  if (
-    mirroredThroughBoundary.length !== requiredIdentities.length ||
-    mirroredThroughBoundary.some(
-      (message, index) => readMirrorIdentity(message) !== requiredIdentities[index],
-    )
-  ) {
-    return undefined;
-  }
-  const historyBoundaryIndex = historyIdentities.get(boundaryIdentity);
-  if (historyBoundaryIndex === undefined) {
-    return undefined;
-  }
-  let previousHistoryIndex = -1;
-  for (const mirroredMessage of mirroredThroughBoundary) {
-    const identity = readMirrorIdentity(mirroredMessage);
-    const historyIndex = identity ? historyIdentities.get(identity) : undefined;
-    const historyMessage = historyIndex === undefined ? undefined : historyMessages[historyIndex];
-    if (
-      historyIndex === undefined ||
-      historyIndex <= previousHistoryIndex ||
-      historyIndex > historyBoundaryIndex ||
-      !historyMessage ||
-      serializeCodexMirrorSourceEvidence(historyMessage) !==
-        serializeCodexMirrorSourceEvidence(mirroredMessage)
-    ) {
-      return undefined;
-    }
-    previousHistoryIndex = historyIndex;
-  }
-
-  // Clone before returning so later transcript/cache mutation cannot change the
-  // exact application evidence authorized for the isolated finalization turn.
-  const messages = Object.freeze(
-    structuredClone(params.historyMessages.slice(0, historyBoundaryIndex + 1)),
-  );
-  return { source: "openclaw-transcript", messages };
-}
-
-/** Reads and freezes the current active transcript branch after mirroring has settled. */
+/** Verifies and freezes a complete replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
-  params: CodexMirroredSessionHistoryTarget & {
-    mirroredMessages: readonly AgentMessage[];
-    settledMessages: readonly AgentMessage[];
-    turnId: string;
-  },
-): Promise<SettledTurnFinalizationContext | undefined> {
+  params: CodexMirroredSessionHistoryTarget &
+    SettledTurnMessages &
+    Partial<CodexSettledTurnSelection> & { signal?: AbortSignal; assertActive?: () => void },
+): Promise<CodexSettledTurnContext | undefined> {
+  let reason: CodexHistoryRejectionReason;
   try {
-    const historyMessages = await readCodexMirroredSessionHistoryMessages(params);
-    if (!historyMessages) {
-      return undefined;
+    params.signal?.throwIfAborted();
+    params.assertActive?.();
+    const { model, modelProvider, authProfileId } = params;
+    if (!model) {
+      throw new CodexHistoryRejection("model_unavailable");
     }
-    return buildCodexSettledTurnFinalizationContext({
-      historyMessages,
-      mirroredMessages: params.mirroredMessages,
-      settledMessages: params.settledMessages,
-      turnId: params.turnId,
-    });
+    const { projectCodexSettledHistoryInWorker } =
+      await import("../../session-history-worker-runtime.js");
+    const result = await projectCodexSettledHistoryInWorker(params, params.signal);
+    params.signal?.throwIfAborted();
+    params.assertActive?.();
+    if (result.status === "ok") {
+      return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+    }
+    reason = result.reason;
   } catch (error) {
-    // Capture runs after tools have settled. Never let transcript I/O or cloning
-    // bypass the caller's side-effect-aware incomplete-turn result.
-    embeddedAgentLog.warn("codex settled-turn finalization context capture failed", {
-      error: formatErrorMessage(error),
-      turnId: params.turnId,
-    });
-    return undefined;
+    reason = params.signal?.aborted ? "cancelled" : codexHistoryRejectionReason(error);
   }
+  // Capture follows settled side effects; a rejected read must preserve the incomplete turn.
+  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", { reason });
+  return undefined;
 }

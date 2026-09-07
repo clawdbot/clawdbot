@@ -52,6 +52,28 @@ describe("taxonomy profile scenario selection", () => {
     ).not.toContainEqual(expect.objectContaining({ sourcePath: unrelatedRefs[0] }));
   });
 
+  it("selects the packaged first-run journey for release container setup", () => {
+    const catalog = readQaScenarioPack().scenarios;
+    const report = readQaScorecardTaxonomyReport(catalog);
+    const onboarding = catalog.find(
+      (scenario) => scenario.id === "docker-npm-onboard-channel-agent",
+    );
+    const systemAgent = catalog.find((scenario) => scenario.id === "docker-system-agent-first-run");
+
+    expect(onboarding?.coverage?.primary).toContain("containers.first-run-onboarding");
+    expect(systemAgent?.coverage?.primary).not.toContain("containers.first-run-onboarding");
+    expect(systemAgent?.coverage?.secondary).toContain("containers.first-run-onboarding");
+    expect(report.validationIssues).not.toContainEqual(
+      expect.objectContaining({
+        code: "coverage-id-missing-primary-inventory",
+        ref: "containers.first-run-onboarding",
+      }),
+    );
+    expect(report.profiles.find((profile) => profile.id === "release")?.scenarioRefs).toContain(
+      onboarding?.sourcePath,
+    );
+  });
+
   it("derives channel defaults from catalog metadata and lane constraints", () => {
     const liveTelegram = resolveLiveTransportQaScenarioIds({
       channelId: "telegram",

@@ -12,6 +12,7 @@ import {
   listChatCommandsForConfig,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
+  mergeNativeCommandSpecs,
   normalizeCommandBody,
   parseCommandArgs,
   resolveCommandArgChoices,
@@ -20,7 +21,11 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
+import type {
+  ChatCommandDefinition,
+  CommandArgValues,
+  NativeCommandSpec,
+} from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -302,6 +307,17 @@ describe("commands registry", () => {
     );
   });
 
+  it("registers /dashboard as a standard tools command with optional requirements", () => {
+    const dashboard = requireChatCommand("dashboard");
+    expect(dashboard.nativeName).toBe("dashboard");
+    expect(dashboard.textAliases).toEqual(["/dashboard"]);
+    expect(dashboard.category).toBe("tools");
+    expect(dashboard.tier).toBe("standard");
+    expect(dashboard.acceptsArgs).toBe(true);
+    expect(requireCommandArg(dashboard, "request").required).not.toBe(true);
+    expect(resolveTextCommand("/dashboard release health")?.args).toBe("release health");
+  });
+
   it("registers /loop as a standard tools command with an optional spec", () => {
     const loop = requireChatCommand("loop");
     expect(loop.nativeName).toBe("loop");
@@ -379,6 +395,47 @@ describe("commands registry", () => {
     expect(requireNativeSpec(native, "demo_skill").descriptionLocalizations).toEqual({
       ko: "데모 스킬",
     });
+  });
+
+  it("merges native command specs with primary precedence and stable secondary order", () => {
+    const primary: readonly NativeCommandSpec[] = [
+      { name: " Primary ", description: "primary", acceptsArgs: false },
+      { name: "", description: "blank primary", acceptsArgs: false },
+      { name: "PRIMARY", description: "duplicate primary", acceptsArgs: false },
+    ];
+    const acceptedSecondary: NativeCommandSpec = {
+      name: "Secondary",
+      description: "secondary",
+      descriptionLocalizations: { de: "Sekundär" },
+      acceptsArgs: true,
+      args: [{ name: "value", description: "value", type: "string" }],
+      isAlias: true,
+    };
+    const secondary: readonly NativeCommandSpec[] = [
+      { name: "primary", description: "primary collision", acceptsArgs: false },
+      { name: " ", description: "blank secondary", acceptsArgs: false },
+      acceptedSecondary,
+      { name: " secondary ", description: "secondary collision", acceptsArgs: false },
+      { name: "third", description: "third", acceptsArgs: false },
+    ];
+    const primaryBefore = structuredClone(primary);
+    const secondaryBefore = structuredClone(secondary);
+    const collisions: string[] = [];
+
+    const merged = mergeNativeCommandSpecs({
+      primary,
+      secondary,
+      onCollision: (name) => collisions.push(name),
+    });
+
+    expect(merged).toEqual([primary[0], acceptedSecondary, secondary[4]]);
+    expect(merged).not.toBe(primary);
+    expect(merged[0]).toBe(primary[0]);
+    expect(merged[1]).toBe(acceptedSecondary);
+    expect(merged[2]).toBe(secondary[4]);
+    expect(collisions).toEqual(["primary", "secondary"]);
+    expect(primary).toEqual(primaryBefore);
+    expect(secondary).toEqual(secondaryBefore);
   });
 
   it("applies discord native command overrides", () => {
@@ -527,11 +584,9 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("scopes configured-default wording to direct model selections", () => {
+  it("documents explicit model persistence scopes", () => {
     const model = requireChatCommand("model");
-    expect(model.description).toBe(
-      "Show or set the model; direct owner/admin selections request a default update.",
-    );
+    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
   it("detects known text commands", () => {
@@ -562,18 +617,7 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: createChannelTestPluginBase({
-            id: "discord",
-            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -596,6 +640,14 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    for (const [surface, expected] of [
+      ["discord", true],
+      [" SLACK ", false],
+    ] as const) {
+      expect(shouldHandleTextCommands({ cfg, surface, commandSource: "text" })).toBe(expected);
+    }
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
@@ -618,8 +670,23 @@ describe("commands registry", () => {
     );
   });
 
-  it("keeps unregistered dock underscore aliases unchanged", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
+  it("normalizes targeted command bodies before bot identity only when requested", () => {
+    expect(
+      normalizeCommandBody("/help@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help");
+    expect(normalizeCommandBody("/help@unresolved_bot")).toBe("/help@unresolved_bot");
+    expect(
+      normalizeCommandBody("/help@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help@some_other_bot");
+  });
+
+  it("keeps unregistered underscore aliases unchanged", () => {
+    expect(normalizeCommandBody("/unknown_command")).toBe("/unknown_command");
   });
 });
 
@@ -684,6 +751,54 @@ describe("commands registry args", () => {
     );
   });
 
+  const structuredArgCases: Array<{
+    command: string;
+    values: CommandArgValues;
+    expected: string;
+  }> = [
+    {
+      command: "config",
+      values: { action: " GET ", path: " agents.defaults.model " },
+      expected: "/config get agents.defaults.model",
+    },
+    {
+      command: "config",
+      values: { action: "set", path: "agents.defaults.model" },
+      expected: "/config set agents.defaults.model",
+    },
+    {
+      command: "mcp",
+      values: { action: "get", path: "servers.github" },
+      expected: "/mcp get servers.github",
+    },
+    { command: "mcp", values: { action: "get" }, expected: "/mcp get" },
+    {
+      command: "plugins",
+      values: { action: "get", path: "discord" },
+      expected: "/plugins get discord",
+    },
+    {
+      command: "plugins",
+      values: { action: "list", path: "ignored" },
+      expected: "/plugins list",
+    },
+    {
+      command: "debug",
+      values: { action: "show", path: "ignored" },
+      expected: "/debug show",
+    },
+    { command: "debug", values: { action: "unset" }, expected: "/debug unset" },
+  ];
+
+  it.each(structuredArgCases)(
+    "serializes structured $command args through its registry definition",
+    (testCase) => {
+      expect(buildCommandTextFromArgs(requireChatCommand(testCase.command), testCase)).toBe(
+        testCase.expected,
+      );
+    },
+  );
+
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 
@@ -697,14 +812,16 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+  it("offers all verbose choices when no argument is provided", () => {
     const verbose = requireChatCommand("verbose");
 
     const modeArg = requireCommandArgAt(verbose, 0);
     expect(modeArg.choices).toEqual(["on", "off", "full"]);
-    expect(
-      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
-    ).toBeNull();
+    expect(requireCommandArgMenu({ command: verbose }).choices).toEqual([
+      { label: "on", value: "on" },
+      { label: "off", value: "off" },
+      { label: "full", value: "full" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {

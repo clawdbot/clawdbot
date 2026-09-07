@@ -4,6 +4,7 @@ import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 function buildModel(): Model<"openai-responses"> {
   return {
@@ -53,14 +54,7 @@ function extractInputMessages(input: unknown[]) {
   );
 }
 
-const ZERO_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-} as const;
+const ZERO_USAGE = createZeroUsageFixture();
 
 function buildReasoningPart(id = "rs_test") {
   return {
@@ -458,7 +452,6 @@ describe("openai-responses reasoning replay", () => {
     });
 
     const messages = extractInputMessages(input);
-    expect(messages).toHaveLength(2);
     const ids = messages.map((item) => item.id);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(2);

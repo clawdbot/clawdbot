@@ -1,4 +1,5 @@
 // Tests heartbeat runner response prefix template handling.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -52,14 +53,6 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
   }
 
-  function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    return call;
-  }
-
   async function runTemplatedHeartbeat(params: { responsePrefix: string; replyText: string }) {
     return withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createTelegramHeartbeatConfig({
@@ -102,7 +95,10 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    const [target, message, options] = requireFirstMockCall(sendTelegram, "telegram send");
+    const [target, message, options] = expectDefined(
+      sendTelegram.mock.calls[0],
+      "telegram send call",
+    );
     expect(target).toBe(TELEGRAM_GROUP);
     expect(message).toBe("[openai/gpt-5.4|think:high] Heartbeat alert");
     expect(typeof options).toBe("object");

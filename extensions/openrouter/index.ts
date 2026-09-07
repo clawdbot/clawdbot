@@ -1,10 +1,13 @@
 // Openrouter plugin entrypoint registers its OpenClaw integration.
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -51,15 +54,7 @@ const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 type OpenRouterFusionPromptContext = {
-  config?: {
-    agents?: {
-      defaults?: {
-        params?: Record<string, unknown>;
-        models?: Record<string, { params?: Record<string, unknown> }>;
-      };
-      list?: Array<{ id?: string; params?: Record<string, unknown> }>;
-    };
-  };
+  config?: OpenClawConfig;
   agentId?: string;
   modelId: string;
 };
@@ -163,7 +158,7 @@ function findConfiguredOpenRouterAgentParams(
   if (!ctx.agentId) {
     return undefined;
   }
-  return readRecord(ctx.config?.agents?.list?.find((agent) => agent.id === ctx.agentId)?.params);
+  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
 }
 
 function resolveMergedOpenRouterPromptParams(
@@ -291,14 +286,18 @@ export default defineSingleProviderPluginEntry({
             return null;
           }
           const providerConfig = ctx.config.models?.providers?.openrouter;
-          return {
-            provider: await buildOpenrouterLiveProvider({
-              apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-              baseUrl: providerConfig?.baseUrl,
-              request: providerConfig?.request,
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: auth.profileId,
+            run: async () => ({
+              provider: await buildOpenrouterLiveProvider({
+                apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                baseUrl: providerConfig?.baseUrl,
+                request: providerConfig?.request,
+              }),
             }),
-          };
+          });
         },
         staticRun: async () => ({
           provider: buildOpenrouterProvider(),
@@ -325,6 +324,17 @@ export default defineSingleProviderPluginEntry({
               baseUrl: normalizedBaseUrl,
             }
           : undefined;
+      },
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
       },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,

@@ -1,9 +1,9 @@
 /** Base Vitest mocks for Windows schtasks daemon tests. */
 import { vi } from "vitest";
 import {
-  inspectPortUsage,
-  killProcessTree,
-  resolveGatewayServiceProbeHosts,
+  gatewayServiceProbeHostsMock,
+  inspectPortUsageMock,
+  killProcessTreeMock,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
@@ -16,17 +16,17 @@ vi.mock("../schtasks-exec.js", () => ({
   },
 }));
 
-vi.mock("../../infra/ports.js", () => ({
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
-    inspectPortUsage(port, options),
+    inspectPortUsageMock(port, options),
 }));
 
 vi.mock("../gateway-service-probe-hosts.js", () => ({
-  resolveGatewayServiceProbeHosts: () => resolveGatewayServiceProbeHosts(),
+  resolveGatewayServiceProbeHosts: () => gatewayServiceProbeHostsMock(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
-  killProcessTree: (pid: number, opts?: { graceMs?: number }) => killProcessTree(pid, opts),
+  killProcessTree: (pid: number, opts?: { graceMs?: number }) => killProcessTreeMock(pid, opts),
 }));
 
 // Launcher encode/decode must not depend on the dev or CI machine's code page;

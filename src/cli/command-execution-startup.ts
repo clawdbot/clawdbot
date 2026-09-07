@@ -2,11 +2,15 @@
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 type CliStartupPolicy = ReturnType<typeof resolveCliStartupPolicy>;
+
+const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
 
 const hasJsonFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
@@ -18,6 +22,7 @@ export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   commandPath?: string[];
   jsonOutputMode: boolean;
+  machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
   const invocation = resolveCliArgvInvocation(params.argv);
@@ -31,6 +36,7 @@ export function resolveCliExecutionStartupContext(params: {
       argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
+      machineOutputMode: params.machineOutputMode,
       env: params.env,
     }),
   };
@@ -69,23 +75,46 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
-  await ensureCliCommandBootstrap({
-    runtime: params.runtime,
-    commandPath: params.commandPath,
-    suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
-    allowInvalid: params.allowInvalid,
-    ...(params.beforeStateMigrations
-      ? { beforeStateMigrations: params.beforeStateMigrations }
-      : {}),
-    loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
-    pluginRegistry: params.startupPolicy.pluginRegistry,
-    skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
-    ...(params.skipPristineStartupStateMigrations
-      ? { skipPristineStartupStateMigrations: true }
-      : {}),
-    ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-  });
+  const {
+    runtime,
+    commandPath,
+    startupPolicy,
+    allowInvalid,
+    beforeStateMigrations,
+    skipPristineCoreStateMigrations,
+    skipPristineStartupStateMigrations,
+  } = params;
+  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
+  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
+  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
+  if (!skipConfigGuard) {
+    await measureCliCommandStartup("config-ready", async () => {
+      const { ensureConfigReady } = await configGuardModuleLoader.load();
+      await ensureConfigReady({
+        runtime,
+        commandPath,
+        measure: (stage, run) => measureCliCommandStartup(stage, run),
+        ...(allowInvalid ? { allowInvalid: true } : {}),
+        ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+        ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+      });
+    });
+  }
+  if (!loadPlugins) {
+    return;
+  }
+  await measureCliCommandStartup("plugin-registry", () =>
+    ensureCliPluginRegistryLoaded({
+      scope: pluginRegistry.scope,
+      routeLogsToStderr: suppressDoctorStdout,
+    }),
+  );
 }

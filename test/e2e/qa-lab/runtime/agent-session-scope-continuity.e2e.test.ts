@@ -1,11 +1,13 @@
 import { createServer, type ServerResponse } from "node:http";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -27,7 +29,7 @@ const MARKERS = [
   SESSION_B_ASSISTANT_1,
 ] as const;
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -67,17 +69,6 @@ afterEach(async () => {
   }
 });
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse, text: string, index: number): void {
   const message = {
     type: "message",
@@ -86,7 +77,7 @@ function writeAssistantResponse(response: ServerResponse, text: string, index: n
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -151,9 +142,9 @@ async function startDeterministicProvider() {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
     stop: async () => {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -161,7 +152,6 @@ async function startDeterministicProvider() {
 async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -192,7 +182,7 @@ async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );
@@ -301,11 +291,13 @@ describe("agent session scope continuity", () => {
     async () => {
       const provider = await startDeterministicProvider();
       cleanups.push(() => provider.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
-          argsPrefix: ["--import", "tsx", "src/entry.ts"],
+          argsPrefix: ["dist/entry.js"],
           cwd: process.cwd(),
           usePackagedPlugins: true,
         },
@@ -317,13 +309,11 @@ describe("agent session scope continuity", () => {
         controlUiEnabled: false,
         fastMode: true,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
-        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
-      cleanups.push(() => gateway.stop());
       const client = await connectOperator(gateway);
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));
 

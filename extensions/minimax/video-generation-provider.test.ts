@@ -104,6 +104,13 @@ function oversizedJsonResponse(): Response {
   );
 }
 
+const malformedVideoDownloadCases = [
+  { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+  { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+  { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+  { name: "empty video", contentType: "video/mp4", body: "" },
+];
+
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     const provider = buildMinimaxVideoGenerationProvider();
@@ -185,6 +192,82 @@ describe("minimax video generation provider", () => {
       }),
     ).rejects.toThrow("MiniMax generated video download exceeds 1 bytes");
   });
+
+  it.each(malformedVideoDownloadCases)(
+    "rejects a successful $name response as generated video",
+    async ({ contentType, body }) => {
+      postJsonRequestMock.mockResolvedValue({
+        response: jsonResponse({
+          task_id: "task-invalid-download",
+          base_resp: { status_code: 0 },
+        }),
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            task_id: "task-invalid-download",
+            status: "Success",
+            video_url: "https://example.com/invalid.mp4",
+            base_resp: { status_code: 0 },
+          }),
+        )
+        .mockResolvedValueOnce(new Response(body, { headers: { "content-type": contentType } }));
+
+      const provider = buildMinimaxVideoGenerationProvider();
+      await expect(
+        provider.generateVideo({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          prompt: "invalid download",
+          cfg: {},
+        }),
+      ).rejects.toThrow("MiniMax generated video download: malformed video response");
+    },
+  );
+
+  it.each(malformedVideoDownloadCases)(
+    "rejects a successful $name response as a file_id generated video",
+    async ({ contentType, body }) => {
+      postJsonRequestMock.mockResolvedValue({
+        response: jsonResponse({
+          task_id: "task-file-invalid-download",
+          base_resp: { status_code: 0 },
+        }),
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            task_id: "task-file-invalid-download",
+            status: "Success",
+            file_id: "file-invalid",
+            base_resp: { status_code: 0 },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            file: {
+              file_id: "file-invalid",
+              filename: "output_aigc.mp4",
+              download_url: "https://example.com/download.mp4",
+            },
+            base_resp: { status_code: 0 },
+          }),
+        )
+        .mockResolvedValueOnce(new Response(body, { headers: { "content-type": contentType } }));
+
+      const provider = buildMinimaxVideoGenerationProvider();
+      await expect(
+        provider.generateVideo({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          prompt: "invalid file download",
+          cfg: {},
+        }),
+      ).rejects.toThrow("MiniMax generated video download: malformed video response");
+    },
+  );
 
   it("downloads via file_id when the status response omits video_url", async () => {
     const requestOverrides = {

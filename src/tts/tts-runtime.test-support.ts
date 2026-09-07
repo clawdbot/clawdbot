@@ -24,14 +24,12 @@ import type { TtsAudioPersistence } from "./tts-synthesis.js";
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
 const synthesizeMock = vi.hoisted(() =>
-  vi.fn(
-    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
-      audioBuffer: Buffer.from("voice"),
-      fileExtension: ".ogg",
-      outputFormat: "ogg",
-      voiceCompatible: request.target === "voice-note",
-    }),
-  ),
+  vi.fn(async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+    audioBuffer: Buffer.from("voice"),
+    fileExtension: ".ogg",
+    outputFormat: "ogg",
+    voiceCompatible: request.target === "voice-note",
+  })),
 );
 const prepareSynthesisMock = vi.hoisted(() =>
   vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
@@ -135,9 +133,8 @@ export const {
   textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./runtime-api.js");
-export const { maybeApplyTtsToPayload: maybeApplyTtsToPayloadCore } =
-  await import("./tts-payload.js");
-export const { textToSpeech: textToSpeechCore } = await import("./tts-synthesis.js");
+export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
+export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;

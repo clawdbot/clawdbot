@@ -1,13 +1,8 @@
-// Process regression coverage for ACP help commands returning without loading runtime transports.
-import {
-  execFile,
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+// Process regression coverage for ACP bridge disconnect and startup-handshake exit paths.
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
+import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import {
@@ -15,9 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-
-const execFileAsync = promisify(execFile);
-const CHILD_PROCESS_TIMEOUT_MS = 30_000;
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const INITIALIZE_FRAME = {
   jsonrpc: "2.0",
@@ -62,25 +55,24 @@ function createAcpProcessEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function waitForExit(child: ChildProcessWithoutNullStreams) {
-  return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
+function withoutSqliteTransactionWarnings(stderr: string): string {
+  // Slow-hold logger output is load-dependent performance diagnostics, not ACP clean-exit
+  // signal; see logSlowTransactionHold in sqlite-transaction.ts.
+  return stderr
+    .split("\n")
+    .filter(
+      (line) => !stripVTControlCharacters(line).trimStart().startsWith("[sqlite/transaction]"),
+    )
+    .join("\n");
 }
 
 function waitForJsonLine(child: ChildProcessWithoutNullStreams, id: number) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     let stdout = "";
-    const timeout = setTimeout(
-      () => reject(new Error("timed out waiting for ACP response")),
-      CHILD_PROCESS_TIMEOUT_MS,
-    );
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       reject(new Error(`ACP process exited before response (code=${code}, signal=${signal})`));
     };
     const finish = (response: Record<string, unknown>) => {
-      clearTimeout(timeout);
       child.off("exit", onExit);
       resolve(response);
     };
@@ -115,65 +107,17 @@ function rawDataToText(data: RawData): string {
 }
 
 describe("ACP CLI process exit", () => {
-  it.each([
-    { args: ["acp", "--help"], usage: "Usage: openclaw acp [options] [command]" },
-    { args: ["acp", "client", "--help"], usage: "Usage: openclaw acp client [options]" },
-  ])(
-    "exits promptly after $args",
-    async ({ args, usage }) => {
-      const state = await createPreparedAcpProcessState();
-      try {
-        const result = await execFileAsync(
-          process.execPath,
-          ["--import", "tsx", "src/entry.ts", ...args],
-          {
-            cwd: path.resolve("."),
-            encoding: "utf8",
-            env: {
-              ...createAcpProcessEnv(state.env),
-              NODE_OPTIONS: process.platform === "darwin" ? "--use-system-ca" : undefined,
-              NODE_USE_SYSTEM_CA: undefined,
-            },
-            killSignal: "SIGKILL",
-            timeout: CHILD_PROCESS_TIMEOUT_MS,
-          },
-        );
-
-        expect(result.stderr).toBe("");
-        expect(result.stdout).toContain(usage);
-      } finally {
-        await state.cleanup();
-      }
-    },
-    CHILD_PROCESS_TIMEOUT_MS + 5_000,
-  );
-
-  it.each([
-    { name: "empty stdin", input: "" },
-    {
-      name: "an initialize frame",
-      input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
-    },
-  ])("exits when the bridge starts with $name and the client disconnects", async ({ input }) => {
+  it("exits when the client disconnects after sending an initialize frame", async () => {
     const state = await createPreparedAcpProcessState();
     try {
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "src/entry.ts", "acp", "--require-existing"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env: createAcpProcessEnv(state.env),
-          input,
-          killSignal: "SIGKILL",
-          timeout: CHILD_PROCESS_TIMEOUT_MS,
-        },
-      );
+      const result = await runCliProcessChild({
+        nodeArgs: [path.resolve("openclaw.mjs"), "acp", "--require-existing"],
+        env: createAcpProcessEnv(state.env),
+        input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
+      });
 
-      expect(result.error).toBeUndefined();
-      expect(result.signal).toBeNull();
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(result).toMatchObject({ code: 0, signal: null });
+      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
     } finally {
       await state.cleanup();
     }
@@ -183,7 +127,6 @@ describe("ACP CLI process exit", () => {
     const state = await createPreparedAcpProcessState();
     const server = createServer();
     const wss = new WebSocketServer({ server });
-    let child: ChildProcessWithoutNullStreams | undefined;
 
     try {
       wss.on("connection", (socket) => {
@@ -235,46 +178,34 @@ describe("ACP CLI process exit", () => {
         throw new Error("ACP process test Gateway did not get a TCP address");
       }
 
-      child = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "src/entry.ts",
+      let response: Record<string, unknown> | undefined;
+      const result = await runCliProcessChild({
+        nodeArgs: [
+          path.resolve("openclaw.mjs"),
           "acp",
           "--require-existing",
           "--url",
           `ws://127.0.0.1:${address.port}`,
         ],
-        {
-          cwd: path.resolve("."),
-          env: createAcpProcessEnv(state.env),
-          stdio: ["pipe", "pipe", "pipe"],
+        env: createAcpProcessEnv(state.env),
+        interact: async (runningChild) => {
+          const responsePromise = waitForJsonLine(runningChild, INITIALIZE_FRAME.id);
+          // Write before the Gateway handshake completes. Startup monitoring must
+          // retain this frame for the eventual AgentSideConnection reader.
+          runningChild.stdin.write(`${JSON.stringify(INITIALIZE_FRAME)}\n`);
+          response = await responsePromise;
+          runningChild.stdin.end();
         },
-      );
-      let stderr = "";
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
       });
-      const exitPromise = waitForExit(child);
-      const responsePromise = waitForJsonLine(child, INITIALIZE_FRAME.id);
 
-      // Write before the Gateway handshake completes. Startup monitoring must
-      // retain this frame for the eventual AgentSideConnection reader.
-      child.stdin.write(`${JSON.stringify(INITIALIZE_FRAME)}\n`);
-      const response = await responsePromise;
       expect(response).toMatchObject({
         jsonrpc: "2.0",
         id: INITIALIZE_FRAME.id,
         result: { protocolVersion: INITIALIZE_FRAME.params.protocolVersion },
       });
-
-      child.stdin.end();
-      const exit = await exitPromise;
-      expect(exit).toEqual({ code: 0, signal: null });
-      expect(stderr).toBe("");
+      expect(result).toMatchObject({ code: 0, signal: null });
+      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
     } finally {
-      child?.kill("SIGKILL");
       for (const socket of wss.clients) {
         socket.terminate();
       }
@@ -286,5 +217,5 @@ describe("ACP CLI process exit", () => {
       });
       await state.cleanup();
     }
-  }, 40_000);
+  });
 });

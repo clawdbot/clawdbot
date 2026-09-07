@@ -1,9 +1,10 @@
 export const SKILL_AUTHORING_STANDARDS_PROMPT = [
   "Skill authoring standards:",
-  "- Description: write one sentence. Lead with concrete trigger phrases or the task class in the first ~60 characters so the skill index can route the request before loading the body. Do not use generic filler; notes, helpers, or workflows cannot be the sole descriptor.",
-  "- Name: choose a lowercase-hyphenated class-level name that will still identify the task a month later. Reject names tied to one session, run ID, incident ID, calendar date, or other temporary artifact.",
-  "- Body: state when to use the skill, give exact procedure steps, name evidenced pitfalls, and include an evidence-backed verification step.",
-  "- Token-efficient language: skills load into model context. Use compact imperative language, short lines, and no narration, filler, or obvious restatement. Every sentence must earn its tokens.",
-  "- Evidence: never invent flags, commands, paths, APIs, tool behavior, or requirements that the source material does not establish. Omit unsupported details or mark them as unknown.",
-  "- Durable learning: capture the working fix, recovery, or procedure. Never preserve a standalone claim that something does not work after the problem may be gone.",
+  "- Size: SKILL.md stays under 10,000 characters. A skill is the shortest procedure that reproduces the result; long reference, examples, and per-branch detail go into a bundled file, pointed to from the step that needs it.",
+  "- Procedures, not records: a skill holds the steps the agent performs. Logs, histories, data tables, personal facts, and task outputs belong in memory or files.",
+  "- Description: leading words first — the situations and phrases that should trigger the skill, one trigger per distinct branch, within the first 60 characters; then what the skill produces.",
+  "- Name: the class of work, 2–4 words.",
+  "- Steps: ordered actions, each ending on a completion criterion the agent can check. Steps come before reference; reference appears only where a step consults it.",
+  '- Language: positive imperatives ("run X, then verify Y"); one source per meaning; every sentence changes behavior versus the default. Sentences that restate defaults, duplicate another line, or describe a one-off are deleted.',
+  "- Evidence: every step comes from the observed trajectory or the existing skill; never invent flags, commands, paths, APIs, tool behavior, or requirements. Capture the recovery that worked, never the failed attempts.",
 ].join("\n");

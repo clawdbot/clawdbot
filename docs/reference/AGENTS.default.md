@@ -106,7 +106,7 @@ Example roster for a personal-assistant workspace; swap in whichever skills fit 
 
 - **mcporter** - tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** - fast macOS screenshots with optional AI vision analysis.
-- **camsnap** - capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
+- **camsnap** - capture frames, clips, or motion alerts from RTSP/ONVIF security cams and local webcams, including USB pan/tilt/zoom control.
 - **oracle** - OpenAI-ready agent CLI with session replay and browser control.
 - **eightctl** - control your sleep, from the terminal.
 - **imsg** - send, read, stream iMessage & SMS.
@@ -127,7 +127,6 @@ Example roster for a personal-assistant workspace; swap in whichever skills fit 
 - Prefer the `openclaw` CLI for scripting; the desktop app handles permissions.
 - Run installs from the Skills tab; the install button is hidden once a required binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
-- Canvas UI runs full-screen with native overlays. Avoid placing critical controls at the top-left/top-right/bottom edges; add explicit layout gutters instead of relying on safe-area insets.
 - For browser-driven verification, use the `openclaw browser` CLI (bundled `browser` plugin) with the OpenClaw-managed Chrome/Brave/Edge/Chromium profile.
 - Manage: `status`, `doctor [--deep]`, `start [--headless]`, `stop`, `tabs`, `tab [new|select|close]`, `open <url>`, `focus <id>`, `close <id>`.
 - Inspect: `screenshot [--full-page|--ref|--labels]`, `snapshot [--format ai|aria|--interactive|--efficient]`, `console`, `errors`, `requests`, `pdf`, `responsebody`.

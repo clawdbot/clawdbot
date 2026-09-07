@@ -1,39 +1,41 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../../gateway/session-store-key.js";
+import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
-  countSqliteSessionEntryRowsReadOnly as countSessionEntryRowsReadOnly,
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
-  ensureSqliteSessionEntrySync,
-  hasSqliteSessionEntriesByStatusReadOnly as hasSessionEntriesByStatusReadOnly,
+  ensureSqliteTranscriptGenerationsForCanonicalRepair as ensureTranscriptGenerationsForCanonicalRepair,
   listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
-  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
-  listSqliteSessionEntries,
-  listSqliteSessionEntriesForCanonicalRepair as listSessionEntriesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepair as rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch as rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
-  listSqliteSessionEntriesReadOnly as listSessionEntriesReadOnly,
-  listSqliteSessionEntryKeysReadOnly as listSessionEntryKeysReadOnly,
-  loadExactSqliteSessionEntry as loadExactSessionEntry,
-  loadExactSqliteSessionEntryReadOnly as loadExactSessionEntryReadOnly,
-  loadSqliteSessionEntry as loadSessionEntry,
-  loadSqliteSessionEntryReadOnly as loadSessionEntryReadOnly,
-  patchSqliteSessionEntry as patchSessionEntry,
-  patchSqliteSessionEntryTarget as patchSessionEntryTarget,
-  readSqliteSessionUpdatedAt as readSessionUpdatedAt,
-  replaceSqliteSessionEntry as replaceSessionEntry,
-  replaceSqliteSessionEntrySync as replaceSessionEntrySync,
-  resolveSqliteSessionEntry,
-  upsertSqliteSessionEntry as upsertSessionEntry,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-canonical-repair.js";
+import {
+  countSessionEntryRowsReadOnly,
+  ensureSessionEntrySync,
+  hasSessionEntriesByStatusReadOnly,
+  listSessionChildEntriesReadOnly,
+  listSessionEntryRows,
+  listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
+  loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
+  loadExactSessionEntryReadOnly,
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+  patchSessionEntryTarget,
+  readSessionUpdatedAtCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+  resolveSessionEntry,
+  upsertSessionEntryCore,
+} from "./session-accessor.sqlite-entry.js";
+import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 import type {
   SessionAccessScope,
   LogicalSessionAccessScope,
@@ -52,52 +54,52 @@ import type {
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import {
+  normalizeStoreSessionKey,
+  resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
+} from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export { clearPluginOwnedSessionState };
 
-// SQLite is the only runtime session store. Re-export its canonical entry
-// operations directly instead of maintaining a second pass-through layer.
+// SQLite is the only runtime session store. Re-export its canonical entry operations directly.
 export {
   countSessionEntryRowsReadOnly,
   copySessionOwnedStateForCanonicalRepair,
-  ensureSqliteSessionEntrySync,
+  ensureTranscriptGenerationsForCanonicalRepair,
+  ensureSessionEntrySync,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
-  listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
+  // Intentionally unfenced: branching owns session-identity freshness; worker transcript commit
+  // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
-  upsertSessionEntry,
+  resolveSessionEntryFromStore,
+  readSessionStoreSummaryReadOnly,
+  upsertSessionEntryCore,
 };
-
-/** Keeps legacy store-key alias resolution behind the entry owner boundary. */
-export function resolveSessionEntryFromStore(params: {
-  store: Record<string, SessionEntry>;
-  sessionKey: string;
-}): ReturnType<typeof resolveSessionStoreEntry> {
-  return resolveSessionStoreEntry(params);
-}
 
 /** Resolves a session directly through canonical SQLite row and alias ownership. */
 export function resolveSessionEntrySelection(
   scope: SessionAccessScope,
   options: { readOnly?: boolean } = {},
-): ReturnType<typeof resolveSessionStoreEntry> {
-  return resolveSqliteSessionEntry(scope, options);
+): ReturnType<typeof resolveSessionEntryFromStore> {
+  return resolveSessionEntry(scope, options);
 }
 
 export function resolveAccessStorePath(scope: SessionAccessScope): string {
@@ -116,7 +118,10 @@ function resolveLogicalSessionStoreCandidates(params: {
   const storeConfig = params.cfg.session?.store;
   const defaultTarget = {
     agentId: params.agentId,
-    storePath: resolveStorePath(storeConfig, { agentId: params.agentId, env: params.env }),
+    storePath: resolveSessionStorePathCore(storeConfig, {
+      agentId: params.agentId,
+      env: params.env,
+    }),
   };
   if (!isStorePathTemplate(storeConfig)) {
     return [defaultTarget];
@@ -164,17 +169,11 @@ function findCanonicalSessionEntryMatch(
   options: { readOnly?: boolean } = {},
 ): SessionEntrySummary | undefined {
   let selected: SessionEntrySummary | undefined;
-  for (const candidate of candidateKeys) {
-    const trimmed = candidate.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const loadExact =
-      options.readOnly === false ? loadExactSessionEntry : loadExactSessionEntryReadOnly;
-    const match = loadExact({ ...scope, sessionKey: trimmed });
-    if (!match) {
-      continue;
-    }
+  for (const match of loadExactSessionEntryCandidates({
+    ...scope,
+    sessionKeys: candidateKeys,
+    readOnly: options.readOnly !== false,
+  })) {
     if (selected) {
       throw canonicalSessionKeyMigrationRequiredError(
         `duplicate rows resolve to canonical session key ${canonicalKey}`,
@@ -213,7 +212,7 @@ export function resolveSessionEntryCandidateTarget(
   const incognitoAgentId = incognitoKey ? resolveAgentIdFromSessionKey(incognitoKey) : undefined;
   const storePath = incognitoAgentId
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
-    : resolveStorePath(scope.cfg.session?.store, {
+    : resolveSessionStorePathCore(scope.cfg.session?.store, {
         agentId: scope.agentId,
         env: scope.env,
       });
@@ -237,7 +236,7 @@ export function resolveSessionEntryCandidateTarget(
     return {
       agentId: resolvedAgentId,
       candidateKey,
-      entry: structuredClone(resolved.existing),
+      entry: resolved.existing,
       persisted: true,
       sessionKey: resolved.normalizedKey,
     };
@@ -259,8 +258,11 @@ function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
-  const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
-  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+    cfg: scope.cfg,
+    sessionKey: requestedKey,
+    agentId: scope.agentId,
+  });
   const scanTargets = buildLogicalSessionEntryCandidateKeys({
     agentId,
     canonicalKey,
@@ -295,7 +297,7 @@ function resolveSessionEntryStoreTarget(
   });
   const fallback = candidates[0] ?? {
     agentId,
-    storePath: resolveStorePath(scope.cfg.session?.store, { agentId, env: scope.env }),
+    storePath: resolveSessionStorePathCore(scope.cfg.session?.store, { agentId, env: scope.env }),
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findCanonicalSessionEntryMatch(
@@ -346,8 +348,8 @@ export async function updateResolvedSessionEntry<T>(
     return { canonicalKey: target.canonicalKey, found: false };
   }
   let updateResult: T | undefined;
-  const updated = await patchSessionEntry(
-    { sessionKey: target.storeKey, storePath: target.storePath },
+  const updated = await patchSessionEntryCore(
+    { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
     async (entry) => {
       const context: ResolvedSessionEntryUpdateContext = {
         agentId: target.agentId,
@@ -377,19 +379,17 @@ export async function updateResolvedSessionEntry<T>(
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
-export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
+export function listSessionEntriesCore(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
     return openSessionEntryReadView(scope).entries();
   }
-  return listSqliteSessionEntries(scope);
+  return listSessionEntryRows(scope);
 }
 
 /**
- * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
- * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
- * or canonical-key resolution. The first probe materializes one validated store
- * snapshot; later probes and `entries` reuse its parsed rows. Rows are borrowed,
- * not cloned: callers must not mutate them and must drop the view before any await.
+ * Synchronous read view: `get` queries one exact persisted key without alias resolution;
+ * `entries` caches listing metadata or loads complete entries. Rows and nested values are
+ * borrowed: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
@@ -401,7 +401,7 @@ export function openSessionEntryReadView(
         clone: false,
         sessionKey,
       })?.entry,
-    entries: () => listSqliteSessionEntries({ ...scope, clone: false }),
+    entries: () => listSessionEntriesReadOnly({ ...scope, clone: false }),
   };
 }
 
@@ -417,11 +417,6 @@ export async function patchSessionEntryWithKey(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntryPatchResult | null> {
-  const entry = await patchSessionEntry(scope, update, options);
+  const entry = await patchSessionEntryCore(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
-
-/**
- * Copies one parent transcript into a new child transcript target.
- * This is for guarded callers that already own the eventual entry commit.
- */

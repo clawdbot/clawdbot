@@ -51,6 +51,18 @@ describe("session activity assistant buffering", () => {
     expect(state.notes.at(-1)?.text).toBe("Assistant: visible after");
   });
 
+  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
+    "does not record the internal acknowledgement %s as assistant activity",
+    (acknowledgement) => {
+      const state = createSessionActivityNoteState();
+      noteSessionActivityEvent(state, assistantEvent(1_000, acknowledgement, acknowledgement));
+
+      flushSessionActivityAssistantNote(state);
+
+      expect(state.notes).toEqual([]);
+    },
+  );
+
   it("keeps delta-only producers on the bounded incremental path", () => {
     const state = createSessionActivityNoteState();
     noteSessionActivityEvent(state, assistantEvent(1_000, "", "a".repeat(5_000)));
@@ -72,5 +84,25 @@ describe("session activity assistant buffering", () => {
     });
 
     expect(state.notes.at(-1)?.text).toBe("Run failed");
+  });
+
+  it("records the normalized terminal reply as the final assistant activity fact", () => {
+    const state = createSessionActivityNoteState();
+    noteSessionActivityEvent(state, {
+      runId: "run-complete",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: {
+        phase: "end",
+        terminalReply: { disposition: "visible", text: "Final answer from the run." },
+      },
+    });
+
+    expect(state.notes.at(-1)?.text).toBe("Assistant: Final answer from the run.");
+    expect(state.terminalReply).toEqual({
+      disposition: "visible",
+      text: "Final answer from the run.",
+    });
   });
 });

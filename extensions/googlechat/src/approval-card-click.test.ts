@@ -1,4 +1,5 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleChatApprovalActionParameters,
@@ -23,14 +24,14 @@ type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 function createApprovalResolveResult(params: {
   applied: boolean;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ApprovalDecision;
 }): ApprovalResolveResult {
   const presentation =
     params.approvalKind === "exec"
       ? {
           kind: "exec" as const,
-          commandText: "echo hi",
+          commandText: `<tag> & &amp; "double" 'single'`,
           commandPreview: null,
           allowedDecisions: ["allow-once" as const, "deny" as const],
         }
@@ -106,7 +107,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       .mockImplementation(
         (params: {
           approvalId: string;
-          approvalKind: "exec" | "plugin";
+          approvalKind: ChannelApprovalKind;
           decision: ApprovalDecision;
         }) =>
           Promise.resolve(
@@ -164,8 +165,9 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       approvalId: "approval-1",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "googlechat",
+      accountId: "default",
       senderId: "users/123",
-      clientDisplayName: "Google Chat approval (users/123)",
     });
     expect(updateGoogleChatMessage).toHaveBeenCalledWith({
       account: target.account,
@@ -173,7 +175,11 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       cardsV2: expect.any(Array),
     });
     const cardJson = JSON.stringify(updateGoogleChatMessage.mock.calls[0]?.[0]);
+    const cardText =
+      updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2[0].card.sections[0].widgets[0]
+        .textParagraph.text;
     expect(cardJson).toContain("Exec Approval: Allowed once");
+    expect(cardText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
     expect(cardJson).toContain("Resolved by this action");
     expect(cardJson).not.toContain("buttonList");
   });

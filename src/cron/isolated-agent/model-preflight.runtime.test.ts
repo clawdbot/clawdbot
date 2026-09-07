@@ -280,7 +280,7 @@ describe("preflightCronModelProvider", () => {
     expect(first.retryAfterMs).toBe(300000);
     expect(first.reason).toContain("the local provider preflight failed");
     expect(first.reason).not.toContain("endpoint is not reachable");
-    expect(first.reason).toContain("Last error: Error: ECONNREFUSED");
+    expect(first.reason).toContain("Last error: ECONNREFUSED");
     expect(first.reason).not.toContain("timed out after");
     expect(second.status).toBe("unavailable");
     if (second.status !== "unavailable") {
@@ -325,7 +325,7 @@ describe("preflightCronModelProvider", () => {
     }
     expect(result.reason).toContain(
       "Last error: Local provider preflight exceeded its configured 2500ms deadline | " +
-        "TypeError: fetch failed | TimeoutError: request timed out",
+        "fetch failed | request timed out",
     );
     expect(result.reason).not.toContain("ECONNREFUSED");
   });
@@ -362,8 +362,7 @@ describe("preflightCronModelProvider", () => {
       throw new Error(`expected preflight unavailable, got ${result.status}`);
     }
     expect(result.reason).toContain(
-      "Last error: AbortError: request aborted (code=ABORT_ERR) | " +
-        "ConnectError: connect ECONNREFUSED (code=ECONNREFUSED)",
+      "Last error: request aborted | ABORT_ERR | connect ECONNREFUSED | ECONNREFUSED",
     );
     expect(result.reason).not.toContain("timed out after");
     expect(result.reason).not.toContain("endpoint is not reachable");
@@ -404,8 +403,9 @@ describe("preflightCronModelProvider", () => {
       throw new Error(`expected preflight unavailable, got ${result.status}`);
     }
     expect(result.reason.match(/failure-0/g)).toHaveLength(1);
-    expect(result.reason).toContain("NestedError7: failure-7 (code=ELOOP7)");
-    expect(result.reason).not.toContain("failure-8");
+    expect(result.reason).toContain("failure-7 | ELOOP7");
+    expect(result.reason).toContain("failure-11 | ELOOP11");
+    expect(result.reason).not.toContain("NestedError");
   });
 
   it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
@@ -433,8 +433,7 @@ describe("preflightCronModelProvider", () => {
     }
     const diagnostic = result.reason.split("Last error: ")[1];
     expect(diagnostic).toHaveLength(1_000);
-    expect(diagnostic).toMatch(/^Error: x+…$/u);
-    expect(diagnostic).not.toContain("😀");
+    expect(diagnostic).toMatch(/^x{992}😀trunc…$/u);
     expect(diagnostic).not.toContain("truncated-detail");
     expect(/[\uD800-\uDBFF]$/u.test(diagnostic ?? "")).toBe(false);
   });

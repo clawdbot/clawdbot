@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
 } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest, type PluginManifestModelCatalog } from "../../plugins/manifest.js";
@@ -20,7 +20,7 @@ const sourcePeerModelCatalogCache = new Map<string, PluginManifestModelCatalog |
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
   return (
     params.metadataSnapshot?.manifestRegistry.plugins ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryCore({
       config: params.cfg,
     }).plugins
   );
@@ -118,14 +118,6 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
       return canonicalProvider === ref.provider ? ref : { ...ref, provider: canonicalProvider };
     },
   };
-}
-
-/** Canonicalizes a provider id through manifest model-catalog aliases. */
-export function canonicalizeModelCatalogProviderAlias(
-  provider: string,
-  params: ProviderAliasSource,
-): string {
-  return createModelCatalogProviderAliasCanonicalizer(params).provider(provider);
 }
 
 /** Canonicalizes the provider field on a model reference. */

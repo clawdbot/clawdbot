@@ -1,8 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import {
+  createStagedInputPathMatcher,
+  stagedInputDirectoriesFromEntries,
+  isStagedInputPath,
+  stagedInputPathDirectory,
+} from "../../media/staged-inputs.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
@@ -28,9 +34,16 @@ import {
   entryMatches,
   localPath,
   readWorkspaceTreeFile,
+  removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
+type WorkspaceRecoveryContext = {
+  root: string;
+  journal: WorkerWorkspaceReconciliationJournal;
+  filteredBaseTree: boolean;
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
+};
 async function requireGit(
   cwd: string,
   args: string[],
@@ -83,7 +96,8 @@ async function writeRawWorkspaceTree(params: {
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Uint8Array }> =
     [];
   let mark = 1;
-  for (const entry of reconciliationEntries(params.entries).toSorted((left, right) =>
+  // Delta entries were selected against a complete manifest; their marker may be unchanged.
+  for (const entry of params.entries.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   )) {
     const content =
@@ -134,7 +148,9 @@ export async function createWorkspacePatch(params: {
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
 }): Promise<{ patch: Uint8Array; baseTree: string; basePack: Uint8Array }> {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-patch-"));
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-patch-"),
+  );
   try {
     // Rollback journals have a fixed SHA-1 object-id contract. Do not inherit
     // user or process defaults that can switch temporary repositories to SHA-256.
@@ -175,11 +191,7 @@ export async function createWorkspacePatch(params: {
     if (packed.stdout.byteLength > MAX_RECONCILIATION_TOTAL_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
     }
-    for (const name of await fs.readdir(temporary)) {
-      if (name !== ".git") {
-        await fs.rm(path.join(temporary, name), { recursive: true, force: true });
-      }
-    }
+    await clearTemporaryWorkspace(temporary);
     for (const entry of params.appliedEntries) {
       await materializeSnapshotEntry({
         root: temporary,
@@ -234,7 +246,9 @@ export async function applyWorkspacePatch(params: {
   }
   // Run no-index with discovery disabled so workspace .gitattributes and
   // repository filter config cannot reinterpret authenticated patch bytes.
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-git-"));
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-no-git-"),
+  );
   try {
     await requireGit(
       params.root,
@@ -263,17 +277,16 @@ function validateJournalSnapshot(journal: WorkerWorkspaceReconciliationJournal):
   }
 }
 
-async function createWorkspaceRecoveryPatch(params: {
-  root: string;
-  journal: WorkerWorkspaceReconciliationJournal;
-}): Promise<Uint8Array> {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-recovery-"));
+async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): Promise<Uint8Array> {
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-recovery-"),
+  );
   try {
     await requireGit(temporary, ["init", "--quiet", "--object-format=sha1"]);
     await requireGit(temporary, ["index-pack", "--stdin"], params.journal.basePack);
     await requireGit(temporary, ["cat-file", "-e", `${params.journal.baseTree}^{tree}`]);
-    const baseEntries = reconciliationEntries(params.journal.baseEntries);
-    const appliedEntries = reconciliationEntries(params.journal.appliedEntries);
+    const baseEntries = params.journal.baseEntries;
+    const appliedEntries = params.journal.appliedEntries;
     const baseByPath = new Map(baseEntries.map((entry) => [entry.path, entry]));
     const appliedByPath = new Map(appliedEntries.map((entry) => [entry.path, entry]));
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
@@ -314,8 +327,18 @@ async function createWorkspaceRecoveryPatch(params: {
         stats.isDirectory() &&
         !stats.isSymbolicLink() &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(params.root, entryPath, paths, directories))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entryPath)));
+          (await directoryContainsOnlyJournalPaths(
+            params.root,
+            entryPath,
+            paths,
+            directories,
+            params.isRetainedInput,
+          ))) ||
+          (await directoryContainsOnlyDerivedWorkspaceEntries(
+            params.root,
+            entryPath,
+            params.isRetainedInput,
+          )));
       if (!isJournalDirectory) {
         throw new ConcurrentWorkspacePathError(
           `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
@@ -334,7 +357,7 @@ async function createWorkspaceRecoveryPatch(params: {
       entries: actualEntries,
     });
     let recoveryBaseTree = params.journal.baseTree;
-    if (baseEntries.length !== params.journal.baseEntries.length) {
+    if (params.filteredBaseTree) {
       await clearTemporaryWorkspace(temporary);
       for (const entry of baseEntries) {
         const content =
@@ -386,22 +409,16 @@ async function createWorkspaceRecoveryPatch(params: {
   }
 }
 
-async function assertWorkspaceRecoveryBase(params: {
-  root: string;
-  journal: WorkerWorkspaceReconciliationJournal;
-}): Promise<void> {
+async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Promise<void> {
+  const baseEntries = params.journal.baseEntries;
+  const appliedEntries = params.journal.appliedEntries;
   await assertWorkspaceMatchesManifest({
     root: params.root,
     manifest: { version: 1, baseCommit: null, entries: params.journal.baseEntries },
+    entries: baseEntries,
   });
-  const baseEntries = reconciliationEntries(params.journal.baseEntries);
-  const appliedEntries = reconciliationEntries(params.journal.appliedEntries);
-  const baseDirectoryPaths = new Set(
-    reconciliationDirectories(params.journal.baseDirectories ?? []),
-  );
-  const appliedDirectoryPaths = new Set(
-    reconciliationDirectories(params.journal.appliedDirectories ?? []),
-  );
+  const baseDirectoryPaths = new Set(params.journal.baseDirectories ?? []);
+  const appliedDirectoryPaths = new Set(params.journal.appliedDirectories ?? []);
   for (const entryPath of baseDirectoryPaths) {
     const node = await localWorkspaceNode(params.root, entryPath);
     if (node?.type !== "directory") {
@@ -427,7 +444,13 @@ async function assertWorkspaceRecoveryBase(params: {
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(params.root, entry.path, basePaths, baseDirectories))
+      (await directoryContainsOnlyJournalPaths(
+        params.root,
+        entry.path,
+        basePaths,
+        baseDirectories,
+        params.isRetainedInput,
+      ))
     ) {
       continue;
     }
@@ -446,7 +469,11 @@ async function assertWorkspaceRecoveryBase(params: {
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entryPath))
+        (await directoryContainsOnlyDerivedWorkspaceEntries(
+          params.root,
+          entryPath,
+          params.isRetainedInput,
+        ))
       )
     ) {
       throw new ConcurrentWorkspacePathError(
@@ -456,18 +483,13 @@ async function assertWorkspaceRecoveryBase(params: {
   }
 }
 
-async function assertWorkspaceRecoveryDirectoriesRecoverable(params: {
-  root: string;
-  journal: WorkerWorkspaceReconciliationJournal;
-}): Promise<void> {
-  const baseDirectories = new Set(reconciliationDirectories(params.journal.baseDirectories));
-  const appliedDirectories = new Set(reconciliationDirectories(params.journal.appliedDirectories));
-  const baseEntries = new Map(
-    reconciliationEntries(params.journal.baseEntries).map((entry) => [entry.path, entry]),
-  );
-  const appliedEntries = new Map(
-    reconciliationEntries(params.journal.appliedEntries).map((entry) => [entry.path, entry]),
-  );
+async function assertWorkspaceRecoveryDirectoriesRecoverable(
+  params: WorkspaceRecoveryContext,
+): Promise<void> {
+  const baseDirectories = new Set(params.journal.baseDirectories ?? []);
+  const appliedDirectories = new Set(params.journal.appliedDirectories ?? []);
+  const baseEntries = new Map(params.journal.baseEntries.map((entry) => [entry.path, entry]));
+  const appliedEntries = new Map(params.journal.appliedEntries.map((entry) => [entry.path, entry]));
   const appliedEntryPaths = new Set(appliedEntries.keys());
   const directoryPaths = new Set([...baseDirectories, ...appliedDirectories]);
   for (const entryPath of directoryPaths) {
@@ -481,6 +503,7 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(params: {
           entryPath,
           appliedEntryPaths,
           appliedDirectories,
+          params.isRetainedInput,
         ))
       ) {
         throw new ConcurrentWorkspacePathError(
@@ -511,52 +534,22 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(params: {
   }
 }
 
-async function restoreWorkspaceJournalDirectories(params: {
-  root: string;
-  journal: WorkerWorkspaceReconciliationJournal;
-}): Promise<void> {
+async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryContext): Promise<void> {
   const workspaceRoot = await openFsSafeRoot(params.root, { mode: 0o700 });
-  const baseDirectories = reconciliationDirectories(params.journal.baseDirectories ?? []);
-  const appliedDirectories = new Set(
-    reconciliationDirectories(params.journal.appliedDirectories ?? []),
-  );
+  const baseDirectories = params.journal.baseDirectories ?? [];
+  const appliedDirectories = new Set(params.journal.appliedDirectories ?? []);
   for (const entryPath of baseDirectories.toSorted()) {
     await workspaceRoot.mkdir(entryPath);
   }
   const baseDirectoryPaths = new Set(baseDirectories);
-  const baseEntryPaths = new Set(
-    reconciliationEntries(params.journal.baseEntries).map((entry) => entry.path),
-  );
+  const baseEntryPaths = new Set(params.journal.baseEntries.map((entry) => entry.path));
   for (const entryPath of [...appliedDirectories].toSorted((left, right) =>
     right.localeCompare(left),
   )) {
     if (baseDirectoryPaths.has(entryPath) || baseEntryPaths.has(entryPath)) {
       continue;
     }
-    let children: string[];
-    try {
-      children = await workspaceRoot.list(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      throw error;
-    }
-    if (children.length > 0) {
-      continue;
-    }
-    try {
-      await workspaceRoot.remove(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
-      if (racedChildren?.length) {
-        continue;
-      }
-      throw error;
-    }
+    await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
 }
 
@@ -573,16 +566,57 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);
+  const matchesLiveInput = createStagedInputPathMatcher(await openFsSafeRoot(root));
+  const journalEntries = [...params.journal.baseEntries, ...params.journal.appliedEntries];
+  const stagedInputDirectories = stagedInputDirectoriesFromEntries(journalEntries);
+  // A delta omits unchanged markers; changed markers may instead be in the journal
+  // while their live file is absent during recovery. Both bind the same producer bytes.
+  const journalPaths = [
+    ...journalEntries.map((entry) => entry.path),
+    ...(params.journal.baseDirectories ?? []),
+    ...(params.journal.appliedDirectories ?? []),
+  ];
+  for (const entryPath of journalPaths) {
+    const directory = stagedInputPathDirectory(entryPath);
+    if (
+      directory &&
+      !stagedInputDirectories.has(directory) &&
+      (await matchesLiveInput(entryPath))
+    ) {
+      stagedInputDirectories.add(directory);
+    }
+  }
+  const journal = {
+    ...params.journal,
+    baseEntries: reconciliationEntries(params.journal.baseEntries, stagedInputDirectories),
+    appliedEntries: reconciliationEntries(params.journal.appliedEntries, stagedInputDirectories),
+    baseDirectories: reconciliationDirectories(
+      params.journal.baseDirectories,
+      stagedInputDirectories,
+    ),
+    appliedDirectories: reconciliationDirectories(
+      params.journal.appliedDirectories,
+      stagedInputDirectories,
+    ),
+  };
+  const isRetainedInput = async (relative: string) =>
+    isStagedInputPath(relative, stagedInputDirectories) || (await matchesLiveInput(relative));
+  const recovery = {
+    root,
+    journal,
+    isRetainedInput,
+    filteredBaseTree: journal.baseEntries.length !== params.journal.baseEntries.length,
+  };
   try {
-    await assertWorkspaceRecoveryBase({ root, journal: params.journal });
+    await assertWorkspaceRecoveryBase(recovery);
     return;
   } catch {
     // The journal may be persisted before, during, or after the multi-file apply.
   }
-  await assertWorkspaceRecoveryDirectoriesRecoverable({ root, journal: params.journal });
-  const recoveryPatch = await createWorkspaceRecoveryPatch({ root, journal: params.journal });
-  await prepareNonDirectoryTargets(root, params.journal.baseEntries);
+  await assertWorkspaceRecoveryDirectoriesRecoverable(recovery);
+  const recoveryPatch = await createWorkspaceRecoveryPatch(recovery);
+  await prepareNonDirectoryTargets(root, journal.baseEntries, isRetainedInput);
   await applyWorkspacePatch({ root, patch: recoveryPatch });
-  await restoreWorkspaceJournalDirectories({ root, journal: params.journal });
-  await assertWorkspaceRecoveryBase({ root, journal: params.journal });
+  await restoreWorkspaceJournalDirectories(recovery);
+  await assertWorkspaceRecoveryBase(recovery);
 }

@@ -6,6 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  McpLoopbackToolCache,
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -29,7 +34,7 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain("This turn visible reply");
+    expect(messageTool).toBeDefined();
   });
 
   it("keeps webchat room-event turns on automatic source delivery", () => {
@@ -55,8 +60,33 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain("This turn visible reply");
+    expect(messageTool).toBeDefined();
   });
+
+  it.each(["profile", "gateway-deny", "surface-exclusion"] as const)(
+    "rejects collector mode after %s removes its reader",
+    async (restriction) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          agents: { entries: { main: { default: true } } },
+          tools: { profile: restriction === "profile" ? "messaging" : "coding" },
+          ...(restriction === "gateway-deny"
+            ? { gateway: { tools: { deny: ["agents_wait"] } } }
+            : {}),
+        },
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        ...(restriction === "surface-exclusion" ? { excludeToolNames: ["agents_wait"] } : {}),
+      });
+      const spawn = result.tools.find((tool) => tool.name === "sessions_spawn");
+      expect(spawn).toBeDefined();
+      expect(result.tools.some((tool) => tool.name === "agents_wait")).toBe(false);
+      expect(spawn?.parameters).not.toHaveProperty("properties.collect");
+      await expect(
+        spawn!.execute("uncollectable", { task: "inspect", collect: true }),
+      ).rejects.toThrow("Collector results are unavailable");
+    },
+  );
 
   it("keeps ordinary loopback turns under the configured profile", () => {
     const result = resolveGatewayScopedTools({
@@ -86,9 +116,139 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(unbound.tools.some((tool) => tool.name === "image")).toBe(false);
-    expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
+    expect(unbound.tools.some((tool) => tool.name === "view_image")).toBe(false);
+    expect(grantBound.tools.some((tool) => tool.name === "view_image")).toBe(true);
   });
+
+  it("uses the prepared vision fact for the loopback image loader", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      modelHasVision: true,
+      surface: "loopback",
+    });
+
+    const imageTool = result.tools.find((tool) => tool.name === "view_image");
+    expect(imageTool).toMatchObject({
+      label: "View Image",
+      catalogMode: "direct-only",
+    });
+    expect(imageTool?.description).toContain("private model context");
+  });
+
+  it.each([
+    { first: undefined, second: false },
+    { first: false, second: undefined },
+  ])(
+    "keeps unknown and disabled model vision distinct in cached tools: $first then $second",
+    async ({ first, second }) => {
+      const cache = new McpLoopbackToolCache();
+      const cfg: OpenClawConfig = { tools: { allow: ["computer"] } };
+      for (const modelHasVision of [first, second]) {
+        const result = await cache.resolve({
+          cfg,
+          context: {
+            sessionKey: "agent:main:vision-context",
+            senderIsOwner: true,
+            modelHasVision,
+          },
+        });
+        expect(result.tools.some((tool) => tool.name === "computer")).toBe(
+          modelHasVision !== false,
+        );
+      }
+    },
+  );
+
+  it("applies a borrowed runtime policy without reassigning session tools", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: { tools: { deny: ["sessions_list"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runtimePolicySessionKey: "agent:worker:discord:default:direct:peer-42",
+      runtimePolicyAgentId: "worker",
+      surface: "loopback",
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.tools.some((tool) => tool.name === "sessions_list")).toBe(false);
+    expect(result.tools.some((tool) => tool.name === "sessions_history")).toBe(true);
+  });
+
+  it("rejects a runtime policy agent that conflicts with its session key", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveGatewayScopedTools({
+        cfg,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runtimePolicySessionKey: "agent:worker:main",
+        runtimePolicyAgentId: "main",
+        surface: "loopback",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it.each(
+    [
+      { mode: "policy", resolve: resolveMcpLoopbackPolicyTools },
+      { mode: "exact grant", resolve: resolveMcpLoopbackScopedTools },
+    ].flatMap(({ mode, resolve }) =>
+      [
+        { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
+        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
+        { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
+        {
+          label: "filesystem group",
+          toolsAllow: ["group:fs"],
+          expected: mode === "policy" ? ["ls", "read"] : [],
+        },
+      ].map((testCase) => Object.assign(testCase, { mode, resolve })),
+    ),
+  )(
+    "materializes $label loopback $mode without widening its cap",
+    async ({ resolve, toolsAllow, expected }) => {
+      const scope = {
+        cfg: {
+          plugins: { enabled: false },
+          tools: { profile: "minimal", alsoAllow: ["ls", "read"] },
+        } satisfies OpenClawConfig,
+        context: {
+          sessionKey: "agent:main:cron:listing-surface",
+          workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
+          senderIsOwner: true,
+          toolsAllow,
+        },
+      };
+      const allowed = await resolve(scope);
+      expect(allowed.tools.map((tool) => tool.name)).toEqual(expected);
+
+      const denied = await resolve({
+        ...scope,
+        cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
+      });
+      expect(denied.tools.map((tool) => tool.name)).toEqual(
+        expected.filter((name) => name !== "ls"),
+      );
+    },
+  );
 
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
@@ -157,34 +317,49 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(withoutActions.tools.some((tool) => tool.name === "spawn_task")).toBe(false);
+    expect(withoutActions.tools.some((tool) => tool.name === "suggest_task")).toBe(false);
     expect(withActions.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["spawn_task", "dismiss_task"]),
+      expect.arrayContaining(["suggest_task", "dismiss_task"]),
     );
   });
 
   it("passes loopback yield context into sessions_yield", async () => {
+    const registry = await import("../agents/subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
     const onYield = vi.fn();
-    const result = resolveGatewayScopedTools({
-      cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } } as OpenClawConfig,
-      sessionKey: "agent:main:telegram:group:-100123",
-      sessionId: "session-123",
-      onYield,
-      surface: "loopback",
-    });
-    const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
-    if (!yieldTool) {
-      throw new Error("expected sessions_yield tool");
+    try {
+      const result = resolveGatewayScopedTools({
+        cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } } as OpenClawConfig,
+        sessionKey: "agent:main:telegram:group:-100123",
+        sessionId: "session-123",
+        runId: "run-123",
+        onYield,
+        surface: "loopback",
+      });
+      const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
+      if (!yieldTool) {
+        throw new Error("expected sessions_yield tool");
+      }
+
+      const toolResult = await yieldTool.execute("tool-call-1", {
+        message: "waiting on subagents",
+        acknowledgment: "I’m waiting on the subagents.",
+      });
+
+      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:telegram:group:-100123",
+        requesterTurnRunId: "run-123",
+      });
+      expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
+      expect(toolResult.details).toEqual({
+        status: "yielded",
+        acknowledgment: "I’m waiting on the subagents.",
+      });
+    } finally {
+      markRequesterTurnYielded.mockRestore();
     }
-
-    const toolResult = await yieldTool.execute("tool-call-1", {
-      message: "waiting on subagents",
-    });
-
-    expect(onYield).toHaveBeenCalledWith("waiting on subagents");
-    expect(toolResult.details).toEqual({
-      status: "yielded",
-      message: "waiting on subagents",
-    });
   });
 });

@@ -1,18 +1,16 @@
+import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
-import { normalizeStringRecord } from "./manifest-capability-normalizers.js";
+import { normalizeManifestStringRecord } from "./manifest-capability-normalizers.js";
 import type {
   PluginManifestModelIdNormalization,
   PluginManifestModelIdNormalizationProvider,
   PluginManifestModelIdPrefixRule,
   PluginManifestModelPricing,
-  PluginManifestModelPricingModelIdTransform,
-  PluginManifestModelPricingProvider,
-  PluginManifestModelPricingSource,
   PluginManifestModelSupport,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequest,
@@ -42,43 +40,6 @@ export function normalizeManifestModelSupport(
   } satisfies PluginManifestModelSupport;
 
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
-}
-
-function normalizeManifestModelPricingSource(
-  value: unknown,
-): PluginManifestModelPricingSource | false | undefined {
-  if (value === false) {
-    return false;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const provider = normalizeModelCatalogProviderId(normalizeOptionalString(value.provider) ?? "");
-  const modelIdTransforms = normalizeTrimmedStringList(value.modelIdTransforms).filter(
-    (entry): entry is PluginManifestModelPricingModelIdTransform => entry === "version-dots",
-  );
-  const source = {
-    ...(provider ? { provider } : {}),
-    ...(value.passthroughProviderModel === true ? { passthroughProviderModel: true } : {}),
-    ...(modelIdTransforms.length > 0 ? { modelIdTransforms } : {}),
-  } satisfies PluginManifestModelPricingSource;
-  return Object.keys(source).length > 0 ? source : undefined;
-}
-
-function normalizeManifestModelPricingProvider(
-  value: unknown,
-): PluginManifestModelPricingProvider | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const openRouter = normalizeManifestModelPricingSource(value.openRouter);
-  const liteLLM = normalizeManifestModelPricingSource(value.liteLLM);
-  const policy = {
-    ...(typeof value.external === "boolean" ? { external: value.external } : {}),
-    ...(openRouter !== undefined ? { openRouter } : {}),
-    ...(liteLLM !== undefined ? { liteLLM } : {}),
-  } satisfies PluginManifestModelPricingProvider;
-  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function normalizeOwnedProviderMap<T>(
@@ -112,7 +73,7 @@ export function normalizeManifestModelPricing(
   const providers = normalizeOwnedProviderMap(
     value,
     params.ownedProviders,
-    normalizeManifestModelPricingProvider,
+    normalizeModelPricingProvider,
   );
   return providers ? { providers } : undefined;
 }
@@ -338,7 +299,7 @@ export function normalizeManifestSecretProviderIntegrations(
       rawIntegration.maxOutputBytes,
       MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
     );
-    const env = normalizeStringRecord(rawIntegration.env);
+    const env = normalizeManifestStringRecord(rawIntegration.env);
     const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
       maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
       pattern: ENV_SECRET_REF_ID_RE,

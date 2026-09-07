@@ -8,15 +8,17 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type RuntimeEnv,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
@@ -29,7 +31,6 @@ import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import {
   acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup,
-  isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   type SharedMatrixClientLease,
@@ -82,7 +83,8 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): bool
     return true;
   }
   if (resolveMatrixStreamingMode(streaming) === "progress") {
-    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+    // Progress drafts are quiet unless the operator opts into the tool log.
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? false;
   }
   return streaming.preview?.toolProgress ?? true;
 }
@@ -99,9 +101,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // Fast-cancel callers should not pay the full Matrix startup/import cost.
   if (opts.abortSignal?.aborted) {
     return;
-  }
-  if (isBunRuntime()) {
-    throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
   const core = getMatrixRuntime();
   let cfg = core.config.current() as CoreConfig;
@@ -204,7 +203,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let client: MatrixClient | null = null;
   let clientLease: SharedMatrixClientLease | null = null;
   let monitorLifecycleSignal = opts.abortSignal;
-  let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  let threadBindingManager: { accountId: string; stop: () => Promise<void> } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -263,7 +262,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
@@ -421,7 +419,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       blockStreamingEnabled,
       dmEnabled,
       dmPolicy,
-      textLimit,
       mediaMaxBytes,
       historyLimit,
       startupMs,
@@ -444,7 +441,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logVerboseMessage,
     });
     if (monitorSetupClosed) {
-      createdThreadBindingManager.stop();
+      await createdThreadBindingManager.stop();
       await cleanup("stop");
       return;
     }
@@ -469,6 +466,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           })
           .catch(() => []),
       directTracker,
+      groupPolicy,
+      roomsConfig,
+      needsRoomAliasesForConfig,
+      getRoomInfo,
       invalidateMemberDisplayName,
       logVerboseMessage,
       warnedEncryptedRooms,

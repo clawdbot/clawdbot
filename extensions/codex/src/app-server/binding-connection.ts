@@ -1,11 +1,16 @@
 // Codex helper module selects an app-server connection from private binding ownership.
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
+import { readCodexPluginConfig } from "./config-parsing.js";
 import {
-  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
-  type CodexAppServerRuntimeOptions,
-} from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+} from "./config-runtime.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  resolveCodexCatalogConnectionHome,
+} from "./plugin-app-cache-key.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type CodexAppServerRuntimeOptionsParams = NonNullable<
@@ -23,6 +28,32 @@ type CodexSupervisionModelSelection = {
   model: string;
   modelProvider: string;
 };
+
+/** Prevents a prepared native session from becoming a fresh thread after its binding changes. */
+export function assertCodexSessionRuntimeOwnership(
+  binding:
+    | Pick<
+        CodexAppServerThreadBinding,
+        "preserveNativeModel" | "connectionScope" | "model" | "modelProvider"
+      >
+    | undefined,
+  expected: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+): void {
+  if (!expected) {
+    return;
+  }
+  const auth = binding?.connectionScope === "supervision" ? "native" : "host";
+  const hostModelChanged =
+    expected.auth === "host" &&
+    (!expected.modelRef ||
+      binding?.model !== expected.modelRef.model ||
+      binding?.modelProvider !== expected.modelRef.provider);
+  if (binding?.preserveNativeModel !== true || auth !== expected.auth || hostModelChanged) {
+    throw new AgentHarnessPreflightError(
+      "Codex native session ownership is missing or changed. Reattach the original native session or create a new chat with a concrete model; no replacement thread was started.",
+    );
+  }
+}
 
 /** Requires the native model pair after a supervised pending branch has materialized. */
 export function requireCodexSupervisionModelSelection(
@@ -58,7 +89,7 @@ export function resolveCodexBindingAppServerConnection(
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const appServer = (
+  let appServer = (
     usesSupervisionConnection
       ? resolveCodexSupervisionAppServerRuntimeOptions
       : resolveCodexAppServerRuntimeOptions
@@ -69,6 +100,21 @@ export function resolveCodexBindingAppServerConnection(
     const persistedFingerprint =
       binding.pendingSupervisionBranch?.connectionFingerprint ??
       binding.appServerRuntimeFingerprint;
+    const catalogHome = persistedFingerprint
+      ? resolveCodexCatalogConnectionHome(persistedFingerprint, runtimeParams.agentDir)
+      : undefined;
+    if (catalogHome) {
+      // Connection recovery changes only the store location. The freshly resolved
+      // runtime keeps its native-model review and permission policy.
+      appServer = {
+        ...appServer,
+        start: {
+          ...appServer.start,
+          homeScope: "user",
+          env: { ...appServer.start.env, CODEX_HOME: catalogHome },
+        },
+      };
+    }
     const currentFingerprint = buildCodexAppServerConnectionFingerprint(
       appServer,
       runtimeParams.agentDir,

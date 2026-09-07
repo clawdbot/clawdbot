@@ -1,10 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
@@ -45,6 +46,39 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
         cleanup();
       }
     }
+  });
+});
+
+async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise<Error> {
+  return await runDatabaseVerifyWorker([], {
+    onWorker: (worker) => {
+      if (!worker) {
+        return;
+      }
+      worker.send = ((...args: unknown[]) => {
+        const callback = args.at(-1);
+        if (typeof callback === "function") {
+          callback(failure);
+        }
+        return true;
+      }) as ChildProcess["send"];
+    },
+  }).then(
+    () => {
+      throw new Error("expected database verification worker failure");
+    },
+    (rejection: unknown) => rejection as Error,
+  );
+}
+
+describe("database verification error coercion", () => {
+  it("preserves structured send failures across the database-worker boundary", async () => {
+    const failure = { code: "SQLITE_IOERR", database: "state" };
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(error).toMatchObject({ message: "[object Object]", code: "SQLITE_IOERR" });
+    expect(error.cause).toBe(failure);
   });
 });
 
@@ -123,19 +157,36 @@ function preparedVerificationResults(
   return targets.map((target) => terminalVerificationResult(target.path));
 }
 
-function readLinuxPosixLocksForPath(pathname: string): string[] {
-  if (process.platform !== "linux") {
-    return [];
-  }
-  const inode = fs.statSync(pathname, { bigint: true }).ino;
-  const lockInode = new RegExp(`\\b[0-9a-f]+:[0-9a-f]+:${inode}\\b`, "u");
-  return fs
-    .readFileSync("/proc/locks", "utf8")
-    .split("\n")
-    .filter((line) => line.includes(" POSIX ") && lockInode.test(line));
-}
-
 describe("OpenClaw database integrity verifier", () => {
+  it.each(["absent", "installed"])(
+    "verifies the %s additive transcript eligibility projection",
+    async (shape) => {
+      const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
+      const agent = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      if (shape === "absent") {
+        agent.db.exec(
+          "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
+        );
+      }
+      const targets: OpenClawDatabaseVerifyTarget[] = [
+        { kind: "agent", label: "transcript eligibility", path: agent.path },
+      ];
+      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+        { path: agent.path, ok: true },
+      ]);
+      expect(
+        agent.db
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+          )
+          .get(),
+      ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "preserves live WAL ownership while snapshotting an open database",
     async () => {
@@ -149,9 +200,12 @@ describe("OpenClaw database integrity verifier", () => {
         .run("verifier-lock-owner", JSON.stringify({ preserved: true }), 1);
       const walBefore = fs.statSync(`${agent.path}-wal`);
       const shmBefore = fs.statSync(`${agent.path}-shm`);
-      const baseLocksBefore = readLinuxPosixLocksForPath(agent.path);
+      const baseLocksBefore =
+        process.platform === "linux" ? readMainDatabasePosixLocks(agent.path) : [];
       if (process.platform === "linux") {
-        expect(baseLocksBefore.length).toBeGreaterThan(0);
+        expect(baseLocksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
       }
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
@@ -163,7 +217,7 @@ describe("OpenClaw database integrity verifier", () => {
       if (process.platform === "linux") {
         // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
         // assert the kernel lock itself rather than relying on that symptom.
-        expect(readLinuxPosixLocksForPath(agent.path).length).toBeGreaterThan(0);
+        expect(readMainDatabasePosixLocks(agent.path)).toEqual(baseLocksBefore);
       }
       const reader = spawnSync(
         process.execPath,

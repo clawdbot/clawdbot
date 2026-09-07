@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 /**
  * Shared compact tool-call display helpers.
  * Redacts and summarizes arguments into short labels/details for chat and UI
@@ -9,8 +10,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -36,15 +37,11 @@ type ToolSearchCodeDisplayTarget = {
 };
 
 type CoerceDisplayValueOptions = {
-  includeFalse?: boolean;
-  includeZero?: boolean;
-  includeNonFinite?: boolean;
-  maxStringChars?: number;
-  maxArrayEntries?: number;
+  includeFalsy?: boolean;
 };
 
 /** Normalize a tool name for fallback display. */
-export function normalizeToolName(name?: string): string {
+export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
@@ -98,6 +95,10 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
+  // Card arguments belong to the card renderer; generic summaries must not expose them.
+  if (isAgentPlanProgressToolName(params.toolKey)) {
+    return {};
+  }
   return resolveToolVerbAndDetail({
     toolKey: params.toolKey,
     args: params.args,
@@ -117,9 +118,6 @@ function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
-  const maxStringChars = opts.maxStringChars ?? 160;
-  const maxArrayEntries = opts.maxArrayEntries ?? 3;
-
   if (value === null || value === undefined) {
     return undefined;
   }
@@ -133,23 +131,22 @@ function coerceDisplayValue(
       return undefined;
     }
     const firstLine = redactToolPayloadText(rawLine);
-    if (firstLine.length > maxStringChars) {
-      const half = Math.floor((maxStringChars - 1) / 2);
-      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
+    if (firstLine.length > 160) {
+      return `${sliceUtf16Safe(firstLine, 0, 79)}…${sliceUtf16Safe(firstLine, -80)}`;
     }
     return firstLine;
   }
   if (typeof value === "boolean") {
-    if (!value && !opts.includeFalse) {
+    if (!value && !opts.includeFalsy) {
       return undefined;
     }
     return value ? "true" : "false";
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      return opts.includeNonFinite ? String(value) : undefined;
+      return undefined;
     }
-    if (value === 0 && !opts.includeZero) {
+    if (value === 0 && !opts.includeFalsy) {
       return undefined;
     }
     return String(value);
@@ -163,7 +160,7 @@ function coerceDisplayValue(
         continue;
       }
       displayValueCount += 1;
-      if (values.length < maxArrayEntries) {
+      if (values.length < 3) {
         values.push(display);
       }
     }
@@ -171,7 +168,7 @@ function coerceDisplayValue(
       return undefined;
     }
     const preview = values.join(", ");
-    return displayValueCount > maxArrayEntries ? `${preview}…` : preview;
+    return displayValueCount > 3 ? `${preview}…` : preview;
   }
   return undefined;
 }
@@ -753,7 +750,7 @@ function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec" || params.toolKey === "bash") {
+  if (params.toolKey === "exec" || params.toolKey === "bash" || params.toolKey === "shell") {
     detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {

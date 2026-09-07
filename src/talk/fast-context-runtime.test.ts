@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   authorizeActiveMemorySearchHits: vi.fn(),
-  getActiveMemorySearchManager: vi.fn(),
+  getActiveMemorySearchManagerCore: vi.fn(),
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   authorizeActiveMemorySearchHits: mocks.authorizeActiveMemorySearchHits,
-  getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore: mocks.getActiveMemorySearchManagerCore,
 }));
 
 import { resolveRealtimeVoiceFastContextConsult } from "./fast-context-runtime.js";
@@ -17,7 +17,7 @@ import { resolveRealtimeVoiceFastContextConsult } from "./fast-context-runtime.j
 describe("resolveRealtimeVoiceFastContextConsult", () => {
   beforeEach(() => {
     mocks.authorizeActiveMemorySearchHits.mockReset().mockImplementation(async ({ hits }) => hits);
-    mocks.getActiveMemorySearchManager.mockReset();
+    mocks.getActiveMemorySearchManagerCore.mockReset();
   });
 
   afterEach(() => {
@@ -27,7 +27,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
 
   it("caps oversized fast-context timeouts before scheduling Node timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    mocks.getActiveMemorySearchManager.mockResolvedValue({
+    mocks.getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: {
         search: vi.fn().mockResolvedValue([]),
       },
@@ -56,7 +56,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
   it("preserves the fast-context timeout error and clears the timer", async () => {
     vi.useFakeTimers();
     const logger = { debug: vi.fn() };
-    mocks.getActiveMemorySearchManager.mockResolvedValue({
+    mocks.getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: {
         search: vi.fn(() => new Promise<never>(() => {})),
       },
@@ -88,7 +88,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
 
   it("does not split a surrogate pair at the fast-context snippet limit", async () => {
     const safePrefix = "x".repeat(698);
-    mocks.getActiveMemorySearchManager.mockResolvedValue({
+    mocks.getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: {
         search: vi.fn().mockResolvedValue([
           {
@@ -146,7 +146,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
         score: 1,
       },
     ];
-    mocks.getActiveMemorySearchManager.mockResolvedValue({
+    mocks.getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: { search: vi.fn().mockResolvedValue(hits) },
     });
     mocks.authorizeActiveMemorySearchHits.mockResolvedValue([hits[0]]);

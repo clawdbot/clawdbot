@@ -4,6 +4,7 @@ import {
   sleepWithAbort,
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OFFSET_PERSIST_RETRY_POLICY: BackoffPolicy = {
   initialMs: 250,
@@ -21,10 +22,7 @@ type TelegramUpdateOffsetPersistenceOptions = {
 };
 
 export function normalizeTelegramUpdateId(value: number | null): number | null {
-  if (value === null || !Number.isSafeInteger(value) || value < 0) {
-    return null;
-  }
-  return value;
+  return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
 export function createTelegramUpdateOffsetPersistence(

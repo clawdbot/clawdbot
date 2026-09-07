@@ -79,6 +79,9 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
       : undefined,
   queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+}));
+
+vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
 }));
@@ -88,7 +91,6 @@ const providerUsageMocks = vi.hoisted(() => ({
     updatedAt: 0,
     providers: [],
   }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
@@ -145,6 +147,8 @@ vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
     const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.loadPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({

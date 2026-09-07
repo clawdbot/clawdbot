@@ -1,6 +1,4 @@
-// Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
@@ -18,6 +16,7 @@ import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
 import type { admitMSTeamsMessage } from "./access.js";
+import { resolveMSTeamsSenderAccess } from "./access.js";
 import type { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import type { assembleMSTeamsInboundFacts } from "./inbound-facts.js";
 import type { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
@@ -139,16 +138,41 @@ export async function dispatchMSTeamsInboundTurn(params: {
             }).allowed,
         })
       : true;
-  const bodyForAgent = threadContext
-    ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
-    : agentBody;
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
-  const ctxPayload = buildChannelInboundEventContext({
+  // Thread routing owns the final session key, so mint the bound result at dispatch preparation.
+  const boundIngress = await resolveMSTeamsSenderAccess({
+    cfg,
+    activity,
+    hasControlCommand: admission.isControlCommand,
+    conversationThreadId: facts.threadId,
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(activity.id ? { messageId: activity.id } : {}),
+      ...(nativeChannelId ? { nativeChannelId } : {}),
+      inboundEventKind: "user_request",
+    },
+  });
+  const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: boundIngress.channelIngress,
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {
+      // The capped Graph thread slice supplements the pending channel backlog;
+      // it cannot claim to replace that history or become sender command text.
+      channelStructuredContext: threadContext.length
+        ? [
+            {
+              label: "Thread history",
+              source: "msteams",
+              type: "chat_window",
+              sessionTranscriptMode: "preserve",
+              payload: { order: "chronological", messages: threadContext },
+            },
+          ]
+        : undefined,
       quote: quoteInfo
         ? {
             id: quoteInfo.id ?? activity.replyToId ?? undefined,
@@ -193,7 +217,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent,
+      bodyForAgent: agentBody,
       inboundHistory,
       rawBody,
       commandBody,
@@ -264,7 +288,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           id: activity.id ?? `${teamsFrom}:${Date.now()}`,
           timestamp: timestamp?.getTime(),
           rawText: rawBody,
-          textForAgent: bodyForAgent,
+          textForAgent: agentBody,
           textForCommands: commandBody,
           raw: activity,
         }),
@@ -301,7 +325,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
     const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
     const counts = resolveInboundReplyDispatchCounts(dispatchResult);
     log.info("dispatch complete", {
-      queuedFinal: dispatchResult?.queuedFinal ?? false,
       counts,
     });
     if (hasFinalInboundReplyDispatch(dispatchResult)) {

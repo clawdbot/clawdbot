@@ -3,27 +3,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  buildTargetResolverSignature,
+  looksLikeTargetId,
+  maybeResolvePluginMessagingTarget,
+  normalizeChannelTargetInput,
+  normalizeTargetForProvider,
+  resolveNormalizedTargetInput,
+} from "./target-normalization.js";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 
-type TargetNormalizationModule = typeof import("./target-normalization.js");
+let registryVersion = 0;
 
-let buildTargetResolverSignature: TargetNormalizationModule["buildTargetResolverSignature"];
-let looksLikeTargetId: TargetNormalizationModule["looksLikeTargetId"];
-let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePluginMessagingTarget"];
-let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
-let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
-let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-
-vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>();
-  return {
-    ...actual,
-    getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
-  };
-});
+vi.mock("../../channels/plugins/registry-loaded.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
+}));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
@@ -34,19 +31,12 @@ vi.mock("../../plugins/runtime.js", () => ({
     getActivePluginChannelRegistryVersionMock(...args),
 }));
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   getLoadedChannelPluginMock.mockReset();
   getChannelPluginMock.mockReset();
   getActivePluginChannelRegistryVersionMock.mockReset();
-  ({
-    buildTargetResolverSignature,
-    looksLikeTargetId,
-    maybeResolvePluginMessagingTarget,
-    normalizeChannelTargetInput,
-    normalizeTargetForProvider,
-    resolveNormalizedTargetInput,
-  } = await import("./target-normalization.js"));
+  // Isolate fixtures through the owner's registry-generation cache contract.
+  getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
 });
 
 describe("normalizeChannelTargetInput", () => {
@@ -72,7 +62,6 @@ describe("normalizeTargetForProvider", () => {
     {
       provider: "alpha",
       setup: () => {
-        getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
         getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
         getChannelPluginMock.mockReturnValueOnce(undefined);
       },
@@ -89,10 +78,6 @@ describe("normalizeTargetForProvider", () => {
   it("uses the cached target normalizer until the plugin registry version changes", () => {
     const firstNormalizer = vi.fn((raw: string) => raw.trim().toUpperCase());
     const secondNormalizer = vi.fn((raw: string) => `next:${raw.trim()}`);
-    getActivePluginChannelRegistryVersionMock
-      .mockReturnValueOnce(10)
-      .mockReturnValueOnce(10)
-      .mockReturnValueOnce(11);
     getLoadedChannelPluginMock
       .mockReturnValueOnce({
         messaging: { normalizeTarget: firstNormalizer },
@@ -103,6 +88,7 @@ describe("normalizeTargetForProvider", () => {
 
     expect(normalizeTargetForProvider("alpha", "  abc  ")).toBe("ABC");
     expect(normalizeTargetForProvider("alpha", "  def  ")).toBe("DEF");
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
     expect(normalizeTargetForProvider("alpha", "  ghi  ")).toBe("next:ghi");
 
     expect(getLoadedChannelPluginMock).toHaveBeenCalledTimes(2);
@@ -112,7 +98,6 @@ describe("normalizeTargetForProvider", () => {
   });
 
   it("uses bundled/catalog target normalization when the channel is not loaded", () => {
-    getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(30);
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
@@ -127,7 +112,6 @@ describe("normalizeTargetForProvider", () => {
   });
 
   it("returns undefined when the provider normalizer resolves to an empty value", () => {
-    getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(20);
     getLoadedChannelPluginMock.mockReturnValueOnce({
       messaging: {
         normalizeTarget: () => "",
@@ -144,7 +128,6 @@ describe("resolveNormalizedTargetInput", () => {
   });
 
   it("returns raw and normalized values", () => {
-    getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
     getLoadedChannelPluginMock.mockReturnValueOnce({
       messaging: {
         normalizeTarget: (raw: string) => raw.trim().toUpperCase(),
@@ -233,7 +216,6 @@ describe("maybeResolvePluginMessagingTarget", () => {
   });
 
   it("invokes the plugin resolver with normalized input and defaults source", async () => {
-    getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
     const resolveTarget = vi.fn().mockResolvedValue({
       to: "channel:C123ABC",
       kind: "group",

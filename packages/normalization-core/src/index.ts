@@ -1,7 +1,9 @@
 // Public barrel for shared coercion and normalization helpers.
 
+export * from "./balanced-json.js";
 export * from "./boolean-coercion.js";
 export * from "./cjk-chars.js";
+export * from "./code-points.js";
 export * from "./error-coercion.js";
 export * from "./expect.js";
 export * from "./format.js";

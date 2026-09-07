@@ -5,8 +5,8 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
-import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
+import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mts";
 import { type FileLockOptions, withFileLock } from "../../../src/infra/file-lock.js";
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
@@ -43,6 +43,7 @@ const SDK_PACKAGE_BUILD_LOCK_OPTIONS = {
 type PackedSdkConsumer = {
   root: string;
   run: (script: string) => Promise<void>;
+  typecheck: (source: string) => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -412,6 +413,30 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
       await runCommand(process.execPath, createNodeEvalArgs(script, { evalFlag: "-e" }), {
         cwd: root,
       });
+    },
+    typecheck: async (source) => {
+      const sourcePath = path.join(root, "consumer.ts");
+      const tsconfigPath = path.join(root, "tsconfig.json");
+      await fs.writeFile(sourcePath, source);
+      await fs.writeFile(
+        tsconfigPath,
+        JSON.stringify({
+          compilerOptions: {
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            noEmit: true,
+            skipLibCheck: true,
+            strict: true,
+            types: [],
+          },
+          include: ["consumer.ts"],
+        }),
+      );
+      await runCommand(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "run-tsgo.mjs"), "-p", tsconfigPath, "--pretty", "false"],
+        { cwd: repoRoot },
+      );
     },
     cleanup: () => fs.rm(root, { recursive: true, force: true }),
   };

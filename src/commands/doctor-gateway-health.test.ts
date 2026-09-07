@@ -1,26 +1,29 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_TITLE,
 } from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
-const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
+const readServiceCommand = vi.hoisted(() => vi.fn());
+const buildGatewayConnectionDetails = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
 const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
 const TEST_TLS_FINGERPRINT = "sha256:test-doctor-gateway-fingerprint";
 
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: vi.fn(() => ({
-    message: `Gateway target: ${TEST_GATEWAY_URL}`,
-    url: TEST_GATEWAY_URL,
-  })),
+  buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails: vi.fn(() => ({
     preauthHandshakeTimeoutMs: 4321,
     tlsFingerprint: TEST_TLS_FINGERPRINT,
@@ -28,7 +31,6 @@ vi.mock("../gateway/call.js", () => ({
   })),
   callGateway,
   isGatewayCredentialsRequiredError,
-  isGatewayTransportError,
 }));
 
 vi.mock("../gateway/credentials.js", () => ({
@@ -37,6 +39,10 @@ vi.mock("../gateway/credentials.js", () => ({
 
 vi.mock("../cli/daemon-cli/probe.js", () => ({
   probeGatewayStatus,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({ readCommand: readServiceCommand }),
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -56,13 +62,58 @@ describe("checkGatewayHealth", () => {
     callGateway.mockReset();
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
-    isGatewayTransportError.mockReset();
-    isGatewayTransportError.mockReturnValue(false);
     isGatewaySecretRefUnavailableError.mockReset();
     isGatewaySecretRefUnavailableError.mockReturnValue(false);
     probeGatewayStatus.mockReset();
+    readServiceCommand.mockReset().mockResolvedValue(null);
+    buildGatewayConnectionDetails.mockReset().mockReturnValue({
+      message: `Gateway target: ${TEST_GATEWAY_URL}`,
+      url: TEST_GATEWAY_URL,
+    });
     note.mockReset();
   });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([false, true])(
+    "reports live paths when status RPC rejection is %s",
+    async (rejectStatus) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/doctor-cli-state");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/doctor-cli-state/openclaw.json");
+      callGateway.mockImplementation(
+        async (options: {
+          method?: string;
+          onHelloOk?: (hello: { snapshot: { stateDir: string; configPath: string } }) => void;
+        }) => {
+          if (options.method === "status") {
+            options.onHelloOk?.({
+              snapshot: {
+                stateDir: "/tmp/doctor-gateway-state",
+                configPath: "/tmp/doctor-gateway-state/openclaw.json",
+              },
+            });
+            if (rejectStatus) {
+              throw new Error("status unavailable");
+            }
+          }
+          return {};
+        },
+      );
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await expect(
+        checkGatewayHealth({ runtime: runtime as never, cfg: {} as OpenClawConfig }),
+      ).resolves.toMatchObject({ authenticated: !rejectStatus, healthOk: !rejectStatus });
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("CLI and live Gateway use different"),
+        "Gateway state directory mismatch",
+      );
+      expect(readServiceCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses a lightweight status RPC for the restart liveness gate", async () => {
     callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
@@ -72,12 +123,15 @@ describe("checkGatewayHealth", () => {
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
     ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
 
-    expect(callGateway).toHaveBeenNthCalledWith(1, {
-      method: "status",
-      params: { includeChannelSummary: false },
-      timeoutMs: 3000,
-      config: cfg,
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "status",
+        params: { includeChannelSummary: false },
+        timeoutMs: 3000,
+        config: cfg,
+      }),
+    );
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "channels.status",
       params: { probe: true, timeoutMs: 5000 },
@@ -92,6 +146,100 @@ describe("checkGatewayHealth", () => {
     });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it.each([
+    { OPENCLAW_STATE_DIR: "/tmp/doctor-service-state" },
+    { HOME: "/tmp/doctor-service-home" },
+  ])("reports the offline service state directory from %j", async (environment) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/doctor-cli-state");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/doctor-cli-state/openclaw.json");
+    vi.stubEnv("OPENCLAW_HOME", "/tmp/doctor-cli-home");
+    callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    readServiceCommand.mockResolvedValueOnce({
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({
+      healthOk: false,
+      authenticated: false,
+    });
+
+    const warning = note.mock.calls.find(
+      ([, title]) => title === "Gateway state directory mismatch",
+    )?.[0];
+    expect(warning).toContain("CLI and installed Gateway service use different");
+    expect(warning).toContain("doctor-cli-state");
+    expect(warning).toContain(
+      environment.OPENCLAW_STATE_DIR ? "doctor-service-state" : "doctor-service-home",
+    );
+    expect(warning).toContain("openclaw gateway install --force");
+    expect(readServiceCommand).toHaveBeenCalledWith(
+      expect.not.objectContaining({ OPENCLAW_STATE_DIR: expect.anything() }),
+      expect.objectContaining({ requireEffective: true }),
+    );
+  });
+
+  it.each(["connection details", "service environment"] as const)(
+    "reports unavailable offline %s without replacing the health failure or exposing errors",
+    async (source) => {
+      callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+      const inspectionError = new Error("secret-service-environment-canary");
+      if (source === "connection details") {
+        buildGatewayConnectionDetails.mockImplementationOnce(() => {
+          throw inspectionError;
+        });
+      } else {
+        readServiceCommand.mockRejectedValueOnce(inspectionError);
+      }
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({
+        healthOk: false,
+      });
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("could not be verified"),
+        "Gateway state directory",
+      );
+      const output = JSON.stringify(note.mock.calls);
+      expect(output).not.toContain("secret-service-environment-canary");
+      expect(output).not.toContain("Gateway state directory mismatch");
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"));
+    },
+  );
+
+  it.each([
+    { name: "remote URL override", config: {}, url: "wss://gateway.example" },
+    {
+      name: "remote loopback tunnel",
+      config: { gateway: { mode: "remote", remote: { url: TEST_GATEWAY_URL } } },
+      url: TEST_GATEWAY_URL,
+    },
+    { name: "missing remote URL", config: { gateway: { mode: "remote" } }, url: TEST_GATEWAY_URL },
+  ] satisfies Array<{ name: string; config: OpenClawConfig; url: string }>)(
+    "does not use a local service to diagnose $name",
+    async ({ config, url }) => {
+      buildGatewayConnectionDetails.mockReturnValue({ url });
+      callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      await expect(checkGatewayHealth({ runtime, cfg: config })).resolves.toMatchObject({
+        healthOk: false,
+      });
+
+      expect(readServiceCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports startup migration warnings without marking the gateway unhealthy", async () => {
+    const startupMigrationWarning = 'Retained legacy state. Run "openclaw doctor --fix".';
+    callGateway.mockResolvedValueOnce({ startupMigrationWarning }).mockResolvedValue({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
+    expect(note).toHaveBeenCalledWith(startupMigrationWarning, "Startup migration warnings");
   });
 
   it("renders the shared redacted telemetry exporter summary", async () => {
@@ -160,6 +308,30 @@ describe("checkGatewayHealth", () => {
     expect(message).not.toContain(token);
     expect(message).not.toContain("\u001B");
     expect(message.split("\n")).toHaveLength(2);
+  });
+
+  it("reports sanitized exporter diagnostic failures with a retry command", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(
+        new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
+      );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+
+    const [message, title] = note.mock.calls.at(-1) ?? [];
+    expect(title).toBe("Telemetry exporters");
+    expect(message).toContain("Exporter diagnostics failed: exporter probe failed");
+    expect(message).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain("\u001B");
+    expect(message.split("\n")).toHaveLength(2);
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
@@ -284,21 +456,24 @@ describe("checkGatewayHealth", () => {
     );
   });
 
-  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
-    const error = Object.assign(
-      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
-      {
-        kind: "closed",
+  it("reports a typed close without depending on gateway error wording", async () => {
+    const error = new GatewayTransportError({
+      message: "transport closed: \u001B]52;c;YXR0YWNr\u0007protocol version mismatch",
+      kind: "closed",
+      code: 1008,
+      connectionDetails: {
+        url: TEST_GATEWAY_URL,
+        urlSource: "local loopback",
+        message: `Gateway target: ${TEST_GATEWAY_URL}`,
       },
-    );
+    });
     callGateway.mockRejectedValueOnce(error);
-    isGatewayTransportError.mockImplementation((value) => value === error);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
-      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway connect failed: transport closed: protocol version mismatch",
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
@@ -311,6 +486,7 @@ describe("checkGatewayHealth", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -334,6 +510,65 @@ describe("checkGatewayHealth", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
+  it("reports a temporary lockout when status auth is rate-limited", async () => {
+    callGateway.mockRejectedValueOnce(new Error());
+    isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
+    probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: "connect failed",
+      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+      gatewayReached: true,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+    const output = note.mock.calls.flat().join("\n");
+    expect(output).not.toContain("gateway.remote.token");
+    expect(output).not.toContain("devices rotate");
+  });
+
+  it("handles the real typed rate-limit error without forcing the credentials predicate", async () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
+      retryable: true,
+      retryAfterMs: 60_000,
+    });
+    retainGatewayResponsePayload(error, undefined);
+    callGateway.mockRejectedValueOnce(error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(isGatewayCredentialsRequiredError).not.toHaveBeenCalled();
+    expect(probeGatewayStatus).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
+  });
+
   it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {
     const error = new Error("gateway.auth.password unavailable");
     callGateway.mockRejectedValueOnce(error);
@@ -342,6 +577,7 @@ describe("checkGatewayHealth", () => {
       ok: false,
       kind: "connect",
       error: TEST_AUTH_CLOSE_ERROR,
+      gatewayReached: true,
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 

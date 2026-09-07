@@ -20,7 +20,6 @@ export {
   parseAgentComponentData,
   parseDiscordComponentData,
   parseDiscordModalId,
-  resolveDiscordInteractionId,
   resolveInteractionCustomId,
   resolveModalFieldValues,
 } from "./agent-components-data.js";

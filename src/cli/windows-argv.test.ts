@@ -83,4 +83,52 @@ describe("normalizeWindowsArgv", () => {
       platform.mockRestore();
     }
   });
+
+  it("preserves node.exe as the first user argument after the script entry", () => {
+    const platform = mockProcessPlatform("win32");
+    try {
+      expect(
+        normalizeWindowsArgv([
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\pkg\\openclaw.mjs",
+          "node.exe",
+          "--help",
+        ]),
+      ).toEqual([
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\pkg\\openclaw.mjs",
+        "node.exe",
+        "--help",
+      ]);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("preserves a post-script node.exe argument after normalizing a duplicated prefix", () => {
+    const platform = mockProcessPlatform("win32");
+    try {
+      expect(
+        normalizeWindowsArgv([
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\pkg\\openclaw.mjs",
+          "node.exe",
+          "--help",
+        ]),
+      ).toEqual([
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\pkg\\openclaw.mjs",
+        "node.exe",
+        "--help",
+      ]);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("does not normalize POSIX argv", () => {
+    const argv = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "node.exe", "--help"];
+    expect(normalizeWindowsArgv(argv, { platform: "linux" })).toBe(argv);
+  });
 });

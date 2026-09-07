@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -127,6 +128,35 @@ export function renderCustodianChannelOnboardingNudge(params: {
   </div>`;
 }
 
+export function renderCustodianChannelOnboardingError(params: {
+  retrying: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="alert">
+    <div class="custodian__nudge-copy">
+      <strong>${t("custodian.nudge.channelStatusErrorTitle")}</strong>
+      <span>${t("custodian.nudge.channelStatusErrorBody")}</span>
+    </div>
+    <button
+      class="btn btn--sm primary custodian__nudge-cta"
+      type="button"
+      ?disabled=${params.retrying}
+      @click=${params.onRetry}
+    >
+      ${params.retrying ? t("common.loading") : t("common.retry")}
+    </button>
+    <button
+      class="custodian__nudge-dismiss"
+      type="button"
+      aria-label=${t("custodian.nudge.channelSetupDismiss")}
+      @click=${params.onDismiss}
+    >
+      ×
+    </button>
+  </div>`;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 const CONSEQUENTIAL_CHANNEL_STATES = new Set([
@@ -142,12 +172,6 @@ const CHANNEL_AUTH_STATUS_KEYS = [
   "signingSecretStatus",
   "userTokenStatus",
 ] as const;
-
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
-}
 
 function hasUnavailableAuth(account: UnknownRecord): boolean {
   return CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable");

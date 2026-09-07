@@ -125,6 +125,34 @@ describe("task owner access", () => {
     });
   });
 
+  it("rejects an agentless caller for a bare owner key", async () => {
+    await withTaskRegistryTempDir(() => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "global",
+        scopeKind: "session",
+        requesterAgentId: "ops",
+        runId: "bare-owner-run",
+        task: "Agent-owned global task",
+        status: "queued",
+      });
+
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+        }),
+      ).toBeUndefined();
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+          callerAgentId: "ops",
+        })?.taskId,
+      ).toBe(task.taskId);
+    });
+  });
+
   it("does not expose system-owned tasks through owner-scoped readers", async () => {
     await withTaskRegistryTempDir(() => {
       const task = createTaskRecord({

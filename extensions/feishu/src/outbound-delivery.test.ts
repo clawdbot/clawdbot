@@ -18,15 +18,16 @@ const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
+  sendStickerFeishu: vi.fn(),
   sendMediaFeishu: sendMediaFeishuMock,
   shouldSuppressFeishuTextForVoiceMedia: () => false,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
-  sendMarkdownCardFeishu: vi.fn(),
   sendMessageFeishu: sendMessageFeishuMock,
   sendStructuredCardFeishu: vi.fn(),
 }));
@@ -97,6 +98,7 @@ describe("Feishu outbound shared delivery", () => {
   });
 
   it("routes oversized presentation media through one media send and chunked fallback text", async () => {
+    const label = "Open the complete retained workflow run details";
     const readFile = vi.fn(async () => Buffer.from("approved image"));
     const mediaAccess = {
       localRoots: ["/approved/workspace"],
@@ -122,6 +124,10 @@ describe("Feishu outbound shared delivery", () => {
                   `account-${String(index)}-${"x".repeat(80)}`,
                   "Review",
                 ]),
+              },
+              {
+                type: "buttons",
+                buttons: [{ label, action: { type: "command", command: "/open-run" } }],
               },
             ],
           },
@@ -155,6 +161,7 @@ describe("Feishu outbound shared delivery", () => {
     expect(textChunks.every((chunk) => Array.from(chunk).length <= 4000)).toBe(true);
     expect(deliveredText).toContain("account-0-");
     expect(deliveredText).toContain("account-399-");
+    expect(deliveredText).toContain(`- ${label}: \`/open-run\``);
   });
 
   it("replays a queued direct message after Feishu runtime availability is restored", async () => {

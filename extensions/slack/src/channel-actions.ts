@@ -9,7 +9,7 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import { resolveSlackChannelId } from "./targets.js";
+import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -62,16 +62,20 @@ export function createSlackActions(
   options?: { invoke?: SlackActionInvoke },
 ): ChannelMessageActionAdapter {
   return {
+    providerOwnedReadGates: true,
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>
       typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
-    prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
+    prepareSendPayload: ({ ctx, to, payload }) =>
+      ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
+        ? payload
+        : null,
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: resolveSlackChannelId,
+        normalizeChannelId: normalizeSlackActionChannelTarget,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
           const actionContext = resolveSlackActionContext(ctx, toolContext);
@@ -82,4 +86,34 @@ export function createSlackActions(
       });
     },
   };
+}
+
+function normalizeSlackActionChannelTarget(raw: string): string {
+  const target = parseSlackTarget(raw, { defaultKind: "channel" });
+  const channelId = resolveSlackChannelId(raw);
+  return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
+}
+
+function shouldUseWorkspaceAwareSlackActionSend(
+  rawTarget: string,
+  context: ChannelMessageActionContext["toolContext"],
+): boolean {
+  const target = parseSlackTarget(rawTarget, { defaultKind: "channel" });
+  if (!target || target.teamId) {
+    return false;
+  }
+  for (const rawCurrentTarget of [context?.currentChannelId, context?.currentMessagingTarget]) {
+    if (!rawCurrentTarget) {
+      continue;
+    }
+    const currentTarget = parseSlackTarget(rawCurrentTarget);
+    if (
+      currentTarget?.teamId &&
+      currentTarget.kind === target.kind &&
+      currentTarget.id.toLowerCase() === target.id.toLowerCase()
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

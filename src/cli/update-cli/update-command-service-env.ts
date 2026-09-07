@@ -1,16 +1,50 @@
 import path from "node:path";
+import {
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+} from "../../daemon/constants.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_WORKSPACE_DIR",
+] as const;
+const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_HOME",
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
 
-function resolveServiceRefreshEnv(
+function applyManagedServiceSelectorEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  serviceEnv: NodeJS.ProcessEnv;
+  selectorEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const resolved = { ...params.baseEnv };
+  const selectorEnv = params.selectorEnv ?? params.serviceEnv;
+  for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
+    if (resolveEnvironmentValue(selectorEnv, key)?.trim()) {
+      resolved[key] = params.serviceEnv[key];
+    } else {
+      delete resolved[key];
+    }
+  }
+  return resolved;
+}
+
+export function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
+  // A plain copy loses Windows process.env's case-insensitive lookups. Keep
+  // immutable snapshots usable by the config and database path resolvers.
+  const resolvedEnv: NodeJS.ProcessEnv =
+    process.platform === "win32"
+      ? Object.fromEntries(
+          Object.entries(mergeProcessEnv([env])).map(([key, value]) => [key.toUpperCase(), value]),
+        )
+      : { ...env };
   for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
     const rawValue = resolvedEnv[key]?.trim();
     if (!rawValue) {
@@ -26,6 +60,42 @@ function resolveServiceRefreshEnv(
     }
     resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
   }
+  return resolvedEnv;
+}
+
+export async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  const scopedKeys = Object.keys(env).filter(
+    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
+  );
+  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
+  // Package replacement can remove cwd. All phase owners must share the
+  // invocation's resolved selectors until cleanup finishes.
+  for (const key of scopedKeys) {
+    process.env[key] = env[key];
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
+  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   return resolvedEnv;
 }
 
@@ -56,9 +126,32 @@ export function resolveUpdatedInstallCommandEnv(params?: {
   });
 }
 
-export function resolveUpdatedServicePathEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  return resolveServiceRefreshEnv(env, invocationCwd);
+export function resolveOwnedManagedUpdateEnv(params: {
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv: NodeJS.ProcessEnv;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolved = resolveUpdatedInstallCommandEnv(params);
+  const definitionEnv = params.serviceDefinitionEnv ?? params.serviceEnv;
+  return applyManagedServiceSelectorEnv({
+    baseEnv: resolved,
+    serviceEnv: resolved,
+    selectorEnv: definitionEnv,
+  });
+}
+
+export function resolveUpdateTargetEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(
+    resolveServiceRefreshEnv(params?.baseEnv ?? process.env, params?.invocationCwd),
+  );
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  return applyManagedServiceSelectorEnv({ baseEnv: resolvedEnv, serviceEnv });
 }

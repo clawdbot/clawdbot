@@ -1,23 +1,27 @@
 import path from "node:path";
-import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
-import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { SavedMedia } from "../../media/store.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
+import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -31,32 +35,34 @@ type ChatSendUserTurnInputController = {
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
+type PersistedChatSendMedia = Awaited<
+  ReturnType<typeof persistInboundImagesForTranscript>
+>["entries"];
+
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
-}): Promise<SavedMedia[]> {
+}): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
     isAcpBridgeClient(params.client)
   ) {
-    return [];
+    return { entries: [], omission: "none" };
   }
   return await persistInboundImagesForTranscript({
     images: params.images,
-    imageOrder: params.imageOrder,
     offloadedRefs: params.offloadedRefs,
     log: params.logGateway,
     logContext: "chat.send",
   });
 }
 
-function resolveChatSendManagedMedia(savedImages: SavedMedia[]): MediaFact[] {
-  return savedImages.map((entry) => ({
+function resolveChatSendManagedMedia(entries: PersistedChatSendMedia): MediaFact[] {
+  return entries.map((entry) => ({
     path: entry.path,
-    contentType: entry.contentType ?? "application/octet-stream",
+    contentType: entry.fact.contentType ?? "application/octet-stream",
   }));
 }
 
@@ -64,39 +70,6 @@ export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): 
   if ((!ctx.media || ctx.media.length === 0) && media.length > 0) {
     ctx.media = media;
   }
-}
-
-function buildChatSendUserTurnMedia(
-  savedMedia: SavedMedia[],
-  offloadedRefs: OffloadedRef[],
-): MediaFact[] {
-  const offloadedRefsById = new Map(offloadedRefs.map((ref) => [ref.id, ref] as const));
-  return savedMedia.map((entry) => {
-    const offloadedRef = offloadedRefsById.get(entry.id);
-    return {
-      path: entry.path,
-      ...(offloadedRef
-        ? {
-            // Every offload keeps its claim-check alias so persisted marker
-            // ownership survives; only non-images skip native image hydration.
-            url: offloadedRef.mediaRef,
-            kind: offloadedRef.kind,
-            fileName: offloadedRef.label,
-            sizeBytes: offloadedRef.sizeBytes,
-            ...(offloadedRef.durationMs !== undefined
-              ? { durationMs: offloadedRef.durationMs }
-              : {}),
-            ...(offloadedRef.width !== undefined ? { width: offloadedRef.width } : {}),
-            ...(offloadedRef.height !== undefined ? { height: offloadedRef.height } : {}),
-            ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
-          }
-        : {}),
-      contentType: entry.contentType,
-      ...(offloadedRef?.durationMs ? { durationMs: offloadedRef.durationMs } : {}),
-      ...(offloadedRef?.width ? { width: offloadedRef.width } : {}),
-      ...(offloadedRef?.height ? { height: offloadedRef.height } : {}),
-    };
-  });
 }
 
 function buildChatSendPromptMedia(
@@ -111,60 +84,103 @@ function buildChatSendPromptMedia(
   return media.length > 0 ? media : undefined;
 }
 
-function buildChatSendMessageContext(params: {
-  agentId: string;
+/** Assemble transcript media and the portable inbound context after attachment preparation. */
+export function prepareChatSendUserTurn(params: {
+  request: Pick<
+    NormalizedChatSendRequest,
+    | "clientInfo"
+    | "inboundMessage"
+    | "suppressCommandInterpretation"
+    | "systemInputProvenance"
+    | "systemProvenanceReceipt"
+    | "toolBindings"
+  >;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
+    Partial<Pick<PreparedChatSendSession, "cfg">>;
+  admission: Pick<AdmittedChatSend, "originatingRoute">;
+  attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
-  clientInfo?: GatewayClientInfo;
-  clientRunId: string;
-  mediaPathOffloadPaths: string[];
-  mediaPathOffloadTypes: string[];
-  mediaPathOffloadWorkspaceDir?: string;
-  originatingRoute: AdmittedChatSend["originatingRoute"];
-  parsedMessage: string;
-  sessionKey: string;
-  suppressCommandInterpretation: boolean;
-  systemInputProvenance?: InputProvenance;
-  systemProvenanceReceipt?: string;
-  toolBindings?: Readonly<Record<string, unknown>>;
+  logGateway: GatewayRequestContext["logGateway"];
+  getConfig?: () => OpenClawConfig;
+  userTurn: ChatSendUserTurnInputController;
 }) {
-  const commandBody = params.parsedMessage;
+  const { request, session, admission, attachments, client, logGateway, userTurn } = params;
+  const persistedMediaForTranscriptPromise = persistChatSendImages({
+    images: attachments.parsedImages,
+    offloadedRefs: attachments.offloadedRefs,
+    client,
+    logGateway,
+  });
+  userTurn.setInputPromise(
+    persistedMediaForTranscriptPromise.then((result) => {
+      const media = result.entries.map((entry) => entry.fact);
+      const slots = result.entries.flatMap((entry, factIndex) =>
+        entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
+      );
+      return {
+        ...userTurn.baseInput,
+        ...(result.omission === "inline-image-save-failed"
+          ? {
+              text: [userTurn.baseInput.text, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+                .filter(Boolean)
+                .join("\n"),
+            }
+          : {}),
+        ...(media.length > 0 ? { media } : {}),
+        ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
+      };
+    }),
+  );
+  const pluginBoundMediaPromise =
+    attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
+      ? persistedMediaForTranscriptPromise.then((result) =>
+          resolveChatSendManagedMedia(result.entries),
+        )
+      : Promise.resolve([]);
+  void pluginBoundMediaPromise.catch(() => undefined);
+  // Generated media hints belong to the prompt and reset payload, not command arguments.
+  const commandBody = request.inboundMessage;
   const commandSource =
-    !params.suppressCommandInterpretation && params.parsedMessage.trim().startsWith("/")
+    !request.suppressCommandInterpretation && commandBody.trim().startsWith("/")
       ? "text"
       : undefined;
-  const messageForAgent = params.systemProvenanceReceipt
-    ? [params.systemProvenanceReceipt, params.parsedMessage].filter(Boolean).join("\n\n")
-    : params.parsedMessage;
-  const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(params.client?.connect?.device?.id);
-  const queuedFollowupOwnerConnId = normalizeOptionalChatText(params.client?.connId);
+  const messageForAgent = request.systemProvenanceReceipt
+    ? [request.systemProvenanceReceipt, attachments.parsedMessage].filter(Boolean).join("\n\n")
+    : attachments.parsedMessage;
+  const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(client?.connect?.device?.id);
+  const queuedFollowupOwnerConnId = normalizeOptionalChatText(client?.connId);
   const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
     ? `device:${queuedFollowupOwnerDeviceId}`
     : queuedFollowupOwnerConnId
       ? `connection:${queuedFollowupOwnerConnId}`
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
-    params.originatingRoute;
+    admission.originatingRoute;
+  const creation = request.systemInputProvenance
+    ? resolveOperatorSessionCreation(client)
+    : prepareSkillLibrarySessionCreation(
+        client,
+        params.getConfig ?? session.cfg ?? {},
+        resolveOperatorSessionCreation(client),
+      );
+  const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
     Body: messageForAgent,
     BodyForAgent: messageForAgent,
     BodyForCommands: commandBody,
-    RawBody: params.parsedMessage,
+    RawBody: attachments.parsedMessage,
     CommandBody: commandBody,
-    InputProvenance: params.systemInputProvenance,
-    SessionKey: params.sessionKey,
-    AgentId: params.agentId,
-    Provider: INTERNAL_MESSAGE_CHANNEL,
-    Surface: INTERNAL_MESSAGE_CHANNEL,
-    OriginatingChannel: originatingChannel,
+    InputProvenance: request.systemInputProvenance,
+    SessionKey: session.sessionKey,
+    AgentId: session.agentId,
     OriginatingTo: originatingTo,
     ExplicitDeliverRoute: explicitDeliverRoute,
     AccountId: accountId,
     MessageThreadId: messageThreadId,
-    ChatType: "direct",
     ...(commandSource ? { CommandSource: commandSource } : {}),
-    CommandAuthorized: !params.suppressCommandInterpretation,
+    CommandAuthorized: !request.suppressCommandInterpretation,
     CommandTurn: commandSource
       ? {
           kind: "text-slash",
@@ -178,110 +194,50 @@ function buildChatSendMessageContext(params: {
           authorized: false,
           body: commandBody,
         },
-    ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
-    MessageSid: params.clientRunId,
-    SessionCreation: resolveOperatorSessionCreation(params.client),
-    ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-    ...(!isOperatorUiClient(params.clientInfo)
-      ? {
-          SenderId: params.clientInfo?.id,
-          SenderName: params.clientInfo?.displayName,
-          SenderUsername: params.clientInfo?.displayName,
-        }
-      : {}),
-    GatewayClientScopes: params.client?.connect?.scopes ?? [],
-    GatewayClientCaps: params.client?.connect?.caps ?? [],
-    GatewayRunToolBindings: params.toolBindings,
+    ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
+    MessageSid: session.clientRunId,
+    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
+    ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
+    GatewayRunToolBindings: request.toolBindings,
   };
-  if (params.mediaPathOffloadPaths.length > 0) {
+  if (attachments.mediaPathOffloadPaths.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the
     // dispatch path renders their prompt note without staging them a second time.
-    ctx.media = params.mediaPathOffloadPaths.map((pathValue, index) => ({
+    ctx.media = attachments.mediaPathOffloadPaths.map((pathValue, index) => ({
       path: pathValue,
-      contentType: params.mediaPathOffloadTypes[index],
-      workspaceDir: params.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
+      contentType: attachments.mediaPathOffloadTypes[index],
+      workspaceDir: attachments.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
     }));
   }
+  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
+    type.startsWith("image/"),
+  );
+  const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
+  if (participant) {
+    prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
+  }
   return {
+    discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {
+      if (!approved) {
+        return;
+      }
+      const retained = new Set(
+        (readPersistedMediaFacts(approved) ?? []).flatMap((fact) => [fact.url, fact.path]),
+      );
+      const prepared = await persistedMediaForTranscriptPromise;
+      // Re-admission retains the original approved files. Dispose only copies
+      // prepared by this request, after its live input consumer releases custody.
+      await discardPreparedInboundMedia(
+        prepared.entries.filter(
+          (entry) => !retained.has(entry.fact.url) && !retained.has(entry.path),
+        ),
+        logGateway,
+      );
+    },
     accountId,
     ctx,
     isInternalTextSlashCommandTurn: commandSource === "text",
     queuedFollowupOwnerKey,
-  };
-}
-
-/** Assemble transcript media and the portable inbound context after chat.send ACK. */
-export function prepareChatSendUserTurn(params: {
-  request: Pick<
-    NormalizedChatSendRequest,
-    | "clientInfo"
-    | "normalizedAttachments"
-    | "suppressCommandInterpretation"
-    | "systemInputProvenance"
-    | "systemProvenanceReceipt"
-    | "toolBindings"
-  >;
-  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
-  admission: Pick<AdmittedChatSend, "originatingRoute">;
-  attachments: PreparedChatSendAttachments;
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
-  userTurn: ChatSendUserTurnInputController;
-}) {
-  const { request, session, admission, attachments, client, logGateway, userTurn } = params;
-  const persistedMediaForTranscriptPromise = persistChatSendImages({
-    images: attachments.parsedImages,
-    imageOrder: attachments.imageOrder,
-    offloadedRefs: attachments.offloadedRefs,
-    client,
-    logGateway,
-  });
-  const preparedUserTurnMediaPromise: Promise<MediaFact[]> =
-    request.normalizedAttachments.length > 0
-      ? persistedMediaForTranscriptPromise.then((media) =>
-          buildChatSendUserTurnMedia(media, attachments.offloadedRefs),
-        )
-      : Promise.resolve([]);
-  userTurn.setInputPromise(
-    preparedUserTurnMediaPromise.then((media) => ({
-      ...userTurn.baseInput,
-      ...(media.length > 0 ? { media } : {}),
-      ...(media.length > 0 && attachments.imageOrder.length > 0
-        ? {
-            mediaImageLayout: {
-              // persistInboundImagesForTranscript emits image facts in this exact order,
-              // then appends non-images, so image slot ordinals are fact ordinals.
-              slots: attachments.imageOrder.map((kind, factIndex) => ({ kind, factIndex })),
-            },
-          }
-        : {}),
-    })),
-  );
-  const pluginBoundMediaPromise =
-    attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then(resolveChatSendManagedMedia)
-      : Promise.resolve([]);
-  const messageContext = buildChatSendMessageContext({
-    agentId: session.agentId,
-    client,
-    clientInfo: request.clientInfo,
-    clientRunId: session.clientRunId,
-    mediaPathOffloadPaths: attachments.mediaPathOffloadPaths,
-    mediaPathOffloadTypes: attachments.mediaPathOffloadTypes,
-    mediaPathOffloadWorkspaceDir: attachments.mediaPathOffloadWorkspaceDir,
-    originatingRoute: admission.originatingRoute,
-    parsedMessage: attachments.parsedMessage,
-    sessionKey: session.sessionKey,
-    suppressCommandInterpretation: request.suppressCommandInterpretation,
-    systemInputProvenance: request.systemInputProvenance,
-    systemProvenanceReceipt: request.systemProvenanceReceipt,
-    toolBindings: request.toolBindings,
-  });
-  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
-    type.startsWith("image/"),
-  );
-  return {
-    ...messageContext,
     pluginBoundMediaPromise,
     replyOptionImages: mediaPathOffloadsIncludeImages
       ? undefined

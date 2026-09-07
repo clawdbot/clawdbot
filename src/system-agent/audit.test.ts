@@ -1,7 +1,7 @@
 // OpenClaw audit tests cover SQLite-backed rescue audit scenarios.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { appendSystemAgentAuditEntry, SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 
@@ -18,7 +18,7 @@ describe("OpenClaw audit log", () => {
   });
 
   it("writes records into shared SQLite state", async () => {
-    await withTempDir({ prefix: "openclaw-audit-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-audit-" }, async (tempDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
 
       const auditStore = await appendSystemAgentAuditEntry({

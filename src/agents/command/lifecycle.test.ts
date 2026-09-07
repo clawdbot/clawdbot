@@ -1,15 +1,127 @@
 import { describe, expect, it, vi } from "vitest";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
+import { FailoverError } from "../failover-error.js";
+import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
-const emitAgentEvent = vi.hoisted(() => vi.fn());
+const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+  lifecycleLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createSubsystemLogger: () => lifecycleLog,
 }));
 
 describe("createAgentCommandLifecycle", () => {
+  it.each([
+    { name: "successful stops", status: "ok", stopReason: "stop", level: "info" },
+    { name: "tool-use stops", status: "ok", stopReason: "toolUse", level: "info" },
+    { name: "ordinary end turns", status: "ok", stopReason: "end_turn", level: undefined },
+    { name: "timeouts", status: "timeout", stopReason: "timeout", level: "warn" },
+    { name: "cancelled runs", status: "error", stopReason: "stop", level: "error" },
+    { name: "failed runs", status: "error", stopReason: "error", level: "error" },
+  ] as const)("logs $name at the expected severity", ({ status, stopReason, level }) => {
+    vi.clearAllMocks();
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "logged-terminal-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status, stopReason }),
+    });
+
+    for (const candidate of ["info", "warn", "error"] as const) {
+      if (candidate === level) {
+        expect(lifecycleLog[candidate]).toHaveBeenCalledOnce();
+      } else {
+        expect(lifecycleLog[candidate]).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it.each([
+    { name: "finishing", phase: "finishing", lifecycleError: undefined },
+    { name: "end", phase: "end", lifecycleError: undefined },
+    { name: "result error", phase: "error", lifecycleError: undefined },
+    {
+      name: "explicit lifecycle guidance",
+      phase: "error",
+      lifecycleError: "Reconnect the selected provider, then try again.",
+    },
+  ] as const)("publishes the timeout diagnostic through $name", ({ phase, lifecycleError }) => {
+    emitAgentEvent.mockClear();
+    const error = "Request timed out before a response was generated. Please try again.";
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "timeout-diagnostic-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+        lifecycleError,
+      },
+    });
+    const terminal = {
+      metadata: { aborted: false, replayInvalid: false },
+      outcome: buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error,
+      }),
+    };
+
+    if (phase === "finishing") {
+      lifecycle.emitFinishing(terminal);
+    } else if (phase === "end") {
+      lifecycle.emitEnd(terminal);
+    } else {
+      lifecycle.emitResultError(
+        {
+          payloads: [
+            { text: "An earlier tool failed.", isError: true },
+            { text: error, isError: true },
+          ],
+          meta: {
+            durationMs: 0,
+            error: { kind: "incomplete_turn", message: error, fallbackSafe: false },
+          },
+        },
+        false,
+        terminal,
+      );
+    }
+
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "timeout-diagnostic-owner",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase,
+          error: lifecycleError ?? error,
+          aborted: false,
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+      }),
+    );
+  });
+
   it.each(["finishing", "end", "error"] as const)(
     "preserves only canonical terminal facts on %s events",
     (phase) => {
@@ -78,11 +190,14 @@ describe("createAgentCommandLifecycle", () => {
             livenessState: "blocked",
             yielded: true,
             replayInvalid: true,
-            ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
+            ...(phase !== "finishing" ? { executionSettled: true } : {}),
           }),
         }),
       );
       const event = emitAgentEvent.mock.calls[0]?.[0];
+      if (phase === "finishing") {
+        expect(event.data).not.toHaveProperty("executionSettled");
+      }
       expect(event.data.terminalDelivery).toEqual({ status: "sent", resultCount: 2 });
       expect(JSON.stringify(event)).not.toContain(secret);
       expect(event.data).not.toHaveProperty("unsafeMetadata");
@@ -131,6 +246,154 @@ describe("createAgentCommandLifecycle", () => {
       expect(JSON.stringify(event)).not.toContain(secret);
     },
   );
+
+  it.each([
+    ["basic", "plain"],
+    ["post-turn", "plain"],
+    ["post-turn", "timeout"],
+    ["post-turn", "abort"],
+  ] as const)(
+    "displays diagnostics on %s errors while retaining native %s facts",
+    (source, kind) => {
+      emitAgentEvent.mockClear();
+      const controller = new AbortController();
+      if (kind === "abort") {
+        controller.abort();
+      }
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "diagnostic-terminal-owner",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        abortSignal: controller.signal,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      const error = attachErrorDiagnostic(
+        kind === "timeout"
+          ? createCliTimeoutError(
+              {},
+              {
+                mode: "overall",
+                timeoutSeconds: 30,
+                observedActivity: false,
+                activeToolCount: 0,
+                backgroundTaskCount: 0,
+              },
+            )
+          : new Error("child exited with code 1"),
+        "stderr: an earlier request timed out and was aborted",
+      );
+
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else {
+        lifecycle.emitPostTurnError(error, {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+        });
+      }
+
+      expect(emitAgentEvent).toHaveBeenCalledOnce();
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toContain(error.message);
+      expect(event.data.error).toContain("an earlier request timed out and was aborted");
+      if (kind === "timeout") {
+        expect(event.data).toMatchObject({ stopReason: "timeout", timeoutPhase: "provider" });
+        expect(event.data).not.toHaveProperty("aborted");
+      } else if (kind === "abort") {
+        expect(event.data).toMatchObject({ aborted: true, stopReason: "aborted" });
+        expect(event.data).not.toHaveProperty("timeoutPhase");
+      } else {
+        for (const field of ["aborted", "stopReason", "timeoutPhase"]) {
+          expect(event.data).not.toHaveProperty(field);
+        }
+      }
+    },
+  );
+
+  it.each(["basic", "post-turn"] as const)(
+    "publishes bounded selected-profile recovery from %s lifecycle errors",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const profileId = "openai:private-profile";
+      const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "missing-selected-profile",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      const error = new FailoverError(rawCause, {
+        reason: "auth",
+        code: "selected_auth_profile_unavailable",
+        profileId,
+        cause: new Error(rawCause),
+      });
+      attachErrorDiagnostic(
+        error,
+        `stderr: credential staging failed. Authorization: Bearer ${secret}`,
+      );
+
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else {
+        lifecycle.emitPostTurnError(error, {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+        });
+      }
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toContain(
+        renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
+      );
+      expect(event.data.error).toContain("stderr: credential staging failed.");
+      expect(event.data.executionSettled).toBe(true);
+      expect(JSON.stringify(event)).not.toContain(profileId);
+      expect(JSON.stringify(event)).not.toContain(rawCause);
+      expect(JSON.stringify(event)).not.toContain(secret);
+    },
+  );
+
+  it("does not let generic abort metadata erase a superseded outcome", () => {
+    emitAgentEvent.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "superseded-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      abortSignal: controller.signal,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: { aborted: true },
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+    });
+
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          aborted: true,
+          phase: "end",
+          stopReason: "superseded",
+        }),
+      }),
+    );
+  });
 
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
     emitAgentEvent.mockClear();

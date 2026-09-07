@@ -1,7 +1,7 @@
 import {
   normalizeToolParameterSchema,
   type ToolParameterSchemaOptions,
-} from "@openclaw/ai/internal/openai";
+} from "@openclaw/ai/internal/tool-schema";
 /**
  * Tool schema normalization wrappers.
  * Applies provider-compatible parameter schema cleanup while preserving
@@ -48,19 +48,6 @@ function schemaHasRequiredParams(schema: Record<string, unknown>): boolean {
   return false;
 }
 
-function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unknown): AnyAgentTool {
-  if (!isObjectSchemaWithNoRequiredParams(parameters)) {
-    return tool;
-  }
-  return {
-    ...tool,
-    prepareArguments: (args: unknown) => {
-      const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
-      return prepared === null || prepared === undefined ? {} : prepared;
-    },
-  };
-}
-
 /** Normalize a tool's parameter schema for the selected provider/model. */
 export function normalizeToolParameters(
   tool: AnyAgentTool,
@@ -74,9 +61,12 @@ export function normalizeToolParameters(
     return tool;
   }
   const parameters = normalizeToolParameterSchema(schema, options);
-  return copyAgentToolMetadata(tool, {
-    ...tool,
-    ...addEmptyObjectArgumentPreparation(tool, parameters),
-    parameters,
-  });
+  const normalized = { ...tool, parameters };
+  if (isObjectSchemaWithNoRequiredParams(parameters)) {
+    normalized.prepareArguments = (args: unknown) => {
+      const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+      return prepared === null || prepared === undefined ? {} : prepared;
+    };
+  }
+  return copyAgentToolMetadata(tool, normalized);
 }

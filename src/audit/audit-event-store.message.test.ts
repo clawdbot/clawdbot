@@ -13,6 +13,10 @@ const AUDIT_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 type AgentRunAuditEventInput = Extract<AuditEventInput, { kind: "agent_run" }>;
 type InboundMessageAuditEventInput = Extract<MessageAuditEventInput, { direction: "inbound" }>;
 type OutboundMessageAuditEventInput = Extract<MessageAuditEventInput, { direction: "outbound" }>;
+type OutboundMessageAuditTerminalInput = Extract<
+  OutboundMessageAuditEventInput,
+  { action: "message.outbound.finished" }
+>;
 type OutboundTerminalFields =
   | "deliveryKind"
   | "errorCode"
@@ -21,11 +25,11 @@ type OutboundTerminalFields =
   | "reasonCode"
   | "status";
 type OutboundMessageAuditTerminal = {
-  [Status in OutboundMessageAuditEventInput["status"]]: Pick<
-    Extract<OutboundMessageAuditEventInput, { status: Status }>,
+  [Status in OutboundMessageAuditTerminalInput["status"]]: Pick<
+    Extract<OutboundMessageAuditTerminalInput, { status: Status }>,
     OutboundTerminalFields
   >;
-}[OutboundMessageAuditEventInput["status"]];
+}[OutboundMessageAuditTerminalInput["status"]];
 
 function createDatabaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-message-audit-") } };

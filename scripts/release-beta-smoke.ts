@@ -9,7 +9,7 @@ import {
   parseFlagArgs,
   stringFlag,
   stripLeadingPackageManagerSeparator,
-} from "./lib/arg-utils.mjs";
+} from "./lib/arg-utils.mts";
 
 type Options = {
   beta: string;
@@ -69,7 +69,7 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
+  const helpIndex = cliArgs.findIndex((arg: string) => arg === "-h" || arg === "--help");
   parseFlagArgs(
     helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
     options,
@@ -93,7 +93,7 @@ export function parseArgs(argv: string[]): Options {
       booleanFlag("--skip-telegram", "skipTelegram", true, { repeatable: true }),
     ],
     {
-      onUnhandledArg(arg) {
+      onUnhandledArg(arg: string) {
         throw new Error(`unknown option: ${arg}`);
       },
     },

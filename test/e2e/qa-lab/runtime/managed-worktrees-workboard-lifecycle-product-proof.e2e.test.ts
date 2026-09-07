@@ -6,8 +6,9 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { ManagedWorktreeRecord } from "../../../../src/agents/worktrees/types.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,9 +23,11 @@ type WorkboardWorkspace = {
 type WorkboardCard = {
   id: string;
   runId?: string;
+  status?: string;
   metadata?: { automation?: { workspace?: WorkboardWorkspace } };
 };
 type WorkboardCreateResult = { card: WorkboardCard };
+type WorkboardCompleteResult = { card: WorkboardCard };
 type WorkboardListResult = { cards: WorkboardCard[] };
 type WorkboardDispatchResult = {
   started: Array<{ cardId: string; runId: string; sessionKey: string; title: string }>;
@@ -33,11 +36,15 @@ type WorkboardDispatchResult = {
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { status?: unknown };
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,7 +72,8 @@ async function initializeRepository(root: string): Promise<string> {
 }
 
 async function startHarness() {
-  harness = await startQaLiveLaneGateway({
+  gatewayOwner = createQaLiveLaneGateway();
+  harness = await gatewayOwner.start({
     repoRoot: process.cwd(),
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",
@@ -149,6 +157,33 @@ async function waitForMaterializedWorktree(params: {
   throw new Error(`timed out waiting for managed worktree ${params.name}`);
 }
 
+async function dispatchCardAndWaitForWorktree(params: {
+  boardId: string;
+  cardId: string;
+  name: string;
+  stateDir: string;
+}): Promise<{ materializedPath: string; started: WorkboardDispatchResult["started"][number] }> {
+  if (!harness) {
+    throw new Error("QA gateway harness is not running");
+  }
+  const dispatchPromise = harness.gateway.call("workboard.cards.dispatch", {
+    boardId: params.boardId,
+  });
+  const materializedPromise = waitForMaterializedWorktree({
+    name: params.name,
+    stateDir: params.stateDir,
+  });
+  const dispatch = (await dispatchPromise) as WorkboardDispatchResult;
+  expect(dispatch.startFailures).toEqual([]);
+  expect(dispatch.started).toEqual([
+    expect.objectContaining({ cardId: params.cardId, runId: expect.any(String) }),
+  ]);
+  return {
+    materializedPath: await materializedPromise,
+    started: dispatch.started[0]!,
+  };
+}
+
 async function waitForWorktreeState(params: {
   id: string;
   predicate: (record: ManagedWorktreeRecord | undefined) => boolean;
@@ -168,7 +203,76 @@ async function waitForWorktreeState(params: {
 
 describe("managed worktrees Workboard-owner product proof", () => {
   it(
-    "materializes, writes back, runs, and removes a clean card worktree losslessly",
+    "nudges a persisted future automation when a linked worker ends",
+    { timeout: 120_000 },
+    async () => {
+      const activeHarness = await startHarness();
+      const addResult = (await activeHarness.gateway.call("cron.add", {
+        name: "Workboard event nudge proof",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Workboard event nudge proof" },
+      })) as { id: string };
+      const boardId = "qa-event-nudge";
+      await activeHarness.gateway.call("workboard.boards.upsert", {
+        id: boardId,
+        automationJobId: addResult.id,
+      });
+      const boards = (await activeHarness.gateway.call("workboard.boards.list", {})) as {
+        boards: Array<{ id: string; automationJobId?: string }>;
+      };
+      expect(boards.boards).toContainEqual(
+        expect.objectContaining({ id: boardId, automationJobId: addResult.id }),
+      );
+      const card = (await activeHarness.gateway.call("workboard.cards.create", {
+        title: "Event nudge lifecycle",
+        status: "ready",
+        agentId: "qa",
+        boardId,
+      })) as WorkboardCreateResult;
+
+      const dispatch = (await activeHarness.gateway.call("workboard.cards.dispatch", {
+        boardId,
+      })) as WorkboardDispatchResult;
+      expect(dispatch.startFailures).toEqual([]);
+      expect(dispatch.started).toEqual([
+        expect.objectContaining({ cardId: card.card.id, runId: expect.any(String) }),
+      ]);
+      const terminal = (await activeHarness.gateway.call(
+        "agent.wait",
+        { runId: dispatch.started[0]!.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      )) as GatewayRunResult;
+      expect(terminal.status).toBe("ok");
+
+      const deadline = Date.now() + 15_000;
+      let entries: unknown[] = [];
+      let lifecycleStatus: string | undefined;
+      while (Date.now() < deadline) {
+        const cards = (await activeHarness.gateway.call("workboard.cards.list", {
+          boardId,
+        })) as WorkboardListResult;
+        lifecycleStatus = cards.cards.find((entry) => entry.id === card.card.id)?.status;
+        const runs = (await activeHarness.gateway.call("cron.runs", {
+          id: addResult.id,
+          limit: 5,
+        })) as { entries?: unknown[] };
+        entries = runs.entries ?? [];
+        if (entries.length > 0) {
+          break;
+        }
+        await sleep(50);
+      }
+      expect(entries, `card=${String(lifecycleStatus)}\n${activeHarness.gateway.logs()}`).toEqual([
+        expect.objectContaining({ jobId: addResult.id, status: "ok" }),
+      ]);
+    },
+  );
+
+  it(
+    "removes clean card worktrees and records dirty run-end retention",
     { timeout: 240_000 },
     async () => {
       const canonicalTmp = await fs.realpath(os.tmpdir());
@@ -180,14 +284,12 @@ describe("managed worktrees Workboard-owner product proof", () => {
       const card = await createCard({ boardId, repo, title: "Clean worktree lifecycle" });
       const name = managedWorktreeName(card.id);
 
-      const dispatchPromise = activeHarness.gateway.call("workboard.cards.dispatch", { boardId });
-      const materializedPath = await waitForMaterializedWorktree({ name, stateDir });
-      const dispatch = (await dispatchPromise) as WorkboardDispatchResult;
-      expect(dispatch.startFailures).toEqual([]);
-      expect(dispatch.started).toEqual([
-        expect.objectContaining({ cardId: card.id, runId: expect.any(String) }),
-      ]);
-      const started = dispatch.started[0]!;
+      const { materializedPath, started } = await dispatchCardAndWaitForWorktree({
+        boardId,
+        cardId: card.id,
+        name,
+        stateDir,
+      });
 
       const cards = (await activeHarness.gateway.call("workboard.cards.list", {
         boardId,
@@ -224,15 +326,76 @@ describe("managed worktrees Workboard-owner product proof", () => {
 
       const removed = await waitForWorktreeState({
         id: activeRecord?.id ?? "",
-        predicate: (record) => record?.removedAt !== undefined,
+        predicate: (record) =>
+          record?.removedAt !== undefined && record.runEndCleanup?.outcome === "removed-lossless",
         timeoutMs: 30_000,
       });
       expect(removed).toMatchObject({
         id: activeRecord?.id,
         snapshotRef: `refs/openclaw/snapshots/${activeRecord?.id}`,
         removedAt: expect.any(Number),
+        runEndCleanup: {
+          outcome: "removed-lossless",
+          at: expect.any(Number),
+        },
       });
       await expect(fs.access(materializedPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // The mock provider reaches terminal without calling the Workboard worker protocol.
+      // Close the first card at the operator boundary so its agent-global owner slot is free.
+      const completed = (await activeHarness.gateway.call("workboard.cards.complete", {
+        id: card.id,
+        summary: "Clean worktree lifecycle completed.",
+      })) as WorkboardCompleteResult;
+      expect(completed.card).toMatchObject({ id: card.id, status: "done" });
+
+      const dirtyBoardId = "qa-worktree-dirty";
+      const dirtyCard = await createCard({
+        boardId: dirtyBoardId,
+        repo,
+        title: "Dirty worktree retention",
+      });
+      const dirtyName = managedWorktreeName(dirtyCard.id);
+      const { materializedPath: dirtyPath, started: dirtyStarted } =
+        await dispatchCardAndWaitForWorktree({
+          boardId: dirtyBoardId,
+          cardId: dirtyCard.id,
+          name: dirtyName,
+          stateDir,
+        });
+      const dirtyFile = path.join(dirtyPath, "untracked-note.txt");
+      await fs.writeFile(dirtyFile, "retain this worktree\n");
+      const dirtyRecord = (await listWorktrees()).worktrees.find(
+        (record) => record.ownerKind === "workboard" && record.ownerId === dirtyCard.id,
+      );
+      expect(dirtyRecord).toMatchObject({
+        name: dirtyName,
+        path: dirtyPath,
+        ownerKind: "workboard",
+        ownerId: dirtyCard.id,
+      });
+
+      const dirtyTerminal = (await activeHarness.gateway.call(
+        "agent.wait",
+        { runId: dirtyStarted.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      )) as GatewayRunResult;
+      expect(dirtyTerminal.status).toBe("ok");
+
+      const retained = await waitForWorktreeState({
+        id: dirtyRecord?.id ?? "",
+        predicate: (record) => record?.runEndCleanup?.outcome === "retained-dirty",
+        timeoutMs: 30_000,
+      });
+      expect(retained).toMatchObject({
+        id: dirtyRecord?.id,
+        runEndCleanup: {
+          outcome: "retained-dirty",
+          at: expect.any(Number),
+        },
+      });
+      expect(retained?.removedAt).toBeUndefined();
+      await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("retain this worktree\n");
     },
   );
 });

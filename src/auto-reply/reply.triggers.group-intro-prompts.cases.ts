@@ -1,7 +1,12 @@
 /** Reusable group-intro prompt assertions shared by auto-reply trigger tests. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeCfg } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  resetPluginRuntimeStateForTest,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
 
@@ -10,7 +15,10 @@ type InboundMessage = Parameters<GetReplyFromConfig>[0];
 
 export function registerGroupIntroPromptCases(): void {
   describe("group intro prompts", () => {
+    let previousPluginRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+
     beforeEach(() => {
+      previousPluginRegistry = captureActivePluginRegistrySnapshot();
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(
         createTestRegistry([
@@ -27,6 +35,7 @@ export function registerGroupIntroPromptCases(): void {
     });
     afterEach(() => {
       resetPluginRuntimeStateForTest();
+      restoreActivePluginRegistrySnapshot(previousPluginRegistry);
     });
 
     type GroupIntroCase = {

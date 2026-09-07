@@ -93,11 +93,10 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use Crabbox-backed Blacksmith
-   Testbox by default on maintainer machines:
-   - `pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>`
-   - add `--keep`/`--id <id-or-slug>` only when several commands must share one
-     warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.
+4. Follow `$openclaw-testing` for host selection. Trusted source benchmarks
+   can run locally with comparable machine/load conditions. Use `$crabbox` when
+   clean packaging, Linux/platform behavior, isolation, or an explicit remote
+   request is part of the proof; reuse and clean up only the owned lease.
 5. If plugin performance is package-artifact sensitive, switch to
    `release-openclaw-plugin-testing` and Package Acceptance rather than
    trusting source-only timing.
@@ -232,8 +231,10 @@ pnpm test:perf:groups --report <vitest-json> \
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.
-- For plugin SDK/barrel/runtime changes, add `pnpm plugin-sdk:api:check` or
-  `pnpm plugin-sdk:api:gen` when the API surface may drift.
+- For plugin SDK/barrel/runtime changes, compare exact commits with
+  `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
+  public API surface may drift. For PR-local proof, use the branch merge base
+  as `<base-sha>` and the exact tested head commit as `<head-sha>`.
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.

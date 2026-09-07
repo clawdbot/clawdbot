@@ -1,21 +1,36 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
+import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
+import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
-type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
 type CrossOsMode = "fresh" | "upgrade" | "both";
-type CrossOsOsId = "ubuntu" | "windows" | "macos";
 type ProviderId = "openai" | "anthropic" | "minimax";
 export type ProviderConfig = {
   extensionId: string;
   secretEnv: string;
   authChoice: string;
   model: string;
+  requiredCompanionPackages: readonly string[];
   baseUrl?: string;
   timeoutSeconds?: number;
 };
 export type ParsedArgs = Record<string, string>;
-export type LaneResult = { status: string; error?: string } & Record<string, unknown>;
+export type PackagedUpgradeTiming = {
+  name: "total" | "package-install" | "package-install-omit-optional" | "staged-swap" | "doctor";
+  durationMs: number;
+};
+export type PackagedUpgradeFallbackEvidence = {
+  reason: "timeout" | "swap-cleanup";
+  action: "direct-candidate-install";
+};
+export type LaneResult = {
+  status: string;
+  error?: string;
+  phaseTimings?: LaneState["phaseTimings"];
+  updateTimings?: PackagedUpgradeTiming[];
+  updateFallback?: PackagedUpgradeFallbackEvidence;
+} & Record<string, unknown>;
 export type CandidateBuild = {
   candidateTgz: string;
   candidateVersion: string;
@@ -64,6 +79,9 @@ export type CommandInvocation = {
 };
 export type Cleanup = () => Promise<void> | void;
 export type LaneBaseParams = {
+  companions: Readonly<
+    ReturnType<typeof import("./companions.ts").resolveCrossOsPackageSet>["companions"]
+  >;
   logsDir: string;
   providerConfig: ProviderConfig;
   providerSecretValue: string;
@@ -75,6 +93,11 @@ export type LaneCommandParams = {
 };
 export type AgentOutputOptions = { logText?: string; logPath?: string };
 export type SummaryPayload = {
+  platform?: string;
+  runnerOs?: string;
+  runnerLabel?: string;
+  nodeVersion?: string;
+  npmVersion?: string;
   provider: string;
   suite: string;
   mode: string;
@@ -95,19 +118,14 @@ export type SummaryPayload = {
     agentOutput?: string;
     error?: string;
     phaseTimings?: LaneState["phaseTimings"];
+    updateTimings?: PackagedUpgradeTiming[];
+    updateFallback?: PackagedUpgradeFallbackEvidence;
   };
 };
 
 export const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
 
 const SUPPORTED_MODES = new Set<CrossOsMode>(["fresh", "upgrade", "both"]);
-const SUPPORTED_SUITES = new Set<CrossOsSuite>([
-  "packaged-fresh",
-  "installer-fresh",
-  "packaged-upgrade",
-  "dev-update",
-]);
-const SUPPORTED_OS_IDS = new Set<CrossOsOsId>(["ubuntu", "windows", "macos"]);
 
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
@@ -128,6 +146,7 @@ const providerConfig = {
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
     model: "openai/gpt-5.6-luna",
+    requiredCompanionPackages: ["@openclaw/codex"],
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -136,12 +155,14 @@ const providerConfig = {
     secretEnv: "ANTHROPIC_API_KEY",
     authChoice: "apiKey",
     model: "anthropic/claude-sonnet-4-6",
+    requiredCompanionPackages: [],
   },
   minimax: {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
     model: "minimax/MiniMax-M2.7",
+    requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
 
@@ -307,11 +328,9 @@ function parseBooleanEnv(name: string, fallback: boolean, env = process.env): bo
   if (!raw) {
     return fallback;
   }
-  if (/^(1|true|yes|on)$/iu.test(raw)) {
-    return true;
-  }
-  if (/^(0|false|no|off)$/iu.test(raw)) {
-    return false;
+  const parsed = parsePermissiveBooleanToken(raw);
+  if (parsed !== undefined) {
+    return parsed;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
 }
@@ -400,7 +419,7 @@ export function resolveRunnerMatrix(params: {
   ];
   const include = runners.flatMap((runner) =>
     suites
-      .filter((suite) => suiteFilter.matches(runner.os_id as CrossOsOsId, suite))
+      .filter((suite) => suiteFilter.matches(runner.os_id, suite))
       .map((suite) =>
         Object.assign({}, runner, {
           suite,
@@ -417,63 +436,6 @@ export function resolveRunnerMatrix(params: {
   return {
     include,
   };
-}
-
-export function parseCrossOsSuiteFilter(rawFilter: string) {
-  const tokens = rawFilter
-    .split(/[, ]+/u)
-    .map((token) => normalizeCrossOsSuiteFilterToken(token))
-    .filter(Boolean);
-  if (tokens.length === 0) {
-    return {
-      matches: () => true,
-      tokens,
-    };
-  }
-
-  const matchers = tokens.map((token) => {
-    if (SUPPORTED_SUITES.has(token as CrossOsSuite)) {
-      return { osId: "", suite: token as CrossOsSuite };
-    }
-    if (SUPPORTED_OS_IDS.has(token as CrossOsOsId)) {
-      return { osId: token as CrossOsOsId, suite: "" };
-    }
-    for (const separator of ["/", ":", "-"]) {
-      const matchedOs = [...SUPPORTED_OS_IDS].find((osId) =>
-        token.startsWith(`${osId}${separator}`),
-      );
-      if (!matchedOs) {
-        continue;
-      }
-      const suite = token.slice(matchedOs.length + separator.length);
-      if (!SUPPORTED_SUITES.has(suite as CrossOsSuite)) {
-        break;
-      }
-      return { osId: matchedOs, suite: suite as CrossOsSuite };
-    }
-    throw new Error(
-      `Unsupported cross_os_suite_filter token ${JSON.stringify(token)}. Use an OS id, suite id, or os/suite pair such as windows/packaged-upgrade.`,
-    );
-  });
-
-  return {
-    matches: (osId: CrossOsOsId, suite: CrossOsSuite) =>
-      matchers.some((matcher) => {
-        const osMatches = !matcher.osId || matcher.osId === osId;
-        const suiteMatches = !matcher.suite || matcher.suite === suite;
-        return osMatches && suiteMatches;
-      }),
-    tokens,
-  };
-}
-
-function normalizeCrossOsSuiteFilterToken(token: string) {
-  return token
-    .trim()
-    .toLowerCase()
-    .replace(/_/gu, "-")
-    .replace(/\s*[/:-]\s*/gu, (separator) => separator.trim())
-    .replace(/\s+/gu, "-");
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
@@ -519,22 +481,6 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
-export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform) && platform !== "win32";
-}
-
-export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
-  return true;
-}
-
 export function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -556,10 +502,6 @@ export function shouldRunMainChannelDevUpdate(ref: string) {
     return false;
   }
   return resolveExpectedDevUpdateRef(ref) === "main";
-}
-
-export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
-  return platform === "win32";
 }
 
 export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
@@ -585,6 +527,58 @@ export function verifyPackagedUpgradeUpdateResult(
     `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
       `${result.stdout}\n${result.stderr}`,
     )}`,
+  );
+}
+
+const PACKAGED_UPGRADE_TIMING_FIELDS = [
+  ["global update", "package-install"],
+  ["global update (omit optional)", "package-install-omit-optional"],
+  ["global install swap", "staged-swap"],
+  ["openclaw doctor", "doctor"],
+] as const;
+const PACKAGED_UPGRADE_TIMING_MAX_MS = 60 * 60 * 1000;
+
+export function parsePackagedUpgradeUpdateTimings(stdout: string): PackagedUpgradeTiming[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return [];
+  }
+
+  const result = parsed as { durationMs?: unknown; steps?: unknown };
+  const timings: PackagedUpgradeTiming[] = [];
+  if (isBoundedTimingMs(result.durationMs)) {
+    timings.push({ name: "total", durationMs: result.durationMs });
+  }
+  if (!Array.isArray(result.steps)) {
+    return timings;
+  }
+
+  for (const [stepName, timingName] of PACKAGED_UPGRADE_TIMING_FIELDS) {
+    const step = result.steps.find(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        (candidate as { name?: unknown }).name === stepName,
+    ) as { durationMs?: unknown } | undefined;
+    if (step && isBoundedTimingMs(step.durationMs)) {
+      timings.push({ name: timingName, durationMs: step.durationMs });
+    }
+  }
+  return timings;
+}
+
+function isBoundedTimingMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= PACKAGED_UPGRADE_TIMING_MAX_MS
   );
 }
 
@@ -680,8 +674,4 @@ function updateStepTimeoutSeconds() {
   return process.platform === "win32"
     ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
     : 1200;
-}
-
-export function isSupportedCrossOsSuite(value: string): value is CrossOsSuite {
-  return SUPPORTED_SUITES.has(value as CrossOsSuite);
 }

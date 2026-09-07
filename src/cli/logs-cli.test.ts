@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
 import type { RuntimeExitOptions } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { registerLogsCli } from "./logs-cli.js";
 
 const { MockGatewayTransportError } = vi.hoisted(() => ({
   MockGatewayTransportError: class extends Error {
@@ -124,6 +125,26 @@ async function runLogsCli(argv: string[]) {
   });
 }
 
+function createGatewayCloseError(params: {
+  code: number;
+  reason: string;
+  message: string;
+  url?: string;
+  urlSource?: "cli" | "local loopback";
+}) {
+  return new GatewayTransportError({
+    kind: "closed",
+    code: params.code,
+    reason: params.reason,
+    connectionDetails: {
+      url: params.url ?? "ws://127.0.0.1:18789",
+      urlSource: params.urlSource ?? "local loopback",
+      message: "",
+    },
+    message: params.message,
+  });
+}
+
 function captureStdoutWrites() {
   const writes: string[] = [];
   vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
@@ -140,20 +161,6 @@ function captureStderrWrites() {
     return true;
   });
   return writes;
-}
-
-async function withTimeZone<T>(timeZone: string, run: () => Promise<T> | T): Promise<T> {
-  const previous = process.env.TZ;
-  process.env.TZ = timeZone;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = previous;
-    }
-  }
 }
 
 describe("logs cli", () => {
@@ -188,9 +195,35 @@ describe("logs cli", () => {
 
     expect(stdoutWrites.join("")).toContain("Log file:");
     expect(stdoutWrites.join("")).toContain("raw line");
-    expect(stderrWrites.join("")).toContain("Log tail truncated");
+    expect(stderrWrites.join("")).toContain(
+      "Log tail truncated (increase --limit or --max-bytes).",
+    );
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
+
+  it.each(["plain", "json"])(
+    "reports a byte-budget re-anchor without claiming rotation in %s output",
+    async (mode) => {
+      callGatewayFromCli.mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 8192,
+        size: 8192,
+        lines: ["line after skipped burst"],
+        truncated: true,
+        reset: true,
+        skippedBytes: 4096,
+      });
+
+      const stdoutWrites = captureStdoutWrites();
+      const stderrWrites = captureStderrWrites();
+
+      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain"]);
+
+      const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
+      expect(output).toContain("re-anchored (skipped 4096 bytes)");
+      expect(output).not.toContain("file rotated");
+    },
+  );
 
   it("uses the passive local Gateway client for implicit loopback log reads", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
@@ -244,74 +277,63 @@ describe("logs cli", () => {
     );
   });
 
-  it("emits local timestamps by default", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
+  it.each([
+    { mode: "plain local", tty: true, args: ["--plain"], time: "2025-01-01T07:00:00.000-05:00" },
+    {
+      mode: "plain --local-time",
+      tty: true,
+      args: ["--local-time", "--plain"],
+      time: "2025-01-01T07:00:00.000-05:00",
+    },
+    { mode: "plain UTC", tty: true, args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
+    { mode: "pretty local", tty: true, args: [], time: "07:00:00-05:00" },
+    { mode: "pretty UTC", tty: true, args: ["--utc"], time: "12:00:00+00:00" },
+    { mode: "non-TTY local", tty: false, args: [], time: "2025-01-01T07:00:00.000-05:00" },
+  ])(
+    "renders $mode timestamps and preserves missing or malformed values",
+    async ({ tty, args, time }) => {
+      await withEnvAsync({ TZ: "America/New_York" }, async () => {
+        const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+        Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: tty });
+        try {
+          callGatewayFromCli.mockResolvedValueOnce({
+            file: "/tmp/openclaw.log",
+            lines: [
+              { time: "2025-01-01T12:00:00.000Z", message: "valid timestamp" },
+              { message: "missing timestamp" },
+              { time: "", message: "empty timestamp" },
+              { time: "invalid-date", message: "invalid timestamp" },
+              { time: "not-a-date", message: "other invalid timestamp" },
+            ].map((entry) =>
+              JSON.stringify({
+                time: entry.time,
+                _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
+                0: entry.message,
+              }),
+            ),
+          });
+          const stdoutWrites = captureStdoutWrites();
+
+          await runLogsCli(["logs", "--no-color", ...args]);
+
+          expect(stdoutWrites.join("").trim().split("\n")).toEqual([
+            "Log file: /tmp/openclaw.log",
+            `${time} info gateway valid timestamp`,
+            "info gateway missing timestamp",
+            "info gateway empty timestamp",
+            "invalid-date info gateway invalid timestamp",
+            "not-a-date info gateway other invalid timestamp",
+          ]);
+        } finally {
+          if (stdoutTty) {
+            Object.defineProperty(process.stdout, "isTTY", stdoutTty);
+          } else {
+            Reflect.deleteProperty(process.stdout, "isTTY");
+          }
+        }
       });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T07:00:00.000-05:00");
-    });
-  });
-
-  it("keeps --local-time accepted as the compatibility spelling", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
-      });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--local-time", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T07:00:00.000-05:00");
-    });
-  });
-
-  it("wires --utc through CLI parsing and emits UTC timestamps", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
-      });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--utc", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T12:00:00.000Z");
-    });
-  });
+    },
+  );
 
   it("warns when the output pipe closes", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
@@ -381,15 +403,9 @@ describe("logs cli", () => {
 
   it("falls back to the configured Gateway file log on loopback gateway close errors", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
-      new GatewayTransportError({
-        kind: "closed",
+      createGatewayCloseError({
         code: 1000,
         reason: "no close reason",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1000 normal closure): no close reason",
       }),
     );
@@ -436,15 +452,9 @@ describe("logs cli", () => {
   describe("--follow retry behavior", () => {
     it("uses the active systemd journal for implicit local follow failures", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli.mockRejectedValueOnce(closeError).mockRejectedValueOnce(closeError);
@@ -521,15 +531,9 @@ describe("logs cli", () => {
       });
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://127.0.0.1:18789",
-              urlSource: "local loopback",
-              message: "",
-            },
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -558,7 +562,7 @@ describe("logs cli", () => {
 
       // Pin UTC: the recovered-line assertion below checks a rendered
       // timestamp, which otherwise follows the host time zone.
-      await withTimeZone("UTC", () =>
+      await withEnvAsync({ TZ: "UTC" }, () =>
         runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]),
       );
 
@@ -583,15 +587,9 @@ describe("logs cli", () => {
 
     it("keeps journal polling responsive while a Gateway recovery probe is pending", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       const pendingProbe = new Promise<never>(() => {
@@ -659,15 +657,9 @@ describe("logs cli", () => {
       vi.spyOn(Date.prototype, "toISOString").mockImplementation(
         () => timestamps.shift() ?? "2026-06-01T00:00:08.000Z",
       );
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -730,15 +722,9 @@ describe("logs cli", () => {
 
     it("emits source meta records in --follow --json when fallback recovers", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -803,21 +789,19 @@ describe("logs cli", () => {
           expect.objectContaining({ type: "raw", raw: "recovered rpc line" }),
         ]),
       );
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(JSON.parse(stderrWrites.join(""))).toMatchObject({
+        type: "error",
+        message: "stop after recovered cursor probe",
+        error: "stop after recovered cursor probe",
+      });
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("keeps journal cursor across repeated fallback before Gateway recovery", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -893,15 +877,9 @@ describe("logs cli", () => {
     });
 
     it("retries loopback close errors in --follow mode instead of tailing fallback files", async () => {
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       for (let i = 0; i <= 8; i += 1) {
@@ -916,7 +894,9 @@ describe("logs cli", () => {
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1006 abnormal closure): abnormal closure",
+      );
       expect(stdoutWrites.join("")).not.toContain("local fallback line");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
@@ -924,15 +904,10 @@ describe("logs cli", () => {
     it("exits after exhausting max retries in --follow mode with explicit URL", async () => {
       // Explicit --url bypasses shouldUseLocalLogsFallback so close errors reach the retry path.
       // initial attempt + 8 retries = 9 total calls before fatal exit.
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "cli",
-          message: "",
-        },
+        urlSource: "cli",
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       for (let i = 0; i <= 8; i += 1) {
@@ -945,22 +920,20 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1006 abnormal closure): abnormal closure",
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("retries on transient close errors in --follow mode with explicit URL (no local fallback)", async () => {
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://remote.example.com:18789",
-              urlSource: "cli",
-              message: "",
-            },
+            url: "ws://remote.example.com:18789",
+            urlSource: "cli",
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -993,15 +966,11 @@ describe("logs cli", () => {
     it("emits notice JSON records for retry and reconnect in --follow --json mode", async () => {
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://remote.example.com:18789",
-              urlSource: "cli",
-              message: "",
-            },
+            url: "ws://remote.example.com:18789",
+            urlSource: "cli",
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -1043,11 +1012,10 @@ describe("logs cli", () => {
 
     it("exits immediately on pairing-required close errors in --follow mode with explicit URL", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 1008,
           reason: "pairing required",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (1008 policy violation): pairing required",
         }),
       );
@@ -1058,17 +1026,18 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1008 policy violation): pairing required",
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("exits immediately on app-defined auth errors (4xxx) in --follow mode with explicit URL", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 4001,
           reason: "unauthorized",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (4001 unauthorized): unauthorized",
         }),
       );
@@ -1079,11 +1048,11 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain("gateway closed (4001 unauthorized): unauthorized");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
-    it("redacts credential-bearing Gateway URLs from JSON errors", async () => {
+    it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
       const rawUrl =
         "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";
       buildGatewayConnectionDetails.mockReturnValueOnce({
@@ -1095,9 +1064,10 @@ describe("logs cli", () => {
       const stderrWrites = captureStderrWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--json", "--url", rawUrl]);
+      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain", "--url", rawUrl]);
 
       const stderr = stderrWrites.join("");
+      expect(stderr).toContain("failed to connect to");
       expect(stderr).toContain("gateway.example/ws");
       expect(stderr).not.toContain("password");
       expect(stderr).not.toContain("secret");
@@ -1108,11 +1078,10 @@ describe("logs cli", () => {
 
     it("routes terminal reset to stderr in --follow --json so stdout stays parseable JSON in a PTY", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 4001,
           reason: "unauthorized",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (4001 unauthorized): unauthorized",
         }),
       );
@@ -1153,15 +1122,9 @@ describe("logs cli", () => {
 
   it("does not use local fallback for explicit Gateway URLs", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
-      new GatewayTransportError({
-        kind: "closed",
+      createGatewayCloseError({
         code: 1000,
         reason: "no close reason",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1000 normal closure): no close reason",
       }),
     );
@@ -1174,57 +1137,10 @@ describe("logs cli", () => {
 
     expect(readConfiguredLogTail).not.toHaveBeenCalled();
     expect(stdoutWrites.join("")).not.toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("Gateway not reachable");
+    expect(stderrWrites.join("")).toContain(
+      "gateway closed (1000 normal closure): no close reason",
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  describe("formatLogTimestamp", () => {
-    it("formats local timestamp in plain mode by default", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z");
-        expect(result).toBe("2025-01-01T07:00:00.000-05:00");
-      });
-    });
-
-    it("formats local timestamp in pretty mode by default", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty");
-        expect(result).toBe("07:00:00-05:00");
-      });
-    });
-
-    it("formats UTC timestamp in plain mode when localTime is false", () => {
-      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "plain", false);
-      expect(result).toBe("2025-01-01T12:00:00.000Z");
-    });
-
-    it("formats UTC timestamp in pretty mode when localTime is false", () => {
-      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty", false);
-      expect(result).toBe("12:00:00+00:00");
-    });
-
-    it("formats local time in plain mode when localTime is true", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "plain", true);
-        expect(result).toBe("2025-01-01T07:00:00.000-05:00");
-      });
-    });
-
-    it("formats local time in pretty mode when localTime is true", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty", true);
-        expect(result).toBe("07:00:00-05:00");
-      });
-    });
-
-    it.each([
-      { input: undefined, expected: "" },
-      { input: "", expected: "" },
-      { input: "invalid-date", expected: "invalid-date" },
-      { input: "not-a-date", expected: "not-a-date" },
-    ])("preserves timestamp fallback for $input", ({ input, expected }) => {
-      expect(formatLogTimestamp(input)).toBe(expected);
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
-  SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
@@ -11,75 +10,164 @@ import {
   serializeSidebarEntry,
   settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
+  visibleSettingsNavigationGroups,
+  isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
+import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
+import { readGatewayOperatorAccess } from "./app/operator-access.ts";
+import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
+import { createNativeDeviceSettingsSnapshot } from "./test-helpers/native-device-settings.ts";
 
-const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+const settingsGroups = visibleSettingsNavigationGroups(true);
+const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
 
 describe("sidebar entries", () => {
+  it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
+    const capability: NativeDeviceSettingsCapability = {
+      snapshot: createNativeDeviceSettingsSnapshot(),
+      subscribe: () => () => undefined,
+      set: () => undefined,
+      requestPermission: () => undefined,
+      openSystemSettings: () => undefined,
+      openPanel: () => undefined,
+      checkForUpdates: () => undefined,
+      installChromeExtension: async () => ({
+        nativeHostRegistered: false,
+        installRequested: false,
+        discoveredProfiles: 0,
+      }),
+      refresh: () => undefined,
+      dispose: () => undefined,
+    };
+    const search = (query: string, nativeDeviceSettings: NativeDeviceSettingsCapability | null) =>
+      findSettingsSearchBlocks({
+        query,
+        schema: null,
+        value: null,
+        uiHints: {},
+        canAdmin,
+        nativeDeviceSettings,
+      });
+    expect(search("Dock icon", null)).toEqual([]);
+    expect(search("Dock icon", capability)).toContainEqual(
+      expect.objectContaining({ routeId: "device" }),
+    );
+    expect(search("computer presence", null)).toEqual([]);
+    expect(search("computer presence", capability)).toContainEqual(
+      expect.objectContaining({ routeId: "device-permissions" }),
+    );
+    const browserGroups = visibleSettingsNavigationGroups(canAdmin);
+    const nativeGroups = visibleSettingsNavigationGroups(canAdmin, capability);
+    expect(browserGroups.flatMap((group) => group.routes).includes("updates")).toBe(canAdmin);
+    expect(nativeGroups.flatMap((group) => group.routes)).toContain("updates");
+    expect(isSettingsNavigationRouteVisible("updates", canAdmin)).toBe(canAdmin);
+    expect(isSettingsNavigationRouteVisible("updates", canAdmin, capability)).toBe(true);
+    expect(search("Check for updates", capability)).toContainEqual(
+      expect.objectContaining({ routeId: "updates" }),
+    );
+    expect(
+      getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
+        (item) => item.routeId === "updates",
+      ),
+    ).toBe(true);
+    expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
+    expect(nativeGroups[1]).toEqual({
+      labelKey: "nav.settingsGroupDevice",
+      routes: ["device", "device-permissions"],
+    });
+    expect(
+      visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
+    ).toBe("nav.settingsGroupThisDevice");
+    for (const route of ["device", "device-permissions"] as const) {
+      expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
+      expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
+      expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
+      expect(
+        getStaticCommandPaletteCatalogItems(canAdmin).some((item) => item.routeId === route),
+      ).toBe(false);
+      expect(
+        getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
+          (item) => item.routeId === route,
+        ),
+      ).toBe(true);
+    }
+  });
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:cron", "route:plugins"]);
-    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:usage");
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:dashboards", "route:cron", "route:plugins"]);
   });
 
   it("drops retired routes from persisted entries", () => {
     expect(normalizeSidebarEntries(["route:overview", "route:usage"])).toEqual(["route:usage"]);
   });
 
-  it("keeps management surfaces in the workspace, not settings", () => {
-    for (const routeId of ["sessions", "activity"] as const) {
-      expect(SIDEBAR_NAV_ROUTES).toContain(routeId);
-      expect(settingsRoutes).not.toContain(routeId);
-    }
-    expect(settingsRoutes).not.toContain("worktrees");
-    expect(settingsRoutes).not.toContain("memory-import");
-  });
-
   it("treats worktrees as a sessions hub tab without its own pin", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("worktrees");
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
     expect(isSessionsHubRoute("chat")).toBe(false);
     expect(normalizeSidebarEntries(["route:worktrees", "route:usage"])).toEqual(["route:usage"]);
   });
 
-  it("keeps settings pages out of the customizable sidebar", () => {
-    for (const routeId of [
-      "custodian",
-      "channels",
-      "security",
-      "notifications",
-      "advanced",
-    ] as const) {
-      expect(SIDEBAR_NAV_ROUTES).not.toContain(routeId);
-      expect(settingsRoutes).toContain(routeId);
-    }
+  it("preserves the shipped Workboard placement slot outside customizable routes", () => {
+    expect(normalizeSidebarEntries(["route:workboard", "workboard:ops"])).toEqual([
+      "plugin:workboard/workboard",
+      "plugin:workboard/board-ops",
+    ]);
+    expect(sidebarMoreRoutes([])).not.toContain("workboard");
+  });
+
+  it("recognizes every settings navigation route", () => {
     expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });
 
+  it("places Updates in the System group immediately before About", () => {
+    const system = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSystem");
+    expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
+  });
+
+  it("places team secrets between Privacy & Security and Approvals", () => {
+    const security = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSecurity");
+    expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
+  });
+
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
-    expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
     expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
 
   it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
-    expect(settingsRoutes).not.toContain("ai-agents");
     expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
     expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
 
-  it("keeps devices in connection settings and drops stale pinned entries", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
-    expect(settingsRoutes).toContain("nodes");
+  it("filters admin-only settings while preserving legacy fail-open visibility", () => {
+    const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
+    expect(nonAdminRoutes).toContain("approvals");
+    expect(nonAdminRoutes).toContain("channels");
+    expect(nonAdminRoutes).not.toContain("security");
+    expect(nonAdminRoutes).not.toContain("communications");
+
+    const legacyCanAdmin = readGatewayOperatorAccess({
+      hello: { auth: { role: "operator" } },
+    } as Parameters<typeof readGatewayOperatorAccess>[0]).canAdmin;
+    expect(legacyCanAdmin).toBe(true);
+    expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
+      visibleSettingsNavigationGroups(true),
+    );
+  });
+
+  it("drops stale device pins", () => {
     expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
   });
 
-  it("keeps the apps promo page unpinned by default but customizable", () => {
-    expect(SIDEBAR_NAV_ROUTES).toContain("apps");
-    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:apps");
+  it("keeps the apps promo page available in More", () => {
     expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("apps");
-    expect(settingsRoutes).not.toContain("apps");
     expect(isSettingsNavigationRoute("apps")).toBe(false);
+  });
+
+  it("keeps Portals available in More", () => {
+    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("portals");
+    expect(isSettingsNavigationRoute("portals")).toBe(false);
   });
 
   it("keeps the plugin manager in customizable workspace routes", () => {
@@ -88,7 +176,6 @@ describe("sidebar entries", () => {
       "route:usage",
     ]);
     expect(sidebarMoreRoutes(["route:usage", "session:agent:main:test"])).toContain("plugins");
-    expect(settingsRoutes).not.toContain("plugins");
   });
 
   it("round-trips route, Workboard, and session entries", () => {
@@ -97,12 +184,17 @@ describe("sidebar entries", () => {
       type: "session",
       key: "agent:main:test",
     });
-    expect(parseSidebarEntry("workboard:ops")).toEqual({ type: "workboard", boardId: "ops" });
+    expect(parseSidebarEntry("workboard:ops")).toEqual({
+      type: "plugin",
+      key: "workboard/board-ops",
+    });
     expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
     expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
       "session:agent:main:test",
     );
-    expect(serializeSidebarEntry({ type: "workboard", boardId: "ops" })).toBe("workboard:ops");
+    expect(serializeSidebarEntry({ type: "plugin", key: "workboard/board-ops" })).toBe(
+      "plugin:workboard/board-ops",
+    );
   });
 
   it("normalizes persisted entries, dropping malformed and duplicate values", () => {
@@ -121,9 +213,7 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
-  it("keeps OpenClaw only in Settings and drops stale sidebar pins", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("custodian");
-    expect(settingsRoutes).toContain("custodian");
+  it("recognizes OpenClaw settings and drops stale sidebar pins", () => {
     expect(isSettingsNavigationRoute("custodian")).toBe(true);
     expect(normalizeSidebarEntries(["route:custodian", "route:usage"])).toEqual(["route:usage"]);
   });

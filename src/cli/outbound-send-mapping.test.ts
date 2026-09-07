@@ -1,9 +1,6 @@
 // Outbound send mapping tests cover CLI-to-channel outbound payload mapping.
 import { describe, expect, it, vi } from "vitest";
-import {
-  CLI_OUTBOUND_SEND_FACTORY,
-  createOutboundSendDepsFromCliSource,
-} from "./outbound-send-mapping.js";
+import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
 describe("createOutboundSendDepsFromCliSource", () => {
   it("adds generic legacy aliases for channel-keyed send deps", () => {
@@ -32,17 +29,6 @@ describe("createOutboundSendDepsFromCliSource", () => {
       sendSignal: deps.signal,
       sendImessage: deps.imessage,
     });
-  });
-
-  it("does not manufacture Discord voice helper deps from the lazy channel factory", () => {
-    const sendFactory = vi.fn((channelId: string) => vi.fn().mockName(channelId));
-    const outbound = createOutboundSendDepsFromCliSource({
-      [CLI_OUTBOUND_SEND_FACTORY]: sendFactory,
-    });
-
-    expect(outbound.discordVoice).toBeUndefined();
-    expect(outbound.sendDiscordVoice).toBeUndefined();
-    expect(sendFactory).not.toHaveBeenCalled();
   });
 
   it("preserves explicitly provided Discord voice helper deps", () => {

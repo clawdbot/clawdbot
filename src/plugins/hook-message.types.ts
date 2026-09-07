@@ -5,6 +5,28 @@ import type { PluginConversationBinding } from "./conversation-binding.types.js"
 /** Ordered media fact exposed by inbound message hooks. */
 export type PluginHookMediaFact = MessageHookMediaFact;
 
+/** Channel-neutral geographic fix carried by an inbound provider update. */
+export type PluginHookLocation = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  name?: string;
+  address?: string;
+  source?: "pin" | "place" | "live";
+  isLive?: boolean;
+  livePeriodSeconds?: number;
+  caption?: string;
+};
+
+/** Stable provider update identity for transport-level correlation and deduplication. */
+export type PluginHookProviderUpdate = {
+  id: string;
+  kind: string;
+  messageId?: string;
+  messageTimestamp?: number;
+  editedTimestamp?: number;
+};
+
 /** Provider metadata plus deprecated media aliases retained during the SDK migration window. */
 export type PluginHookInboundMessageMetadata = Record<string, unknown> & {
   /** @deprecated Use the first `event.media` fact with a defined `path`. */
@@ -129,6 +151,8 @@ export type PluginHookInboundClaimEvent = {
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   wasMentioned?: boolean;
+  location?: PluginHookLocation;
+  providerUpdate?: PluginHookProviderUpdate;
   /** Staged, locally usable attachments in stable source order. */
   media?: PluginHookMediaFact[];
   /** Original attachment facts when local staging has not completed yet. */
@@ -156,6 +180,8 @@ export type PluginHookMessageReceivedEvent = {
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
+  location?: PluginHookLocation;
+  providerUpdate?: PluginHookProviderUpdate;
   /** Staged, locally usable attachments in stable source order. */
   media?: PluginHookMediaFact[];
   /** Original attachment facts when local staging has not completed yet. */

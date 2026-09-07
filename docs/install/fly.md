@@ -66,6 +66,13 @@ read_when:
       min_machines_running = 1
       processes = ["app"]
 
+    [[http_service.checks]]
+      grace_period = "2m"
+      interval = "15s"
+      method = "GET"
+      timeout = "5s"
+      path = "/startupz"
+
     [[vm]]
       size = "shared-cpu-2x"
       memory = "2048mb"
@@ -84,6 +91,7 @@ read_when:
     | `--bind lan`                   | Binds to `0.0.0.0` so Fly's proxy can reach the gateway                     |
     | `--allow-unconfigured`         | Starts without a config file (you create one after)                        |
     | `internal_port = 3000`         | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
+    | `path = "/startupz"`          | Admits traffic after Gateway startup finishes, independent of channel health |
     | `memory = "2048mb"`            | 512MB is too small; 2GB recommended                                         |
     | `OPENCLAW_STATE_DIR = "/data"` | Persists state on the volume                                                |
 
@@ -123,7 +131,7 @@ read_when:
     fly logs
     ```
 
-    Gateway startup logs `gateway ready` once the HTTP/WebSocket listener is up. Fly's own health check watches `internal_port = 3000` per `fly.toml`; the image's Docker `HEALTHCHECK` directive additionally polls `/healthz` on its default port 18789, which is unused here since this deployment overrides the gateway to `--port 3000`.
+    Gateway startup logs `gateway ready` once the HTTP/WebSocket listener is up. Fly checks `/startupz` on `internal_port = 3000` and admits traffic after startup work finishes. The image's Docker `HEALTHCHECK` resolves the active Gateway lock port, so its `/healthz` liveness check also follows this deployment's `--port 3000` override.
 
   </Step>
 
@@ -146,12 +154,11 @@ read_when:
           },
           "maxConcurrent": 4
         },
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true
           }
-        ]
+        }
       },
       "auth": {
         "profiles": {
@@ -197,9 +204,9 @@ read_when:
 
     Replace `https://my-openclaw.fly.dev` with your real Fly app origin. Gateway startup seeds local Control UI origins from the runtime `--bind` and `--port` values so first boot can proceed before config exists, but browser access through Fly still needs the exact HTTPS origin listed in `gateway.controlUi.allowedOrigins`.
 
-    The Discord token can come from either:
+    The `channels.discord` block above enables Discord. Its token can come from either:
 
-    - Environment variable `DISCORD_BOT_TOKEN` (recommended for secrets); no need to add it to config, the gateway reads it automatically
+    - Environment variable `DISCORD_BOT_TOKEN` (recommended for secrets); the configured default account reads it automatically
     - Config file `channels.discord.token`
 
     Restart to apply:
@@ -248,9 +255,9 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 ### Health checks failing / connection refused
 
-Fly cannot reach the gateway on the configured port.
+Fly cannot reach the gateway on the configured port, or `/startupz` is still reporting startup work.
 
-**Fix:** ensure `internal_port` matches the gateway port (`--port 3000` or `OPENCLAW_GATEWAY_PORT=3000`).
+**Fix:** ensure `internal_port` matches the gateway port (`--port 3000` or `OPENCLAW_GATEWAY_PORT=3000`), then inspect `fly logs` for the pending startup step.
 
 ### OOM / memory issues
 
