@@ -12,7 +12,7 @@ type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
 export function resolveCompletionsCacheControl(
   compat: Pick<
     ResolvedOpenAICompletionsCompat,
-    "cacheControlFormat" | "supportsLongCacheRetention"
+    "cacheControlFormat" | "supportsLongCacheRetention" | "configuredSupportsLongCacheRetention"
   >,
   retention: CacheRetention,
   openRouterRoute: boolean,
@@ -22,7 +22,9 @@ export function resolveCompletionsCacheControl(
   }
   return {
     type: "ephemeral",
-    ...(retention === "long" && openRouterRoute && compat.supportsLongCacheRetention
+    ...(retention === "long" &&
+    compat.supportsLongCacheRetention &&
+    (openRouterRoute || compat.configuredSupportsLongCacheRetention === true)
       ? { ttl: "1h" }
       : {}),
   };
@@ -38,6 +40,7 @@ export function applyCompletionsAnthropicCacheControl(
   cacheControl: CacheControl | null = { type: "ephemeral" },
   cacheOptOutIndexes: ReadonlySet<number> = new Set(),
   markTools = true,
+  markMessages = true,
 ): void {
   if (shapedPayloads.has(payload)) {
     return;
@@ -95,6 +98,10 @@ export function applyCompletionsAnthropicCacheControl(
   const lastTool = tools.at(-1);
   if (markTools && lastTool) {
     lastTool.cache_control = cacheControl;
+  }
+  // String-only endpoints cannot carry block markers; wrappers retain this decision.
+  if (!markMessages) {
+    return;
   }
   const system = messages.find(
     (message) => isRecord(message) && (message.role === "system" || message.role === "developer"),

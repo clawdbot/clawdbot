@@ -138,33 +138,46 @@ describe("createDeepInfraAnthropicCacheWrapper", () => {
     },
   );
 
-  it("passes configured none through the wrapper to the managed builder", () => {
-    const model: Model<"openai-completions"> = {
-      api: "openai-completions",
-      provider: "deepinfra",
-      id: "anthropic/claude-sonnet-4-6",
-      name: "Claude",
-      baseUrl: "https://api.deepinfra.com/v1/openai",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-    };
-    let payload: Record<string, unknown> = {};
-    const base: StreamFn = (resolvedModel, context, options) => {
-      payload = buildOpenAICompletionsParams(resolvedModel, context, {
-        cacheRetention: options?.cacheRetention,
+  it.each([
+    { cacheRetention: "none", requiresStringContent: false },
+    { cacheRetention: "short", requiresStringContent: true },
+  ] as const)(
+    "composes managed requests with $cacheRetention retention and string-only=$requiresStringContent",
+    ({ cacheRetention, requiresStringContent }) => {
+      const model: Model<"openai-completions"> & {
+        compat: { requiresStringContent: boolean };
+      } = {
+        api: "openai-completions",
+        provider: "deepinfra",
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude",
+        baseUrl: "https://api.deepinfra.com/v1/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+        compat: { requiresStringContent },
+      };
+      let payload: Record<string, unknown> = {};
+      const base: StreamFn = (resolvedModel, context, options) => {
+        payload = buildOpenAICompletionsParams(resolvedModel, context, {
+          cacheRetention: options?.cacheRetention,
+        });
+        options?.onPayload?.(payload, resolvedModel);
+        return createAssistantMessageEventStream();
+      };
+      void createDeepInfraAnthropicCacheWrapper(base, { cacheRetention })(model, {
+        systemPrompt: "STABLE",
+        messages: [{ role: "user", content: "Question", timestamp: 1 }],
       });
-      options?.onPayload?.(payload, resolvedModel);
-      return createAssistantMessageEventStream();
-    };
-    void createDeepInfraAnthropicCacheWrapper(base, { cacheRetention: "none" })(model, {
-      systemPrompt: "STABLE",
-      messages: [{ role: "user", content: "Question", timestamp: 1 }],
-    });
-    expect(JSON.stringify(payload)).not.toContain("cache_control");
-  });
+      expect(JSON.stringify(payload)).not.toContain("cache_control");
+      expect(payload.messages).toEqual([
+        { role: "system", content: "STABLE" },
+        { role: "user", content: "Question" },
+      ]);
+    },
+  );
 
   it("preserves native Anthropic Messages payloads and options", () => {
     const initialPayload = {

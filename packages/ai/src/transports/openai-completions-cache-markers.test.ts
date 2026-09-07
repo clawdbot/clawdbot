@@ -27,6 +27,43 @@ function markers(payload: unknown) {
 }
 
 describe("managed Completions cache markers", () => {
+  it("keeps every message as a string for string-only endpoints with caching enabled", () => {
+    const payload = buildOpenAICompletionsParams(
+      { ...model, compat: { requiresStringContent: true, cacheControlFormat: "anthropic" } },
+      context,
+      { cacheRetention: "short" },
+    );
+    expect(payload.messages).toEqual([
+      { role: "system", content: "STABLE\nToday: 2026-09-06" },
+      { role: "user", content: "Question" },
+    ]);
+    expect(payload.tools).toMatchObject([
+      { function: { name: "alpha" } },
+      { function: { name: "zeta" }, cache_control: marker },
+    ]);
+    expect(markers(payload)).toHaveLength(1);
+  });
+
+  it.each([undefined, false, true])(
+    "honors explicit custom-endpoint long retention support: %s",
+    (supportsLongCacheRetention) => {
+      const payload = buildOpenAICompletionsParams(
+        {
+          ...model,
+          provider: "custom",
+          baseUrl: "https://proxy.example/v1",
+          compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention },
+        },
+        context,
+        { cacheRetention: "long" },
+      );
+      expect(markers(payload)).toHaveLength(3);
+      expect(JSON.stringify(payload).match(/"ttl":"1h"/g) ?? []).toHaveLength(
+        supportsLongCacheRetention === true ? 3 : 0,
+      );
+    },
+  );
+
   it("preserves the marked stable prefix across suffix changes and sorted tool permutations", () => {
     const first = buildOpenAICompletionsParams(model, context, undefined);
     const second = buildOpenAICompletionsParams(

@@ -205,10 +205,17 @@ describe("proxy stream wrappers", () => {
     ]);
   });
 
-  it.each(["none", "short", "long"] as const)(
-    "composes managed requests with %s retention without marking volatile content",
-    (cacheRetention) => {
-      const model: Model<"openai-completions"> = {
+  it.each([
+    { cacheRetention: "none", requiresStringContent: false },
+    { cacheRetention: "short", requiresStringContent: false },
+    { cacheRetention: "long", requiresStringContent: false },
+    { cacheRetention: "short", requiresStringContent: true },
+  ] as const)(
+    "composes managed requests with $cacheRetention retention and string-only=$requiresStringContent",
+    ({ cacheRetention, requiresStringContent }) => {
+      const model: Model<"openai-completions"> & {
+        compat: { requiresStringContent: boolean };
+      } = {
         api: "openai-completions",
         provider: "openrouter",
         id: "anthropic/claude-sonnet-4-6",
@@ -219,6 +226,7 @@ describe("proxy stream wrappers", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
+        compat: { requiresStringContent },
       };
       let payload: Record<string, unknown> = {};
       const base: StreamFn = (resolvedModel, context, options) => {
@@ -239,10 +247,19 @@ describe("proxy stream wrappers", () => {
           });
           const wire = JSON.stringify(payload);
           expect(wire.match(/"cache_control":/g) ?? []).toHaveLength(
-            cacheRetention === "none" ? 0 : Number(Boolean(stable)) + Number(hasUser),
+            cacheRetention === "none" || requiresStringContent
+              ? 0
+              : Number(Boolean(stable)) + Number(hasUser),
           );
           expect(wire).not.toContain('"text":"VOLATILE","cache_control"');
           expect(wire).not.toContain('"text":"Runtime","cache_control"');
+          if (requiresStringContent) {
+            expect(payload.messages).toEqual([
+              { role: "system", content: `${stable}\nVOLATILE` },
+              ...(hasUser ? [{ role: "user", content: "Question" }] : []),
+              { role: "user", content: "Runtime" },
+            ]);
+          }
           expect(wire.includes('"ttl":"1h"')).toBe(
             cacheRetention === "long" && Boolean(stable || hasUser),
           );

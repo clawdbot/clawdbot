@@ -539,6 +539,25 @@ describe("OpenAI-compatible completions compatibility", () => {
     ).toMatchObject(compat);
   });
 
+  it.each([undefined, false, true])(
+    "sends custom-endpoint long TTL only with explicit support: %s",
+    async (supportsLongCacheRetention) => {
+      await streamOpenAICompletions(
+        createModel({ compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention } }),
+        context,
+        { apiKey: "test", cacheRetention: "long" },
+      ).result();
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const cacheControl =
+        supportsLongCacheRetention === true
+          ? { type: "ephemeral", ttl: "1h" }
+          : { type: "ephemeral" };
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
+        `"cache_control":${JSON.stringify(cacheControl)}`,
+      );
+    },
+  );
+
   it.each([undefined, "anthropic"] as const)(
     "requires explicit cache format %s for Qwen behind a custom endpoint",
     async (cacheControlFormat) => {

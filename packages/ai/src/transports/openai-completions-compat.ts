@@ -55,6 +55,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
   sessionAffinity: OpenAICompletionsSessionAffinity;
   visibleReasoningDetailTypes: string[];
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  configuredSupportsLongCacheRetention?: boolean;
 };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -279,6 +280,7 @@ export function resolveOpenAICompletionsCompat(
     supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
     supportsLongCacheRetention:
       configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
+    configuredSupportsLongCacheRetention: configured?.supportsLongCacheRetention,
     visibleReasoningDetailTypes:
       configured && "visibleReasoningDetailTypes" in configured
         ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??

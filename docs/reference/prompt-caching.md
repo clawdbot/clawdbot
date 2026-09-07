@@ -102,7 +102,7 @@ Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthro
 
 For `anthropic/*` models, the managed and SDK Chat Completions paths use the
 [shared marker layout](#chat-completions-cache-markers). `cacheRetention: "none"`
-disables these markers. Both `"short"` and `"long"` use ephemeral markers without
+disables these markers. By default, both `"short"` and `"long"` use ephemeral markers without
 a TTL override; OpenClaw does not assume one-hour support for this route.
 
 ### Model Studio / DashScope (Qwen)
@@ -195,6 +195,17 @@ all preceding tools, system content, and messages, so changing the volatile
 system suffix still invalidates that later checkpoint; the earlier stable-system
 checkpoint remains reusable where the backend supports block-level caching.
 Backend token minimums and cache lifetimes still apply.
+
+With `compat.requiresStringContent: true`, managed requests keep message content
+as strings and omit message-block markers, including through provider wrappers.
+The tool-definition marker remains where supported.
+
+Detected defaults request `ttl: "1h"` only on verified OpenRouter routes. For a
+custom endpoint that supports one-hour Anthropic caching, explicitly set
+`compat.cacheControlFormat: "anthropic"`, `compat.supportsLongCacheRetention: true`,
+and `cacheRetention: "long"` to send that TTL. Omitting the capability override
+keeps custom-endpoint markers without a TTL; setting it to `false` disables
+the one-hour TTL even on OpenRouter.
 
 ## System-prompt cache boundary
 

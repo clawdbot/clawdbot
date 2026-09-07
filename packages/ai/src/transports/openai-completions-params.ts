@@ -310,7 +310,7 @@ export function buildOpenAICompletionsParams(
   const cacheOptOutIndexes = new Set<number>();
   let messages = convertMessages(model as never, context, compat as never, {
     cacheOptOutIndexes,
-    preserveSystemPromptCacheBoundary: cacheControl !== undefined,
+    preserveSystemPromptCacheBoundary: cacheControl !== undefined && !compat.requiresStringContent,
   });
   applyCompletionsReplay(messages as unknown[], context, model, compat);
   if (compat.strictMessageKeys) {
@@ -516,6 +516,7 @@ export function buildOpenAICompletionsParams(
           endpointClass === "default" &&
           ["modelstudio", "dashscope", "qwen"].includes(model.provider)
         ),
+      !compat.requiresStringContent,
     );
   }
   return params;
