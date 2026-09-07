@@ -33,21 +33,16 @@ export function archiveMetadata(tarBase64: string): { tarBytes: number; sha256: 
   };
 }
 
-export function writeTarString(
-  header: Buffer,
-  offset: number,
-  length: number,
-  value: string,
-): void {
+function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
   header.write(value.slice(0, length), offset, length, "utf8");
 }
 
-export function writeTarOctal(header: Buffer, offset: number, length: number, value: number): void {
+function writeTarOctal(header: Buffer, offset: number, length: number, value: number): void {
   const text = value.toString(8).padStart(length - 1, "0");
   header.write(`${text}\0`.slice(-length), offset, length, "ascii");
 }
 
-export function createTarFileHeader(name: string, size: number, type = "0"): Buffer {
+function createTarFileHeader(name: string, size: number, type = "0"): Buffer {
   const header = Buffer.alloc(512);
   writeTarString(header, 0, 100, name);
   writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
@@ -66,7 +61,7 @@ export function createTarFileHeader(name: string, size: number, type = "0"): Buf
   return header;
 }
 
-export function createTarDirHeader(name: string): Buffer {
+function createTarDirHeader(name: string): Buffer {
   return createTarFileHeader(name, 0, "5");
 }
 
