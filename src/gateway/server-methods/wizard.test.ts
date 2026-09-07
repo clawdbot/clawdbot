@@ -191,6 +191,166 @@ describe("hosted wizard runtime isolation", () => {
   );
 });
 
+// Matches openclaw.setup.auth.start (PROVIDER_AUTH_SESSION_TIMEOUT_MS).
+const WIZARD_START_IDLE_TTL_MS = 25 * 60 * 1000;
+
+describe("wizard.start idle TTL", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { flow: "setup", params: { mode: "local" } },
+    { flow: "channels", params: { flow: "channels" } },
+  ] as const)(
+    "expires an abandoned $flow wizard so a later start is not busy",
+    async ({ params }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const tracker = createWizardSessionTracker();
+      const waitOnPrompt = async (
+        _opts: unknown,
+        _runtime: RuntimeEnv,
+        prompter: WizardPrompter,
+      ) => {
+        await prompter.text({ message: "Name" });
+      };
+      const context = {
+        ...tracker,
+        wizardRunner: waitOnPrompt,
+        channelWizardRunner: waitOnPrompt,
+      };
+
+      try {
+        const startRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({
+          params,
+          respond: startRespond,
+          context,
+        } as never);
+        expect(startRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+
+        const busyRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({
+          params,
+          respond: busyRespond,
+          context,
+        } as never);
+        expect(busyRespond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            details: { code: "SETUP_ADMISSION_BUSY" },
+          }),
+        );
+
+        await vi.advanceTimersByTimeAsync(WIZARD_START_IDLE_TTL_MS);
+        const abandoned = expectDefined(
+          [...tracker.wizardSessions.values()][0],
+          "abandoned wizard session",
+        );
+        expect(abandoned.getStatus()).toBe("cancelled");
+        await whenAdmittedWizardSessionSettled(abandoned);
+
+        const replacementRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({
+          params,
+          respond: replacementRespond,
+          context,
+        } as never);
+        expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+      } finally {
+        await cancelWizardSessions(tracker.wizardSessions);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("refreshes the idle TTL when wizard.next answers a prompt", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const tracker = createWizardSessionTracker();
+    const waitOnPrompts = async (
+      _opts: unknown,
+      _runtime: RuntimeEnv,
+      prompter: WizardPrompter,
+    ) => {
+      await prompter.text({ message: "Name" });
+      await prompter.text({ message: "Email" });
+    };
+    const context = {
+      ...tracker,
+      wizardRunner: waitOnPrompts,
+    };
+
+    try {
+      const startRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({
+        params: { mode: "local" },
+        respond: startRespond,
+        context,
+      } as never);
+      const started = startRespond.mock.calls[0]?.[1] as {
+        sessionId: string;
+        step?: { id: string };
+        status: string;
+      };
+      expect(started.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(WIZARD_START_IDLE_TTL_MS - 60_000);
+      const answerRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.next"],
+        "wizard.next test invariant",
+      )({
+        params: {
+          sessionId: started.sessionId,
+          answer: { stepId: started.step?.id, value: "Ada" },
+        },
+        respond: answerRespond,
+        context,
+      } as never);
+      expect(answerRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+
+      await vi.advanceTimersByTimeAsync(WIZARD_START_IDLE_TTL_MS - 60_000);
+      const stillAlive = expectDefined(
+        tracker.wizardSessions.get(started.sessionId),
+        "active wizard session",
+      );
+      expect(stillAlive.getStatus()).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(WIZARD_START_IDLE_TTL_MS);
+      expect(stillAlive.getStatus()).toBe("cancelled");
+      await whenAdmittedWizardSessionSettled(stillAlive);
+
+      const replacementRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({
+        params: { mode: "local" },
+        respond: replacementRespond,
+        context,
+      } as never);
+      expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+    } finally {
+      await cancelWizardSessions(tracker.wizardSessions);
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("wizard setup ownership", () => {
   it("rejects classic setup while structured setup owns admission, then permits it", async () => {
     const structuredStarted = createDeferred();
