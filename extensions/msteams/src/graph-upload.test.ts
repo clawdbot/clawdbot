@@ -303,6 +303,45 @@ describe("graph upload helpers", () => {
     ).rejects.toThrow("SharePoint upload response missing required fields");
   });
 
+  it("rejects a null upload response body", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(null));
+
+    await expect(
+      uploadToSharePoint({
+        filename: "null.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("rejects empty-string required fields in upload response", async () => {
+    // Regression: empty strings pass the typeof === "string" check on base
+    // but the new !field guard rejects them, preventing broken file cards.
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ id: "", webUrl: "https://example.com", name: "file.txt" }),
+    );
+
+    await expect(
+      uploadToSharePoint({
+        filename: "empty-id.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("rejects all-empty-string required fields in upload response", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ id: "", webUrl: "", name: "" }),
+    );
+
+    await expect(
+      uploadToSharePoint({
+        filename: "all-empty.txt",
+        fetchFn: withFetchPreconnect(fetchFn),
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
   it("bounds upload error bodies without requiring response.text()", async () => {
     const fetchFn = vi.fn(async () =>
       bodyOnlyErrorResponse(`${"upload-denied ".repeat(4096)}tail-marker`, 413),
