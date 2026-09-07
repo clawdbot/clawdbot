@@ -1,5 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildCronCommandShellArgv } from "../../cron/command-shell-argv.js";
 import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
@@ -241,7 +242,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   } else if (hasCommandPatch) {
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
-    assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
+    assignIf(payload, "argv", buildCronCommandShellArgv(commandShell ?? ""), Boolean(commandShell));
     assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
     assignIf(payload, "input", opts.commandInput, hasCommandInput);

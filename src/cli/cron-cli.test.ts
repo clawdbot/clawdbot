@@ -1,6 +1,7 @@
 // Cron CLI tests cover cron command registration and schedule output.
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildCronCommandShellArgv } from "../cron/command-shell-argv.js";
 import type { CronJob } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -1013,7 +1014,7 @@ describe("cron cli", () => {
     expect(params?.sessionTarget).toBe("isolated");
     expect(params?.payload).toMatchObject({
       kind: "command",
-      argv: ["sh", "-lc", "echo ok"],
+      argv: buildCronCommandShellArgv("echo ok"),
       cwd: "/srv/app",
       env: { FOO: "bar" },
       timeoutSeconds: 30,
