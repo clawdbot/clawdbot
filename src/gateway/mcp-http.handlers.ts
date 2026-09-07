@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
+import { sanitizeToolResult } from "../agents/embedded-agent-tool-results.js";
 import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
   formatToolExecutionErrorMessage,
@@ -56,6 +57,26 @@ function normalizeToolCallContent(result: unknown): ContentBlock[] {
       text: stringifyMcpContent(result),
     },
   ];
+}
+
+/** Redact model-visible text in MCP content without stripping image/binary payloads. */
+function sanitizeMcpToolCallContent(content: ContentBlock[]): ContentBlock[] {
+  return content.map((block) => {
+    if (block.type === "text") {
+      return Object.assign({}, block, { text: sanitizeToolResult(block.text) });
+    }
+    if (block.type === "resource" && "resource" in block && block.resource) {
+      const resource = block.resource;
+      if ("text" in resource && typeof resource.text === "string") {
+        return Object.assign({}, block, {
+          resource: Object.assign({}, resource, {
+            text: sanitizeToolResult(resource.text),
+          }),
+        });
+      }
+    }
+    return block;
+  });
 }
 
 /** Handles one MCP loopback JSON-RPC message and returns a response or notification null. */
@@ -180,7 +201,7 @@ export async function handleMcpJsonRpc(params: {
               : { outcome: disposition },
           );
           return jsonRpcResult(id, {
-            content: [{ type: "text", text: hookResult.reason }],
+            content: [{ type: "text", text: sanitizeToolResult(hookResult.reason) }],
             isError: true,
           });
         }
@@ -217,7 +238,7 @@ export async function handleMcpJsonRpc(params: {
         return copyInternalToolResultState(
           result,
           jsonRpcResult(id, {
-            content: normalizeToolCallContent(result),
+            content: sanitizeMcpToolCallContent(normalizeToolCallContent(result)),
             isError: failureKind !== undefined,
           }),
         );
@@ -230,7 +251,12 @@ export async function handleMcpJsonRpc(params: {
         });
         const message = formatToolExecutionErrorMessage(error, "tool execution failed");
         return jsonRpcResult(id, {
-          content: [{ type: "text", text: message || "tool execution failed" }],
+          content: [
+            {
+              type: "text",
+              text: sanitizeToolResult(message || "tool execution failed"),
+            },
+          ],
           isError: true,
         });
       }
