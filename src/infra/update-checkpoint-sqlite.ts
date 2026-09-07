@@ -7,7 +7,7 @@ import {
   readSqliteSchemaObjects,
   readSqliteSnapshotHeader,
   readSqliteTableList,
-  readSqliteTableColumns,
+  readSqliteTableXInfo,
 } from "./sqlite-schema-contract.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
@@ -66,7 +66,7 @@ function rowIdentityColumn(db: DatabaseSync, table: string) {
   if (readSqliteTableList(db).some((row) => row.name === table && row.wr === 1)) {
     return null;
   }
-  const columns = readSqliteTableColumns(db, table);
+  const columns = readSqliteTableXInfo(db, table);
   const alias = (["rowid", "_rowid_", "oid"] as const).find((name) =>
     columns.every((column) => String(column.name).toLowerCase() !== name),
   );
@@ -278,7 +278,7 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       params.staged.exec(`DROP TRIGGER ${quoteIdentifier(trigger.name)}`);
     }
     for (const [table, rows] of copyRows) {
-      const columns = readSqliteTableColumns(params.staged, table)
+      const columns = readSqliteTableXInfo(params.staged, table)
         .filter((row) => row.hidden === 0)
         .map((row) => String(row.name));
       if (rowsEqual(rows, readRows(params.staged, table))) {

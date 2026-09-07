@@ -648,7 +648,7 @@ export function readSqliteTableList(database: DatabaseSync) {
   return database.prepare("PRAGMA table_list").all();
 }
 
-export function readSqliteTableColumns(database: DatabaseSync, table: string) {
+export function readSqliteTableXInfo(database: DatabaseSync, table: string) {
   return database.prepare(`PRAGMA table_xinfo(${quoteSqliteIdentifier(table)})`).all();
 }
 

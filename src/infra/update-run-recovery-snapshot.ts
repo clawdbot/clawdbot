@@ -8,7 +8,7 @@ import {
   readSqliteSchemaObjects,
   readSqliteSnapshotHeader,
   readSqliteTableList,
-  readSqliteTableColumns,
+  readSqliteTableXInfo,
 } from "./sqlite-schema-contract.js";
 import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
@@ -73,7 +73,7 @@ function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): string {
   const tableList = readSqliteTableList(db);
   for (const table of schema.filter((entry) => entry.type === "table")) {
     const name = table.name;
-    const columns = readSqliteTableColumns(db, name);
+    const columns = readSqliteTableXInfo(db, name);
     const withoutRowid = tableList.some((entry) => entry.name === name && entry.wr === 1);
     const rowid = (["rowid", "_rowid_", "oid"] as const).find((candidate) =>
       columns.every((column) => String(column.name).toLowerCase() !== candidate),
