@@ -600,10 +600,19 @@ export async function resolveIMessageInboundDecision(params: {
       params.logVerbose?.(
         describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
-      // Use "self-chat echo" for self-chat paired mirrors so the loop rate
-      // limiter exempts them — counting benign mirror drops would suppress
-      // legitimate conversation after a short burst of paired mirrors.
-      return { kind: "drop", reason: isSelfChat ? "self-chat echo" : "echo" };
+      // Use "self-chat echo" when either isSelfChat is true or the self-chat
+      // cache confirms this as a duplicate, so the loop rate limiter exempts
+      // benign mirror drops. isSelfChat requires destination_caller_id, but
+      // the self-chat cache can recognize duplicates without that field.
+      const isSelfChatMirror =
+        isSelfChat ||
+        Boolean(
+          params.selfChatCache?.has({
+            ...selfChatLookup,
+            text: bodyText,
+          }),
+        );
+      return { kind: "drop", reason: isSelfChatMirror ? "self-chat echo" : "echo" };
     }
   }
 
