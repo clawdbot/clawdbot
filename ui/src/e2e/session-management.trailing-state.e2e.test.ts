@@ -175,15 +175,24 @@ suite.define(() => {
       await captureUiProof(suite, page, "sidebar-session-title-icon-gap.png");
 
       await page.addStyleTag({ content: ".session-glyph__ring { animation: none !important; }" });
-      const [restingNameBounds, restingStateBounds] = await Promise.all([
+      const glyph = row.locator(".sidebar-session-indicator .session-glyph");
+      const [restingNameBounds, restingGlyphBounds, restingStateBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
+        glyph.boundingBox(),
         state.boundingBox(),
       ]);
-      if (!restingNameBounds || !restingStateBounds) {
+      if (!restingNameBounds || !restingGlyphBounds || !restingStateBounds) {
         throw new Error("Expected visible title and leading activity geometry");
       }
-      expect(restingNameBounds.x - (restingStateBounds.x + restingStateBounds.width)).toBeCloseTo(
-        6,
+      // A glyph-less row draws the compact 12px ring centered in its 20px lead
+      // slot; the title keeps its 8px distance from the slot, not from the ring.
+      expect(restingStateBounds.width).toBeCloseTo(12, 1);
+      expect(restingStateBounds.x + restingStateBounds.width / 2).toBeCloseTo(
+        restingGlyphBounds.x + restingGlyphBounds.width / 2,
+        1,
+      );
+      expect(restingNameBounds.x - (restingGlyphBounds.x + restingGlyphBounds.width)).toBeCloseTo(
+        8,
         1,
       );
 

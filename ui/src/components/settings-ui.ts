@@ -308,17 +308,71 @@ export function renderSettingsDefaultDescription(value: string, overridden: bool
   return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
 }
 
-export function renderSettingsSegmented<T extends string>(props: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
-  /** The selected radio is passed so callers can anchor visual transitions. */
-  onChange: (value: T, element: HTMLElement) => boolean | void;
-  /** Optional activation for an already-selected value, such as clearing an explicit default. */
-  onReselect?: (value: T, element: HTMLElement) => void;
-  disabled?: boolean;
-  ariaLabel?: string;
-  className?: string;
-}): TemplateResult {
+export function renderSettingsSegmented<T extends string>(
+  props: {
+    value: T;
+    options: ReadonlyArray<{
+      value: T;
+      label: unknown;
+      title?: string;
+      testId?: string;
+      disabled?: boolean;
+      compactLabel?: string;
+      ariaLabel?: string;
+    }>;
+    disabled?: boolean;
+    ariaLabel?: string;
+    className?: string;
+  } & (
+    | {
+        mode?: undefined;
+        /** The selected radio is passed so callers can anchor visual transitions. */
+        onChange: (value: T, element: HTMLElement) => boolean | void;
+        onReselect?: (value: T, element: HTMLElement) => void;
+      }
+    | {
+        mode: "buttons";
+        variant?: "accent" | "primary" | "compact";
+        ariaPressed?: false;
+        onClick?: (event: MouseEvent, value: T) => void;
+        onChange: (value: T) => void;
+        onReselect?: (value: T) => void;
+      }
+  ),
+): TemplateResult<1> {
+  if (props.mode === "buttons") {
+    return html`<div
+      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.className ?? ""}"
+      role=${props.ariaLabel ? "group" : nothing}
+      aria-label=${props.ariaLabel ?? nothing}
+    >
+      ${props.options.map(
+        (option) => html`<button
+          type="button"
+          class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""} ${props.variant === "accent" ? "btn btn--sm" : ""}"
+          aria-pressed=${props.ariaPressed === false ? nothing : String(option.value === props.value)}
+          aria-label=${option.ariaLabel ?? nothing}
+          data-compact-label=${option.compactLabel ?? nothing}
+          data-test-id=${option.testId ?? nothing}
+          title=${option.title ?? nothing}
+          ?disabled=${props.disabled || option.disabled}
+          @click=${(event: MouseEvent) => {
+            props.onClick?.(event, option.value);
+            if (event.defaultPrevented || props.disabled || option.disabled) {
+              return;
+            }
+            if (option.value === props.value) {
+              props.onReselect?.(option.value);
+            } else {
+              props.onChange(option.value);
+            }
+          }}
+        >
+          ${option.label}
+        </button>`,
+      )}
+    </div>`;
+  }
   return html`
     <wa-radio-group
       class="settings-segmented ${props.className ?? ""}"
@@ -353,6 +407,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
+            ?disabled=${option.disabled ?? false}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
             @click=${(event: Event) => {

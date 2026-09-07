@@ -81,7 +81,7 @@ async function confirmGatewayUrl(page: Page, options: { required: boolean }) {
     }
     return;
   }
-  await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+  await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 }
 
 function devicesPageUrl(gatewayPort: number) {

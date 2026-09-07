@@ -1,4 +1,7 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderCatalogOutcome,
@@ -9,6 +12,7 @@ import {
   type runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
@@ -16,22 +20,34 @@ import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type CatalogContext = {
   config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
+  discoveryAuthConfig?: OpenClawConfig;
   explicitProviders?: Record<string, ProviderConfig> | null;
 };
 
-export function buildPluginCatalogConfig(ctx: CatalogContext): OpenClawConfig {
-  if (!ctx.explicitProviders || Object.keys(ctx.explicitProviders).length === 0) {
+export function buildPluginCatalogConfig(
+  ctx: CatalogContext,
+  provider: ProviderPlugin,
+): OpenClawConfig {
+  const providers = { ...ctx.config?.models?.providers, ...ctx.explicitProviders };
+  if (Object.keys(providers).length === 0) {
     return ctx.config ?? {};
+  }
+  for (const [providerId, source] of Object.entries(providers)) {
+    const runtime = findNormalizedProviderValue(
+      ctx.discoveryAuthConfig?.models?.providers,
+      providerId,
+    );
+    if (runtime && matchesProviderPluginRef(provider, providerId)) {
+      // Keep source auth selection and other providers private; only this hook's
+      // request surfaces consume the matching materialized runtime values.
+      providers[providerId] = { ...source, headers: runtime.headers, request: runtime.request };
+    }
   }
   return {
     ...ctx.config,
     models: {
       ...ctx.config?.models,
-      providers: {
-        ...ctx.config?.models?.providers,
-        ...ctx.explicitProviders,
-      },
+      providers,
     },
   };
 }

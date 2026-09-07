@@ -246,5 +246,80 @@ class PhotoContentTest(unittest.TestCase):
         self.assertIsNone(event)
 
 
+class GroupWriteAccessTest(unittest.TestCase):
+    def make_driver(self, status, default=True, boosts=None, kind="chatTypeSupergroup", active=True):
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        requests = []
+        class Client:
+            users = {}
+
+            def next_update(self, timeout):
+                return None
+
+            def request(self, payload, timeout=20):
+                requests.append(payload)
+                return {
+                    "getChat": {"type": {"@type": kind, "supergroup_id": 1, "basic_group_id": 1, "is_channel": False}, "permissions": {"can_send_basic_messages": default}},
+                    "getChatMember": {"status": status},
+                    "getSupergroupFullInfo": boosts or {},
+                    "getBasicGroup": {"is_active": active},
+                    "getMe": {"id": 123},
+                }[payload["@type"]]
+        instance.client = Client()
+        return instance, requests
+
+    def test_effective_group_text_permissions(self):
+        cases = [
+            ({"@type": "chatMemberStatusMember"}, True, None, True),
+            ({"@type": "chatMemberStatusMember"}, False, None, False),
+            ({"@type": "chatMemberStatusMember"}, None, None, False),
+            ({"@type": "chatMemberStatusLeft"}, True, None, False),
+            ({"@type": "chatMemberStatusBanned"}, True, None, False),
+            ({"@type": "chatMemberStatusCreator", "is_member": False}, True, None, False),
+            ({"@type": "chatMemberStatusCreator", "is_member": True}, False, None, True),
+            ({"@type": "chatMemberStatusAdministrator"}, False, None, True),
+            ({"@type": "chatMemberStatusRestricted", "is_member": False, "permissions": {"can_send_basic_messages": True}}, True, None, False),
+            ({"@type": "chatMemberStatusRestricted", "is_member": True, "permissions": {}}, True, None, False),
+            ({"@type": "chatMemberStatusRestricted", "is_member": True, "permissions": {"can_send_basic_messages": False}}, True, None, False),
+            ({"@type": "chatMemberStatusRestricted", "is_member": True, "permissions": {"can_send_basic_messages": True}}, True, None, True),
+            ({"@type": "chatMemberStatusRestricted", "is_member": True, "permissions": {"can_send_basic_messages": True}}, False, None, False),
+            ({"@type": "chatMemberStatusMember"}, False, {"unrestrict_boost_count": 2, "my_boost_count": 2}, True),
+            ({"@type": "chatMemberStatusMember"}, False, {"unrestrict_boost_count": 2, "my_boost_count": 1}, False),
+            ({"@type": "chatMemberStatusMember"}, False, {"unrestrict_boost_count": 0, "my_boost_count": 0}, False),
+        ]
+        for status, default, boosts, allowed in cases:
+            with self.subTest(status=status, default=default, boosts=boosts):
+                instance, requests = self.make_driver(status, default, boosts)
+                if allowed:
+                    self.assertTrue(instance.check_group_write_access(-1001, 123))
+                else:
+                    with self.assertRaisesRegex(driver.DriverError, "credential pool owner"):
+                        instance.check_group_write_access(-1001, 123)
+                self.assertTrue(all(p["@type"].startswith("get") for p in requests))
+
+    def test_inactive_basic_group_is_not_writable_even_for_creator(self):
+        instance, _ = self.make_driver({"@type": "chatMemberStatusCreator", "is_member": True}, kind="chatTypeBasicGroup", active=False)
+        with self.assertRaisesRegex(driver.DriverError, "inactive"):
+            instance.check_group_write_access(-1001, 123)
+
+    def test_private_chat_does_not_claim_group_permission(self):
+        instance, requests = self.make_driver({}, kind="chatTypePrivate")
+        self.assertFalse(instance.check_group_write_access(123, 123))
+        self.assertEqual(len(requests), 1)
+
+    def test_denied_tester_never_announces_ready_or_sends(self):
+        from unittest.mock import patch
+        import argparse
+        import io
+        instance, requests = self.make_driver({"@type": "chatMemberStatusLeft"})
+        instance.authorize = lambda args: None
+        instance.resolve_chat = lambda chat: -1001
+        emitted = []
+        with patch.object(driver, "load_config", return_value=({}, {})), patch.object(driver, "UserDriver", return_value=instance), patch.object(driver, "write_ndjson", side_effect=emitted.append), patch.object(driver.sys, "stdin", io.StringIO("")), patch.object(driver.select, "select", return_value=([driver.sys.stdin], [], [])):
+            with self.assertRaisesRegex(driver.DriverError, "not an active member"):
+                driver.command_serve(argparse.Namespace(timeout_ms=1000, chat="-1001"))
+        self.assertEqual(emitted, [])
+        self.assertNotIn("sendMessage", [p["@type"] for p in requests])
+
 if __name__ == "__main__":
     unittest.main()

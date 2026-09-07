@@ -1,6 +1,7 @@
 // Control UI tests cover the agents overview context display.
 import { render } from "lit";
-import { expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { MultiSelect } from "../../components/multi-select.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgents } from "./view.ts";
@@ -148,4 +149,76 @@ it("shows inherited skills in the Agent Context overview", () => {
     (term) => term.textContent?.trim() === "Skills Filter",
   )?.nextElementSibling;
   expect(skillsFilterRow?.textContent?.trim()).toBe("2 selected");
+});
+
+describe("fallback field", () => {
+  const primary = "openai/gpt-5.4";
+  const existingFallback = "anthropic/claude-sonnet-4-6";
+  const catalog = [
+    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
+  ] satisfies ReturnType<typeof createProps>["modelCatalog"];
+
+  function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
+    const container = document.createElement("div");
+    const onModelFallbacksChange = vi.fn();
+    render(
+      renderAgents(
+        createProps({
+          config: {
+            form: {
+              agents: {
+                defaults: { model: { primary, fallbacks: [existingFallback] } },
+                entries: { alpha: {}, beta: {} },
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+            error: null,
+          },
+          modelCatalog: catalog,
+          onModelFallbacksChange,
+          ...overrides,
+        }),
+      ),
+      container,
+    );
+    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
+    if (!field) {
+      throw new Error("fallback field missing");
+    }
+    return { field, onModelFallbacksChange };
+  }
+
+  it("hands the field the effective chain, the catalog, and the primary to exclude", () => {
+    const { field } = renderFallbacks();
+
+    expect(field.value).toEqual([existingFallback]);
+    expect(field.exclude).toEqual([primary]);
+    expect(field.options.map((option) => option.value)).toEqual(
+      expect.arrayContaining([primary, existingFallback, "google/gemini-3-pro"]),
+    );
+    expect(field.allowCustom).toBe(true);
+    expect(field.disabled).toBe(false);
+  });
+
+  it("stages the field's next chain for the selected agent", () => {
+    const { field, onModelFallbacksChange } = renderFallbacks();
+
+    field.onChange([existingFallback, "google/gemini-3-pro"]);
+
+    expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
+      existingFallback,
+      "google/gemini-3-pro",
+    ]);
+  });
+
+  it("disables the field without config write access", () => {
+    const access = { ...createProps().access, canUpdateConfig: false };
+    const { field } = renderFallbacks({ access });
+
+    expect(field.disabled).toBe(true);
+  });
 });

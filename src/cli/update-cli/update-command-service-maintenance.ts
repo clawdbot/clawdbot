@@ -349,6 +349,7 @@ type ManagedServiceStopParams = {
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
+  onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 };
 
@@ -629,6 +630,8 @@ async function stopManagedServiceBeforeMutableUpdate(
           env: currentState.env,
           stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
           assertCurrent: assertStopCurrent,
+          // Native stop may unload the service before a later port check fails.
+          onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
         });
       }
     };

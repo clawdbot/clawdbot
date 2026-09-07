@@ -68,7 +68,7 @@ private class ReconnectDeviceAuthStore(
     role: String,
     token: String,
     scopes: List<String>,
-  ) = Unit
+  ) = true
 
   override fun clearToken(
     gatewayId: String,
@@ -94,10 +94,11 @@ private class BlockingSaveDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
     token: String,
     scopes: List<String>,
-  ) {
+  ): Boolean {
     saveStarted.countDown()
     allowSave.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     savedToken.complete(token)
+    return true
   }
 
   override fun clearToken(
@@ -122,8 +123,9 @@ private class RecordingDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
     token: String,
     scopes: List<String>,
-  ) {
+  ): Boolean {
     savedToken.complete(token)
+    return true
   }
 
   override fun clearToken(

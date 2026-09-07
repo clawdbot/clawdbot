@@ -154,7 +154,9 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 **View Raw Text** keeps Markdown notation literal, including nested code fences.
 Decoded text artifacts use the same literal preview. **Copy code** preserves the
-code's leading whitespace and final newline when present.
+code's leading whitespace and final newline when present. Indented Markdown code
+blocks also work at the start of a message and remain literal while streaming,
+including blank lines within the block.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.

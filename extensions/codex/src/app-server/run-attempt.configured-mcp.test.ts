@@ -3,7 +3,10 @@ import path from "node:path";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  createPluginMetadataSnapshotFixture,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mcpMocks = vi.hoisted(() => ({
@@ -211,13 +214,12 @@ beforeEach(() => {
   mcpMocks.threadConfigFacade.mockClear();
 });
 
-function configureFakeMcp(params: ReturnType<typeof createParams>): void {
+function configureFakeMcp(params: ReturnType<typeof createParams>) {
   setCodexTestModelSupportsTools(params, true);
   params.cleanupBundleMcpOnRunEnd = true;
   params.runtimePlan = createCodexRuntimePlanFixture();
-  params.preparedModelRuntime = {
-    metadataSnapshot: { manifestRegistry: { plugins: [] }, plugins: [] },
-  } as never;
+  const metadataSnapshot = createPluginMetadataSnapshotFixture();
+  params.preparedModelRuntime = { metadataSnapshot } as never;
   params.config = {
     ...params.config,
     mcp: {
@@ -230,6 +232,7 @@ function configureFakeMcp(params: ReturnType<typeof createParams>): void {
       },
     },
   };
+  return metadataSnapshot;
 }
 
 function createCronAuthorityCapabilityFixture(
@@ -412,11 +415,8 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   it("does not replace bundle discovery with partial prepared plugin metadata", async () => {
     const sessionFile = path.join(tempDir, "session-partial-manifest-registry.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-partial-registry"));
-    configureFakeMcp(params);
-    const manifestRegistry = { plugins: [] };
-    params.preparedModelRuntime = {
-      metadataSnapshot: { manifestRegistry, pluginIds: ["codex"], plugins: [] },
-    } as never;
+    const metadataSnapshot = configureFakeMcp(params);
+    metadataSnapshot.pluginIds = ["codex"];
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);

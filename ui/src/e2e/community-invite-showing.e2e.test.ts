@@ -534,7 +534,9 @@ suite.define(() => {
       await otherGatewayPage.goto(otherGatewayUrl.href);
       const confirmation = otherGatewayPage.locator("openclaw-gateway-url-confirmation");
       await confirmation.waitFor({ state: "visible" });
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
       await otherGatewayPage.locator("openclaw-app-sidebar").waitFor();
       expect(await otherGatewayPage.locator(".community-invite-card").count()).toBe(0);
     } finally {

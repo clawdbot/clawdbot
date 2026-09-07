@@ -155,19 +155,15 @@ export async function validateUpdateCandidateCanary(params: {
       windowsHide: true,
     });
     let stdout = "";
+    let stdoutBytes = 0;
     let outputExceeded = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length + chunk.length <= 1024 * 1024) {
-        stdout += chunk.toString("utf8");
-      } else {
-        outputExceeded = true;
-      }
-    });
     const flushers = [child.stdout, child.stderr].map((stream) => {
+      // Node entrypoints emit UTF-8; pipe chunks need not end at code-point boundaries.
+      stream.setEncoding("utf8");
       let pending = "";
       let droppingLine = false;
-      stream.on("data", (chunk: Buffer) => {
-        let text = chunk.toString("utf8");
+      stream.on("data", (chunk: string) => {
+        let text = chunk;
         if (droppingLine) {
           const newline = text.indexOf("\n");
           if (newline < 0) {
@@ -195,6 +191,14 @@ export async function validateUpdateCandidateCanary(params: {
           pending = "";
         }
       };
+    });
+    child.stdout.on("data", (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(chunk);
+      if (stdoutBytes <= 1024 * 1024) {
+        stdout += chunk;
+      } else {
+        outputExceeded = true;
+      }
     });
     let exited = false;
     const closed = new Promise<number | null>((resolve) => {

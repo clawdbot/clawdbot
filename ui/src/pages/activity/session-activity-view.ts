@@ -5,7 +5,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
 import "../../components/web-awesome-popover.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsStatus, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -480,26 +480,20 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             }}
           />
         </label>
-        <div
-          class="settings-segmented activity-feed__time-filter"
-          role="group"
-          aria-label=${t("activityFeed.time")}
-        >
-          ${ACTIVITY_TIME_FILTERS.map(
-            (time) => html`<button
-              type="button"
-              class="settings-segmented__btn ${
-                props.filters.time === time ? "settings-segmented__btn--active" : ""
-              }"
-              data-compact-label=${time === "all" ? t(TIME_LABELS[time]) : time}
-              aria-label=${t(TIME_LABELS[time])}
-              aria-pressed=${String(props.filters.time === time)}
-              @click=${() => props.onFiltersChange({ ...props.filters, time })}
-            >
-              ${t(TIME_LABELS[time])}
-            </button>`,
-          )}
-        </div>
+        ${renderSettingsSegmented({
+          mode: "buttons",
+          className: "activity-feed__time-filter",
+          value: props.filters.time,
+          ariaLabel: t("activityFeed.time"),
+          options: ACTIVITY_TIME_FILTERS.map((time) => ({
+            value: time,
+            label: t(TIME_LABELS[time]),
+            ariaLabel: t(TIME_LABELS[time]),
+            compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
+          })),
+          onChange: (time) => props.onFiltersChange({ ...props.filters, time }),
+          onReselect: (time) => props.onFiltersChange({ ...props.filters, time }),
+        })}
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
       <div class="activity-feed__feedback">

@@ -49,10 +49,8 @@ import {
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
-import {
-  withUpdateCommandExecutor,
-  type UpdateCommandExecutor,
-} from "./update-command-executor.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   reportPreMutationUpdateFailure,
@@ -123,11 +121,15 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  const presentation = createUpdateProgress(!opts.json, run);
+  let disposePresentation: (() => void) | undefined;
+  let executionStarted = false;
   try {
+    const presentation = createUpdateProgress(!opts.json, run);
+    disposePresentation = presentation.dispose;
     const execute = () =>
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
+          executionStarted = true;
           await withUpdateCommandExecutor(run.runId, (executor) =>
             withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
               updateCommandInternal(
@@ -143,8 +145,15 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
         });
       });
     await withUpdatePreviewSignals(opts, execute);
+  } catch (error) {
+    // Execution owns its unwind, including helper-pending rollback and migrated state.
+    // This boundary only terminalizes failures before that owner starts.
+    if (!executionStarted) {
+      failUpdateCommandRun(error, run);
+    }
+    throw error;
   } finally {
-    presentation.dispose();
+    disposePresentation?.();
   }
 }
 

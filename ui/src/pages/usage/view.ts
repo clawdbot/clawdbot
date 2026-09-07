@@ -5,7 +5,11 @@ import {
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
-import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
+import {
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsSegmented,
+} from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
@@ -555,36 +559,38 @@ export function renderUsage(props: UsageProps) {
                   <option value="local">${t("usage.filters.timeZoneLocal")}</option>
                   <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
                 </select>
-                <div class="chart-toggle">
-                  <button
-                    class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
-                    title=${t("usage.scope.instanceHint")}
-                    @click=${() => filterActions.onScopeChange("instance")}
-                  >
-                    ${t("usage.scope.instance")}
-                  </button>
-                  <button
-                    class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
-                    title=${t("usage.scope.familyHint")}
-                    @click=${() => filterActions.onScopeChange("family")}
-                  >
-                    ${t("usage.scope.family")}
-                  </button>
-                </div>
-                <div class="chart-toggle">
-                  <button
-                    class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
-                    @click=${() => displayActions.onChartModeChange("tokens")}
-                  >
-                    ${t("usage.metrics.tokens")}
-                  </button>
-                  <button
-                    class="btn btn--sm toggle-btn ${!isTokenMode ? "active" : ""}"
-                    @click=${() => displayActions.onChartModeChange("cost")}
-                  >
-                    ${t("usage.metrics.cost")}
-                  </button>
-                </div>
+                ${renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  value: filters.scope,
+                  onChange: filterActions.onScopeChange,
+                  onReselect: filterActions.onScopeChange,
+                  options: [
+                    {
+                      value: "instance",
+                      label: t("usage.scope.instance"),
+                      title: t("usage.scope.instanceHint"),
+                    },
+                    {
+                      value: "family",
+                      label: t("usage.scope.family"),
+                      title: t("usage.scope.familyHint"),
+                    },
+                  ],
+                })}
+                ${renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  value: isTokenMode ? "tokens" : "cost",
+                  onChange: displayActions.onChartModeChange,
+                  onReselect: displayActions.onChartModeChange,
+                  options: [
+                    { value: "tokens", label: t("usage.metrics.tokens") },
+                    { value: "cost", label: t("usage.metrics.cost") },
+                  ],
+                })}
                 <button
                   class="btn btn--sm primary"
                   @click=${filterActions.onRefresh}

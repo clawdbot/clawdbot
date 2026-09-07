@@ -7074,8 +7074,8 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it("persists Node 22 declarations through trusted bounded artifacts", () => {
-    const workflow = parse(readFileSync(".github/workflows/node22-compat.yml", "utf8"));
+  it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
+    const workflow = parse(readFileSync(".github/workflows/node-runtime-compat.yml", "utf8"));
     const steps = workflow.jobs.compat.steps as WorkflowStep[];
     const setupStep = steps.find((step) => step.name === "Setup Node environment");
     const resolveStep = steps.find(
@@ -15204,7 +15204,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
-  it("runs Node 22 compatibility only from manual CI dispatches", () => {
+  it("runs Node 24 minimum compatibility only from manual CI dispatches", () => {
     const workflow = readCiWorkflow();
     const compatibilityJob = workflow.jobs["checks-node-compat"];
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
@@ -15212,7 +15212,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Dispatch CI",
     );
 
-    expect(compatibilityJob.name).toBe("checks-node-compat-node22");
+    expect(compatibilityJob.name).toBe("checks-node-compat-node24");
     expect(compatibilityJob.if).toBe(
       "needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'",
     );

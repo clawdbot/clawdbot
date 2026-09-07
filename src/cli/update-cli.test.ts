@@ -5098,6 +5098,123 @@ describe("update-cli", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalled();
   });
 
+  it.each(["progress initialization", "triage preparation"] as const)(
+    "finishes the admitted run when %s fails before update execution",
+    async (boundary) => {
+      const { closeOpenClawStateDatabaseByPath } = await import("../state/openclaw-state-db.js");
+      const stateDir = tempDirs.make("openclaw-update-run-initialization-");
+      const failure = new Error(`${boundary} failed`);
+      if (boundary === "progress initialization") {
+        const progress = await import("./update-cli/progress.js");
+        vi.spyOn(progress, "createUpdateProgress").mockImplementationOnce(() => {
+          throw failure;
+        });
+      } else {
+        const triage = await import("../infra/update-triage.js");
+        vi.spyOn(triage, "prepareUpdateFailureTriage").mockRejectedValueOnce(failure);
+      }
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(updateCommand({ yes: true, json: true })).rejects.toBe(failure);
+
+        const runs = listUpdateRuns();
+        expect(runs).toHaveLength(1);
+        expect(runs[0]).toMatchObject({
+          trigger: "cli",
+          phase: "finished",
+          status: "failed",
+          reason: "update-failed",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "requested",
+              status: "failed",
+              detail: failure.message,
+            }),
+          ]),
+        });
+        expect(runs[0]?.steps.some((step) => step.status === "in_progress")).toBe(false);
+      }).finally(() => {
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+        );
+      });
+
+      expectNoSideEffects(
+        cleanupStaleManagedServiceUpdateHandoffs,
+        replaceConfigFile,
+        runGatewayUpdate,
+        runDaemonInstall,
+        runDaemonRestart,
+        serviceStop,
+        serviceStart,
+        serviceRestart,
+        runRestartScript,
+        doctorCommand,
+        syncPluginsForUpdateChannel,
+        updateNpmInstalledPlugins,
+        launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      );
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
+
+  it("leaves restored-generation completion with the helper across updateCommand unwind", async () => {
+    const postUpdate = await import("./update-cli/update-command-post-update.js");
+    const { UpdateCommandFailure } = await import("./update-cli/update-command-result.js");
+    const { finishUpdateRun } = await import("../infra/update-run-ledger.js");
+    const result = makeOkUpdateResult({
+      status: "error",
+      root: process.cwd(),
+      reason: "restart-unhealthy",
+      before: { version: "2026.9.1" },
+      after: { version: "2026.9.1" },
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        version: "2026.9.1",
+      },
+    });
+    vi.spyOn(postUpdate, "finishUpdate").mockRejectedValueOnce(new UpdateCommandFailure(result));
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+
+    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
+      await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+      expect(postUpdate.finishUpdate).toHaveBeenCalledOnce();
+      const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "helper-owned update run");
+      expect(run).toMatchObject({ status: "running", after: { version: "2026.9.1" } });
+      // Native recovery finishes after the CLI exits; the ledger must still accept its outcome.
+      finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "rolled-back",
+        phase: "finished",
+        reason: "restart-unhealthy",
+      });
+    });
+  });
+
+  it("does not reopen the ledger after migrated finalization fails", async () => {
+    const migrated = await import("./update-cli/update-command-migrated.js");
+    const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
+    const failure = new Error("candidate finalization failed");
+    let readsAtHandoff = 0;
+    vi.spyOn(migrated, "inspectActivatedUpdateState").mockResolvedValueOnce(
+      "state-migrated-no-rollback",
+    );
+    vi.spyOn(migrated, "continueMigratedUpdateInFreshProcess").mockImplementationOnce(async () => {
+      readsAtHandoff = ledgerReads.mock.calls.length;
+      throw failure;
+    });
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+
+    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+    expect(migrated.continueMigratedUpdateInFreshProcess).toHaveBeenCalledOnce();
+    expect(ledgerReads).toHaveBeenCalledTimes(readsAtHandoff);
+  });
+
   it.each([false, true])(
     "records ordered update phases across service stop, restart, and verified health (json=%s)",
     async (json) => {
@@ -8445,6 +8562,36 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([false, true])(
+    "recovers a failed managed service stop only after an observed mutation (%s)",
+    async (mutated) => {
+      const root = await mockPackageInstallAtCaseDir("openclaw-update-partial-stop");
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      serviceStop.mockImplementationOnce(async ({ onMutation }) => {
+        if (mutated) {
+          onMutation?.({ mode: "bootout" });
+        }
+        throw new Error(mutated ? "port still busy after bootout" : "bootout refused");
+      });
+
+      await expect(invokeUpdateCli({ channel: "beta", yes: true, json: true })).rejects.toEqual(
+        new ExitError(1),
+      );
+
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(freshRestartCalls(), getErrorOutput()).toHaveLength(mutated ? 1 : 0);
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "managed-service-stop-failed",
+        recovery: { serviceRestartSafe: true },
+      });
+      expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
+        version: "1.0.0",
+      });
+    },
+  );
+
   it("restores Windows Scheduled Task autostart when service stop fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const root = await mockPackageInstallAtCaseDir("openclaw-update-stop-failure");
@@ -9070,12 +9217,18 @@ describe("update-cli", () => {
             throw new Error(`update completed before ${phase}`);
           }),
         ]);
-        const signalListener = processOnSpy.mock.calls.find(([event]) => event === signal)?.[1];
-        if (typeof signalListener !== "function") {
-          throw new Error(`expected armed ${signal} recovery during ${phase}`);
+        const signalListeners = processOnSpy.mock.calls
+          .filter(([event]) => event === signal)
+          .map(([, listener]) => listener);
+        expect(signalListeners.length).toBeGreaterThan(0);
+        // A native signal reaches every invocation-owned listener in registration order.
+        for (const listener of signalListeners) {
+          listener();
         }
-        signalListener();
-        signalListener();
+        for (const listener of signalListeners) {
+          listener();
+        }
+        expect(processExitSpy).not.toHaveBeenCalled();
         expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
         expect(gitMutation).not.toHaveBeenCalled();
         gate.resolve();
@@ -9091,8 +9244,8 @@ describe("update-cli", () => {
         ]);
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
         await vi.waitFor(() => {
-          expect(processExitSpy).toHaveBeenCalledTimes(2);
           expect(processExitSpy).toHaveBeenCalledWith(130);
+          expect(processExitSpy.mock.calls.every(([code]) => code === 130)).toBe(true);
         });
       } finally {
         gate.resolve();
