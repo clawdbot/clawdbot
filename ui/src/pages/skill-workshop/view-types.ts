@@ -1,9 +1,11 @@
 import type {
   SkillWorkshopActionBusy,
   SkillWorkshopActionNotice,
+  SkillWorkshopInstalledSkill,
+  SkillWorkshopInstalledSelection,
   SkillWorkshopMode,
   SkillWorkshopProposal,
-  SkillWorkshopStatusFilter,
+  SkillWorkshopProposalDecision,
 } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopAccess } from "./access.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
@@ -15,8 +17,11 @@ export type SkillWorkshopProps = {
   error: string | null;
   inspectingKey: string | null;
   proposals: SkillWorkshopProposal[];
+  installedSkills: SkillWorkshopInstalledSkill[];
+  installedSelection: SkillWorkshopInstalledSelection;
+  onSelectInstalled: (name: string) => void;
+  onRetryInstalled: () => void;
   selectedKey: string | null;
-  statusFilter: SkillWorkshopStatusFilter;
   query: string;
   filePreviewKey: string | null;
   filePreviewQuery: string;
@@ -26,12 +31,11 @@ export type SkillWorkshopProps = {
   actionNotice: SkillWorkshopActionNotice | null;
   revisionKey: string | null;
   revisionDraft: string;
+  revisionRecoveryActive: boolean;
   assistantName: string;
   workshopAgentName: string;
   selfLearning: SkillWorkshopSelfLearning | null;
   historyScan: SkillWorkshopHistoryScanState;
-  counts: Record<SkillWorkshopStatusFilter, number>;
-  onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onRetry: () => void;
   onQueryChange: (query: string) => void;
   onFilePreviewQueryChange: (query: string) => void;
@@ -40,10 +44,10 @@ export type SkillWorkshopProps = {
   onSelect: (key: string) => void;
   onPrev: () => void;
   onNext: () => void;
-  onApply: (key: string) => void;
+  onApply: (decision: SkillWorkshopProposalDecision) => void;
   onEvaluate: (key: string) => void;
   onRevise: (key: string) => void;
-  onReject: (key: string) => void;
+  onReject: (decision: SkillWorkshopProposalDecision) => void;
   onRevisionDraftChange: (draft: string) => void;
   onRevisionCancel: () => void;
   onRevisionSubmit: (key: string) => void;

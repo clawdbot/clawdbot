@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
 import { pushServerUiPrefs } from "./server-prefs.ts";
 
 export type RequestMock = ReturnType<
@@ -24,7 +24,7 @@ export function createServerPrefsWriter(
     state: { client, connected },
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
-      options?: Parameters<RuntimeConfigCapability["runExternalMutation"]>[1],
+      options?: RuntimeConfigExternalMutationOptions<T>,
     ) => {
       if (!writer.state.connected) {
         return {

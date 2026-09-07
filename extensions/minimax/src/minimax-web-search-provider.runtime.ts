@@ -232,14 +232,14 @@ export async function executeMiniMaxWebSearchProviderTool(
   const endpoint = resolveMiniMaxEndpoint(searchConfig, config);
 
   const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
 
   const { results, relatedSearches } = await runMiniMaxSearch({
     query,
@@ -272,12 +272,3 @@ export async function executeMiniMaxWebSearchProviderTool(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  MINIMAX_SEARCH_ENDPOINT_GLOBAL,
-  MINIMAX_SEARCH_ENDPOINT_CN,
-  resolveMiniMaxApiKey,
-  resolveMiniMaxEndpoint,
-  resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
-} as const;

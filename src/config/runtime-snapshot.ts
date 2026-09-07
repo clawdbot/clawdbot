@@ -5,6 +5,7 @@ import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
+import { copyConfigResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -139,6 +140,10 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
   if (left === right) {
     return true;
   }
+  // Authored SecretRefs live outside the JSON bytes. Projection must not replace their provenance.
+  if (getConfigResolutionFacts(left) !== getConfigResolutionFacts(right)) {
+    return false;
+  }
   try {
     return stableConfigStringify(left) === stableConfigStringify(right);
   } catch {
@@ -167,6 +172,8 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
   for (const prepare of runtimeConfigSnapshotPreparers) {
     prepare(config);
   }
@@ -206,6 +213,7 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  copyConfigResolutionFacts(params.sourceConfig, runtimeConfigSnapshot);
   setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
   return true;
 }
@@ -315,6 +323,15 @@ export function selectApplicableRuntimeConfig(params: {
     return runtimeConfig;
   }
   return inputConfig;
+}
+
+/** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
+export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
+  const followsRuntimeConfig =
+    runtimeConfigSnapshot === inputConfig ||
+    (runtimeConfigSourceSnapshot !== null &&
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+  return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
 }
 
 export function setRuntimeConfigSnapshotRefreshHandler(

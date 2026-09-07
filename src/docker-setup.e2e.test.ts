@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   cleanupDockerSetupSandboxRoot,
   collectMatchingLines,
@@ -601,7 +602,19 @@ describe("scripts/docker/setup.sh", () => {
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-agent-dirs");
+    const workspaceDir = join(configDir, "workspace");
+    const stateFiles = [
+      "identity/owned.txt",
+      "agents/workspace/owned.txt",
+      "workspace-archive/owned.txt",
+    ];
+    const workspaceFile = "workspace/project/user.txt";
+    for (const relative of [...stateFiles, workspaceFile]) {
+      const path = join(configDir, relative);
+      await mkdir(join(path, ".."), { recursive: true });
+      await writeFile(path, "fixture");
+    }
+    expect((await stat(workspaceDir)).dev).toBe((await stat(configDir)).dev);
 
     const result = runDockerSetup(activeSandbox, {
       OPENCLAW_CONFIG_DIR: configDir,
@@ -618,7 +631,11 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     const chownIdx = log.indexOf("--user root");
     const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
-    const stateRepairIdx = log.indexOf(noFollowOwnershipRepair("/home/node/.openclaw"));
+    const stateRepair = log.match(/\/usr\/bin\/find -P \/home\/node\/\.openclaw [^;]+/u)?.[0];
+    if (!stateRepair) {
+      throw new Error("Missing generated state ownership repair");
+    }
+    const stateRepairIdx = log.indexOf(stateRepair);
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(safePathIdx).toBeGreaterThan(chownIdx);
@@ -626,7 +643,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
     expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
-    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
+    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
     expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
@@ -635,6 +652,27 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("-exec chown");
     expect(log).not.toContain(" chown node:node");
     expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
+
+    // Execute the generated traversal, replacing only the ownership side effect.
+    // Same-device workspace mounts are not excluded by find's -xdev option.
+    const selection = stateRepair
+      .replaceAll("/home/node/.openclaw", '"$repair_root"')
+      .replace(/-execdir \/usr\/bin\/chown -h node:node \{\} \+$/u, "-print");
+    expect(selection).not.toContain("chown");
+    const traversal = spawnSync(
+      "bash",
+      ["-c", 'repair_root="$(cd "$1" && pwd)"; ' + selection, "ownership-repair", configDir],
+      { encoding: "utf8" },
+    );
+    expect(traversal.status, traversal.stderr).toBe(0);
+    const selected = traversal.stdout.trim().split(/\r?\n/u);
+    const selectedRoot = selected[0];
+    expect(selectedRoot).toMatch(/\/config-agent-dirs$/u);
+    for (const relative of stateFiles) {
+      expect(selected).toContain(`${selectedRoot}/${relative}`);
+    }
+    expect(selected).toContain(`${selectedRoot}/workspace`);
+    expect(selected).not.toContain(`${selectedRoot}/${workspaceFile}`);
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
@@ -952,20 +990,31 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 
-  it("pins container-side state, workspace, and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    // Both gateway and CLI services must override env_file values with the
-    // canonical container paths so host-style paths written to `.env` cannot
-    // reach runtime code inside Linux Docker.
-    expect(compose.match(/OPENCLAW_HOME: \/home\/node$/gm)).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_STATE_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_CONFIG_PATH: \/home\/node\/\.openclaw\/openclaw\.json$/gm),
-    ).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),
-    ).toHaveLength(2);
+  it("isolates container paths and listener port from host .env values on both services", async () => {
+    const { services } = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+      services: Record<
+        "openclaw-gateway" | "openclaw-cli",
+        {
+          environment: Record<string, string>;
+          command: string[];
+          ports: string[];
+        }
+      >;
+    };
+    const gateway = services["openclaw-gateway"];
+    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
+    expect(listenerPort).toBe("18789");
+    expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
+      expect(services[name].environment, name).toMatchObject({
+        OPENCLAW_HOME: "/home/node",
+        OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/openclaw.json",
+        OPENCLAW_CONFIG_DIR: "/home/node/.openclaw",
+        OPENCLAW_WORKSPACE_DIR: "/home/node/.openclaw/workspace",
+        OPENCLAW_GATEWAY_PORT: listenerPort,
+      });
+    }
   });
 
   it("Dockerfile ARG OPENCLAW_IMAGE_APT_PACKAGES must not have a default value", async () => {
@@ -978,7 +1027,6 @@ describe("scripts/docker/setup.sh", () => {
     const argLine = dockerfile
       .split("\n")
       .find((line) => line.startsWith("ARG OPENCLAW_IMAGE_APT_PACKAGES"));
-    expect(argLine).toBeDefined();
     // Must be bare `ARG OPENCLAW_IMAGE_APT_PACKAGES` with no default assignment
     expect(argLine).toBe("ARG OPENCLAW_IMAGE_APT_PACKAGES");
   });

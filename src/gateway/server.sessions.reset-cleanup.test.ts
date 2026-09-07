@@ -175,7 +175,12 @@ test("sessions.reset aborts active runs and clears queues", async () => {
       status: "pending",
     },
   });
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup(
+    "agent:main:main",
+    ["main", "agent:main:main", "sess-main"],
+    "sess-main",
+    "main",
+  );
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
   expect(peekSystemEvents("sess-main")).toStrictEqual([]);
@@ -515,16 +520,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
         },
       ]
     | undefined;
-  const closeSessionParams = closeSessionCall?.[0] as
-    | {
-        allowBackendUnavailable?: boolean;
-        cfg?: unknown;
-        discardPersistentState?: boolean;
-        requireAcpSession?: boolean;
-        reason?: string;
-        sessionKey?: string;
-      }
-    | undefined;
+  const closeSessionParams = closeSessionCall?.[0];
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
   if (!closeSessionParams?.cfg) {
     throw new Error("expected closeSession config");
@@ -535,6 +531,15 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(closeSessionParams?.sessionKey).toBe("agent:main:main");
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
+    agentId: "main",
+    persistedHandle: {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      backend: "acpx",
+      runtimeSessionName: "runtime:reset",
+      cwd: "/tmp/acp-session",
+      acpxRecordId: "agent:main:main",
+    },
   });
   expect(
     loadSessionEntry({
@@ -766,6 +771,9 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       "unrelated-acp-child": sessionStoreEntry("sess-unrelated-acp-child", {
         spawnedBy: "agent:main:other",
       }),
+      "acp-grandchild": sessionStoreEntry("sess-grandchild", {
+        parentSessionKey: "agent:main:acp-child-1",
+      }),
     },
   });
   writeAcpSessionMetaForMigration({
@@ -784,18 +792,16 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       mode: "oneshot",
     }),
   });
-  writeAcpSessionMetaForMigration({
-    sessionKey: "agent:main:unrelated-acp-child",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:unrelated",
-      mode: "oneshot",
-      cwd: "/tmp/acp-session",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
-  });
+  for (const child of ["acp-grandchild", "unrelated-acp-child"]) {
+    writeAcpSessionMetaForMigration({
+      sessionKey: `agent:main:${child}`,
+      meta: resolvedAcpMeta({
+        recordId: `agent:main:${child}`,
+        backendSessionId: `backend-session-${child}`,
+        mode: "oneshot",
+      }),
+    });
+  }
 
   const reset = await directSessionReq<{ ok: true }>("sessions.reset", {
     key: "main",
@@ -811,6 +817,7 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
   expect(closedKeys).toContain("agent:main:acp-child-1");
   expect(closedKeys).not.toContain("agent:main:not-acp-child");
   expect(closedKeys).not.toContain("agent:main:unrelated-acp-child");
+  expect(closedKeys).not.toContain("agent:main:acp-grandchild");
 });
 
 test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {
@@ -1045,27 +1052,32 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
   });
 });
 
-test("sessions.reset preserves explicit responseUsage preference across session rollover", async () => {
-  // Regression: a full session reset must carry the user's display preference forward
-  // so the usage footer mode survives rollovers. Only /usage reset clears the override.
-  const { dir } = await createSessionStoreDir();
+test("sessions.reset preserves explicit session preferences across session rollover", async () => {
+  // Reset clears conversation state without discarding operator-owned session preferences.
+  const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
+  const preferences = {
+    responseUsage: "tokens",
+    pinnedAt: 123,
+    label: "Operator session",
+    category: "Operator group",
+    icon: "🦞",
+    boardFace: "dashboard",
+    visibility: "draft",
+  } satisfies Partial<InternalSessionEntry>;
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main", {
-        responseUsage: "tokens",
-        pinnedAt: 123,
-      }),
+      main: sessionStoreEntry("sess-main", preferences),
     },
   });
 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
+    entry: InternalSessionEntry;
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.responseUsage).toBe("tokens");
-  expect(reset.payload?.entry.pinnedAt).toBe(123);
+  expect(reset.payload?.entry).toMatchObject(preferences);
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject(preferences);
 });

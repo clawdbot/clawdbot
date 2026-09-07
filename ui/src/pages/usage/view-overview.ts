@@ -4,10 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import {
   buildUsageCostWindows,
@@ -173,13 +173,15 @@ function renderFilterChips(
             </div>
           `,
         )}
-      ${(selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
-        ? html`
-            <button class="btn btn--sm" @click=${onClearFilters}>
-              ${t("usage.filters.clearAll")}
-            </button>
-          `
-        : nothing}
+      ${
+        (selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
+          ? html`
+              <button class="btn btn--sm" @click=${onClearFilters}>
+                ${t("usage.filters.clearAll")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -303,14 +305,16 @@ function renderDailyChartCompact(
         )}
         <div class="card-title">
           ${isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
-          ${usesCompressedScale
-            ? html`<span
-                class="daily-chart-scale-badge"
-                title=${t("usage.daily.compressedScaleHint")}
-                aria-label=${t("usage.daily.compressedScaleHint")}
-                >√</span
-              >`
-            : nothing}
+          ${
+            usesCompressedScale
+              ? html`<span
+                  class="daily-chart-scale-badge"
+                  title=${t("usage.daily.compressedScaleHint")}
+                  aria-label=${t("usage.daily.compressedScaleHint")}
+                  >√</span
+                >`
+              : nothing
+          }
         </div>
       </div>
       <div class="daily-chart">
@@ -322,11 +326,13 @@ function renderDailyChartCompact(
             ).map(
               (value) =>
                 html`<span
-                  >${isTokenMode
-                    ? formatUsageTokens(value)
-                    : value === 0
-                      ? formatUsageCost(0)
-                      : formatAnalysisCost(value)}</span
+                  >${
+                    isTokenMode
+                      ? formatUsageTokens(value)
+                      : value === 0
+                        ? formatUsageCost(0)
+                        : formatAnalysisCost(value)
+                  }</span
                 >`,
             )}
           </div>
@@ -375,31 +381,35 @@ function renderDailyChartCompact(
                     @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
                     @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
                   >
-                    ${dailyChartMode === "by-type"
-                      ? html`
-                          <div
-                            class="daily-bar daily-bar--stacked"
-                            style="height: ${heightPx.toFixed(0)}px;"
-                          >
-                            ${segments.map(
-                              ({ className, value }) => html`
-                                <div
-                                  class="cost-segment ${className}"
-                                  style="height: ${(value / segmentTotal) * 100}%"
-                                ></div>
-                              `,
-                            )}
-                          </div>
-                        `
-                      : html`
-                          <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
-                        `}
-                    ${showTotals
-                      ? html`<div class="daily-bar-total">${totalLabel}</div>`
-                      : html`<div
-                          class="daily-bar-total daily-bar-total--placeholder"
-                          aria-hidden="true"
-                        ></div>`}
+                    ${
+                      dailyChartMode === "by-type"
+                        ? html`
+                            <div
+                              class="daily-bar daily-bar--stacked"
+                              style="height: ${heightPx.toFixed(0)}px;"
+                            >
+                              ${segments.map(
+                                ({ className, value }) => html`
+                                  <div
+                                    class="cost-segment ${className}"
+                                    style="height: ${(value / segmentTotal) * 100}%"
+                                  ></div>
+                                `,
+                              )}
+                            </div>
+                          `
+                        : html`
+                            <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
+                          `
+                    }
+                    ${
+                      showTotals
+                        ? html`<div class="daily-bar-total">${totalLabel}</div>`
+                        : html`<div
+                            class="daily-bar-total daily-bar-total--placeholder"
+                            aria-hidden="true"
+                          ></div>`
+                    }
                     <div class="${labelClass}">${shortLabel}</div>
                   </div>
                 </openclaw-tooltip>
@@ -452,9 +462,9 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode
-          ? formatUsageTokens(totals.totalTokens)
-          : formatAnalysisCost(totals.totalCost)}
+        ${
+          isTokenMode ? formatUsageTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)
+        }
       </div>
     </div>
   `;
@@ -477,33 +487,37 @@ function renderInsightList(
   return html`
     <div class=${cardClass}>
       <div class="usage-insight-title">${title}</div>
-      ${items.length === 0
-        ? html`<div class="muted">${emptyLabel}</div>`
-        : html`
-            <div class=${listClass}>
-              ${items.map((item) =>
-                options?.error
-                  ? html`
-                      <div class="usage-error-row">
-                        <div class="usage-error-date">${item.label}</div>
-                        <div class="usage-error-rate">${item.value}</div>
-                        ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
-                      </div>
-                    `
-                  : html`
-                      <div class="usage-list-item">
-                        <span>${item.label}</span>
-                        <span class="usage-list-value">
-                          <span>${item.value}</span>
-                          ${item.sub
-                            ? html`<span class="usage-list-sub">${item.sub}</span>`
-                            : nothing}
-                        </span>
-                      </div>
-                    `,
-              )}
-            </div>
-          `}
+      ${
+        items.length === 0
+          ? html`<div class="muted">${emptyLabel}</div>`
+          : html`
+              <div class=${listClass}>
+                ${items.map((item) =>
+                  options?.error
+                    ? html`
+                        <div class="usage-error-row">
+                          <div class="usage-error-date">${item.label}</div>
+                          <div class="usage-error-rate">${item.value}</div>
+                          ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
+                        </div>
+                      `
+                    : html`
+                        <div class="usage-list-item">
+                          <span>${item.label}</span>
+                          <span class="usage-list-value">
+                            <span>${item.value}</span>
+                            ${
+                              item.sub
+                                ? html`<span class="usage-list-sub">${item.sub}</span>`
+                                : nothing
+                            }
+                          </span>
+                        </div>
+                      `,
+                )}
+              </div>
+            `
+      }
     </div>
   `;
 }
@@ -787,7 +801,7 @@ function renderSessionsCard(
   sessionSortDir: "asc" | "desc",
   recentSessions: string[],
   sessionsTab: "all" | "recent",
-  onSelectSession: (key: string, shiftKey: boolean) => void,
+  onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void,
   onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
   onSessionSortDirChange: (dir: "asc" | "desc") => void,
   onSessionsTabChange: (tab: "all" | "recent") => void,
@@ -828,68 +842,73 @@ function renderSessionsCard(
 
   const selectedDaySet = new Set(selectedDays);
 
-  const getSessionMetricValue = (s: UsageSessionEntry, metric: "tokens" | "cost"): number => {
-    const usage = s.usage;
-    if (!usage) {
-      return 0;
-    }
-
-    if (selectedDaySet.size > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
-      return usage.dailyBreakdown.reduce((sum, day) => {
-        if (!selectedDaySet.has(day.date)) {
-          return sum;
+  const sortedSessions = sessions
+    .map((session) => {
+      const usage = session.usage;
+      let tokens = usage?.totalTokens ?? 0;
+      let cost = usage?.totalCost ?? 0;
+      const daily = selectedDaySet.size > 0 ? usage?.dailyBreakdown : undefined;
+      if (daily?.length) {
+        tokens = 0;
+        cost = 0;
+        for (const day of daily) {
+          if (selectedDaySet.has(day.date)) {
+            tokens += day.tokens;
+            cost += day.cost;
+          }
         }
-        return sum + (metric === "tokens" ? day.tokens : day.cost);
-      }, 0);
-    }
-
-    return metric === "tokens" ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
-  };
-
-  const getSessionValue = (s: UsageSessionEntry): number => {
-    return getSessionMetricValue(s, isTokenMode ? "tokens" : "cost");
-  };
-
-  const getSessionSortValue = (s: UsageSessionEntry): number => {
-    switch (sessionSort) {
-      case "recent":
-        return s.updatedAt ?? 0;
-      case "messages":
-        return s.usage?.messageCounts?.total ?? 0;
-      case "errors":
-        return s.usage?.messageCounts?.errors ?? 0;
-      case "cost":
-        return getSessionMetricValue(s, "cost");
-      case "tokens":
-        return getSessionMetricValue(s, "tokens");
-    }
-    const exhaustiveSort: never = sessionSort;
-    return exhaustiveSort;
-  };
-
-  const sortedSessions = [...sessions].toSorted((a, b) => {
-    const valueDiff = getSessionSortValue(b) - getSessionSortValue(a);
-    if (valueDiff !== 0) {
-      return valueDiff;
-    }
-    const recentDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-    if (recentDiff !== 0) {
-      return recentDiff;
-    }
-    return formatSessionListLabel(a).localeCompare(formatSessionListLabel(b));
-  });
+      }
+      let sortValue: number;
+      switch (sessionSort) {
+        case "recent":
+          sortValue = session.updatedAt ?? 0;
+          break;
+        case "messages":
+          sortValue = usage?.messageCounts?.total ?? 0;
+          break;
+        case "errors":
+          sortValue = usage?.messageCounts?.errors ?? 0;
+          break;
+        case "cost":
+          sortValue = cost;
+          break;
+        case "tokens":
+          sortValue = tokens;
+          break;
+      }
+      return {
+        session,
+        displayLabel: formatSessionListLabel(session),
+        value: isTokenMode ? tokens : cost,
+        sortValue,
+      };
+    })
+    .toSorted((a, b) => {
+      const valueDiff = b.sortValue - a.sortValue;
+      if (valueDiff !== 0) {
+        return valueDiff;
+      }
+      const recentDiff = (b.session.updatedAt ?? 0) - (a.session.updatedAt ?? 0);
+      if (recentDiff !== 0) {
+        return recentDiff;
+      }
+      return a.displayLabel.localeCompare(b.displayLabel);
+    });
   const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
 
-  const totalValue = sortedWithDir.reduce((sum, session) => sum + getSessionValue(session), 0);
+  const totalValue = sortedWithDir.reduce((sum, entry) => sum + entry.value, 0);
   const avgValue = sortedWithDir.length ? totalValue / sortedWithDir.length : 0;
   const totalErrors = sortedWithDir.reduce(
-    (sum, session) => sum + (session.usage?.messageCounts?.errors ?? 0),
+    (sum, entry) => sum + (entry.session.usage?.messageCounts?.errors ?? 0),
     0,
   );
 
-  const renderSessionBarRow = (s: UsageSessionEntry, isSelected: boolean) => {
-    const value = getSessionValue(s);
-    const displayLabel = formatSessionListLabel(s);
+  const renderSessionBarRow = (
+    entry: (typeof sortedSessions)[number],
+    isSelected: boolean,
+    orderedKeys: string[],
+  ) => {
+    const { session: s, value, displayLabel } = entry;
     const meta = buildSessionMeta(s);
     return html`
       <div
@@ -898,7 +917,7 @@ function renderSessionsCard(
           if ((event.target as Element | null)?.closest("button")) {
             return;
           }
-          onSelectSession(s.key, event.shiftKey);
+          onSelectSession(s.key, event.shiftKey, orderedKeys);
         }}
         title="${s.key}"
       >
@@ -907,13 +926,15 @@ function renderSessionsCard(
           class="session-bar-selection"
           aria-label=${displayLabel}
           aria-pressed=${isSelected ? "true" : "false"}
-          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey)}
+          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey, orderedKeys)}
         >
           <span class="session-bar-label">
             <span class="session-bar-title">${displayLabel}</span>
-            ${meta.length > 0
-              ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
-              : nothing}
+            ${
+              meta.length > 0
+                ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
+                : nothing
+            }
           </span>
         </button>
         <div class="session-bar-actions">
@@ -922,10 +943,10 @@ function renderSessionsCard(
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
-              void copyToClipboard(formatSessionListLabel(s));
+              void handleCopyButton(e, displayLabel, t("usage.sessions.copy"));
             }}
           >
-            ${t("usage.sessions.copy")}
+            <span data-copy-label>${t("usage.sessions.copy")}</span>
           </button>
           <div class="session-bar-value">
             ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}
@@ -936,12 +957,19 @@ function renderSessionsCard(
   };
 
   const selectedSet = new Set(selectedSessions);
-  const selectedEntries = sortedWithDir.filter((s) => selectedSet.has(s.key));
+  const selectedEntries = sortedWithDir.filter((entry) => selectedSet.has(entry.session.key));
   const selectedCount = selectedEntries.length;
-  const sessionMap = new Map(sortedWithDir.map((s) => [s.key, s]));
+  const sessionMap = new Map(sortedWithDir.map((entry) => [entry.session.key, entry]));
   const recentEntries = recentSessions
     .map((key) => sessionMap.get(key))
-    .filter((entry): entry is UsageSessionEntry => Boolean(entry));
+    .filter((entry) => entry !== undefined);
+  const renderSessionBarRows = (entries: typeof sortedSessions) => {
+    // Selection follows this rendered group, before a click reorders recently viewed sessions.
+    const orderedKeys = entries.map((entry) => entry.session.key);
+    return entries.map((entry) =>
+      renderSessionBarRow(entry, selectedSet.has(entry.session.key), orderedKeys),
+    );
+  };
 
   return renderSettingsSection(
     { title: t("usage.sessions.title") },
@@ -950,9 +978,11 @@ function renderSessionsCard(
         <div class="sessions-card-header">
           <div class="sessions-card-count">
             ${t("usage.sessions.shown", { count: String(sessions.length) })}
-            ${totalSessions !== sessions.length
-              ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
-              : ""}
+            ${
+              totalSessions !== sessions.length
+                ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
+                : ""
+            }
           </div>
         </div>
         <div class="sessions-card-meta">
@@ -991,64 +1021,74 @@ function renderSessionsCard(
             </select>
           </label>
           <openclaw-tooltip
-            .content=${sessionSortDir === "desc"
-              ? t("usage.sessions.descending")
-              : t("usage.sessions.ascending")}
+            .content=${
+              sessionSortDir === "desc"
+                ? t("usage.sessions.descending")
+                : t("usage.sessions.ascending")
+            }
           >
             <button
               class="btn btn--sm"
-              aria-label=${sessionSortDir === "desc"
-                ? t("usage.sessions.descending")
-                : t("usage.sessions.ascending")}
+              aria-label=${
+                sessionSortDir === "desc"
+                  ? t("usage.sessions.descending")
+                  : t("usage.sessions.ascending")
+              }
               @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
             >
               ${sessionSortDir === "desc" ? "↓" : "↑"}
             </button>
           </openclaw-tooltip>
-          ${selectedCount > 0
-            ? html`
-                <button class="btn btn--sm" @click=${onClearSessions}>
-                  ${t("usage.sessions.clearSelection")}
-                </button>
-              `
-            : nothing}
+          ${
+            selectedCount > 0
+              ? html`
+                  <button class="btn btn--sm" @click=${onClearSessions}>
+                    ${t("usage.sessions.clearSelection")}
+                  </button>
+                `
+              : nothing
+          }
         </div>
-        ${sessionsTab === "recent"
-          ? recentEntries.length === 0
-            ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
-            : html`
-                <div class="session-bars session-bars--recent">
-                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+        ${
+          sessionsTab === "recent"
+            ? recentEntries.length === 0
+              ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
+              : html`
+                  <div class="session-bars session-bars--recent">
+                    ${renderSessionBarRows(recentEntries)}
+                  </div>
+                `
+            : sessions.length === 0
+              ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
+              : html`
+                  <div class="session-bars">
+                    ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
+                    ${
+                      sessions.length > 50
+                        ? html`
+                            <div class="usage-more-sessions">
+                              ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
+                            </div>
+                          `
+                        : nothing
+                    }
+                  </div>
+                `
+        }
+        ${
+          selectedCount > 1
+            ? html`
+                <div class="sessions-selected-group">
+                  <div class="sessions-card-count">
+                    ${t("usage.sessions.selected", { count: String(selectedCount) })}
+                  </div>
+                  <div class="session-bars session-bars--selected">
+                    ${renderSessionBarRows(selectedEntries)}
+                  </div>
                 </div>
               `
-          : sessions.length === 0
-            ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
-            : html`
-                <div class="session-bars">
-                  ${sortedWithDir
-                    .slice(0, 50)
-                    .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
-                  ${sessions.length > 50
-                    ? html`
-                        <div class="usage-more-sessions">
-                          ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
-                        </div>
-                      `
-                    : nothing}
-                </div>
-              `}
-        ${selectedCount > 1
-          ? html`
-              <div class="sessions-selected-group">
-                <div class="sessions-card-count">
-                  ${t("usage.sessions.selected", { count: String(selectedCount) })}
-                </div>
-                <div class="session-bars session-bars--selected">
-                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
-                </div>
-              </div>
-            `
-          : nothing}
+            : nothing
+        }
       </div>
     `,
   );

@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
@@ -128,11 +129,13 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: path.join(rootDir, "session.jsonl"),
       lifecycleRunId: "run-before-reset",
+      lastRunId: "run-before-reset",
       agentHarnessId: "codex",
       claudeCliSessionId: "native-before-boundary",
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
+      contextTokensSource: "runtime",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -160,6 +163,11 @@ describe("resetReplyRunSession", () => {
         reason: "rate limit",
       },
       compactionCount: 4,
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session",
+        maxBytes: 50_000,
+      },
       memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
@@ -201,15 +209,18 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.sessionId).toBe("session");
     expect(activeSessionEntry?.lifecycleRevision).toBe("00000000-0000-0000-0000-000000000123");
     expect(activeSessionEntry?.lifecycleRunId).toBeUndefined();
+    expect(activeSessionEntry?.lastRunId).toBeUndefined();
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(activeSessionEntry?.modelProvider).toBeUndefined();
     expect(activeSessionEntry?.agentHarnessId).toBeUndefined();
     expect(activeSessionEntry?.claudeCliSessionId).toBeUndefined();
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
+    expect(activeSessionEntry?.contextTokensSource).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.transcriptByteCompactionLatch).toBeUndefined();
     expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
@@ -231,6 +242,7 @@ describe("resetReplyRunSession", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.contextTokensSource).toBeUndefined();
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
@@ -281,6 +293,102 @@ describe("resetReplyRunSession", () => {
       sessionId: "session",
     });
     expect(filtered.files.map((file) => file.path)).toEqual(["after-reset.txt"]);
+  });
+
+  it("keeps a custom session workspace in the header when a reset lands on an empty window", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const customWorkspace = path.join(rootDir, "custom-session-workspace");
+    await fs.mkdir(customWorkspace, { recursive: true });
+    const storePath = path.join(rootDir, "sessions.json");
+    // The stored row runs somewhere other than the run's configured workspace.
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      spawnedCwd: customWorkspace,
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+        onActiveSessionEntry: () => {},
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    });
+    // The prior row's own workspace wins over the run's configured workspace.
+    expect(events[0]).toMatchObject({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      cwd: customWorkspace,
+    });
+    expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
+  });
+
+  it("records the runner workspace in the header when a reset lands on an empty window", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const storePath = path.join(rootDir, "sessions.json");
+    // A window created moments earlier, before its first message: no transcript rows yet.
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+        onActiveSessionEntry: () => {},
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    });
+    // The header must take seq 0 (never the reset boundary) and must record the
+    // runner's effective workspace, not the service process cwd.
+    expect(events[0]).toMatchObject({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      cwd: workspace,
+    });
+    expect(events[0]).not.toMatchObject({ cwd: process.cwd() });
+    expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
+    expect(events.filter((event) => (event as { type?: unknown }).type === "session")).toHaveLength(
+      1,
+    );
   });
 
   it("continues with the authoritative unavailable marker after capture failure", async () => {
@@ -497,7 +605,6 @@ describe("resetReplyRunSession", () => {
     });
 
     // The boundary reset keeps both the logical id and transcript in place.
-    expect(rotatedSessionId).toBeDefined();
     expect(rotatedSessionId).toBe("old-session");
     await fs.access(oldTranscriptPath);
   });

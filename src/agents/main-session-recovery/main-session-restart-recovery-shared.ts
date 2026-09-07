@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -7,10 +8,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
-import {
-  hasSessionEntriesByStatusReadOnly,
-  type SessionTranscriptTurnExpectedState,
-} from "../../config/sessions/session-accessor.js";
+import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
@@ -29,29 +27,12 @@ export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
 };
 
-export function buildRestartRecoveryExpectedState(
-  entry: SessionEntry,
-  mainRestartRecovery?: { cycleId: string; revision: number },
-): SessionTranscriptTurnExpectedState {
-  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
-  return {
-    abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-    status: entry.status,
-  };
+export function resolveRestartRecoveryTerminalClientRunId(
+  entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
+): string | undefined {
+  return entry.restartRecoverySourceIngress === "control-ui"
+    ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
+    : undefined;
 }
 
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
@@ -79,7 +60,7 @@ export function hasCurrentProcessOwner(params: {
   return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
-export async function resolveRestartRecoveryStorePaths(params: {
+export async function discoverRestartRecoveryStorePaths(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
 }): Promise<string[]> {
@@ -112,9 +93,17 @@ export async function resolveRestartRecoveryStorePaths(params: {
       storePaths.add(path.join(sessionsDir, "sessions.json"));
     }
   }
-  // Agent databases also hold auth and model-catalog state. Enter the writer
-  // lane only when the session owner proves that a running row may need repair.
-  return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
-    .toSorted((a, b) => a.localeCompare(b));
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function resolveRestartRecoveryStorePaths(
+  params: Parameters<typeof discoverRestartRecoveryStorePaths>[0],
+): Promise<string[]> {
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // Startup recovery needs running rows; shutdown must also mark queued turns
+  // whose session still carries a prior terminal status.
+  return (await discoverRestartRecoveryStorePaths(params)).filter((storePath) =>
+    hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]),
+  );
 }

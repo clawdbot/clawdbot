@@ -15,6 +15,7 @@ import {
 } from "../infra/state-migrations.exec-approvals.js";
 import type { MigrationLogger, MigrationMessages } from "../infra/state-migrations.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { initializeNativeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 
 async function reportMigration(
   label: string,
@@ -25,6 +26,9 @@ async function reportMigration(
     const result = await run();
     for (const change of result?.changes ?? []) {
       log.info(change);
+    }
+    for (const notice of result?.notices ?? []) {
+      log.info(notice);
     }
     for (const warning of result?.warnings ?? []) {
       log.warn(warning);
@@ -44,6 +48,10 @@ export async function runStartupMigrations(params?: {
   const stateDir = resolveStateDir(params?.env);
   const env = { ...(params?.env ?? process.env), OPENCLAW_STATE_DIR: stateDir };
   const log = params?.log ?? createSubsystemLogger("node-host/startup-migrations");
+
+  // Native clients can create version-zero tables before this node starts.
+  // Complete their canonical bootstrap before plugins make read-only state queries.
+  initializeNativeOpenClawStateDatabase({ env });
 
   await reportMigration(
     "device auth",

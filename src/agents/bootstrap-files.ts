@@ -8,8 +8,10 @@ import type { ChatType } from "../channels/chat-type.js";
 import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
+import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -23,6 +25,7 @@ import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -207,20 +210,87 @@ function filterBootstrapFilesAfterHooks(params: {
     chatType?: ChatType;
     workspaceDir: string;
   };
-  protectedRootMemoryFile?: WorkspaceBootstrapFile;
+  protectedFiles?: WorkspaceBootstrapFile[];
 }): WorkspaceBootstrapFile[] {
   const sessionFiltered = filterBootstrapFilesForSession(params.files, params.session);
-  const rootMemoryFile = params.protectedRootMemoryFile;
-  if (!rootMemoryFile) {
+  const protectedFiles = params.protectedFiles ?? [];
+  if (protectedFiles.length === 0) {
     return sessionFiltered;
   }
   // Hooks can relabel or alias loader-produced records. Reapply lexical/session
-  // policy first, then enforce the root-memory source captured by the pinned open.
-  return sessionFiltered.filter((file) => !workspaceFilesShareSourceIdentity(file, rootMemoryFile));
+  // policy first, then enforce protected sources captured by the pinned opens.
+  return sessionFiltered.filter(
+    (file) =>
+      !protectedFiles.some((protectedFile) => {
+        if (workspaceFilesShareSourceIdentity(file, protectedFile)) {
+          return true;
+        }
+        const filePath = normalizeOptionalString(file.path);
+        const protectedPath = normalizeOptionalString(protectedFile.path);
+        return Boolean(
+          filePath && protectedPath && path.resolve(filePath) === path.resolve(protectedPath),
+        );
+      }),
+  );
+}
+
+async function resolveIneligibleAutomaticMemoryFiles(params: {
+  files: WorkspaceBootstrapFile[];
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  warn?: (message: string) => void;
+}): Promise<WorkspaceBootstrapFile[]> {
+  const candidates = params.files.filter(
+    (file) =>
+      !file.missing &&
+      (file.name === DEFAULT_MEMORY_FILENAME || file.name === DEFAULT_USER_FILENAME),
+  );
+  if (candidates.length === 0 || !params.config) {
+    return [];
+  }
+  let agentId: string;
+  try {
+    agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  } catch (error) {
+    params.warn?.(`excluding automatic memory context: ${String(error)}`);
+    return candidates;
+  }
+  const relativePaths = candidates.map((file) =>
+    path.relative(resolveUserPath(params.workspaceDir), file.path).replaceAll(path.sep, "/"),
+  );
+  let classificationResult: Awaited<ReturnType<typeof classifyActiveMemoryWorkspacePaths>>;
+  try {
+    classificationResult = await classifyActiveMemoryWorkspacePaths({
+      cfg: params.config,
+      agentId,
+      workspaceDir: params.workspaceDir,
+      relativePaths,
+    });
+  } catch (error) {
+    params.warn?.(`excluding automatic memory context: ${String(error)}`);
+    return candidates;
+  }
+  if (classificationResult.status === "unavailable") {
+    return [];
+  }
+  if (classificationResult.status === "unsupported") {
+    params.warn?.(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
+    return candidates;
+  }
+  const origins = new Map(
+    classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
+  );
+  return candidates.filter(
+    (_file, index) =>
+      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
+  );
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
-export async function resolveBootstrapFilesForRun(params: {
+type BootstrapFileResolutionParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -231,7 +301,28 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
   readOnlyState?: boolean;
-}): Promise<WorkspaceBootstrapFile[]> {
+};
+
+// Diagnostics project declared files without executing registered hook handlers.
+type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
+
+/** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
+export async function resolveBootstrapFilesForPreparation(
+  params: BootstrapFileResolutionParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFiles({ ...params, readOnlyState: true }, "none");
+}
+
+export async function resolveBootstrapFilesForRun(
+  params: BootstrapFileResolutionParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFiles(params, "registered");
+}
+
+async function resolveBootstrapFiles(
+  params: BootstrapFileResolutionParams,
+  hooks: BootstrapHookApplication,
+): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
     sessionKey,
@@ -248,6 +339,13 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
+    files: rawFiles,
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    warn: params.warn,
+  });
   const rootMemoryFile = rawFiles.find(
     (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
   );
@@ -255,9 +353,18 @@ export async function resolveBootstrapFilesForRun(params: {
     rootMemoryFile && filterBootstrapFilesForSession([rootMemoryFile], session).length === 0
       ? rootMemoryFile
       : undefined;
+  const protectedFiles = [
+    ...(protectedRootMemoryFile ? [protectedRootMemoryFile] : []),
+    ...ineligibleAutomaticMemoryFiles,
+  ];
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, session),
+      filterBootstrapFilesForSession(rawFiles, session).filter(
+        (file) =>
+          !ineligibleAutomaticMemoryFiles.some((ineligible) =>
+            workspaceFilesShareSourceIdentity(file, ineligible),
+          ),
+      ),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
@@ -265,19 +372,23 @@ export async function resolveBootstrapFilesForRun(params: {
     runKind: params.runKind,
   });
 
-  const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-  });
+  const hooked =
+    hooks === "registered"
+      ? await applyBootstrapHookOverrides({
+          files: bootstrapFiles,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : bootstrapFiles;
+  const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
       files: updated,
       session,
-      protectedRootMemoryFile,
+      protectedFiles,
     }),
     workspaceSetupCompleted,
     params.workspaceDir,
@@ -302,6 +413,19 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
+  return { bootstrapFiles, contextFiles };
+}
+
+/** Applies declared additions through the normal bootstrap filters and budgets. */
+export async function resolveBootstrapContextWithProjectedHookFiles(
+  params: Pick<BootstrapFileResolutionParams, "workspaceDir" | "config" | "agentId">,
+  projected: WorkspaceBootstrapFile[],
+): ReturnType<typeof resolveBootstrapContextForRun> {
+  const bootstrapFiles = await resolveBootstrapFiles(
+    { ...params, readOnlyState: true },
+    { projected },
+  );
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

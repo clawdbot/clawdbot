@@ -203,6 +203,14 @@ Adding a model to a supported ClawRouter provider needs no OpenClaw release:
 the next catalog refresh (cached 60 seconds per credential scope) discovers
 it. A model that needs a new wire protocol requires plugin support first.
 
+A model's optional `displayName` is its picker label; without it, OpenClaw uses
+the provider display name and catalog `id`. The label never changes model
+identity. Responses and Chat Completions send the catalog `id` unchanged;
+only native Anthropic and Gemini routes use `upstream` at dispatch. A facade
+that exposes an alias must return only safe catalog metadata, including that
+alias in the required `upstream` field, and keep its private target mapping
+inside the facade.
+
 ## Protocol and provider plugins
 
 ClawRouter owns upstream credentials; its catalog tells OpenClaw which

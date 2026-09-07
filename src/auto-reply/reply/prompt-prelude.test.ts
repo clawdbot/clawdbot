@@ -59,6 +59,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
+      fragments: [{ kind: "conversation-data", text: "Current message:\nchat_id=C123" }],
       promptJoiner: " ",
     });
   });
@@ -151,6 +152,8 @@ describe("buildReplyPromptEnvelope", () => {
       startupAction: "new",
       inboundEventKind: "room_event",
       sourceReplyDeliveryMode: "message_tool_only",
+      threadContextNote: "Thread note",
+      systemEventBlocks: ["System event"],
     });
 
     // The active room-event prompt is the attributed transcript row itself, so
@@ -174,7 +177,9 @@ describe("buildReplyPromptEnvelope", () => {
           "#35674 Other: I wish I could enjoy 5.5",
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
-        "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
     );
     // Each room-event fact appears exactly once per request: kind lives in the
@@ -191,8 +196,16 @@ describe("buildReplyPromptEnvelope", () => {
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
         ].join("\n"),
-        "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (chronological, selected for current message):",
@@ -256,7 +269,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.queuedBody).toBe("#2002 Bob: current note");
     expect(envelope.currentInboundContext?.text).toContain(
-      "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.",
+      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
     );
     expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
     expect(envelope.currentInboundContext?.text).not.toContain(

@@ -40,10 +40,8 @@ const baseRequest = {
 
 const activeForwarders: Array<ReturnType<typeof createExecApprovalForwarder>> = [];
 
-afterEach(() => {
-  for (const forwarder of activeForwarders.splice(0)) {
-    forwarder.stop();
-  }
+afterEach(async () => {
+  await Promise.all(activeForwarders.splice(0).map((forwarder) => forwarder.stop()));
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -403,6 +401,62 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
+  it("joins started delivery and its queued real resolution while stopping future expiry", async () => {
+    vi.useFakeTimers();
+    const pendingDelivery = createDeferred();
+    const resolvedDelivery = createDeferred();
+    const resolvedEntered = createDeferred();
+    const deliveryOrder: string[] = [];
+    const deliver = vi.fn(async (params: { payloads?: Array<{ text?: string }> }) => {
+      const kind = params.payloads?.[0]?.text?.includes("required") ? "pending" : "resolved";
+      deliveryOrder.push(kind);
+      if (kind === "pending") {
+        await pendingDelivery.promise;
+      } else {
+        resolvedEntered.resolve();
+        await resolvedDelivery.promise;
+      }
+      return [];
+    });
+    const { forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    try {
+      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      await forwarder.handleResolved({
+        id: baseRequest.id,
+        decision: "allow-once",
+        resolvedBy: "reviewer",
+        ts: 2000,
+      });
+      stopping = forwarder.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(stopped).toBe(false);
+      expect(deliveryOrder).toEqual(["pending"]);
+      pendingDelivery.resolve();
+      await resolvedEntered.promise;
+      expect(stopped).toBe(false);
+      resolvedDelivery.resolve();
+      await stopping;
+      expect(deliveryOrder).toEqual(["pending", "resolved"]);
+      await expect(forwarder.handleRequested({ ...baseRequest, id: "late" })).resolves.toBe(false);
+      await forwarder.handleResolved({
+        id: "late",
+        decision: "deny",
+        resolvedBy: "reviewer",
+        ts: 3000,
+        request: baseRequest.request,
+      });
+      expect(deliveryOrder).toEqual(["pending", "resolved"]);
+    } finally {
+      pendingDelivery.resolve();
+      resolvedDelivery.resolve();
+      await (stopping ?? forwarder.stop());
+    }
+  });
+
   it("keeps pending delivery ahead of a resolution received during route lookup", async () => {
     const target = createDeferred<{ channel: "slack"; to: string }>();
     const pendingDelivery = createDeferred();
@@ -424,23 +478,68 @@ describe("exec approval forwarder", () => {
     });
 
     const requested = forwarder.handleRequested(baseRequest);
-    await vi.waitFor(() => expect(resolveSessionTarget).toHaveBeenCalledOnce());
-    await forwarder.handleResolved({
-      id: baseRequest.id,
-      decision: "allow-once",
-      resolvedBy: "slack:U1",
-      ts: 2000,
+    try {
+      await vi.waitFor(() => expect(resolveSessionTarget).toHaveBeenCalledOnce());
+      await forwarder.handleResolved({
+        id: baseRequest.id,
+        decision: "allow-once",
+        resolvedBy: "slack:U1",
+        ts: 2000,
+      });
+
+      target.resolve({ channel: "slack", to: "U1" });
+      await expect(requested).resolves.toBe(true);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      expect(deliveryOrder).toEqual(["pending"]);
+
+      pendingDelivery.resolve();
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+      expect(deliveryOrder).toEqual(["pending", "resolved"]);
+      expect(resolveSessionTarget).toHaveBeenCalledOnce();
+    } finally {
+      target.resolve({ channel: "slack", to: "U1" });
+      pendingDelivery.resolve();
+      await requested.catch(() => {});
+      await forwarder.stop();
+    }
+  });
+
+  it("does not arm new expiry while an admitted route lookup finishes during stop", async () => {
+    vi.useFakeTimers();
+    const lookupEntered = createDeferred();
+    const target = createDeferred<{ channel: "slack"; to: string }>();
+    const delivery = createDeferred();
+    const sent: string[] = [];
+    const { forwarder } = createForwarder({
+      cfg: makeSessionCfg(),
+      resolveSessionTarget: () => {
+        lookupEntered.resolve();
+        return target.promise;
+      },
+      deliver: vi.fn(async (params: { payloads?: Array<{ text?: string }> }) => {
+        sent.push(params.payloads?.[0]?.text ?? "");
+        await delivery.promise;
+        return [];
+      }),
     });
-
-    target.resolve({ channel: "slack", to: "U1" });
-    await expect(requested).resolves.toBe(true);
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-    expect(deliveryOrder).toEqual(["pending"]);
-
-    pendingDelivery.resolve();
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
-    expect(deliveryOrder).toEqual(["pending", "resolved"]);
-    expect(resolveSessionTarget).toHaveBeenCalledOnce();
+    const requested = forwarder.handleRequested(baseRequest);
+    let stopping: Promise<void> | undefined;
+    try {
+      await lookupEntered.promise;
+      stopping = forwarder.stop();
+      target.resolve({ channel: "slack", to: "U1" });
+      await expect(requested).resolves.toBe(true);
+      await vi.advanceTimersByTimeAsync(10_000);
+      delivery.resolve();
+      await stopping;
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain("required");
+    } finally {
+      target.resolve({ channel: "slack", to: "U1" });
+      delivery.resolve();
+      await requested.catch(() => {});
+      await (stopping ?? forwarder.stop());
+    }
   });
 
   it("keeps pending delivery ahead of expiry", async () => {
@@ -458,14 +557,19 @@ describe("exec approval forwarder", () => {
     });
     const { forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
 
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-    expect(deliveryOrder).toEqual(["pending"]);
-    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
-    expect(deliveryOrder).toEqual(["pending"]);
+    try {
+      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      expect(deliveryOrder).toEqual(["pending"]);
+      await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
+      expect(deliveryOrder).toEqual(["pending"]);
 
-    pendingDelivery.resolve();
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
-    expect(deliveryOrder).toEqual(["pending", "expired"]);
+      pendingDelivery.resolve();
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+      expect(deliveryOrder).toEqual(["pending", "expired"]);
+    } finally {
+      pendingDelivery.resolve();
+      await forwarder.stop();
+    }
   });
 
   it("forwards to explicit targets and expires", async () => {

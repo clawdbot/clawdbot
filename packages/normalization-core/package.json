@@ -19,6 +19,11 @@
       "import": "./dist/agent-id.mjs",
       "default": "./dist/agent-id.mjs"
     },
+    "./agent-run-terminal-outcome": {
+      "types": "./dist/agent-run-terminal-outcome.d.mts",
+      "import": "./dist/agent-run-terminal-outcome.mjs",
+      "default": "./dist/agent-run-terminal-outcome.mjs"
+    },
     "./boolean-coercion": {
       "types": "./dist/boolean-coercion.d.mts",
       "import": "./dist/boolean-coercion.mjs",
@@ -28,6 +33,11 @@
       "types": "./dist/cjk-chars.d.mts",
       "import": "./dist/cjk-chars.mjs",
       "default": "./dist/cjk-chars.mjs"
+    },
+    "./code-points": {
+      "types": "./dist/code-points.d.mts",
+      "import": "./dist/code-points.mjs",
+      "default": "./dist/code-points.mjs"
     },
     "./error-coercion": {
       "types": "./dist/error-coercion.d.mts",
@@ -53,6 +63,11 @@
       "types": "./dist/markdown-plain-text.d.mts",
       "import": "./dist/markdown-plain-text.mjs",
       "default": "./dist/markdown-plain-text.mjs"
+    },
+    "./mountinfo-path": {
+      "types": "./dist/mountinfo-path.d.mts",
+      "import": "./dist/mountinfo-path.mjs",
+      "default": "./dist/mountinfo-path.mjs"
     },
     "./number-coercion": {
       "types": "./dist/number-coercion.d.mts",
@@ -106,10 +121,10 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/json-coercion.ts src/json-schema.ts src/markdown-plain-text.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/agent-run-terminal-outcome.ts src/boolean-coercion.ts src/cjk-chars.ts src/code-points.ts src/error-coercion.ts src/expect.ts src/json-coercion.ts src/json-schema.ts src/markdown-plain-text.ts src/mountinfo-path.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
-    "libphonenumber-js": "1.13.9",
-    "typebox": "1.3.6"
+    "libphonenumber-js": "1.13.12",
+    "typebox": "1.3.18"
   }
 }

@@ -15,8 +15,12 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
-  await import("./setup-code.js");
+const {
+  decodePairingSetupCode,
+  encodePairingSetupCode,
+  resolveConfiguredPairingPublicUrl,
+  resolvePairingSetupFromConfig,
+} = await import("./setup-code.js");
 const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
@@ -24,6 +28,17 @@ const TLS_FINGERPRINT = "ab".repeat(32);
 const COLON_TLS_FINGERPRINT = (TLS_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
 
 describe("pairing setup code", () => {
+  it("reads the configured public pairing URL from its owning plugin entry", () => {
+    expect(
+      resolveConfiguredPairingPublicUrl({
+        plugins: {
+          entries: { "device-pair": { config: { publicUrl: " wss://public.example " } } },
+        },
+      }),
+    ).toBe("wss://public.example");
+    expect(resolveConfiguredPairingPublicUrl({})).toBeUndefined();
+  });
+
   it("round-trips setup codes while canonicalizing their TLS fingerprint", () => {
     const payload = {
       url: "wss://gateway.example:8443/openclaw-gw",

@@ -194,7 +194,6 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).toBe("");
-    expect(prompt.length).toBeLessThanOrEqual(10);
   });
 
   it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
@@ -231,45 +230,64 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("REMOTE_NOTE_");
   });
 
-  it("preserves the exact full-catalog bytes when a remote note fits", () => {
-    const skill = makeSkill("weather", "Get weather data");
-    const remoteNote = "Remote node skills are available.";
-    const catalog = formatSkillsForPromptCore([skill]);
-    const expected = [remoteNote, catalog].join("\n");
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
-      entries: [makeEntry(skill)],
-      config: {
-        skills: { limits: { maxSkillsPromptChars: expected.length } },
-      } satisfies OpenClawConfig,
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: () => false,
-          note: remoteNote,
-        },
-      },
-    });
+  it.each(["full", "compact", "count-limited", "empty"])(
+    "preserves exact %s catalog bytes at the optional remote-note boundary",
+    (format) => {
+      const skill = makeSkill(
+        "weather",
+        format === "compact" ? "A".repeat(800) : "Get weather data",
+      );
+      const skills = format === "empty" ? [] : [skill];
+      const remoteNote = "Remote node skills are available.";
+      const notice =
+        format === "compact"
+          ? COMPACT_SHORTENED_NOTICE
+          : format === "count-limited"
+            ? "⚠️ Skills truncated: included 1 of 2. Run `openclaw skills check` to audit."
+            : "";
+      const catalog =
+        format === "compact" ? formatSkillsCompact(skills) : formatSkillsForPromptCore(skills);
+      const withoutNote = [notice, catalog].filter(Boolean).join("\n");
+      const withNote = [remoteNote, withoutNote].filter(Boolean).join("\n");
+      const entries = (format === "count-limited" ? [...skills, makeSkill("zoo")] : skills).map(
+        makeEntry,
+      );
 
-    expect(prompt).toBe(expected);
-    expect(prompt.length).toBeLessThanOrEqual(expected.length);
-  });
+      for (const delta of [-1, 0, 1]) {
+        const prompt = buildWorkspaceSkillsPrompt("/fake", {
+          entries,
+          config: {
+            skills: {
+              limits: { maxSkillsInPrompt: 1, maxSkillsPromptChars: withNote.length + delta },
+            },
+          } satisfies OpenClawConfig,
+          eligibility: {
+            remote: {
+              platforms: ["linux"],
+              hasBin: () => false,
+              hasAnyBin: () => false,
+              note: remoteNote,
+            },
+          },
+        });
 
-  it("budgets the final rendered prompt including versions and limit notices", () => {
-    const skills = Array.from({ length: 24 }, (_, i) => ({
-      ...makeSkill(`skill-${i}`, "A".repeat(160)),
-      promptVersion: `sha256:${String(i).padStart(16, "0")}`,
-    }));
+        expect(prompt).toBe(delta < 0 ? withoutNote : withNote);
+        expect(prompt.length).toBeLessThanOrEqual(withNote.length + delta);
+      }
+    },
+  );
+
+  it("budgets the final rendered prompt including limit notices", () => {
+    const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));
     const budget = 2_200;
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
-    expect(prompt).toContain("<version>sha256:");
     expect(prompt).toContain("included");
   });
 
-  it("keeps no-skill catalogs empty instead of emitting version guidance", () => {
+  it("keeps no-skill catalogs empty", () => {
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [],
     });
@@ -404,6 +422,23 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("~/");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("A test skill for path compaction");
+  });
+
+  it("refreshes home prefixes for each prompt catalog", () => {
+    const root = path.parse(os.homedir()).root;
+    for (const name of ["first-home", "second-home"]) {
+      const home = path.join(root, "openclaw-compact-test", name);
+      const prompt = withEnv({ HOME: home, OPENCLAW_HOME: undefined }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: home,
+          skillDir: path.join(home, "skills", "dynamic-home"),
+          name: "dynamic-home",
+          description: "Per-catalog home resolution",
+        }),
+      );
+      expect(prompt).toContain("<location>~/skills/dynamic-home/SKILL.md</location>");
+      expect(prompt).not.toContain(home);
+    }
   });
 
   it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {

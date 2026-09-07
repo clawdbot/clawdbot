@@ -45,16 +45,12 @@ async function runBrowserSetRequest(params: {
 }) {
   await runBrowserCommand(async () => {
     const profile = params.parent?.browserProfile;
-    const result = await callBrowserRequest(
-      params.parent,
-      {
-        method: "POST",
-        path: params.path,
-        query: profile ? { profile } : undefined,
-        body: params.body,
-      },
-      { timeoutMs: 20000 },
-    );
+    const result = await callBrowserRequest(params.parent, {
+      method: "POST",
+      path: params.path,
+      query: profile ? { profile } : undefined,
+      body: params.body,
+    });
     if (printBrowserJsonResult(params.parent, result)) {
       return;
     }
@@ -92,7 +88,6 @@ export function registerBrowserStateCommands(
           width,
           height,
           targetId: opts.targetId,
-          timeoutMs: 20000,
           successMessage: `viewport set: ${width}x${height}`,
         });
       });
@@ -147,19 +142,15 @@ export function registerBrowserStateCommands(
           }
         }
         const profile = parent?.browserProfile;
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/set/headers",
-            query: profile ? { profile } : undefined,
-            body: {
-              headers,
-              targetId: normalizeOptionalString(opts.targetId),
-            },
+        const result = await callBrowserRequest(parent, {
+          method: "POST",
+          path: "/set/headers",
+          query: profile ? { profile } : undefined,
+          body: {
+            headers,
+            targetId: normalizeOptionalString(opts.targetId),
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (printBrowserJsonResult(parent, result)) {
           return;
         }

@@ -17,8 +17,9 @@ import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-au
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.js";
 import type { GatewayRole } from "../../role-policy.js";
+import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
-import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import type { GatewayWsBrowserOrigin, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import type { ControlUiPairingKind } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
 import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
@@ -34,9 +35,11 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
+  connectionWork: GatewayConnectionWork;
   upgradeReq: IncomingMessage;
   ingressAttribution: GatewayAttributedIngress;
   connId: string;
+  bootId: string;
   remoteAddr?: string;
   remotePort?: number;
   localAddr?: string;
@@ -58,6 +61,7 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -94,7 +98,7 @@ export type GatewayConnectPhaseContext = {
   reportedClientIp?: string;
   reportedClientIpSource: NodePairingAutoApproveClientIpSource;
   hasBrowserOriginHeader: boolean;
-  enforceOriginCheckForAnyClient: boolean;
+  browserOrigin?: GatewayWsBrowserOrigin;
   browserRateLimitClientIp?: string;
   authRateLimiter?: AuthRateLimiter;
   clientLabel: string;
@@ -129,6 +133,7 @@ export type AuthenticatedGatewayConnect = {
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
   isNativeAppUi: boolean;
+  startupPending: boolean;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;

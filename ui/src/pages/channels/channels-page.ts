@@ -11,12 +11,13 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -25,14 +26,14 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
+import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
-import { renderChannels } from "./view.ts";
+import { renderChannels, resolveChannelOrder } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
 import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
-
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
@@ -76,15 +77,17 @@ class ChannelsPage extends OpenClawLightDomElement {
   @state()
   private pairingNotice: string | null = null;
 
-  @state()
-  private showAdvancedSettings = false;
+  private readonly pluginPresentation = new ChannelPluginPresentationController({
+    getContext: () => this.context,
+    getChannelIds: () => resolveChannelOrder(this.context.channels.state.channelsSnapshot),
+    isConnected: () => this.isConnected,
+    requestUpdate: () => this.requestUpdate(),
+  });
 
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
     requestUpdate: () => this.requestUpdate(),
-    clearSelection: () => {
-      this.selectedChannel = null;
-    },
+    clearSelection: () => (this.selectedChannel = null),
   });
 
   private schemaLoadStarted = false;
@@ -119,6 +122,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         const handleChange = () => {
           if (this.channelsSource === channels) {
             this.reconcilePairingFilter(channels.state.pairingSnapshot);
+            this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
             this.requestUpdate();
           }
         };
@@ -145,14 +149,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         };
       },
     )
-    // The advanced tier is one global display pref; theme republishes every
-    // appearance setting, so this keeps the channel forms in sync with the
-    // toggle on the config pages.
+    // Republished theme settings keep channel forms in sync with the global advanced toggle.
     .watch(
       () => this.context?.theme,
       (theme, notify) => theme.subscribe(notify),
       () => {
-        this.showAdvancedSettings = loadSettings().showAdvancedSettings === true;
+        this.requestUpdate();
       },
     );
 
@@ -164,6 +166,9 @@ class ChannelsPage extends OpenClawLightDomElement {
       !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
     if (change.identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
+    }
+    if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
+      this.pluginPresentation.reset();
     }
     if (
       change.identityChanged ||
@@ -214,6 +219,8 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
 
+    this.pluginPresentation.ensure(client);
+
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
@@ -245,6 +252,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.pairingAccountFilter = null;
     this.pairingNotice = null;
     this.pairingPolling.stop();
+    this.pluginPresentation.reset();
     this.invalidateNostrForm();
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
@@ -253,27 +261,16 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private setShowAdvancedSettings(enabled: boolean) {
     patchSettings({ showAdvancedSettings: enabled });
-    // Republish so the config pages and this page read the same pref without a
-    // reload; patchSettings alone only writes storage and the server pref.
     this.context.theme.refresh();
   }
 
   private async saveChannelConfig() {
-    const context = this.context;
-    if (!context) {
+    if (!this.context) {
       return;
     }
-    const saved = await context.runtimeConfig.save();
-    const saveError = context.runtimeConfig.state.lastError;
-    if (!saved) {
-      await context.runtimeConfig.refresh();
-      if (saveError && !context.runtimeConfig.state.lastError) {
-        context.runtimeConfig.state.lastError = saveError;
-      }
-      this.requestUpdate();
-      return;
+    if (await this.context.runtimeConfig.save()) {
+      await this.context.channels.refresh(true);
     }
-    await context.channels.refresh(true);
   }
 
   private async reloadChannelConfig() {
@@ -575,7 +572,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.setPairingFilter(channel, accountId);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
-        behavior: "smooth",
+        behavior: resolveScrollBehavior(),
         block: "start",
       });
     });
@@ -657,8 +654,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("channels")}
-            ${renderDocsLink(CHANNELS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("channels")} ${renderLearnMoreLink(CHANNELS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -667,6 +663,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
+          pluginCatalog: this.pluginPresentation.pluginCatalog,
+          pluginIconUrls: this.pluginPresentation.pluginIconUrls,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
           pairingLoading: channels.pairingLoading,
@@ -689,8 +687,9 @@ class ChannelsPage extends OpenClawLightDomElement {
           configForm: config.configForm,
           configUiHints: config.configUiHints,
           configSaving: config.configSaving,
+          configError: config.lastError,
           configFormDirty: config.configFormDirty,
-          showAdvancedSettings: this.showAdvancedSettings,
+          showAdvancedSettings: loadSettings().showAdvancedSettings === true,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
@@ -705,7 +704,11 @@ class ChannelsPage extends OpenClawLightDomElement {
           onCloseDetail: () => {
             this.selectedChannel = null;
           },
-          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onStartSetup: (channelId) => {
+            if (canAdmin) {
+              this.wizardHost.startSetup(channelId);
+            }
+          },
           onWizardAnswer: (value) => this.wizardHost.answer(value),
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
           onWizardTextInput: (value) => this.wizardHost.setTextValue(value),

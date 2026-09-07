@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
@@ -12,8 +13,10 @@ import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-q
 import {
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
+  countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
+  getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -91,7 +94,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       enqueueValid("valid-b");
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
-      expect(entries).toHaveLength(2);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 
@@ -109,6 +111,56 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
     });
+  });
+
+  it("counts pending rows across only the selected namespaces", () => {
+    enqueueValid("pending");
+    upsertDeliveryQueueEntry({
+      queueName: "other-q",
+      entry: { id: "other", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    upsertDeliveryQueueEntry({
+      queueName: "ignored-q",
+      entry: { id: "ignored", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    completeDeliveryQueueEntry(QUEUE, "pending", stateDir);
+
+    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
+    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+  });
+
+  it("reads ownership without materializing unrelated queue payloads", () => {
+    const id = "large-pending-payload";
+    for (const status of ["pending", "failed"] as const) {
+      const entry = {
+        id,
+        enqueuedAt: Date.now(),
+        retryCount: 0,
+        payload: "x".repeat(16_384),
+        ...(status === "failed" ? { recoveryState: "settlement_pending" } : {}),
+      };
+      upsertDeliveryQueueEntry({ queueName: status, entry, status, stateDir });
+    }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const reads = trackSqliteStatementExecutions(db, ["owners"], (sql) =>
+      sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"') ? "owners" : null,
+    );
+    try {
+      expect(getDeliveryQueueEntryOwners(["pending", "failed"], id, stateDir)).toEqual(
+        new Map([
+          ["failed", { status: "failed", settlementPending: true }],
+          ["pending", { status: "pending" }],
+        ]),
+      );
+      expect(reads.rowCounts.owners).toBe(2);
+      expect(reads.textBytes.owners).toBeLessThan(1024);
+    } finally {
+      reads.restore();
+    }
   });
 
   describe("updateDeliveryQueueEntry with corrupt row", () => {
@@ -650,7 +702,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
         expect(staleClaimId).toEqual(expect.any(String));
-        vi.setSystemTime(Date.now() + 30_001);
+        vi.setSystemTime(Date.now() + 60_001);
         if (!staleClaimId) {
           throw new Error("test invariant: the original producer claim must be available");
         }
@@ -675,7 +727,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         expect(recoveredClaimId).not.toBe(staleClaimId);
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
           recoveryState: "producer_claimed",
-          availableAt: Date.now() + 30_000,
+          availableAt: Date.now() + 60_000,
           producerClaimId: recoveredClaimId,
         });
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
@@ -740,10 +792,10 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
               claimId,
               stateDir,
             }),
-          ).toBe(Date.now() + 30_000);
+          ).toBe(Date.now() + 60_000);
           expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
             recoveryState,
-            availableAt: Date.now() + 30_000,
+            availableAt: Date.now() + 60_000,
             ...(recoveryState === "producer_claimed"
               ? { producerClaimId: claimId }
               : { platformSendAttemptId: claimId }),

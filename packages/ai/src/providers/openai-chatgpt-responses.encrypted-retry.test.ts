@@ -7,7 +7,9 @@ import {
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "../transports/openai-responses-contracts.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, Context, Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -63,14 +65,7 @@ function createReplayContext(kind: "compaction" | "mixed"): Context {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 1,
   };
@@ -297,7 +292,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       {
         apiKey: createJwt(),
         transport: "sse" as const,
-        maxRetries: 0,
         onCompactionRejected,
         ...REPLAY_IDENTITY,
       },
@@ -349,7 +343,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       }),
     );
     const options = createObservedOptions(
-      { apiKey: createJwt(), transport: "sse" as const, maxRetries: 0, ...REPLAY_IDENTITY },
+      { apiKey: createJwt(), transport: "sse" as const, ...REPLAY_IDENTITY },
       observations,
     );
 
@@ -388,13 +382,16 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
-      maxRetries: 0,
       onCompactionRejected,
       ...REPLAY_IDENTITY,
     };
 
     const failed = await streamOpenAICodexResponses(model, context, options).result();
-    expect(failed).toMatchObject({ stopReason: "error", errorMessage: "unsupported_parameter" });
+    expect(failed).toMatchObject({
+      stopReason: "error",
+      errorMessage: "400: unsupported_parameter",
+      errorCode: "unsupported_parameter",
+    });
     expect(failed.providerReplay).toBeUndefined();
     expect(onCompactionRejected).not.toHaveBeenCalled();
     await streamOpenAICodexResponses(model, nextTurn(context, failed), options).result();
@@ -426,7 +423,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const aborted = await streamOpenAICodexResponses(model, context, {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       signal: controller.signal,
       ...REPLAY_IDENTITY,
     }).result();
@@ -443,7 +439,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     await streamOpenAICodexResponses(model, nextTurn(context, aborted), {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     }).result();
     expect(hasInputType(requireItem(requests, 2), "compaction")).toBe(true);
@@ -471,7 +466,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const result = await streamOpenAICodexResponses(model, createReplayContext("compaction"), {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     }).result();
 
@@ -486,7 +480,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     };
     responsesPromptObserver.set(options, () => {
@@ -542,6 +535,47 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       "initial",
     ]);
     expect(onCompactionRejected).toHaveBeenCalledOnce();
+  });
+
+  it("WebSocket commits stripped compaction before acceptance observation fails", async () => {
+    const context = createReplayContext("compaction");
+    const onCompactionRejected = vi.fn();
+    const observations: ResponsesPromptObservation[] = [];
+    const scripted = installScriptedWebSocket([
+      { events: [invalidEncryptedEvent()] },
+      { events: [completionEvent("resp_ws_hook_failure")] },
+    ]);
+    const baseOptions = createObservedOptions(
+      {
+        apiKey: createJwt(),
+        transport: "websocket" as const,
+        onCompactionRejected,
+        ...REPLAY_IDENTITY,
+      },
+      observations,
+    );
+    const options = withProviderAcceptanceObserver(baseOptions, () => {
+      if (scripted.requests.length >= 2) {
+        throw new Error("acceptance observer failed");
+      }
+    });
+
+    const result = await streamOpenAICodexResponses(model, context, options).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance observer failed",
+      providerReplay: { type: "openai-responses-compaction-suppression" },
+    });
+    expect(scripted.requests).toHaveLength(2);
+    expect(hasInputType(requireItem(scripted.requests, 0), "compaction")).toBe(true);
+    expect(hasInputType(requireItem(scripted.requests, 1), "compaction")).toBe(false);
+    expect(observations.map((entry) => entry.payloadVariant)).toEqual([
+      "initial",
+      "compaction-stripped",
+    ]);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
+    expect(scripted.sockets[1]?.closed).toBe(true);
   });
 
   it("WebSocket preserves compaction when reasoning-stripped recovery succeeds", async () => {

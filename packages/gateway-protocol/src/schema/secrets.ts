@@ -19,6 +19,16 @@ const SecretStoreNameSchema = Type.String({
   pattern: "^[A-Z][A-Z0-9_]{0,127}$",
 });
 
+export const GitHubSetupHandleSchema = Type.String({
+  pattern: "^github-setup-[a-f0-9]{32}$",
+});
+
+const SecretStoreMutationNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^(?:[A-Z][A-Z0-9_]{0,127}|github-setup-[a-f0-9]{32})$",
+});
+
 const SecretStoreEntryMetadataProperties = {
   name: SecretStoreNameSchema,
   scopeKind: Type.Literal("team"),
@@ -63,7 +73,7 @@ export const SecretsStoreListResultSchema = closedObject({
 
 /** Create or replace one team secret-store entry. */
 export const SecretsStoreSetParamsSchema = closedObject({
-  name: SecretStoreNameSchema,
+  name: SecretStoreMutationNameSchema,
   value: Type.String({ maxLength: 64 * 1024 }),
   kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
   allowedHosts: Type.Optional(withSince("2026.8", SecretStoreAllowedHostsSchema)),
@@ -71,7 +81,7 @@ export const SecretsStoreSetParamsSchema = closedObject({
 
 /** Soft-delete one team secret-store entry. */
 export const SecretsStoreDeleteParamsSchema = closedObject({
-  name: SecretStoreNameSchema,
+  name: SecretStoreMutationNameSchema,
 });
 
 /** Mutation acknowledgement including whether the active runtime was refreshed. */

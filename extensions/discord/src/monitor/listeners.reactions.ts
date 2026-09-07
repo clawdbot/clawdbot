@@ -22,6 +22,7 @@ import {
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./listeners.queue.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
 type LoadedConfig = OpenClawConfig;
@@ -30,6 +31,7 @@ type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: LoadedConfig;
   runtime: RuntimeEnv;
   logger: DiscordListenerLogger;
@@ -37,6 +39,7 @@ type DiscordReactionListenerParams = {
 } & DiscordReactionRoutingParams;
 
 type DiscordReactionRoutingParams = {
+  isPolicyCurrent?: () => boolean;
   accountId: string;
   botUserId?: string;
   dmEnabled: boolean;
@@ -90,7 +93,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 }
 
-async function runDiscordReactionHandler(params: {
+async function runDiscordReactionHandler(initialParams: {
   data: DiscordReactionEvent;
   client: Client;
   action: "added" | "removed";
@@ -98,6 +101,17 @@ async function runDiscordReactionHandler(params: {
   listener: string;
   event: string;
 }): Promise<void> {
+  const policy = await initialParams.handlerParams.readPolicy?.();
+  const params = policy
+    ? {
+        ...initialParams,
+        handlerParams: {
+          ...initialParams.handlerParams,
+          ...policy,
+          isPolicyCurrent: policy.isCurrent,
+        },
+      }
+    : initialParams;
   await runDiscordListenerWithSlowLog({
     logger: params.handlerParams.logger,
     listener: params.listener,
@@ -108,6 +122,7 @@ async function runDiscordReactionHandler(params: {
         client: params.client,
         action: params.action,
         cfg: params.handlerParams.cfg,
+        isPolicyCurrent: params.handlerParams.isPolicyCurrent,
         accountId: params.handlerParams.accountId,
         botUserId: params.handlerParams.botUserId,
         dmEnabled: params.handlerParams.dmEnabled,
@@ -124,6 +139,7 @@ async function runDiscordReactionHandler(params: {
 }
 
 type DiscordReactionIngressAuthorizationParams = {
+  isPolicyCurrent?: () => boolean;
   cfg: LoadedConfig;
   accountId: string;
   user: User;
@@ -148,6 +164,9 @@ type DiscordReactionIngressAuthorizationParams = {
 async function authorizeDiscordReactionIngress(
   params: DiscordReactionIngressAuthorizationParams,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  if (params.isPolicyCurrent?.() === false) {
+    return { allowed: false, reason: "policy-changed" };
+  }
   if (params.isDirectMessage && !params.dmEnabled) {
     return { allowed: false, reason: "dm-disabled" };
   }
@@ -168,6 +187,9 @@ async function authorizeDiscordReactionIngress(
       allowNameMatching: params.allowNameMatching,
       eventKind: "reaction",
     });
+    if (params.isPolicyCurrent?.() === false) {
+      return { allowed: false, reason: "policy-changed" };
+    }
     if (access.senderAccess.decision !== "allow") {
       return { allowed: false, reason: access.senderAccess.reasonCode };
     }
@@ -434,6 +456,7 @@ async function handleDiscordReactionEvent(
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
+      isPolicyCurrent: params.isPolicyCurrent,
       cfg: params.cfg,
       accountId: params.accountId,
       user,
@@ -481,8 +504,8 @@ async function handleDiscordReactionEvent(
         : channelName
           ? `#${normalizeDiscordSlug(channelName)}`
           : `#${data.channel_id}`;
-      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
+      const baseText = `Discord ${data.burst ? "super " : ""}reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}${data.burst ? ":burst" : ""}`;
       reactionBase = { baseText, contextKey };
       return reactionBase;
     };

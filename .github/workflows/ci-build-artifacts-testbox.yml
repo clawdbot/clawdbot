@@ -16,7 +16,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-v1-{1}', github.workflow, github.event.pull_request.number) || format('{0}-manual-v1-{1}', github.workflow, github.run_id) }}
+  # Admission precedes job skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group where subscribed, as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || (github.event_name == 'pull_request' && format('{0}-pr-v1-{1}', github.workflow, github.event.pull_request.number) || format('{0}-manual-v1-{1}', github.workflow, github.run_id)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -42,14 +47,16 @@ jobs:
           testbox_id: ${{ inputs.testbox_id }}
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: ${{ github.event_name == 'workflow_dispatch' && 'read-write' || 'restore' }}
           install-bun: "false"
           install-trufflehog: "true"
 
@@ -105,7 +112,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .artifacts/build-all-cache/
@@ -143,8 +150,8 @@ jobs:
           test -f dist/control-ui/index.html
 
       - name: Save dist build cache
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .artifacts/build-all-cache/
@@ -153,12 +160,6 @@ jobs:
             packages/*/dist/
           key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
 
-      - name: Ensure Testbox base commit
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
@@ -173,6 +174,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
@@ -216,7 +218,9 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
+        # Temporary local-listener fix: https://github.com/useblacksmith/run-testbox/pull/15
+        # Return to useblacksmith/run-testbox after the fix lands upstream.
+        uses: steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4
         if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

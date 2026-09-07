@@ -12,9 +12,9 @@ inside that container exactly like any other Linux install, so the [Linux
 guide](/platforms/linux) applies in full. This page covers the ChromeOS
 specific setup and the gotchas that differ from a plain Linux host.
 
-OpenClaw requires Node because its canonical state store uses `node:sqlite`.
-Bun can install dependencies or run package scripts, but it cannot run the
-OpenClaw CLI or Gateway.
+Node is the primary, default, and recommended runtime. Bun 1.4+ builds with
+WAL-reset-safe `node:sqlite` can run the CLI and Gateway as an explicit opt-in,
+and Bun can also run package scripts. The installation path below uses Node.
 
 ## Enable the Linux container
 
@@ -54,8 +54,8 @@ Full server guidance lives in the [Linux guide](/platforms/linux) and the
 
 On a single user Chromebook, use the native npm install (the installer script,
 or `npm i -g openclaw@latest --allow-scripts=openclaw` on npm 12 or npm
-11.16+) rather than [Docker](/install/docker). On npm 11.12 and earlier, omit
-`--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+11.16+) rather than [Docker](/install/docker). On npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`.
 
 Docker works inside Crostini, but Docker in Crostini adds friction: if you use
 the Claude Code CLI as your model runtime, it has to be installed and logged in

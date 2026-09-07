@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/model-ref-parse";
 
 const XAI_PROVIDER_IDS = new Set(["xai", "x-ai"]);
 

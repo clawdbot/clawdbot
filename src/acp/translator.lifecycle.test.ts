@@ -14,8 +14,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import type { AcpGatewayAgent } from "./translator.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -149,7 +153,7 @@ async function startPendingPrompt(params: {
 describe("acp translator stable lifecycle handlers", () => {
   it("advertises only session capabilities backed by bridge handlers", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -191,7 +195,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -241,7 +245,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -266,7 +270,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -294,7 +298,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -319,7 +323,7 @@ describe("acp translator stable lifecycle handlers", () => {
 
   it("rejects relative cwd filters for session/list", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -347,7 +351,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -385,7 +389,7 @@ describe("acp translator stable lifecycle handlers", () => {
       return { ok: true };
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -412,7 +416,7 @@ describe("acp translator stable lifecycle handlers", () => {
       sessionKey: "agent:main:work",
       cwd: "/tmp/openclaw",
     });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -436,7 +440,7 @@ describe("acp translator stable lifecycle handlers", () => {
       sessionKey: "agent:main:work",
       cwd: "/tmp/openclaw",
     });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -459,7 +463,7 @@ describe("acp translator stable lifecycle handlers", () => {
       sessionKey: "agent:main:work",
       cwd: "/tmp/openclaw",
     });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -489,7 +493,7 @@ describe("acp translator stable lifecycle handlers", () => {
       sessionKey: "agent:main:work",
       cwd: "/tmp/openclaw",
     });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
     const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-1" });
@@ -527,11 +531,11 @@ describe("acp translator stable lifecycle handlers", () => {
       }
       return { ok: true };
     });
-    const agentA = new AcpGatewayAgent(
+    const agentA = createAcpGatewayAgent(
       createAcpConnection(),
       createAcpGateway(requestA as GatewayClient["request"]),
     );
-    const agentB = new AcpGatewayAgent(
+    const agentB = createAcpGatewayAgent(
       createAcpConnection(),
       createAcpGateway(requestB as GatewayClient["request"]),
     );
@@ -566,7 +570,7 @@ describe("acp translator stable lifecycle handlers", () => {
 
   it("rejects close for missing sessions", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 

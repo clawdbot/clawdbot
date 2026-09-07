@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -829,9 +830,15 @@ async function importChatGptConversationsUnlocked(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      const compile = await compileMemoryWikiVault(params.config);
-      indexUpdatedFiles = compile.updatedFiles;
       await writeImportRunRecord(params.config.vault.path, importRunRecord);
+      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+          { cause: error },
+        );
+      });
+      indexUpdatedFiles = compile.updatedFiles;
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
         timestamp: nowIso,
@@ -904,8 +911,7 @@ function resolveContainedImportPath(root: string, relativePath: string, label: s
   }
   const resolvedRoot = path.resolve(root);
   const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  const relative = path.relative(resolvedRoot, resolvedPath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInside(resolvedRoot, resolvedPath)) {
     throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
   }
   return resolvedPath;

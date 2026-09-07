@@ -186,7 +186,7 @@ describe("gateway compaction hot reload", () => {
                 memoryFlush: { enabled: false },
               },
             },
-            entries: { dev: { default: true } },
+            entries: { dev: {} },
           },
           models: {
             mode: "replace",

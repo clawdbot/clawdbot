@@ -1,13 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createWriteStream } from "node:fs";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { ServiceChildRelayMessage, ServiceChildStart } from "./service-child-protocol.js";
-
-function runtimeArgv(url: URL): string[] {
-  return url.pathname.endsWith(".ts")
-    ? ["--import", "tsx", fileURLToPath(url)]
-    : [fileURLToPath(url)];
-}
 
 type StdioEntry = "ignore" | "inherit" | "ipc" | number;
 
@@ -22,7 +20,7 @@ function reserveIpcFd(stdio: StdioEntry[]): void {
   stdio[fd] = "ipc";
 }
 
-export function runServiceChildRelay(): void {
+function runServiceChildRelay(): void {
   let generation: string | undefined;
   let anchor: ChildProcess | undefined;
   let parentLost = false;
@@ -58,11 +56,12 @@ export function runServiceChildRelay(): void {
       return;
     }
     generation = start.generation;
-    const anchorUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "service-child-group-anchor",
-      distWorkerPath: "process/supervisor/service-child-group-anchor.js",
-    });
+    if (start.controlFd === undefined) {
+      report({ type: "relay-error", generation, error: "service child control fd is missing" });
+      process.exitCode = 1;
+      return;
+    }
+    const anchorUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
     const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
     while (stdio.length <= start.controlFd) {
       stdio.push("ignore");
@@ -76,7 +75,7 @@ export function runServiceChildRelay(): void {
     }
     reserveIpcFd(stdio);
     try {
-      anchor = spawn(process.execPath, runtimeArgv(anchorUrl), {
+      anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
         stdio,
         detached: true,
         windowsHide: true,
@@ -97,11 +96,22 @@ export function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    // The anchor owns forwarded output lifetime. Drop the relay's duplicate writers so
-    // root output can reach EOF while the anchor retains descendant cleanup authority.
-    process.stdout.destroy();
-    process.stderr.destroy();
     anchor.once("spawn", () => {
+      // The anchor inherited these outputs. Close only the relay's duplicate writers
+      // so output EOF does not depend on either process giving up cleanup authority.
+      if (process.versions.bun) {
+        for (const fd of [1, 2]) {
+          const output = createWriteStream("", { fd, autoClose: true });
+          output.once("error", (error) => {
+            report({ type: "relay-error", generation: start.generation, error: error.message });
+            notifyParentLoss();
+          });
+          output.end();
+        }
+      } else {
+        process.stdout.destroy();
+        process.stderr.destroy();
+      }
       anchor?.send(start);
       if (parentLost) {
         anchor?.send({ type: "parent-loss", generation });
@@ -111,7 +121,6 @@ export function runServiceChildRelay(): void {
       report({ type: "relay-error", generation: generation!, error: error.message });
     });
     anchor.once("exit", (code, signal) => {
-      report({ type: "anchor-exit", generation: generation!, code, signal });
       process.exit(code === 0 || signal === "SIGKILL" ? 0 : 1);
     });
   });

@@ -51,7 +51,11 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
 
 export { parseLineAllowFromId };
 
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
+
 export const lineSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchLineAccountConfig({
@@ -79,27 +83,45 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     const accessToken = typedInput.channelAccessToken ?? typedInput.token;
     const normalizedAccountId = normalizeAccountId(accountId);
     const useEnv = normalizedAccountId === DEFAULT_ACCOUNT_ID && Boolean(typedInput.useEnv);
+    // A credential resolves from the inline value first and only then from its
+    // file, so writing one form has to retire the other. Leaving both behind
+    // makes a rotation onto a file a silent no-op: the stale inline value keeps
+    // winning and setup still reports success.
+    const credentials = [
+      {
+        fileKey: "tokenFile",
+        file: typedInput.tokenFile,
+        inlineKey: "channelAccessToken",
+        inline: accessToken,
+      },
+      {
+        fileKey: "secretFile",
+        file: typedInput.secretFile,
+        inlineKey: "channelSecret",
+        inline: typedInput.channelSecret,
+      },
+    ] as const;
+    const patch: Record<string, string> = {};
+    const retired: string[] = [];
+    for (const credential of credentials) {
+      if (credential.file) {
+        patch[credential.fileKey] = credential.file;
+        retired.push(credential.inlineKey);
+      } else if (credential.inline) {
+        patch[credential.inlineKey] = credential.inline;
+        retired.push(credential.fileKey);
+      }
+    }
     return patchLineAccountConfig({
       cfg,
       accountId: normalizedAccountId,
       enabled: true,
       clearFields: useEnv
         ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
-        : undefined,
-      patch: useEnv
-        ? {}
-        : {
-            ...(typedInput.tokenFile
-              ? { tokenFile: typedInput.tokenFile }
-              : accessToken
-                ? { channelAccessToken: accessToken }
-                : {}),
-            ...(typedInput.secretFile
-              ? { secretFile: typedInput.secretFile }
-              : typedInput.channelSecret
-                ? { channelSecret: typedInput.channelSecret }
-                : {}),
-          },
+        : retired.length > 0
+          ? retired
+          : undefined,
+      patch: useEnv ? {} : patch,
     });
   },
 };

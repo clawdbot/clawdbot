@@ -33,7 +33,12 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
-        { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
+        {
+          url: "/assets/app.hl.js",
+          method: "GET",
+          headers: {},
+          headersDistinct: {},
+        } as IncomingMessage,
         res,
         { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );
@@ -65,7 +70,7 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
+        '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
       );
     });
   });

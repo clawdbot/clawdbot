@@ -111,6 +111,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         model: params.model,
         timeoutMs,
         runId,
+        // Conversation-derived utility input must never regain caller-denied capabilities.
+        disableTools: true,
+        toolsAllow: [],
         disableTrajectory: true,
         cleanupBundleMcpOnRunEnd: true,
         // Internal helper run: route failures lane-local so an upstream 400/billing

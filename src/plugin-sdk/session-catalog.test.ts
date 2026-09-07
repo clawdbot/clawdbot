@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginRuntime } from "./plugin-runtime.js";
 import {
   createSessionCatalogFamily,
   sessionCatalogPaging,
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogFamilyOptions,
+  type SessionCatalogProvider,
   type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
 } from "./session-catalog.js";
 
 const messages = {
@@ -26,6 +29,32 @@ const session = (threadId: string): SessionCatalogSession => ({
 });
 
 describe("session catalog SDK", () => {
+  it("exposes the closed share-route contract to external providers", () => {
+    const shareRoute = {
+      kind: "thread-id-prefix",
+      routeSegment: "shared-sessions",
+      hostId: "gateway",
+      identifierAlphabet: "lowercase-hex",
+      fullLength: 32,
+      minPrefixLength: 12,
+      lookup: "catalog-list-search-by-thread-id-prefix",
+      ambiguity: "multiple-results-or-next-cursor",
+    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+    const provider = {
+      id: "external",
+      label: "External",
+      shareRoute,
+      async list() {
+        return [];
+      },
+      async read({ hostId, threadId }) {
+        return { hostId, threadId, items: [] };
+      },
+    } satisfies SessionCatalogProvider;
+
+    expect(provider.shareRoute).toEqual(shareRoute);
+  });
+
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
@@ -53,7 +82,48 @@ describe("session catalog SDK", () => {
     ).toThrow("bad thread");
   });
 
-  it("composes explicit local, node, adoption, capability, and continuation operations", async () => {
+  it.each([
+    { name: "missing", timestamps: [] },
+    {
+      name: "equal",
+      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
+    },
+    {
+      name: "non-monotonic",
+      timestamps: [
+        "2026-08-30T12:00:04Z",
+        "2026-08-30T12:00:01Z",
+        "2026-08-30T12:00:03Z",
+        "2026-08-30T12:00:00Z",
+        "2026-08-30T12:00:02Z",
+      ],
+    },
+  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+    const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
+      id,
+      type: "agentMessage",
+      text: id,
+      timestamp: timestamps[index],
+    }));
+    const latest = sessionCatalogPaging.boundTranscriptPage(items, 2, 0);
+    expect(latest.items.map((item) => item.id)).toEqual(["1", "a"]);
+    const older = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(latest.nextCursor),
+    );
+    expect(older.items.map((item) => item.id)).toEqual(["10", "2"]);
+    const oldest = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(older.nextCursor),
+    );
+    expect(oldest.items.map((item) => item.id)).toEqual(["z"]);
+    expect(oldest.nextCursor).toBeUndefined();
+    expect(items.map((item) => item.id)).toEqual(["z", "2", "10", "a", "1"]);
+  });
+
+  function createFamilyFixture() {
     const invoke = vi.fn().mockResolvedValue({
       payloadJSON: JSON.stringify({ sessions: [session("remote-thread")] }),
     });
@@ -72,8 +142,12 @@ describe("session catalog SDK", () => {
         invoke,
       },
     } as unknown as PluginRuntime;
-    const create = vi.fn().mockResolvedValue({ sessionKey: "agent:main:created" });
-    const complete = vi.fn(async (continued: { sessionKey: string }) => continued);
+    const create = vi.fn<SessionCatalogFamilyOptions["continuation"]["create"]>(
+      async ({ agentId }) => ({ sessionKey: `agent:${agentId}:created` }),
+    );
+    const complete = vi.fn<SessionCatalogFamilyOptions["continuation"]["complete"]>(
+      async (continued) => continued,
+    );
     const options: SessionCatalogFamilyOptions = {
       runtime,
       local: {
@@ -114,7 +188,7 @@ describe("session catalog SDK", () => {
         sessionUnavailable: "session unavailable",
       },
       continuation: {
-        resolveAgentId: () => "main",
+        resolveAgentId: (agentId = "main") => agentId,
         availability: () => ({ available: true }),
         listAdopted: (_agentId, entries) =>
           entries
@@ -136,6 +210,11 @@ describe("session catalog SDK", () => {
       checkUpstreamActivity: async () => [],
     };
     const provider = createSessionCatalogFamily(options, sessionCatalogPaging.isExactCursor);
+    return { provider, options, create, complete };
+  }
+
+  it("composes explicit local, node, adoption, capability, and continuation operations", async () => {
+    const { provider } = createFamilyFixture();
     const onHost = vi.fn();
 
     const hosts = await provider.list({
@@ -168,13 +247,87 @@ describe("session catalog SDK", () => {
     ]);
     expect(onHost).toHaveBeenCalledTimes(2);
 
-    const [first, second] = await Promise.all([
-      provider.continueSession!({ hostId: "gateway", threadId: "local-thread" }),
-      provider.continueSession!({ hostId: "gateway", threadId: "local-thread" }),
-    ]);
-    expect(first).toEqual({ sessionKey: "agent:main:created" });
-    expect(second).toEqual(first);
-    expect(create).toHaveBeenCalledOnce();
-    expect(complete).toHaveBeenCalledOnce();
+    await expect(
+      provider.continueSession({ hostId: "gateway", threadId: "local-thread" }),
+    ).resolves.toEqual({ sessionKey: "agent:main:created" });
   });
+
+  it.each([
+    { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "main" },
+    { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "other" },
+    { joinDuring: "lookup", firstAgentId: undefined, secondAgentId: "main" },
+    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "main" },
+    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "other" },
+    { joinDuring: "completion", firstAgentId: undefined, secondAgentId: "main" },
+  ])(
+    "coordinates $firstAgentId/$secondAgentId adoption during $joinDuring and reuses stored adoption",
+    async ({ joinDuring, firstAgentId, secondAgentId }) => {
+      const { provider, options, create, complete } = createFamilyFixture();
+      const request = { hostId: "gateway", threadId: "local-thread" };
+      const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      const adopted = new Map<string, Map<string, string>>();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const secondResolved = createDeferred();
+      let resolutions = 0;
+      options.continuation.resolveAgentId = (agentId = "main") => {
+        if (++resolutions === 2) {
+          secondResolved.resolve();
+        }
+        return agentId;
+      };
+      const listAdopted = vi.fn(async (agentId = "main") => {
+        if (joinDuring === "lookup") {
+          entered.resolve();
+          await release.promise;
+        }
+        return adopted.get(agentId) ?? new Map<string, string>();
+      });
+      options.continuation.listAdopted = listAdopted;
+      create.mockImplementation(async ({ agentId }) => {
+        const sessionKey = `agent:${agentId}:created`;
+        adopted.set(agentId, new Map([[sourceKey, sessionKey]]));
+        return { sessionKey };
+      });
+      complete.mockImplementation(async (continued) => {
+        if (joinDuring === "completion") {
+          entered.resolve();
+          await release.promise;
+        }
+        return continued;
+      });
+
+      const first = provider.continueSession({ ...request, agentId: firstAgentId });
+      await entered.promise;
+      const second = provider.continueSession({ ...request, agentId: secondAgentId });
+      // Resolution is synchronous; the second request enters single-flight before this resumes.
+      await secondResolved.promise;
+      release.resolve();
+      const results = await Promise.all([first, second]);
+
+      expect
+        .soft(results)
+        .toEqual([
+          { sessionKey: "agent:main:created" },
+          { sessionKey: `agent:${secondAgentId}:created` },
+        ]);
+      const agentIds = [...new Set(["main", secondAgentId])];
+      expect.soft(listAdopted.mock.calls).toEqual(agentIds.map((agentId) => [agentId]));
+      expect.soft(create).toHaveBeenCalledTimes(agentIds.length);
+      expect.soft(complete).toHaveBeenCalledTimes(agentIds.length);
+      for (const agentId of agentIds) {
+        const continued = { sessionKey: `agent:${agentId}:created` };
+        expect.soft(create).toHaveBeenCalledWith({
+          ...request,
+          agentId,
+          session: session(request.threadId),
+        });
+        expect.soft(complete).toHaveBeenCalledWith(continued, request.threadId);
+        // Stored source identity stays host/thread-only after the in-flight operation ends.
+        await expect(provider.continueSession({ ...request, agentId })).resolves.toEqual(continued);
+      }
+      expect(create).toHaveBeenCalledTimes(agentIds.length);
+      expect(complete).toHaveBeenCalledTimes(agentIds.length * 2);
+    },
+  );
 });

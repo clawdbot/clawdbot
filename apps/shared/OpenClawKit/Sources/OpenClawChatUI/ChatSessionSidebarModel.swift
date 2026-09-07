@@ -5,6 +5,7 @@ import OpenClawProtocol
 /// so pin/search/ordering rules stay unit-testable across macOS and iOS.
 public enum ChatSessionSidebarModel {
     public struct Badges: Equatable, Sendable {
+        public let queuedCount: Int
         public let runningCount: Int
         public let failedCount: Int
         public let hasUnread: Bool
@@ -159,12 +160,15 @@ public enum ChatSessionSidebarModel {
 
     private static func node(session: OpenClawChatSessionEntry, children: [Node]) -> Node {
         let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isRunning = session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running"
+        let isQueued = status == "queued"
+        let isRunning = !isQueued &&
+            (session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running")
         let hasFailed = status == "failed" || status == "timeout"
         return Node(
             session: session,
             children: children,
             badges: Badges(
+                queuedCount: (isQueued ? 1 : 0) + children.reduce(0) { $0 + $1.badges.queuedCount },
                 runningCount: (isRunning ? 1 : 0) + children.reduce(0) { $0 + $1.badges.runningCount },
                 failedCount: (hasFailed ? 1 : 0) + children.reduce(0) { $0 + $1.badges.failedCount },
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
@@ -209,8 +213,11 @@ public enum ChatSessionSidebarModel {
         let declaredAttention = agentStatus?.attention == nil ? nil : agentStatus?.note
         let failedAttention = self.unreadFailureReason(for: session)
         let statusNote = agentStatus?.note
+        let queued = self.normalized(session.status)?.lowercased() == "queued"
+            ? String(localized: "Waiting for a concurrency slot")
+            : nil
         let observer = self.visibleObserverDigest(for: session)?.headline
-        return declaredAttention ?? failedAttention ?? statusNote ?? observer ?? workSubtitle
+        return declaredAttention ?? failedAttention ?? statusNote ?? queued ?? observer ?? workSubtitle
     }
 
     /// Live observer events are useful only after a server row names the
@@ -365,6 +372,9 @@ public enum ChatSessionSidebarModel {
         if let lastReadAt = change.lastReadAt {
             session.lastReadAt = lastReadAt
         }
+        if change.colorPresent {
+            session.color = change.color
+        }
         if change.agentStatusPresent {
             session.agentStatus = change.agentStatus
         }
@@ -377,8 +387,8 @@ public enum ChatSessionSidebarModel {
         if let hasActiveRun = change.hasActiveRun {
             session.hasActiveRun = hasActiveRun
         }
-        if let activeRunIds = change.activeRunIds {
-            session.activeRunIds = activeRunIds
+        if change.activeRunIdsPresent {
+            session.activeRunIds = change.activeRunIds
         }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
@@ -495,9 +505,17 @@ public enum ChatSessionSidebarModel {
             status != "running"
     }
 
-    static func isSessionInActiveAgentScope(key: String, activeAgentID: String?) -> Bool {
+    public static func isSessionInActiveAgentScope(
+        key: String,
+        agentID: String? = nil,
+        activeAgentID: String?) -> Bool
+    {
         let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         guard !normalizedAgent.isEmpty else { return true }
+        // Gateway row ownership outranks ambiguous bare/global keys. Missing
+        // metadata is a shipped legacy-cache state and keeps key-only behavior.
+        let rowAgent = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let rowAgent, !rowAgent.isEmpty, rowAgent != normalizedAgent { return false }
         let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].lowercased() == "agent" else { return true }
         return parts[1].lowercased() == normalizedAgent
@@ -601,35 +619,12 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(self.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
         }
         // Gateway, cached lists, iOS, and macOS must share the same pin
         // chronology, stable key ties, and searchable session fields.
         return OpenClawChatSessionListOrganizer.filter(
             OpenClawChatSessionListOrganizer.organize(entries),
             search: query)
-    }
-
-    private static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
     }
 }

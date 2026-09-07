@@ -26,7 +26,7 @@ export function createCliRuntimeMock(
     writeJson: viInstance.fn((value: unknown, space = 2) => {
       defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
     }),
-    exit: viInstance.fn((code: number) => {
+    exit: viInstance.fn((code: number): void => {
       throw new Error(`${options.exitPrefix ?? "__exit__"}:${code}`);
     }),
   };

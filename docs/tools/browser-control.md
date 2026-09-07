@@ -23,7 +23,7 @@ agent tools, but nothing listens on the loopback control port.
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
-- Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
+- Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
@@ -48,6 +48,30 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 `suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
+Tab handles are scoped to a browser host or node and profile; keep that route
+with the handle when making follow-up requests.
+
+The Control UI's `browser.request` Gateway method accepts `target: "host"` to
+pin the Gateway host or `target: "node"` with `node: "<node-id>"` to pin a browser
+node. Pass the profile in `query.profile`. Explicit routes do not fall back to
+another host; omitting them keeps the configured automatic routing. These
+routing fields do not grant access or change browser policy.
+
+Browser previews require a result from the `browser` tool with a known route.
+Browser-shaped metadata from other tools does not trigger screenshots or change
+the panel's selection; those results remain ordinary tool output.
+
+When URL validation fails during tab listing, the tab keeps its identity and
+title but returns `url: ""` and `urlUnavailableReason`:
+
+- `navigation_blocked`: navigation rules rejected the address.
+- `navigation_check_failed`: OpenClaw could not validate the address, for example
+  because DNS lookup failed. Refresh to check again.
+
+An empty URL alone does not indicate a policy denial. Navigation-policy errors
+also carry `reason: "navigation_blocked"`; raw blocked URLs and DNS details are
+not included in that metadata. Tab listings are observations, not authorization:
+every subsequent content read or action still enforces its own checks.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -60,6 +84,65 @@ Notes:
   Tailscale Serve identity headers.
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes; keep them loopback-only.
+
+### Screencast stream
+
+`POST /screencast` mints a single-use token for a live view of the selected tab.
+Pass an optional `targetId`, `maxWidth`, `maxHeight`, and `quality` in the JSON
+body. Dimensions default to 1280 and are clamped to integers from 320 to 2000;
+JPEG quality defaults to 70 and is clamped from 30 to 90.
+
+The response contains `token`, `wsPath`, `expiresAtMs`, `targetId`, and `url`.
+Resolve `wsPath` against the Gateway URL and open a WebSocket there:
+`/browser/screencast?token=<token>`. The 48-character hexadecimal token expires
+after 60 seconds and can be consumed once. Invalid, expired, and reused tokens
+are rejected with HTTP 401 before upgrade. Viewers send no application messages;
+binary viewer messages close the connection.
+
+Tickets and viewers minted through the Gateway are bound to the requesting
+Gateway connection; ending that connection revokes unused tickets and closes
+its viewers. Revoked (invalidated) connections are fenced immediately, before
+the Gateway socket finishes closing: their tickets cannot upgrade, and their
+viewers receive no further frames or metadata. The loopback HTTP control API
+has no Gateway connection to bind, so its tickets remain TTL-only.
+
+The plugin shares one CDP screencast per profile and tab. Chrome sends JPEG
+frames on repaint, paced to approximately 20 frames per second. Slow viewers
+skip frames instead of building a queue. Navigation immediately retires the
+capture session. A new CDP session starts only after the address is allowed,
+so delayed frames from the previous document cannot enter the new stream.
+A rejected navigation stops the stream.
+
+Text messages are JSON with `type` in `ready`, `meta`, or `error`. A `ready`
+message includes `targetId`, `url`, and `title`; `meta` updates `url` and `title`
+after allowed navigation and page load. Binary messages contain:
+
+1. A four-byte unsigned big-endian JSON header length.
+2. That many bytes of UTF-8 JSON: `{ "url", "cssWidth", "cssHeight", "scrollX", "scrollY", "ts" }`.
+3. The JPEG bytes.
+
+`cssWidth` and `cssHeight` come from CDP's `deviceWidth` and `deviceHeight`
+metadata and describe the layout viewport in CSS pixels. `scrollX` and `scrollY`
+come from `scrollOffsetX` and `scrollOffsetY`; `ts` is the CDP frame timestamp.
+
+| Close code | Meaning                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| 4001       | Token invalid or expired (normally rejected before upgrade with HTTP 401)                                   |
+| 4003       | `navigation_blocked`                                                                                        |
+| 4004       | `target_closed`, including a profile lifecycle change                                                       |
+| 4005       | Unsupported streaming                                                                                       |
+| 4006       | `authority_revoked` (the requesting Gateway connection ended or was invalidated, e.g. device token revoked) |
+| 1012       | Gateway shutting down                                                                                       |
+
+Chrome MCP existing-session profiles and missing Playwright return HTTP 501 with
+`code: "SCREENCAST_UNSUPPORTED"` and `reason: "existing-session"` or `"playwright"`.
+Node-routed requests fail before proxying with `INVALID_REQUEST` and details
+`{ "code": "SCREENCAST_UNSUPPORTED", "reason": "node" }`. The Control UI falls
+back to the existing screenshot route when streaming is unavailable.
+Navigation metadata updates the tab and address bar; the displayed image keeps
+its own URL and metrics until a replacement frame arrives. While Annotate or
+Inspect is active, the Control UI pins the captured image and its URL, then
+displays the latest held frame when capture mode ends.
 
 ### `/act` error contract
 
@@ -265,7 +348,8 @@ Notes:
   interception is available for managed Playwright profiles; existing-session
   profiles return an unsupported-operation error.
 - Prefer atomic chooser uploads: pass the trigger `--ref` with the upload so OpenClaw arms and clicks in one request. Paths-only `upload` remains supported when a later trigger is intentional. Use `--input-ref` or `--element` to set a file input directly. `dialog` is an arming call; run it before the click/press that triggers the dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
-- `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
+- Cancelling a pending locator click, typing, or upload operation leaves other tabs connected. Upload waiters belong to the selected tab; a new upload on that tab replaces its previous waiter.
+- `click`/`type`/etc require a `ref` from `snapshot` (for example, Playwright ref `f1e12`, role ref `e12`, or actionable ARIA ref `ax12`). Copy the returned ref unchanged, including any frame prefix. CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` accepts files from the OpenClaw temp uploads root and
   OpenClaw-managed inbound media. Managed inbound media can be referenced as
@@ -282,10 +366,12 @@ volatile; prefer `suggestedTargetId` from `tabs` in scripts.
 
 Snapshot flags at a glance:
 
-- `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
+- `--format ai` (default with Playwright): AI snapshot with native Playwright refs, including frame-qualified refs such as `f1e12`.
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
-- `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
+- `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/config-browser-ui-desktop#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
+- A selector-scoped snapshot is a point-in-time observation: if no element matches when the snapshot is requested, it returns an empty snapshot immediately instead of waiting for the snapshot timeout. Use `openclaw browser wait "<selector>"` when the page is expected to add the element later.
+- `--selector` does not change the behavior of page-wide or frame-scoped transport failures; those still use the configured snapshot timeout and diagnostics.
 - With Playwright, `--labels` adds a screenshot with overlayed ref labels
   (prints `MEDIA:<path>`) plus an `annotations` array with each ref's bounding
   box. On `screenshot`, Playwright-backed labels work with `--full-page`,
@@ -298,17 +384,19 @@ Snapshot flags at a glance:
 
 ## Snapshots and refs
 
-OpenClaw supports two "snapshot" styles:
+OpenClaw supports three "snapshot" styles:
 
-- **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
-  - Output: a text snapshot that includes numeric refs.
-  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
+- **AI snapshot (native refs)**: `openclaw browser snapshot` (default; `--format ai`)
+  - Output: a text snapshot with refs such as `f1e12` and matching `refs` metadata.
+  - Actions: `openclaw browser click f1e12`, `openclaw browser type f1e23 "hello"` (use your snapshot's refs).
   - Internally, the ref is resolved via Playwright's `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
+  - Names containing quotes, backslashes, or YAML punctuation remain actionable; use the ref rather than reconstructing a locator from the displayed name.
+  - A missing displayed name can mean an empty accessible name or one above Playwright's 900 UTF-16-unit limit; keep using the returned ref.
   - Add `--labels` to include a screenshot with overlayed `e12` labels. On
     Playwright-backed profiles this also returns per-ref bounding-box metadata
     (`annotations[]`).
@@ -365,7 +453,8 @@ profiles; send actions individually there.
 --actions-file plan.json`, or `openclaw browser batch --actions-file -` to
   read the JSON array from stdin. `--continue` sets `stopOnError=false`; the
   default is to stop on first error. `--target-id` scopes the whole batch to
-  one tab.
+  one tab. `--actions-file` and stdin input are capped at 1,000,000 bytes;
+  split larger plans into multiple batch commands.
 - Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is
   not a nested action). A nested action that changes page state — such as a
   `click` that triggers navigation, or an `evaluate` that mutates the DOM — can
@@ -382,6 +471,10 @@ profiles; send actions individually there.
   `stopOnError` is the default, the array ends at the first failure; with
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero; pass `--json` to preserve the full ordered response for scripts.
+- Nested batches occupy one parent result. If a child action fails, that result
+  reports the first child error. Each batch applies its own `stopOnError`:
+  continuing inside a nested batch does not make it successful or make its
+  parent continue.
 
 ## Wait power-ups
 

@@ -10,12 +10,16 @@ import {
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 // Boundary checks are disposable subprocesses; bound descendant cleanup after timeout.
 const TIMEOUT_KILL_GRACE_MS = 250;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
 
 type ProcessSignal = `SIG${string}`;
@@ -62,13 +66,9 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    // This full-root pass runs all four focused rules, including the narrower
+    // HTTP/window.open guards and both public assertion aliases.
     ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
-    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
-    [
-      "lint:plugins:no-register-http-handler",
-      "pnpm",
-      ["run", "lint:plugins:no-register-http-handler"],
-    ],
     [
       "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
       "pnpm",
@@ -111,7 +111,6 @@ export const BOUNDARY_CHECKS = (
       "pnpm",
       ["run", "lint:extensions:telegram-grammy-types"],
     ],
-    ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
   ] satisfies Array<[label: string, command: string, args: string[]]>
 ).map(([label, command, args]) => ({ label, command, args }));
@@ -209,6 +208,7 @@ export function parseShardSelection(value: unknown) {
 export function selectChecksForShard(
   checks: BoundaryCheck[],
   shardSpec: string | BoundaryShard | BoundaryShard[] | null,
+  coreTestBoundaryOwner: "additional" | "test-types" = "additional",
 ) {
   const shards =
     typeof shardSpec === "string"
@@ -218,11 +218,11 @@ export function selectChecksForShard(
         : shardSpec
           ? [shardSpec]
           : null;
-  if (!shards || shards.length === 0) {
-    return checks;
-  }
-  return checks.filter((_check, index) =>
-    shards.some((shard) => index % shard.count === shard.index),
+  // Transfer only this obligation, after partitioning so other checks keep their owner.
+  return checks.filter(
+    (check, index) =>
+      (!shards?.length || shards.some((shard) => index % shard.count === shard.index)) &&
+      (coreTestBoundaryOwner !== "test-types" || check.label !== "lint:tmp:tsgo-core-boundary"),
   );
 }
 
@@ -294,38 +294,20 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
 }
 
 function terminateChild(child: ChildProcess, signal: ProcessSignal) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal as NodeJS.Signals);
-      return;
-    } catch {}
-  }
-  child.kill(signal as NodeJS.Signals);
+  terminateManagedChild(child, signal as NodeJS.Signals, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 function processGroupAlive(child: ChildProcess) {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!processGroupAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !processGroupAlive(child);
+function waitForProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function finishTerminatedProcessTree(
@@ -607,6 +589,7 @@ Runs supplemental architecture and boundary checks with bounded concurrency.
 
 Options:
   --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  --core-test-boundary-owner=test-types  The required type job owns the core graph boundary
   -h, --help        Show this help
 `;
 }
@@ -614,8 +597,13 @@ Options:
 export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.env) {
   let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
   let help = false;
+  let coreTestBoundaryOwner: "additional" | "test-types" = "additional";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
+    if (arg === "--core-test-boundary-owner=test-types") {
+      coreTestBoundaryOwner = "test-types";
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       help = true;
       continue;
@@ -639,7 +627,7 @@ export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.en
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
-  return { help, shardSpec };
+  return { help, shardSpec, coreTestBoundaryOwner };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -668,7 +656,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
       );
       const shards = parseShardSelection(cliArgs.shardSpec);
-      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards, cliArgs.coreTestBoundaryOwner);
       if (shards) {
         process.stdout.write(
           `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,

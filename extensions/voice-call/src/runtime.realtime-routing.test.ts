@@ -6,11 +6,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { finalizeTestManagerCalls } from "./manager.test-harness.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -48,13 +50,15 @@ function createStateRuntime(): VoiceCallStateRuntime["state"] {
 function createRealtimeProvider(params: {
   id: string;
   connect: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  requests?: RealtimeVoiceBridgeCreateRequest[];
 }): RealtimeVoiceProviderPlugin {
   return {
     id: params.id,
     label: params.id,
     isConfigured: () => true,
-    createBridge: vi.fn(
-      (): RealtimeVoiceBridge => ({
+    createBridge: vi.fn((request): RealtimeVoiceBridge => {
+      params.requests?.push(request);
+      return {
         connect: params.connect,
         sendAudio: vi.fn(),
         setMediaTimestamp: vi.fn(),
@@ -63,8 +67,8 @@ function createRealtimeProvider(params: {
         close: vi.fn(),
         isConnected: () => true,
         triggerGreeting: vi.fn(),
-      }),
-    ),
+      };
+    }),
   };
 }
 
@@ -83,7 +87,12 @@ describe("voice-call realtime route ownership", () => {
     let runtime: VoiceCallRuntime | undefined;
     const salesConnect = vi.fn(async () => {});
     const supportConnect = vi.fn(async () => {});
-    const salesProvider = createRealtimeProvider({ id: "openai", connect: salesConnect });
+    const salesRequests: RealtimeVoiceBridgeCreateRequest[] = [];
+    const salesProvider = createRealtimeProvider({
+      id: "openai",
+      connect: salesConnect,
+      requests: salesRequests,
+    });
     const supportProvider = createRealtimeProvider({ id: "xai", connect: supportConnect });
     const registrations = new Map([
       [
@@ -195,21 +204,52 @@ describe("voice-call realtime route ownership", () => {
         ),
       ).toEqual(["sales", "support"]);
 
-      for (const ws of sockets) {
-        const closed = waitForClose(ws);
-        ws.close(1000);
-        await closed;
-      }
-      await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0));
+      const hangupCall = vi.spyOn(runtime.provider, "hangupCall");
+      const closed = Promise.all(sockets.map((ws) => waitForClose(ws)));
+      salesRequests[0]?.onClose?.("completed");
+      sockets[1]?.close(1000);
+      await closed;
+      await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0), {
+        timeout: 3_000,
+      });
+      expect(hangupCall).toHaveBeenCalledTimes(2);
+      expect(hangupCall).toHaveBeenCalledWith(
+        expect.objectContaining({ providerCallId: "CA-sales", reason: "completed" }),
+      );
+      expect(hangupCall).toHaveBeenCalledWith(
+        expect.objectContaining({ providerCallId: "CA-support", reason: "hangup-bot" }),
+      );
+      await expect(runtime.manager.getCallHistory()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            endReason: "completed",
+            providerCallId: "CA-sales",
+            state: "completed",
+          }),
+          expect.objectContaining({
+            endReason: "hangup-bot",
+            providerCallId: "CA-support",
+            state: "hangup-bot",
+          }),
+        ]),
+      );
     } finally {
       await runtime?.stop();
       for (const ws of sockets) {
         if (ws.readyState !== WebSocket.CLOSED) {
+          const closed = waitForClose(ws);
           ws.terminate();
+          await closed;
         }
       }
       await Promise.all(servers.map((server) => server.close()));
-      resetPluginStateStoreForTests();
+      try {
+        if (runtime) {
+          finalizeTestManagerCalls(runtime.manager);
+        }
+      } finally {
+        resetPluginStateStoreForTests();
+      }
     }
   });
 });

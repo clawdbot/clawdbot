@@ -61,8 +61,8 @@ export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile 
         : Date.now();
     subscribers.push({
       to,
-      accountId,
-      messageThreadId,
+      ...(accountId ? { accountId } : {}),
+      ...(messageThreadId != null ? { messageThreadId } : {}),
       mode,
       addedAtMs,
     });

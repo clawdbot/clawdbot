@@ -9,18 +9,15 @@ import type {
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
-  resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
-  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
 const OPENROUTER_CLIP_MUSIC_MODEL = "google/lyria-3-clip-preview";
@@ -272,9 +269,8 @@ async function readOpenRouterAudioStream(
     maxBytes,
   };
   const maxEventBytes = resolveOpenRouterSseEventMaxBytes(maxBytes);
-  let buffer = "";
+  const lineFragments: string[] = [];
   let pendingBytes = 0;
-  let doneSeen = false;
   try {
     for (;;) {
       const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
@@ -289,10 +285,17 @@ async function readOpenRouterAudioStream(
           );
         }
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/u);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
+      const chunk = decoder.decode(value, { stream: true });
+      let start = 0;
+      // Audio events can span many chunks; scan only new text and join each line once.
+      for (let end = chunk.indexOf("\n"); end !== -1; end = chunk.indexOf("\n", start)) {
+        let line = chunk.slice(start, end);
+        start = end + 1;
+        if (lineFragments.length > 0) {
+          lineFragments.push(line);
+          line = lineFragments.join("");
+          lineFragments.length = 0;
+        }
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
           // Once [DONE] is observed, the generated result is authoritative.
@@ -304,23 +307,20 @@ async function readOpenRouterAudioStream(
           };
         }
       }
+      if (start < chunk.length) {
+        lineFragments.push(chunk.slice(start));
+      }
     }
     resolveOpenRouterStreamRemainingMs(deadline);
-    buffer += decoder.decode();
+    lineFragments.push(decoder.decode());
+    const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
     if (pendingBytes > maxEventBytes) {
       throw new Error(
         `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
       );
     }
-    if (buffer.trim()) {
-      for (const line of buffer.split(/\r?\n/u)) {
-        if (processOpenRouterSseLine(line.trim(), result)) {
-          doneSeen = true;
-        }
-      }
-    }
-    if (!doneSeen) {
+    if (!processOpenRouterSseLine(buffer.trim(), result)) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
     flushOpenRouterMusicAudio(result);
@@ -371,33 +371,13 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("OpenRouter music generation supports at most one reference image.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("OpenRouter API key missing");
-      }
-
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.openrouter?.request,
-          ),
-          provider: "openrouter",
+        await resolveOpenRouterGenerationRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
           capability: "audio",
-          transport: "http",
+          jsonContentType: true,
         });
       const model = resolveOpenRouterMusicModel(req.model);
       const format = req.format ?? "wav";

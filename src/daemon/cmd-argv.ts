@@ -2,12 +2,16 @@
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
 
-export function quoteCmdScriptArg(value: string): string {
+export function quoteCmdScriptArg(
+  value: string,
+  options: { delayedExpansion?: boolean } = {},
+): string {
   assertNoCmdLineBreak(value, "Command argument");
   if (!value) {
     return '""';
   }
-  const escaped = value.replace(/"/g, '\\"').replace(/%/g, "%%").replace(/!/g, "^!");
+  const quoted = value.replace(/"/g, '\\"').replace(/%/g, "%%");
+  const escaped = options.delayedExpansion === false ? quoted : quoted.replace(/!/g, "^!");
   if (!/[ \t"&|<>^()%!]/g.test(value)) {
     return escaped;
   }

@@ -174,7 +174,8 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 	if strings.EqualFold(strings.TrimSpace(targetLang), "en") {
 		return docOutputReady, nil
 	}
-	if extractPromptVersion(frontData) != promptVersion {
+	// Workflow changes can retire public metadata even when source text is unchanged.
+	if extractI18NVersion(frontData, "workflow") != workflowVersion || extractI18NVersion(frontData, "prompt_version") != promptVersion {
 		return docOutputNeedsTranslation, nil
 	}
 
@@ -185,12 +186,12 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 	return docOutputNeedsPostprocess, nil
 }
 
-func extractPromptVersion(frontData map[string]any) int {
+func extractI18NVersion(frontData map[string]any, field string) int {
 	xi, ok := extractXI18N(frontData)
 	if !ok {
 		return 0
 	}
-	value, ok := xi["prompt_version"].(int)
+	value, ok := xi[field].(int)
 	if !ok {
 		return 0
 	}

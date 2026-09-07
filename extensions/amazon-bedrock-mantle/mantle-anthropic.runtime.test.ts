@@ -1,5 +1,10 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { Model } from "openclaw/plugin-sdk/llm";
 // Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import {
+  notifyProviderStreamOpened,
+  withProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
@@ -54,19 +59,77 @@ function firstStreamOptions(deps: ReturnType<typeof createTestDeps>): Record<str
 }
 
 describe("createMantleAnthropicStreamFn", () => {
-  it("uses authToken bearer auth for Mantle Anthropic requests", () => {
+  it.each(["short", "long", "none"] as const)(
+    "keeps the stable system prefix independently cacheable across suffix changes (%s)",
+    async (cacheRetention) => {
+      const systems: unknown[] = [];
+      for (const suffix of ["Today: Monday", "Today: Tuesday"]) {
+        let payload: unknown;
+        const events = await createMantleAnthropicStreamFn()(
+          createTestModel(),
+          {
+            systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          },
+          {
+            apiKey: "synthetic-test-key",
+            cacheRetention,
+            onPayload: (request) => {
+              payload = request;
+              throw new Error("payload captured before network");
+            },
+          },
+        );
+        await events.result();
+        const request = requireRecord(payload, "Mantle payload");
+        systems.push(request.system);
+        expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+        if (cacheRetention === "none") {
+          expect(request.system).toEqual([{ type: "text", text: `Stable workspace\n${suffix}` }]);
+          expect(JSON.stringify(request)).not.toContain("cache_control");
+        } else {
+          expect(request.system).toEqual([
+            {
+              type: "text",
+              text: "Stable workspace",
+              cache_control: {
+                type: "ephemeral",
+                ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
+              },
+            },
+            { type: "text", text: suffix },
+          ]);
+          expect(JSON.stringify(request).match(/"cache_control"/g)?.length).toBeLessThanOrEqual(4);
+        }
+      }
+      if (cacheRetention !== "none") {
+        expect(Array.isArray(systems[0]) && systems[0][0]).toEqual(
+          Array.isArray(systems[1]) && systems[1][0],
+        );
+      }
+    },
+  );
+
+  it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
     const stream = { kind: "anthropic-stream" };
     const model = createTestModel();
     const context = { messages: [] };
     const deps = createTestDeps();
     deps.stream.mockReturnValue(stream as never);
-
-    const result = createMantleAnthropicStreamFn(deps)(model, context, {
-      apiKey: "bedrock-bearer-token",
-      headers: {
-        "X-Caller": "caller-header",
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: "bedrock-bearer-token",
+        onResponse,
+        headers: {
+          "X-Caller": "caller-header",
+        },
       },
-    });
+      acceptanceObserver,
+    );
+
+    const result = createMantleAnthropicStreamFn(deps)(model, context, options);
 
     expect(result).toBe(stream);
     const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
@@ -87,6 +150,9 @@ describe("createMantleAnthropicStreamFn", () => {
       "bedrock-bearer-token",
     );
     expect(streamOptions.thinkingEnabled).toBe(false);
+    expect(streamOptions.onResponse).toBe(onResponse);
+    await notifyProviderStreamOpened({ options: streamOptions, cancelStream: vi.fn() });
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {

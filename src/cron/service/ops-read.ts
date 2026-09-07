@@ -1,5 +1,8 @@
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
@@ -17,6 +20,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsLastRunStatusFilter,
   CronJobsScheduleKindFilter,
+  CronJobsTriggerFilter,
   CronListPageOptions,
   CronListPageResult,
 } from "./list-page-types.js";
@@ -27,7 +31,6 @@ import {
   ensureLoadedForRead,
   ownsStreamSource,
   resolveCurrentDefaultAgentId,
-  resolveEffectiveJobAgentId,
 } from "./ops-shared.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -41,6 +44,7 @@ export async function status(state: CronServiceState) {
     const sqlitePath = resolveOpenClawStateSqlitePath();
     return {
       enabled: state.deps.cronEnabled,
+      triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
       storePath: sqlitePath,
       storage: "sqlite" as const,
       sqlitePath,
@@ -306,72 +310,140 @@ function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRun
   return "all";
 }
 
+function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
+  if (
+    opts?.trigger === "all" ||
+    opts?.trigger === "conditional" ||
+    opts?.trigger === "unconditional"
+  ) {
+    return opts.trigger;
+  }
+  return "all";
+}
+
+const SLOW_LIST_PAGE_MS = 1_000;
+
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
-  return await locked(state, async () => {
-    await ensureLoadedForRead(state);
-    const query = normalizeLowercaseStringOrEmpty(opts?.query);
-    const enabledFilter = resolveEnabledFilter(opts);
-    const scheduleKindFilter = resolveScheduleKindFilter(opts);
-    const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
-    const sortBy = opts?.sortBy ?? "nextRunAtMs";
-    const sortDir = opts?.sortDir ?? "asc";
-    const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
-    const source = state.store?.jobs ?? [];
-    const filtered = source.filter((job) => {
-      if (enabledFilter === "enabled" && !isJobEnabled(job)) {
-        return false;
+  const startedAt = performance.now();
+  let enteredAt: number | undefined;
+  let finishedAt: number | undefined;
+  let sourceCount: number | undefined;
+  let result: CronListPageResult | undefined;
+  try {
+    return await locked(state, async () => {
+      enteredAt = performance.now();
+      try {
+        await ensureLoadedForRead(state);
+        const query = normalizeLowercaseStringOrEmpty(opts?.query);
+        const enabledFilter = resolveEnabledFilter(opts);
+        const scheduleKindFilter = resolveScheduleKindFilter(opts);
+        const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
+        const triggerFilter = resolveTriggerFilter(opts);
+        const sortBy = opts?.sortBy ?? "nextRunAtMs";
+        const sortDir = opts?.sortDir ?? "asc";
+        const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
+        const source = state.store?.jobs ?? [];
+        sourceCount = source.length;
+        const filtered = source.filter((job) => {
+          if (enabledFilter === "enabled" && !isJobEnabled(job)) {
+            return false;
+          }
+          if (enabledFilter === "disabled" && isJobEnabled(job)) {
+            return false;
+          }
+          if (
+            requestedAgentId &&
+            tryResolveCronJobEffectiveAgentId(job, resolveCurrentDefaultAgentId(state)) !==
+              requestedAgentId
+          ) {
+            return false;
+          }
+          if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
+            return false;
+          }
+          if (
+            lastRunStatusFilter !== "all" &&
+            (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
+          ) {
+            return false;
+          }
+          if (triggerFilter === "conditional" && !job.trigger) {
+            return false;
+          }
+          if (triggerFilter === "unconditional" && job.trigger) {
+            return false;
+          }
+          if (!query) {
+            return true;
+          }
+          const haystack = normalizeLowercaseStringOrEmpty(
+            [
+              job.id,
+              job.name,
+              job.description ?? "",
+              job.agentId ?? "",
+              ...(job.displayName ? [job.displayName] : []),
+            ].join(" "),
+          );
+          return haystack.includes(query);
+        });
+        // Hash the complete sorted result under the lock, but detach only the page
+        // that can outlive later in-place execution state changes.
+        const sortedJobs = sortCronJobs(filtered, sortBy, sortDir);
+        const snapshotRevision = resolveCronListSnapshotRevision(sortedJobs);
+        const total = sortedJobs.length;
+        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+        const defaultLimit = total === 0 ? 50 : total;
+        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+        const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
+        const nextOffset = offset + jobs.length;
+        return (result = {
+          jobs,
+          snapshotRevision,
+          total,
+          offset,
+          limit,
+          hasMore: nextOffset < total,
+          nextOffset: nextOffset < total ? nextOffset : null,
+        } satisfies CronListPageResult);
+      } finally {
+        finishedAt = performance.now();
       }
-      if (enabledFilter === "disabled" && isJobEnabled(job)) {
-        return false;
-      }
-      if (
-        requestedAgentId &&
-        resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
-      ) {
-        return false;
-      }
-      if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
-        return false;
-      }
-      if (
-        lastRunStatusFilter !== "all" &&
-        (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
-      ) {
-        return false;
-      }
-      if (!query) {
-        return true;
-      }
-      const haystack = normalizeLowercaseStringOrEmpty(
-        [
-          job.id,
-          job.name,
-          job.description ?? "",
-          job.agentId ?? "",
-          ...(job.displayName ? [job.displayName] : []),
-        ].join(" "),
-      );
-      return haystack.includes(query);
     });
-    // Hash the complete sorted result under the lock, but detach only the page
-    // that can outlive later in-place execution state changes.
-    const sortedJobs = sortCronJobs(filtered, sortBy, sortDir);
-    const snapshotRevision = resolveCronListSnapshotRevision(sortedJobs);
-    const total = sortedJobs.length;
-    const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-    const defaultLimit = total === 0 ? 50 : total;
-    const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
-    const nextOffset = offset + jobs.length;
-    return {
-      jobs,
-      snapshotRevision,
-      total,
-      offset,
-      limit,
-      hasMore: nextOffset < total,
-      nextOffset: nextOffset < total ? nextOffset : null,
-    } satisfies CronListPageResult;
-  });
+  } finally {
+    const completedAt = performance.now();
+    const elapsedMs = completedAt - startedAt;
+    if (elapsedMs >= SLOW_LIST_PAGE_MS) {
+      // These are wall times: waiting includes scheduling, and callback awaits
+      // include unrelated work. Keep queue completion delay separate from both.
+      try {
+        state.deps.log.warn(
+          {
+            operation: "cron.listPage",
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            elapsedMs: Math.round(elapsedMs),
+            waitToCallbackMs:
+              enteredAt === undefined ? undefined : Math.round(enteredAt - startedAt),
+            callbackMs:
+              enteredAt === undefined || finishedAt === undefined
+                ? undefined
+                : Math.round(finishedAt - enteredAt),
+            completionDelayMs:
+              finishedAt === undefined ? undefined : Math.round(completedAt - finishedAt),
+            sourceCount,
+            matchedCount: result?.total,
+            returnedCount: result?.jobs.length,
+            outcome: result ? "ok" : "error",
+            thresholdMs: SLOW_LIST_PAGE_MS,
+          },
+          "cron: slow list page",
+        );
+      } catch {
+        // Diagnostics must not replace the operation result or original error.
+      }
+    }
+  }
 }

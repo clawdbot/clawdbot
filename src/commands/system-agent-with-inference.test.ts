@@ -205,6 +205,7 @@ describe("runSystemAgentWithInference", () => {
     expect(runGuidedOnboarding).toHaveBeenCalledWith(
       { workspace: "/tmp/work", acceptRisk: true },
       currentRuntime,
+      { handoffMode: "chat" },
     );
     expect(runSystemAgent).not.toHaveBeenCalled();
   });

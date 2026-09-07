@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueCommandInLane,
-  getActiveTaskCount,
   getCommandLaneSnapshot,
+  getTotalQueueSize,
   resetCommandLane,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
+import { createLaneQueue, type LaneState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import { CommandLane } from "./lanes.js";
 
@@ -75,7 +76,7 @@ describe("scoped command lane lifecycle", () => {
       expect(results).toEqual(Array.from({ length: 10 }, (_, index) => index));
       expect(peakActiveRuns).toBe(10);
       expect(activeRuns).toBe(0);
-      expect(getActiveTaskCount()).toBe(0);
+      expect(getTotalQueueSize()).toBe(0);
       expect(lanes.size).toBe(baselineSize);
       for (const lane of laneNames) {
         expect(lanes.has(lane)).toBe(false);
@@ -182,7 +183,6 @@ describe("scoped command lane lifecycle", () => {
       CommandLane.SystemAgent,
       CommandLane.Cron,
       CommandLane.CronNested,
-      CommandLane.SkillWorkshopReview,
       CommandLane.Subagent,
       CommandLane.Nested,
     ];
@@ -244,12 +244,12 @@ describe("scoped command lane lifecycle", () => {
     });
     const replacementState = {
       lane,
-      queue: [],
+      queue: createLaneQueue(),
       activeTaskIds: new Set<number>(),
       maxConcurrent: 1,
       draining: false,
       generation: 0,
-    };
+    } satisfies LaneState;
 
     lanes.set(lane, replacementState);
     staleGate.resolve();

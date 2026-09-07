@@ -1,9 +1,9 @@
-// Safe recursive removal helpers for focused plugin file-access surfaces.
+// Safe recursive removal without coupling the file-access surface to log redaction.
 import "./fs-safe-defaults.js";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
-import { isMissingPathError } from "./errors.js";
+import { isMissingPathError } from "./errno.js";
 
 async function listDirectoryEntries(root: Root, relativePath: string) {
   return await root.list(relativePath, { withFileTypes: true });
@@ -89,6 +89,7 @@ async function removeDirectoryEntry(
   root: Root,
   relativePath: string,
   suppressNotFound: boolean,
+  recursive: boolean,
 ): Promise<void> {
   const entry = await findDirectoryEntry(root, relativePath).catch((error: unknown) => {
     if (suppressNotFound && isNotFoundError(error)) {
@@ -101,7 +102,7 @@ async function removeDirectoryEntry(
     return;
   }
   assertNotSymbolicLink(relativePath, entry);
-  if (entry.isDirectory) {
+  if (recursive && entry.isDirectory) {
     const children = (
       await listDirectoryEntries(root, relativePath).catch((error: unknown) => {
         if (suppressNotFound && isNotFoundError(error)) {
@@ -119,6 +120,7 @@ async function removeDirectoryEntry(
         root,
         joinRootRelativePath(relativePath, child.name),
         suppressNotFound,
+        true,
       );
     }
   }
@@ -134,20 +136,5 @@ export async function removePathWithinRoot(params: {
   const root = await fsSafeRoot(params.rootDir);
   const suppressNotFound = params.force !== false;
   const recursive = params.recursive === true;
-  const entry = await findDirectoryEntry(root, params.relativePath).catch((error: unknown) => {
-    if (suppressNotFound && isNotFoundError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!entry) {
-    await removeRootRelativePath(root, params.relativePath, suppressNotFound);
-    return;
-  }
-  if (!recursive || !entry.isDirectory) {
-    assertNotSymbolicLink(params.relativePath, entry);
-    await removeRootRelativePath(root, params.relativePath, suppressNotFound);
-    return;
-  }
-  await removeDirectoryEntry(root, params.relativePath, suppressNotFound);
+  await removeDirectoryEntry(root, params.relativePath, suppressNotFound, recursive);
 }

@@ -32,8 +32,13 @@ function createClient(params?: {
         throw params.connectError;
       }
     }),
-    listTools: vi.fn(async (input?: { cursor?: string }, options?: { timeout?: number }) =>
-      params?.list ? await params.list(input, options) : { tools: params?.tools ?? [] },
+    request: vi.fn(
+      async (
+        request: { method: "tools/list"; params?: { cursor?: string } },
+        _schema: unknown,
+        options?: { timeout?: number },
+      ) =>
+        params?.list ? await params.list(request.params, options) : { tools: params?.tools ?? [] },
     ),
     callTool: vi.fn(
       async (
@@ -68,7 +73,7 @@ async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string;
 
 function itWithFrozenClock(name: string, run: () => Promise<void>): void {
   it(name, async () => {
-    // Size and pagination proofs must not spend the separately tested catalog deadline.
+    // Non-timeout catalog proofs must not spend the separately tested catalog deadline.
     useFrozenTime(1_000);
     try {
       await run();
@@ -110,7 +115,7 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
-  it("terminates streamable HTTP sessions on failed startup and manager close", async () => {
+  itWithFrozenClock("terminates HTTP sessions on failed startup and manager close", async () => {
     const events = new Map<string, string[]>();
     const transports = new Map(
       ["failed", "healthy"].map((serverName) => {
@@ -377,8 +382,11 @@ describe("node host MCP manager", () => {
       { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
     );
 
-    expect(client.listTools).toHaveBeenCalledTimes(2);
-    expect(client.listTools.mock.calls.map((call) => call[0])).toEqual([undefined, { cursor: "" }]);
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request.mock.calls.map((call) => call[0].params)).toEqual([
+      undefined,
+      { cursor: "" },
+    ]);
     expect(manager.descriptors.map((descriptor) => descriptor.mcp?.tool)).toEqual([
       "first",
       "second",
@@ -402,7 +410,7 @@ describe("node host MCP manager", () => {
       },
     );
 
-    expect(looping.listTools).toHaveBeenCalledTimes(2);
+    expect(looping.request).toHaveBeenCalledTimes(2);
     expect(looping.close).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("repeated pagination cursor"));
@@ -435,7 +443,7 @@ describe("node host MCP manager", () => {
       },
     );
 
-    expect(endless.listTools).toHaveBeenCalledTimes(128);
+    expect(endless.request).toHaveBeenCalledTimes(128);
     expect(endless.close).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeded 128 pages"));
@@ -472,8 +480,8 @@ describe("node host MCP manager", () => {
       await vi.advanceTimersByTimeAsync(50);
       const manager = await starting;
 
-      expect(slow.listTools).toHaveBeenCalledTimes(2);
-      expect(slow.listTools.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 50]);
+      expect(slow.request).toHaveBeenCalledTimes(2);
+      expect(slow.request.mock.calls.map((call) => call[2]?.timeout)).toEqual([50, 50]);
       expect(slow.close).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));
@@ -512,7 +520,7 @@ describe("node host MCP manager", () => {
         },
       );
 
-      expect(oversized.listTools).toHaveBeenCalledTimes(2);
+      expect(oversized.request).toHaveBeenCalledTimes(2);
       expect(oversized.close).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/listing exceeded \d+ bytes/u));
@@ -561,7 +569,7 @@ describe("node host MCP manager", () => {
           warn,
         },
       );
-      await vi.waitFor(() => expect(client.listTools).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
 
       controller.abort();
       const manager = await starting;

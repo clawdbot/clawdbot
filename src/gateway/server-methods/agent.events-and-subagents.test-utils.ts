@@ -21,8 +21,8 @@ import {
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
@@ -55,7 +55,6 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
 
@@ -117,7 +116,7 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-rotation-complete",
@@ -214,7 +213,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "public-provenance-accounting",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -355,7 +354,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "admin-sender-owner",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -497,7 +496,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "model-run-raw",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -666,6 +665,8 @@ describe("gateway agent handler", () => {
     primeMainAgentRun();
     const respond = vi.fn();
     const logInfo = vi.fn();
+    const context = makeContext();
+    context.logGateway.info = logInfo;
 
     await invokeAgent(
       {
@@ -679,15 +680,7 @@ describe("gateway agent handler", () => {
       {
         reqId: "best-effort-delivery-fallback",
         respond,
-        context: {
-          dedupe: new Map(),
-          addChatRun: vi.fn(),
-          chatAbortControllers: new Map(),
-          logGateway: { info: logInfo, error: vi.fn() },
-          broadcastToConnIds: vi.fn(),
-          getSessionEventSubscriberConnIds: () => new Set(),
-          getRuntimeConfig: () => mocks.loadConfigReturn,
-        } as unknown as GatewayRequestContext,
+        context,
       },
     );
 
@@ -775,7 +768,13 @@ describe("gateway agent handler", () => {
     expect(rejection).toBeUndefined();
   });
 
-  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      ["not-a-real-channel", "cron-event", "exec-event"].map(
+        (channel) => [field, channel] as const,
+      ),
+    ),
+  )("rejects unknown %s hint %s", async (field, channel) => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -785,14 +784,14 @@ describe("gateway agent handler", () => {
         message: "bogus channel",
         agentId: "main",
         sessionKey: "agent:main:main",
-        [field]: "not-a-real-channel",
+        [field]: channel,
         idempotencyKey: `unknown-${field}`,
       } as AgentParams,
       { reqId: `unknown-${field}-1`, respond },
     );
 
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "unknown channel: not-a-real-channel");
+    expectStringFieldContains(error, "message", `unknown channel: ${channel}`);
   });
 
   it("keeps voice-originated followups on the voice message channel without delivery", async () => {
@@ -1099,13 +1098,13 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    const persistTranscriptTurn = mocks.persistSessionTranscriptTurn.getMockImplementation();
-    if (!persistTranscriptTurn) {
-      throw new Error("expected transcript persistence implementation");
+    const stagePendingInput = mocks.stageSessionPendingInput.getMockImplementation();
+    if (!stagePendingInput) {
+      throw new Error("expected pending input staging implementation");
     }
-    mocks.persistSessionTranscriptTurn.mockImplementationOnce(async (...args) => {
+    mocks.stageSessionPendingInput.mockImplementationOnce(async (...args) => {
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
-      return await persistTranscriptTurn(...args);
+      return await stagePendingInput(...args);
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "must not dispatch" }],

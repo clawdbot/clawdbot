@@ -113,6 +113,8 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
     const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
     expect(turnOptions?.channel).toBe("telegram");
+    expect(turnOptions?.conversation.routePeer).toEqual({ kind: "direct", id: "42" });
+    expect(turnOptions?.conversation.parentId).toBeUndefined();
     expect(turnOptions?.from).toBe("telegram:1234");
     expect(turnOptions?.sender?.isBot).toBe(true);
     expect(turnOptions?.message.rawBody).toBe("hello");

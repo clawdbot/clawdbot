@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -13,7 +15,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("logs-layout", artifactRoot)
+    : undefined;
+});
 const proofLabel = process.env.OPENCLAW_UI_E2E_PROOF_LABEL?.trim() || "logs-layout";
 const viewport = { height: 584, width: 863 };
 
@@ -79,10 +87,12 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
         await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, proofLabel, "logs-layout.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, proofLabel, "logs-layout.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
+              page.locator(".log-row").first(),
+            ]),
+          );
         }
 
         const metrics = await page.locator(".logs-card").evaluate((card) => {

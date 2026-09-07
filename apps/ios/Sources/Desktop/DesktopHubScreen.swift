@@ -100,17 +100,11 @@ struct DesktopHubScreen: View {
         source: String?,
         session: String? = nil) -> URL?
     {
-        var queryItems = [URLQueryItem(name: "view", value: "desktop")]
-        if let source = self.normalizedSource(source) {
-            queryItems.append(URLQueryItem(name: "source", value: source))
-        }
-        if let session = self.normalizedSource(session) {
-            queryItems.append(URLQueryItem(name: "session", value: session))
-        }
+        guard let path = self.desktopPath(source: source, session: session) else { return nil }
         return AuthenticatedControlUI.pageURL(
             config: config,
-            path: "/",
-            queryItems: queryItems)
+            path: path,
+            queryItems: [])
     }
 
     static func desktopAuthUserScript(
@@ -147,13 +141,25 @@ struct DesktopHubScreen: View {
         hasher.combine(AuthenticatedControlUI.webContentIdentity(
             config: config,
             storedOperatorToken: storedOperatorToken))
-        hasher.combine(self.normalizedSource(source))
-        hasher.combine(self.normalizedSource(session))
+        hasher.combine(self.desktopPath(source: source, session: session))
         return hasher.finalize()
     }
 
-    private static func normalizedSource(_ source: String?) -> String? {
-        let trimmed = source?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func desktopPath(source: String?, session: String?) -> String? {
+        let basePath = "/focus/desktop"
+        if let source = self.normalizedValue(source) {
+            guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(source) else { return nil }
+            return "\(basePath)/source/\(encoded)"
+        }
+        if let session = self.normalizedValue(session) {
+            guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(session) else { return nil }
+            return "\(basePath)/session/\(encoded)"
+        }
+        return basePath
+    }
+
+    private static func normalizedValue(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 }

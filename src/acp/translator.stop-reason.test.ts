@@ -3,8 +3,8 @@ import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemoryAcpEventLedger } from "./event-ledger.js";
-import { AcpGatewayAgent } from "./translator.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import type { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
@@ -12,7 +12,11 @@ import {
   observeSettlement,
   promptAgent,
 } from "./translator.prompt-harness.test-support.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -44,7 +48,7 @@ async function createDisconnectNoticeHarness(params: { sendAccepted: boolean }) 
   const sessionKey = "agent:main:main";
   const sessionStore = createInMemorySessionStore();
   sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
-  const eventLedger = createInMemoryAcpEventLedger();
+  const eventLedger = createTestAcpEventLedger();
   await eventLedger.startSession({
     sessionId,
     sessionKey,
@@ -68,7 +72,7 @@ async function createDisconnectNoticeHarness(params: { sendAccepted: boolean }) 
     }
     return {};
   }) as GatewayClient["request"];
-  const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
     eventLedger,
     sessionStore,
   });
@@ -140,6 +144,49 @@ describe("acp translator stop reason mapping", () => {
         state: "aborted",
       }),
     );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+  });
+
+  function sendAbortWithCause(agent: AcpGatewayAgent, runId: string): Promise<void> {
+    return agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "aborted",
+        errorMessage: "Tool validation failed: command contains unsupported flag",
+      }),
+    );
+  }
+
+  it("aborted state with errorMessage surfaces the cause before resolving as cancelled", async () => {
+    const { agent, promptPromise, runId, sessionUpdate } = await createPendingPromptHarness();
+    const settlement = observeSettlement(promptPromise);
+
+    await sendAbortWithCause(agent, runId);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "[OpenClaw interruption] Tool validation failed: command contains unsupported flag",
+        },
+      },
+    });
+    expect(sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      settlement.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("resolves as cancelled when the interruption notice delivery rejects", async () => {
+    const { agent, promptPromise, runId, sessionUpdate } = await createPendingPromptHarness();
+    sessionUpdate.mockRejectedValueOnce(new Error("client gone"));
+
+    await sendAbortWithCause(agent, runId);
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
@@ -531,7 +578,7 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
-  it("rejects a superseded pre-ack prompt when a newer prompt has replaced the session entry", async () => {
+  it("cancels a superseded pre-ack prompt before admitting its replacement", async () => {
     let promptCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "chat.send") {
@@ -550,11 +597,11 @@ describe("acp translator stop reason mapping", () => {
 
     const secondPrompt = promptAgent(agent, sessionId, "second");
 
-    await expect(firstPrompt).rejects.toThrow("gateway closed (1006): connection lost");
+    await expect(firstPrompt).resolves.toEqual({ stopReason: "cancelled" });
     await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
   });
 
-  it("rejects stale pre-ack prompts when a superseded send resolves late", async () => {
+  it("keeps replacement disconnect handling isolated when a cancelled send resolves late", async () => {
     vi.useFakeTimers();
     try {
       let firstSendResolve: (() => void) | undefined;
@@ -583,8 +630,14 @@ describe("acp translator stop reason mapping", () => {
 
       const secondPrompt = promptAgent(agent, sessionId, "second");
       void secondPrompt.catch(() => {});
-      await Promise.resolve();
-      expect(sendCount).toBe(2);
+      await expect(firstPrompt).resolves.toEqual({ stopReason: "cancelled" });
+      await vi.waitFor(() => {
+        expect(sendCount).toBe(2);
+      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.abort",
+        expect.objectContaining({ sessionKey: "agent:main:main", runId: expect.any(String) }),
+      );
 
       resolveFirstSend();
       await Promise.resolve();
@@ -630,7 +683,7 @@ describe("acp translator stop reason mapping", () => {
         sessionKey: "agent:main:second",
         cwd: "/tmp",
       });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
         sessionStore,
       });
 
@@ -724,7 +777,7 @@ describe("acp translator stop reason mapping", () => {
       sessionKey: "agent:main:main",
       cwd: "/tmp",
     });
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -775,7 +828,7 @@ describe("acp translator stop reason mapping", () => {
       const sessionId = "session-1";
       const sessionKey = "agent:main:main";
       sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
         sessionStore,
       });
 

@@ -92,7 +92,7 @@ describe("registerNodeCli", () => {
         "--host",
         "gateway.example",
         "--runtime",
-        "node",
+        "bun",
         "--force",
         "--json",
       ],
@@ -103,7 +103,7 @@ describe("registerNodeCli", () => {
       expect.objectContaining({
         port: "19000",
         host: "gateway.example",
-        runtime: "node",
+        runtime: "bun",
         force: true,
         json: true,
       }),
@@ -130,6 +130,23 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayPort: 19000 }),
     );
+  });
+
+  it("hosts worker turns process-locally for an ephemeral node run", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "run", "--ephemeral"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true, ephemeral: true }),
+    );
+    const nodeCommand = program.commands.find((command) => command.name() === "node");
+    const runCommand = nodeCommand?.commands.find((command) => command.name() === "run");
+    expect(runCommand?.helpInformation()).not.toContain("--ephemeral");
+
+    daemonMocks.runNodeHost.mockClear();
+    await createProgram().parseAsync(["node", "run"], { from: "user" });
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
   });
 
   it("falls back to configured node run port when --port is omitted", async () => {

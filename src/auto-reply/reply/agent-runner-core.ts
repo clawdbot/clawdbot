@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -8,7 +9,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -41,6 +41,7 @@ import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./q
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -81,11 +82,13 @@ export function buildSilentFallbackFailurePayload(params: {
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  hasExplicitSilentReply?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
+    params.hasExplicitSilentReply === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
@@ -144,18 +147,15 @@ export function resolveReplyRunDeliveryContext(params: {
   ) {
     return undefined;
   }
-  const threadId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
-    normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
-    normalizeOptionalString(
-      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
-    );
   return normalizeDeliveryContext({
     ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
-    threadId,
+    threadId: resolveRoutedDeliveryThreadId({
+      ctx: params.sessionCtx,
+      sessionKey: params.sessionCtx.SessionKey ?? params.sessionKey,
+    }),
   });
 }
 
@@ -195,7 +195,12 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
 export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
+  runtimeModelSelection?: ModelRef;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
+  // Runtime-owned selection is not a fallback from the caller's nominal model.
+  if (params.runtimeModelSelection) {
+    return { ...params.runtimeModelSelection, persistedAutoFallback: false };
+  }
   const entry = params.fallbackStateEntry;
   const isAutoFallbackOverride =
     entry?.modelOverrideSource === "auto" ||
@@ -218,17 +223,13 @@ export function resolveFallbackOriginModel(params: {
 
 export function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
+  includeStatusLines: boolean;
   includeTraceLines: boolean;
 }): ReplyPayload | undefined {
-  const statusLines =
-    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
-      ? resolveSessionPluginStatusLines(params.entry)
-      : [];
-  const traceLines =
-    params.includeTraceLines &&
-    (params.entry?.traceLevel === "on" || params.entry?.traceLevel === "raw")
-      ? resolveSessionPluginTraceLines(params.entry)
-      : [];
+  const statusLines = params.includeStatusLines
+    ? resolveSessionPluginStatusLines(params.entry)
+    : [];
+  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
   const lines = [...statusLines, ...traceLines];
   if (lines.length === 0) {
     return undefined;
@@ -250,6 +251,7 @@ export function refreshSessionEntryFromStore(params: {
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
+  expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 }): SessionEntry | undefined {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
@@ -261,6 +263,14 @@ export function refreshSessionEntryFromStore(params: {
       sessionKey,
     });
     if (!latestEntry) {
+      return fallbackEntry;
+    }
+    // Completion may refresh facts, but only admission can adopt a replacement generation.
+    if (
+      params.expectedGeneration &&
+      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+    ) {
       return fallbackEntry;
     }
     if (activeSessionStore) {
@@ -289,8 +299,7 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
-    blockReplyPipeline: BlockReplyPipeline | null;
-    didDeliverVisiblePartialReply: () => boolean;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -301,8 +310,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
-    blockReplyPipeline,
-    didDeliverVisiblePartialReply,
+    resolveVisibleReplyDelivery,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -359,19 +367,8 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
-  if (blockReplyPipeline) {
-    try {
-      await blockReplyPipeline.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-  }
-  const didDeliverVisibleReply =
-    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
-    didDeliverVisiblePartialReply();
-  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+  const visibleReplyDelivered = await resolveVisibleReplyDelivery();
+  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({

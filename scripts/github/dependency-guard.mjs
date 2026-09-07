@@ -324,7 +324,7 @@ export function renderTrustedDependencyComment({ actor, headSha }) {
     "",
     "### Dependency graph changes noted",
     "",
-    "This PR includes dependency graph changes. The dependency guard is informational because the PR author is a repository admin or a member of `@openclaw/openclaw-secops`.",
+    "This PR includes dependency graph changes. The dependency guard is informational because the PR author is a repository admin, a member of `@openclaw/openclaw-secops`, or an OpenClaw organization member with Maintain or Admin repository access.",
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
     `- Trusted actor: @${sanitizeGuardDisplayValue(actor.login)}`,
@@ -497,12 +497,27 @@ export function dependencyGuardTrustedActorCandidates({ pullRequest, event, curr
 /**
  * @param {{
  *   candidates: GuardActorCandidate[],
+ *   pullRequest: { author_association?: string },
  *   isDependencyApprover: (login: string) => Promise<string | null>,
+ *   getRepositoryRoleName: (login: string) => Promise<string | null>,
  * }} options
  */
-export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
+export async function findTrustedDependencyGuardActor({
+  candidates,
+  pullRequest,
+  isDependencyApprover,
+  getRepositoryRoleName,
+}) {
   for (const candidate of candidates) {
-    const role = await isDependencyApprover(candidate.login);
+    let role = await isDependencyApprover(candidate.login);
+    if (!role && pullRequest.author_association === "MEMBER") {
+      // GitHub's MEMBER association excludes outside collaborators. Keep this role path separate
+      // from override approvers so Maintain authors cannot authorize another contributor's PR.
+      const repositoryRole = await getRepositoryRoleName(candidate.login);
+      if (repositoryRole === "maintain" || repositoryRole === "admin") {
+        role = `OpenClaw organization member with repository ${repositoryRole} role`;
+      }
+    }
     if (role) {
       return {
         login: candidate.login,
@@ -787,7 +802,7 @@ async function main() {
     return;
   }
 
-  const { isSecurityMember, isRepositoryAdmin } = createGuardApproverChecks({
+  const { getRepositoryRoleName, isSecurityMember, isRepositoryAdmin } = createGuardApproverChecks({
     api,
     owner,
     repo,
@@ -820,7 +835,9 @@ async function main() {
   }
   const trustedActor = await findTrustedDependencyGuardActor({
     candidates: dependencyGuardTrustedActorCandidates({ pullRequest, event, currentHeadSha }),
+    pullRequest,
     isDependencyApprover,
+    getRepositoryRoleName,
   });
   if (trustedActor) {
     if (mode === "detect") {

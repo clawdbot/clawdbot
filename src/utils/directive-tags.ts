@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
@@ -26,8 +27,9 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
+  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/iuy;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
+const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
 const NO_INLINE_DIRECTIVES = {
   audioAsVoice: false,
   replyToCurrent: false,
@@ -118,50 +120,59 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
   };
 }
 
-function stripUnsafeReplyDirectiveChars(value: string): string {
-  const chars: string[] = [];
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if (
-      (code >= 0 && code <= 31) ||
-      code === 127 ||
-      (code >= 0x80 && code <= 0x9f) ||
-      ch === "[" ||
-      ch === "]"
-    ) {
-      continue;
-    }
-    chars.push(ch);
-  }
-  return chars.join("");
-}
-
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const sanitized = stripUnsafeReplyDirectiveChars(trimmed).trim();
+  const sanitized = trimmed.replace(UNSAFE_REPLY_DIRECTIVE_CHARS_RE, "").trim();
   if (!sanitized) {
     return undefined;
   }
-  const chars = Array.from(sanitized);
-  if (chars.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
-    return chars.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
-  }
-  return sanitized;
+  // UTF-16 length is an upper bound on the number of code points.
+  return sanitized.length <= MAX_REPLY_DIRECTIVE_ID_LENGTH
+    ? sanitized
+    : truncateCodePoints(sanitized, MAX_REPLY_DIRECTIVE_ID_LENGTH);
 }
 
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
-  if (!text) {
+  if (!text.includes("[[")) {
     return { text, changed: false };
   }
-  const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, () => " ");
-  const changed = stripped !== text;
-  return {
-    text: changed ? stripped.trim() : text,
-    changed,
-  };
+  // Only malformed prefixes at the absolute message start are control text; keep
+  // the regex non-multiline while code-region scanning preserves literal examples.
+  const codeRegions = findCodeRegions(text);
+  const parts: string[] = [];
+  let cursor = 0;
+  let searchFrom = 0;
+  // A preserved code match still owns its padding; later directives must not consume it.
+  let previousMatchEnd = 0;
+  while (searchFrom < text.length) {
+    const marker = text.indexOf("[[", searchFrom);
+    if (marker < 0) {
+      break;
+    }
+    // Inspect padding only at a marker; retrying from every blank line is quadratic.
+    let start = marker;
+    while (start > previousMatchEnd && /\s/u.test(text.charAt(start - 1))) {
+      start -= 1;
+    }
+    INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex = start;
+    const match = INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.exec(text);
+    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 1;
+    if (!match) {
+      continue;
+    }
+    previousMatchEnd = searchFrom;
+    if (isInsideCode(marker, codeRegions)) {
+      continue;
+    }
+    parts.push(text.slice(cursor, start), match[0].includes("]]") ? " " : "");
+    cursor = searchFrom;
+  }
+  return cursor === 0
+    ? { text, changed: false }
+    : { text: [...parts, text.slice(cursor)].join("").trim(), changed: true };
 }
 
 export function parseInlineDirectives(

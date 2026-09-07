@@ -1,3 +1,4 @@
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
@@ -15,7 +16,6 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    authToken: null,
     loading: false,
     error: null,
     agentsList: {
@@ -82,10 +82,19 @@ export function createAgentViewTestProps(
       error: null,
       result: null,
     },
+    onOpenGitHubConnections: () => undefined,
+    githubIdentity: new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "Mutation unavailable in rendering test.",
+      }),
+    }),
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
-    modelCatalogError: null,
+    modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
@@ -102,7 +111,7 @@ export function createAgentViewTestProps(
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
-    onModelCatalogRetry: () => undefined,
+    onModelCatalogOpen: () => undefined,
     onChannelsRefresh: () => undefined,
     onCronRefresh: () => undefined,
     onCronLoadMore: () => undefined,

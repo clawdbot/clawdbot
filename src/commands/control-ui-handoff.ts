@@ -5,20 +5,19 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { resolveGatewayPort } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
 } from "../gateway/control-ui-contract.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS } from "../infra/control-ui-assets.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { sleep } from "../utils.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
@@ -38,20 +37,17 @@ export async function resolveControlUiHandoffTarget(params: {
   const customBindHost = config.gateway?.customBindHost;
   const tlsConfig = config.gateway?.tls;
   const tlsEnabled = tlsConfig?.enabled === true;
-  const resolvedToken = await resolveGatewayAuthToken({ cfg: config, env, envFallback: "always" });
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
+  const credentialPlan = createGatewayCredentialPlan({ config, env });
+  const resolvedAuth = await resolveGatewayInteractiveSurfaceAuth({
+    config,
     env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
+    surface: "local",
   });
-  const passwordSecretRefConfigured = Boolean(
-    resolveSecretInputRef({
-      value: config.gateway?.auth?.password,
-      defaults: config.secrets?.defaults,
-    }).ref,
-  );
+  const authMode =
+    config.gateway?.auth?.mode ??
+    (credentialPlan.localPassword.value || credentialPlan.envPassword ? "password" : "token");
   const gatewayAuthHandoff =
-    resolvedAuth.mode === "password" && !passwordSecretRefConfigured
+    authMode === "password" && !credentialPlan.localPassword.hasSecretRef
       ? resolvedAuth.password
       : undefined;
 
@@ -96,10 +92,10 @@ export async function resolveControlUiHandoffTarget(params: {
   documentUrl.search = "";
   documentUrl.hash = "";
 
-  const token = resolvedToken.token ?? "";
+  const token = credentialPlan.localToken.value ?? credentialPlan.envToken ?? "";
   // Legacy JSON consumers still need the shared-token URL for their Gateway RPC;
   // browser delivery separately uses a single-use bootstrap and never this URL.
-  const includeTokenInUrl = Boolean(token) && !resolvedToken.secretRefConfigured;
+  const includeTokenInUrl = Boolean(token) && !credentialPlan.localToken.hasSecretRef;
   const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
@@ -109,7 +105,7 @@ export async function resolveControlUiHandoffTarget(params: {
     basePath,
     bind,
     links,
-    authMode: resolvedAuth.mode,
+    authMode,
     gatewayAuthHandoff,
     includeTokenInUrl,
     dashboardUrl,
@@ -142,7 +138,10 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 }
 
 /** Mint the Control-UI-scoped one-time device grant immediately before actual delivery. */
-export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
+export async function issueControlUiBrowserHandoff({
+  httpUrl,
+  wsUrl,
+}: ControlUiHandoffTarget["links"]): Promise<{
   browserUrl: string;
   expiresAtMs: number;
 }> {
@@ -152,6 +151,7 @@ export async function issueControlUiBrowserHandoff(httpUrl: string): Promise<{
   const fragment = new URLSearchParams({
     bootstrapToken: issued.token,
     [CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM]: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+    gatewayUrl: wsUrl,
   });
   return {
     browserUrl: `${httpUrl}#${fragment.toString()}`,
@@ -165,7 +165,6 @@ type ControlUiDocumentReadiness =
 
 type ControlUiDocumentReadinessDeps = {
   fetch?: typeof fetchConfiguredLocalOriginWithSsrFGuard;
-  loadTls?: typeof loadGatewayTlsRuntime;
   now?: () => number;
   sleep?: (timeoutMs: number) => Promise<void>;
 };
@@ -187,26 +186,19 @@ export async function waitForControlUiDocument(params: {
 
   if (params.tlsConfig?.enabled === true) {
     try {
-      const tls = await (params.deps?.loadTls ?? loadGatewayTlsRuntime)({
-        ...params.tlsConfig,
-        autoGenerate: false,
-      });
-      tlsFingerprint = normalizeTlsFingerprint(tls.fingerprintSha256 ?? "");
-      const serverCertificate = tls.tlsOptions?.cert;
-      if (!tls.enabled || !tlsFingerprint || !serverCertificate) {
-        return {
-          ready: false,
-          reason: tls.error || "Gateway TLS certificate fingerprint is unavailable.",
-        };
+      const certificate = await inspectGatewayTlsCertificate(params.tlsConfig);
+      if (!certificate.ok) {
+        return { ready: false, reason: certificate.error };
       }
+      tlsFingerprint = certificate.value.fingerprintSha256;
       const expectedFingerprint = tlsFingerprint;
-      const configuredCa = tls.tlsOptions?.ca;
-      // The Gateway CA may verify clients rather than issue its server cert;
-      // retain both trust anchors before checking the actual peer fingerprint.
+      // Trust the configured public certificate even when it is CA-signed;
+      // peer pinning still binds the connection to that exact leaf certificate.
       tlsConnect = {
-        ca: configuredCa ? [serverCertificate, configuredCa].flat() : serverCertificate,
-        checkServerIdentity: (_hostname: string, certificate: PeerCertificate) =>
-          normalizeTlsFingerprint(certificate.fingerprint256 ?? "") === expectedFingerprint
+        ca: certificate.value.cert,
+        allowPartialTrustChain: true,
+        checkServerIdentity: (_hostname: string, peerCertificate: PeerCertificate) =>
+          normalizeTlsFingerprint(peerCertificate.fingerprint256 ?? "") === expectedFingerprint
             ? undefined
             : new Error("Gateway TLS certificate fingerprint mismatch."),
       };

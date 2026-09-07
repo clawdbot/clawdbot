@@ -1,6 +1,7 @@
 // Memory Wiki tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
@@ -18,6 +19,8 @@ import {
   loadMemoryWikiVaultIdentity,
   resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
+import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
+import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
@@ -39,6 +42,40 @@ const toolMocks = vi.hoisted(() => {
 vi.mock("./src/tool.js", () => toolMocks);
 
 const { createPluginApi, createTempDir } = createMemoryWikiTestHarness();
+
+function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
+  return {
+    digest: { claimCount: 0, contradictionCount: 0, pages: [] },
+    claims: [],
+    dashboards: {
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
+      overview: {
+        totalItems: 0,
+        totalPages: 0,
+        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [],
+        truncated: false,
+      },
+    },
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 describe("memory-wiki plugin", () => {
   it("registers prompt supplement, gateway methods, tools, and wiki cli surface", () => {
@@ -106,6 +143,22 @@ describe("memory-wiki plugin", () => {
           hasSubcommands: true,
         },
       ],
+    });
+  });
+
+  it("registers default-vault tools inside the configured state directory", () => {
+    const stateDir = "/tmp/openclaw-memory-wiki-runtime-state";
+    const { api, registerTool } = createPluginApi();
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      plugin.register(api);
+      const statusFactory = registerTool.mock.calls.find(
+        ([, registration]) => registration.name === "wiki_status",
+      )?.[0];
+
+      expect(statusFactory?.({ agentId: "main" })).toMatchObject({
+        testConfig: { vault: { path: path.join(stateDir, "wiki", "main") } },
+      });
     });
   });
 
@@ -200,6 +253,107 @@ describe("memory-wiki plugin", () => {
     });
   });
 
+  it("fences cache publication when the plugin service stops", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-stop-fence-");
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    plugin.register(api);
+    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+    const identity = await loadMemoryWikiVaultIdentity(rootDir);
+    if (!identity.vaultGeneration) {
+      throw new Error("Expected an active Memory Wiki vault generation");
+    }
+    const snapshot = emptyCompiledSnapshot();
+    const validationEntered = deferred();
+    const releaseValidation = deferred();
+    const commitPublication = vi.fn();
+    const publicationId = createMemoryWikiCompiledCachePublicationId();
+    const publication = writeMemoryWikiCompiledCache(
+      config,
+      snapshot,
+      resolveMemoryWikiCompiledCacheGeneration(snapshot),
+      publicationId,
+      null,
+      async () => {
+        validationEntered.resolve();
+        await releaseValidation.promise;
+      },
+      commitPublication,
+      async () => ({
+        vaultGeneration: identity.vaultGeneration,
+        compiledCachePublicationId: publicationId,
+      }),
+    );
+    await validationEntered.promise;
+
+    await service?.stop?.();
+    releaseValidation.resolve();
+
+    await expect(publication).rejects.toThrow("cache owner retired before publication");
+    expect(commitPublication).not.toHaveBeenCalled();
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+  });
+
+  it.each(["wiki.importInsights", "wiki.compile"])(
+    "closes queued %s source sync before it can activate a vault",
+    async (method) => {
+      const rootDir = await createTempDir("memory-wiki-index-stop-sync-");
+      const { api, registerGatewayMethod, registerService } = createPluginApi();
+      api.pluginConfig = { vault: { path: rootDir } };
+      plugin.register(api);
+      const config = resolveMemoryWikiConfig(api.pluginConfig);
+      const service = registerService.mock.calls[0]?.[0];
+      await service?.start?.();
+
+      const mutationEntered = deferred();
+      const releaseMutation = deferred();
+      const mutation = withMemoryWikiVaultMutation(rootDir, async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+      });
+      await mutationEntered.promise;
+      const handler = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
+      if (!handler) {
+        throw new Error(`Expected ${method} gateway handler`);
+      }
+      const request = handler({ params: {}, respond: vi.fn() });
+      await vi.waitFor(async () => {
+        const drainState = await Promise.race([
+          waitForMemoryWikiImportedSourceSyncs().then(() => "settled" as const),
+          new Promise<"pending">((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
+        ]);
+        expect(drainState).toBe("pending");
+      });
+
+      const stop = service?.stop?.();
+      releaseMutation.resolve();
+      await mutation;
+      await request;
+      await stop;
+
+      const snapshot = emptyCompiledSnapshot();
+      await expect(
+        writeMemoryWikiCompiledCache(
+          config,
+          snapshot,
+          resolveMemoryWikiCompiledCacheGeneration(snapshot),
+          createMemoryWikiCompiledCachePublicationId(),
+          null,
+          async () => {},
+          async () => {},
+          () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+        ),
+      ).rejects.toThrow("vault is not active");
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    },
+  );
+
   it("clears active owners before a fallible lifecycle identity refresh", async () => {
     const rootDir = await createTempDir("memory-wiki-index-refresh-failure-");
     const { api, registerService } = createPluginApi();
@@ -211,10 +365,7 @@ describe("memory-wiki plugin", () => {
     const service = registerService.mock.calls[0]?.[0];
     await service?.start?.();
 
-    const snapshot: MemoryWikiCompiledCacheSnapshot = {
-      digest: { claimCount: 0, contradictionCount: 0, pages: [] },
-      claims: [],
-    };
+    const snapshot = emptyCompiledSnapshot();
     const publicationId = createMemoryWikiCompiledCachePublicationId();
     const reservationId = createMemoryWikiCompiledCachePublicationId();
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))

@@ -21,7 +21,7 @@ import {
   truncateToVisibleWidth,
   visibleWidth,
 } from "../../packages/terminal-core/src/ansi.js";
-import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import { noteToStream as emitNote } from "../../packages/terminal-core/src/note.js";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
   stylePromptMessage,
@@ -46,8 +46,8 @@ import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
 const SPINNER_DECORATION_COLUMNS = 10;
 
-function readProgressColumns(): number | undefined {
-  const columns = process.stdout.columns;
+function readProgressColumns(output: NodeJS.WriteStream): number | undefined {
+  const columns = output.columns;
   if (typeof columns !== "number" || !Number.isFinite(columns) || columns <= 0) {
     return undefined;
   }
@@ -70,10 +70,10 @@ function clampProgressLabel(label: string, columns: number | undefined): string 
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
-function guardCancel<T>(value: T | symbol, signal?: AbortSignal): T {
+function guardCancel<T>(value: T | symbol, output: NodeJS.WriteStream, signal?: AbortSignal): T {
   if (isCancel(value)) {
     if (!signal?.aborted) {
-      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.", { output });
     }
     throw new WizardCancelledError();
   }
@@ -129,6 +129,7 @@ async function withHorizontalCursorActionsDisabled<T>(
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
+  output: NodeJS.WriteStream,
   externalSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
@@ -177,7 +178,7 @@ async function runPromptWithNavigation<T>(
     if (navigationDirection) {
       throw new WizardNavigationError(navigationDirection);
     }
-    return guardCancel(value, externalSignal);
+    return guardCancel(value, output, externalSignal);
   } finally {
     if (cancellationImmediate) {
       clearImmediate(cancellationImmediate);
@@ -213,19 +214,22 @@ export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boo
 
 // Public factory used by setup/onboard commands. Keep side effects inside method
 // calls so tests can import the module without starting prompts.
-export function createClackPrompter(): WizardPrompter {
+export function createClackPrompter(
+  output: NodeJS.WriteStream = process.stdout,
+  signal?: AbortSignal,
+): WizardPrompter {
   return {
     intro: async (title) => {
-      intro(stylePromptTitle(title) ?? title);
+      intro(stylePromptTitle(title) ?? title, { output });
     },
     outro: async (message) => {
-      outro(stylePromptTitle(message) ?? message);
+      outro(stylePromptTitle(message) ?? message, { output });
     },
     note: async (message, title) => {
-      emitNote(message, title);
+      emitNote(message, title, output);
     },
     plain: async (message) => {
-      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
+      output.write(message.endsWith("\n") ? message : `${message}\n`);
     },
     select: async (params) => {
       const { message, options: styledOptions } = styleSelectParams(params);
@@ -234,40 +238,49 @@ export function createClackPrompter(): WizardPrompter {
       return await withHorizontalCursorActionsDisabled(
         hasPromptNavigation(params.navigation),
         async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            if (params.searchable) {
+          await runPromptWithNavigation(
+            params.navigation,
+            async (promptSignal) => {
+              if (params.searchable) {
+                return params.navigation
+                  ? await autocompleteWithNavigationFooter({
+                      message,
+                      options,
+                      initialValue: params.initialValue,
+                      filter: tokenizedOptionFilter,
+                      signal: promptSignal,
+                      navigation: params.navigation,
+                      output,
+                    })
+                  : await autocomplete({
+                      message,
+                      options,
+                      initialValue: params.initialValue,
+                      filter: tokenizedOptionFilter,
+                      signal: promptSignal,
+                      output,
+                    });
+              }
               return params.navigation
-                ? await autocompleteWithNavigationFooter({
+                ? await selectWithNavigationFooter({
                     message,
                     options,
                     initialValue: params.initialValue,
-                    filter: tokenizedOptionFilter,
-                    signal,
+                    signal: promptSignal,
                     navigation: params.navigation,
+                    output,
                   })
-                : await autocomplete({
+                : await select({
                     message,
                     options,
                     initialValue: params.initialValue,
-                    filter: tokenizedOptionFilter,
-                    signal,
+                    signal: promptSignal,
+                    output,
                   });
-            }
-            return params.navigation
-              ? await selectWithNavigationFooter({
-                  message,
-                  options,
-                  initialValue: params.initialValue,
-                  signal,
-                  navigation: params.navigation,
-                })
-              : await select({
-                  message,
-                  options,
-                  initialValue: params.initialValue,
-                  signal,
-                });
-          }),
+            },
+            output,
+            signal,
+          ),
       );
     },
     multiselect: async (params) => {
@@ -277,40 +290,49 @@ export function createClackPrompter(): WizardPrompter {
       return await withHorizontalCursorActionsDisabled(
         hasPromptNavigation(params.navigation),
         async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            if (params.searchable) {
+          await runPromptWithNavigation(
+            params.navigation,
+            async (promptSignal) => {
+              if (params.searchable) {
+                return params.navigation
+                  ? await autocompleteMultiselectWithNavigationFooter({
+                      message,
+                      options,
+                      initialValues: params.initialValues,
+                      filter: tokenizedOptionFilter,
+                      signal: promptSignal,
+                      navigation: params.navigation,
+                      output,
+                    })
+                  : await autocompleteMultiselect({
+                      message,
+                      options,
+                      initialValues: params.initialValues,
+                      filter: tokenizedOptionFilter,
+                      signal: promptSignal,
+                      output,
+                    });
+              }
               return params.navigation
-                ? await autocompleteMultiselectWithNavigationFooter({
+                ? await multiselectWithNavigationFooter({
                     message,
                     options,
                     initialValues: params.initialValues,
-                    filter: tokenizedOptionFilter,
-                    signal,
+                    signal: promptSignal,
                     navigation: params.navigation,
+                    output,
                   })
-                : await autocompleteMultiselect({
+                : await multiselect({
                     message,
                     options,
                     initialValues: params.initialValues,
-                    filter: tokenizedOptionFilter,
-                    signal,
+                    signal: promptSignal,
+                    output,
                   });
-            }
-            return params.navigation
-              ? await multiselectWithNavigationFooter({
-                  message,
-                  options,
-                  initialValues: params.initialValues,
-                  signal,
-                  navigation: params.navigation,
-                })
-              : await multiselect({
-                  message,
-                  options,
-                  initialValues: params.initialValues,
-                  signal,
-                });
-          }),
+            },
+            output,
+            signal,
+          ),
       );
     },
     text: async (params) => {
@@ -320,7 +342,7 @@ export function createClackPrompter(): WizardPrompter {
         async () =>
           await runPromptWithNavigation(
             params.navigation,
-            async (signal) => {
+            async (promptSignal) => {
               const message = stylePromptMessage(params.message);
               const validateInput = validate
                 ? (value: string | undefined) => validate(value ?? "")
@@ -331,9 +353,15 @@ export function createClackPrompter(): WizardPrompter {
                       message,
                       validate: validateInput,
                       navigation: params.navigation,
-                      signal,
+                      signal: promptSignal,
+                      output,
                     })
-                  : await password({ message, validate: validateInput, signal });
+                  : await password({
+                      message,
+                      validate: validateInput,
+                      signal: promptSignal,
+                      output,
+                    });
               }
               return params.navigation
                 ? await textWithNavigationFooter({
@@ -342,17 +370,22 @@ export function createClackPrompter(): WizardPrompter {
                     placeholder: params.placeholder,
                     validate: validateInput,
                     navigation: params.navigation,
-                    signal,
+                    signal: promptSignal,
+                    output,
                   })
                 : await text({
                     message,
                     initialValue: params.initialValue,
                     placeholder: params.placeholder,
                     validate: validateInput,
-                    signal,
+                    signal: promptSignal,
+                    output,
                   });
             },
-            params.signal,
+            output,
+            params.signal && signal
+              ? AbortSignal.any([params.signal, signal])
+              : (params.signal ?? signal),
           ),
       );
     },
@@ -360,40 +393,47 @@ export function createClackPrompter(): WizardPrompter {
       await withHorizontalCursorActionsDisabled(
         hasPromptNavigation(params.navigation),
         async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            const message = stylePromptMessage(params.message);
-            if (params.navigation) {
-              return await confirmWithNavigationFooter({
+          await runPromptWithNavigation(
+            params.navigation,
+            async (promptSignal) => {
+              const message = stylePromptMessage(params.message);
+              if (params.navigation) {
+                return await confirmWithNavigationFooter({
+                  message,
+                  initialValue: params.initialValue,
+                  vertical: params.layout === "vertical",
+                  navigation: params.navigation,
+                  signal: promptSignal,
+                  output,
+                });
+              }
+              return await confirm({
                 message,
                 initialValue: params.initialValue,
                 vertical: params.layout === "vertical",
-                navigation: params.navigation,
-                signal,
+                signal: promptSignal,
+                output,
               });
-            }
-            return await confirm({
-              message,
-              initialValue: params.initialValue,
-              vertical: params.layout === "vertical",
-              signal,
-            });
-          }),
+            },
+            output,
+            signal,
+          ),
       ),
     progress: (label: string): WizardProgress => {
-      const useClawSpinner =
-        process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
+      const useClawSpinner = output.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
       const spin = useClawSpinner
         ? spinner({
             frames: CLAW_SPINNER_FRAMES,
             delay: 120,
             styleFrame: theme.accent,
+            output,
           })
-        : spinner();
+        : spinner({ output });
       let currentLabel = label;
-      let maxColumns = readProgressColumns();
+      let maxColumns = readProgressColumns(output);
       const renderLabel = () => theme.accent(clampProgressLabel(currentLabel, maxColumns));
       const handleResize = () => {
-        const columns = readProgressColumns();
+        const columns = readProgressColumns(output);
         if (maxColumns === undefined || columns === undefined || columns >= maxColumns) {
           return;
         }
@@ -403,7 +443,7 @@ export function createClackPrompter(): WizardPrompter {
         spin.message(renderLabel());
       };
       if (maxColumns !== undefined) {
-        process.stdout.on("resize", handleResize);
+        output.on("resize", handleResize);
       }
       // Clack erases using bare-message wrapping but writes the frame and dots too.
       // Keeping animated labels to one row prevents long scans from leaking a line each tick.
@@ -413,6 +453,7 @@ export function createClackPrompter(): WizardPrompter {
         indeterminate: true,
         enabled: true,
         fallback: "none",
+        stream: output,
       });
       // Drive both Clack spinner UI and OSC progress output for terminals that
       // display command progress outside the prompt line.
@@ -423,7 +464,7 @@ export function createClackPrompter(): WizardPrompter {
           osc.setLabel(message);
         },
         stop: (message) => {
-          process.stdout.off("resize", handleResize);
+          output.off("resize", handleResize);
           osc.done();
           if (message === undefined) {
             spin.clear();

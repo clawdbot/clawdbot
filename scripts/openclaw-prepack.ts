@@ -6,7 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventory.ts";
 import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
@@ -241,13 +241,7 @@ function run(command: string, args: string[], options: SpawnSyncOptions = {}): v
 export function resolvePrepackBuildEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   now: () => Date = () => new Date(),
-  readGitCommit: () => string | null = () => {
-    const result = spawnSync("git", ["rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return result.status === 0 ? result.stdout.trim() : null;
-  },
+  readGitCommit: () => string | null = readCurrentGitCommit,
 ): NodeJS.ProcessEnv {
   return resolveBuildIdentityEnvironment({
     commitLabel: "build commit",
@@ -276,12 +270,12 @@ async function writeDistInventory(): Promise<void> {
 
 export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   ensurePreparedArtifacts();
-  await writeDistInventory();
   runBuildSmoke();
   // The docs-map receipt serializes source-mutating pack lifecycles before the
   // changelog is touched, so concurrent packs cannot restore each other's files.
   await preparePackageDocsMap(process.cwd());
   try {
+    await writeDistInventory();
     await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {
       allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
@@ -307,8 +301,11 @@ function prepackPreparationRestoreError(error: unknown, restoreError: unknown): 
 async function main(): Promise<void> {
   ensureSupportedSourcePack();
   const buildEnv = resolvePrepackBuildEnvironment();
-  runPnpm(["build"], buildEnv);
-  runPnpm(["ui:build"], buildEnv);
+  // Release preflight already built or restored clean outputs for its exact SHA.
+  // Preserve those artifacts while still running the complete packaging lifecycle.
+  if (buildEnv[PREPARED_RELEASE_ENV]?.trim() !== "1") {
+    runPnpm(["build:package"], buildEnv);
+  }
   await preparePrepackArtifacts(buildEnv);
 }
 

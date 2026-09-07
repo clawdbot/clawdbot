@@ -1,8 +1,13 @@
-// Doctor detection for legacy meeting transcript files and interrupted imports.
+// Doctor detection for legacy meeting transcript files, projections, and interrupted imports.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  TRANSCRIPT_EXPORT_FILE_NAMES,
+  TRANSCRIPT_PATH_SEGMENT_MAX_BYTES,
+} from "../transcripts/store-artifacts.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   hasMatchingRecordedTranscriptArtifact,
@@ -22,20 +27,14 @@ type MeetingTranscriptMigrationDetectionState = {
   exportOwnership: Map<string, MeetingTranscriptExportOwnership>;
   exportOwnershipByFoldedSelector: Map<string, MeetingTranscriptExportOwnership[]>;
   pendingImportCount: number;
+  hasOversizedSessionSlugs: boolean;
 };
-
-const TRANSCRIPT_ARTIFACT_NAMES = new Set([
-  "metadata.json",
-  "summary.json",
-  "summary.md",
-  "transcript.jsonl",
-]);
 
 function hasLegacyArtifactsSync(directory: string): boolean {
   const entries = fs.readdirSync(directory, { withFileTypes: true });
   let found = false;
   for (const entry of entries) {
-    if (!TRANSCRIPT_ARTIFACT_NAMES.has(entry.name.toLowerCase())) {
+    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name.toLowerCase())) {
       continue;
     }
     const stat = fs.lstatSync(path.join(directory, entry.name));
@@ -110,6 +109,7 @@ export function detectLegacyMeetingTranscripts(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
+  artifactPreservingReadOnly?: boolean;
 }): LegacyMeetingTranscriptsDetection {
   const sourceDir = path.join(params.stateDir, "transcripts");
   if (params.doctorOnlyStateMigrations !== true) {
@@ -117,8 +117,10 @@ export function detectLegacyMeetingTranscripts(params: {
   }
   const databaseState = readMeetingTranscriptMigrationDetectionState({
     env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
   const pendingImportCount = databaseState.pendingImportCount;
+  const needsDatabaseRepair = pendingImportCount > 0 || databaseState.hasOversizedSessionSlugs;
   try {
     const rootStat = fs.lstatSync(sourceDir);
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
@@ -167,12 +169,12 @@ export function detectLegacyMeetingTranscripts(params: {
     });
     return {
       sourceDir,
-      hasLegacy: hasSource || pendingImportCount > 0,
+      hasLegacy: hasSource || needsDatabaseRepair,
       pendingImportCount,
     };
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") {
-      return { sourceDir, hasLegacy: pendingImportCount > 0, pendingImportCount };
+      return { sourceDir, hasLegacy: needsDatabaseRepair, pendingImportCount };
     }
     throw error;
   }
@@ -180,17 +182,15 @@ export function detectLegacyMeetingTranscripts(params: {
 
 export function readMeetingTranscriptMigrationDetectionState(params: {
   env: NodeJS.ProcessEnv;
+  artifactPreservingReadOnly?: boolean;
 }): MeetingTranscriptMigrationDetectionState {
-  const databasePath = resolveOpenClawStateSqlitePath(params.env);
-  if (!fs.existsSync(databasePath)) {
-    return {
-      exportOwnership: new Map(),
-      exportOwnershipByFoldedSelector: new Map(),
-      pendingImportCount: 0,
-    };
-  }
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  try {
+  const empty = (): MeetingTranscriptMigrationDetectionState => ({
+    exportOwnership: new Map(),
+    exportOwnershipByFoldedSelector: new Map(),
+    pendingImportCount: 0,
+    hasOversizedSessionSlugs: false,
+  });
+  const read = ({ db: database }: { db: import("node:sqlite").DatabaseSync }) => {
     const tables = new Set(
       database
         .prepare(
@@ -201,13 +201,16 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
     );
     const exportOwnership = new Map<string, MeetingTranscriptExportOwnership>();
     const exportOwnershipByFoldedSelector = new Map<string, MeetingTranscriptExportOwnership[]>();
+    let hasOversizedSessionSlugs = false;
     if (tables.has("meeting_transcript_sessions")) {
       const rows = database
         .prepare(
-          "SELECT session_id, started_at, selector, export_manifest_json, export_pending_json FROM meeting_transcript_sessions",
+          "SELECT session_id, started_at, selector, session_slug, export_manifest_json, export_pending_json FROM meeting_transcript_sessions",
         )
         .all();
       for (const row of rows) {
+        hasOversizedSessionSlugs ||=
+          String(row.session_slug).length > TRANSCRIPT_PATH_SEGMENT_MAX_BYTES;
         const selector = String(row.selector);
         const parsed = JSON.parse(String(row.export_manifest_json)) as unknown;
         if (isRecord(parsed)) {
@@ -237,7 +240,22 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
       exportOwnership,
       exportOwnershipByFoldedSelector,
       pendingImportCount: typeof pendingRow?.count === "number" ? pendingRow.count : 0,
+      hasOversizedSessionSlugs,
     };
+  };
+  if (params.artifactPreservingReadOnly) {
+    return (
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, { env: params.env }) ??
+      empty()
+    );
+  }
+  const databasePath = resolveOpenClawStateSqlitePath(params.env);
+  if (!fs.existsSync(databasePath)) {
+    return empty();
+  }
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    return read({ db: database });
   } finally {
     database.close();
   }

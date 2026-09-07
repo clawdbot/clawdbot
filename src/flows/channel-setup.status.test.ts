@@ -1,4 +1,5 @@
 // Channel setup status tests cover status text and docs link rendering.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -84,17 +85,6 @@ import {
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
 
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  calls: Calls,
-  label: string,
-): Calls[number] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call as Calls[number];
-}
-
 describe("resolveChannelSetupSelectionContributions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,6 +98,24 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
+  });
+
+  it("uses the caller-selected workspace for explicit-fleet status and selection notes", async () => {
+    const params = {
+      cfg: { agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } } },
+      workspaceDir: "/tmp/beta-workspace",
+      accountOverrides: {},
+      installedPlugins: [],
+      selection: [],
+    };
+
+    await collectChannelStatus(params);
+    resolveChannelSelectionNoteLines(params);
+
+    expect(resolveChannelSetupEntries).toHaveBeenCalledTimes(2);
+    for (const [request] of resolveChannelSetupEntries.mock.calls) {
+      expect(request.workspaceDir).toBe(params.workspaceDir);
+    }
   });
 
   it("uses the configured system agent workspace for explicit multi-agent setup", async () => {
@@ -456,7 +464,10 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
 
     expect(formatChannelPrimerLine).toHaveBeenCalledOnce();
-    const [primerMeta] = requireFirstMockCall(formatChannelPrimerLine.mock.calls, "primer line");
+    const [primerMeta] = expectDefined(
+      formatChannelPrimerLine.mock.calls.at(0),
+      "primer line call",
+    );
     expect(primerMeta?.id).toBe("bad\\nid");
     expect(primerMeta?.label).toBe("bad\\nid");
     expect(primerMeta?.selectionLabel).toBe("bad\\nid");
@@ -531,9 +542,9 @@ describe("resolveChannelSetupSelectionContributions", () => {
     });
 
     expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
-    const [selectionMeta, docsLink] = requireFirstMockCall(
-      formatChannelSelectionLine.mock.calls,
-      "selection line",
+    const [selectionMeta, docsLink] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
     );
     expect(selectionMeta?.label).toBe("Zalo\\nBot");
     expect(selectionMeta?.blurb).toBe("Setup\\nhelp");
@@ -545,6 +556,42 @@ describe("resolveChannelSetupSelectionContributions", () => {
     }
     expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
+  });
+
+  it.each([
+    ["empty", "", ""],
+    ["whitespace", " \t ", "Docs:"],
+    ["control-only", "\u001B[2K\u0007", "Docs:"],
+  ] as const)("normalizes %s selection docs prefixes", (_label, prefix, expected) => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: {
+              id: "custom-chat",
+              label: "Custom Chat",
+              selectionLabel: "Custom Chat",
+              docsPath: "/channels/custom-chat",
+              blurb: "External channel.",
+              selectionDocsPrefix: prefix,
+            },
+          },
+        ],
+      }),
+    );
+
+    resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["custom-chat"],
+    });
+
+    const [selectionMeta] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
+    );
+    expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
   });
 
   it("localizes built-in channel blurbs before selection notes", () => {

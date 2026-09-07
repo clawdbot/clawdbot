@@ -36,10 +36,22 @@ const model = {
   maxTokens: 8_192,
 } satisfies Model<"openai-responses">;
 
+const officialOpenAIModel = {
+  ...model,
+  id: "gpt-5.6-luna",
+  name: "GPT-5.6 Luna",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+} satisfies Model<"openai-responses">;
+
 const context = {
   systemPrompt: "Retain the conversation.",
   messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
 } satisfies Context;
+
+function mockCompactResponse(body: unknown): void {
+  sdkState.post.mockResolvedValue(body);
+}
 
 describe("responses compact endpoint", () => {
   beforeEach(() => {
@@ -47,50 +59,79 @@ describe("responses compact endpoint", () => {
     sdkState.post.mockReset();
   });
 
-  it("posts the normal Responses input and returns the validated checkpoint with usage", async () => {
-    sdkState.post.mockResolvedValue({
+  it("accepts retained-message prefixes from the official OpenAI endpoint", async () => {
+    mockCompactResponse({
       object: "response.compaction",
-      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
+      output: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Retain the conversation." }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
+        },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
     });
 
     const result = await requestPreparedOpenAIResponsesCompaction(
       createOpenAIResponsesTransportStreamFn(),
-      model,
+      officialOpenAIModel,
       context,
       { apiKey: "test-key", sessionId: "session-1" },
     );
 
     expect(sdkState.clients[0]).toMatchObject({
       apiKey: "test-key",
-      baseURL: "https://api.x.ai/v1",
+      baseURL: "https://api.openai.com/v1",
     });
     expect(sdkState.post).toHaveBeenCalledWith(
       "/responses/compact",
       expect.objectContaining({
         body: {
-          model: "grok-4.5",
+          model: "gpt-5.6-luna",
           input: [
-            expect.objectContaining({ role: "system", type: "message" }),
+            expect.objectContaining({ role: "developer", type: "message" }),
             expect.objectContaining({ role: "user", type: "message" }),
           ],
         },
       }),
     );
     expect(result).toMatchObject({
+      output: [
+        expect.objectContaining({ role: "developer" }),
+        expect.objectContaining({ role: "user" }),
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
       item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      historyMode: "retained-users",
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
-      model,
+      model: officialOpenAIModel,
       replayMetadata: {
         source: "openai-responses",
-        provider: "xai",
-        model: "grok-4.5",
+        provider: "openai",
+        model: "gpt-5.6-luna",
       },
     });
   });
 
-  it("rejects responses without exactly one encrypted compaction item", async () => {
-    sdkState.post.mockResolvedValue({ object: "response.compaction", output: [], usage: {} });
+  it("rejects retained-message prefixes from native xAI", async () => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
+        },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
 
     await expect(
       requestPreparedOpenAIResponsesCompaction(
@@ -99,7 +140,142 @@ describe("responses compact endpoint", () => {
         context,
         { apiKey: "test-key" },
       ),
-    ).rejects.toThrow("exactly one compaction item");
+    ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it.each([
+    ["missing", [{ type: "message", role: "user", content: [] }]],
+    [
+      "malformed retained-message",
+      [
+        { type: "message", role: "assistant", content: [] },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+    ],
+    [
+      "retained tool-output",
+      [
+        { type: "function_call_output", call_id: "call_1", output: "result" },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+    ],
+    [
+      "duplicated",
+      [
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque-1" },
+        { type: "compaction", id: "cmp_2", encrypted_content: "opaque-2" },
+      ],
+    ],
+    [
+      "non-trailing",
+      [
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+        { type: "message", role: "user", content: [] },
+      ],
+    ],
+  ])("rejects a %s compaction item", async (_case, output) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        model,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it("keeps the checkpoint-only response shape distinct from retained user history", async () => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        model,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).resolves.toMatchObject({ historyMode: "compacted-prefix" });
+  });
+
+  it.each([
+    { type: "input_text", text: 1 },
+    { type: "input_image", detail: "auto" },
+    { type: "input_image", detail: "invalid", image_url: "https://media.example/image.png" },
+    { type: "input_file", file_id: 42 },
+    { type: "output_text", text: "not supported input" },
+  ])("rejects unsupported retained content without rewriting it: %j", async (block) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [
+        { type: "message", role: "user", content: [block] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        officialOpenAIModel,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it.each([model, { ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
+    "rejects endpoint output altered by the $provider route's status policy",
+    async (route) => {
+      mockCompactResponse({
+        object: "response.compaction",
+        output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      await expect(
+        requestPreparedOpenAIResponsesCompaction(
+          createOpenAIResponsesTransportStreamFn(),
+          route,
+          context,
+          { apiKey: "test-key" },
+        ),
+      ).rejects.toThrow("one trailing compaction item");
+    },
+  );
+
+  it.each([
+    "data:image/png;base64,invalid",
+    "data:image/bmp;base64,Qk0=",
+    "data:image/png;base64,/9j/",
+  ])("rejects canonical image output that the transport would change: %s", async (imageUrl) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
+        },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        officialOpenAIModel,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([

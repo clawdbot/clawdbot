@@ -41,6 +41,7 @@ export function renderBrowserPanelTabs(params: {
     onClose: params.onClose,
     onNew: params.onNew,
     newLabel: t("browser.newTab"),
+    newTabAction: true,
     ...(params.hideNewControl ? { newControl: nothing } : {}),
   });
 }

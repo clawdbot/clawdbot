@@ -28,8 +28,11 @@ describe("waitForCronRunCompletion", () => {
       1,
       "cron.runs",
       { id: "dreaming-job", limit: 20, sortDir: "desc" },
-      { timeoutMs: 100 },
+      { timeoutMs: expect.any(Number) },
     );
+    const firstTimeoutMs = callGateway.mock.calls[0]?.[2]?.timeoutMs;
+    expect(firstTimeoutMs).toBeGreaterThan(0);
+    expect(firstTimeoutMs).toBeLessThanOrEqual(100);
   });
 
   it("surfaces recent run history on timeout", async () => {

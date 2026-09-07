@@ -36,6 +36,7 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   ownerDeviceId?: unknown;
   reservationId?: unknown;
   runId?: unknown;
+  runtime?: unknown;
   sessionKey?: unknown;
   status: "accepted";
 } {

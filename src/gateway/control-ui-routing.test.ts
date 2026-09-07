@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 
@@ -41,6 +42,27 @@ describe("isControlUiApprovalDocumentPath", () => {
     { basePath: "/openclaw", pathname: "/approve/id" },
   ])("does not reserve $pathname", ({ basePath, pathname }) => {
     expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
+  });
+});
+
+describe("isControlUiFocusDocumentPath", () => {
+  it.each([
+    { basePath: "", pathname: "/focus" },
+    { basePath: "", pathname: "/focus/" },
+    { basePath: "", pathname: "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb" },
+    { basePath: "", pathname: "/focus/not-supported" },
+    { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
+  ])("classifies $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(true);
+  });
+
+  it.each([
+    { basePath: "", pathname: "/focused" },
+    { basePath: "", pathname: "/focused/terminal" },
+    { basePath: "/openclaw", pathname: "/focus/terminal" },
+    { basePath: "/openclaw", pathname: "/openclaw/focused" },
+  ])("does not classify $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(false);
   });
 });
 
@@ -103,13 +125,29 @@ describe("Control UI SPA fallback Accept routing", () => {
       expected: false,
     },
     {
-      name: "rejected HTML entry with an accepting wildcard",
+      name: "specific HTML rejection overrides an accepting wildcard",
       basePath: "",
       pathname: "/chat",
       method: "GET",
       accept: "text/html;q=0, */*",
-      expected: true,
+      expected: false,
     },
+    ...[
+      { accept: "text/html;q=0, text/*;charset=utf-8", expected: false },
+      { accept: "text/html;charset=utf-8;q=0, text/html;q=1", expected: false },
+      { accept: "text/html;q=0;charset=utf-8, */*", expected: false },
+      { accept: "text/html;q=1;charset=utf-16, */*;q=0", expected: false },
+      { accept: "text/html;profile=other;q=0, */*", expected: true },
+      { accept: 'text/html;note="a,b;c", */*', expected: true },
+      { accept: "application/xhtml+xml", expected: true },
+    ].map(({ accept, expected }) => ({
+      accept,
+      expected,
+      name: `representation precedence: ${accept}`,
+      basePath: "/openclaw",
+      pathname: "/openclaw/chat",
+      method: "HEAD",
+    })),
     {
       name: "nonzero HTML quality",
       basePath: "",

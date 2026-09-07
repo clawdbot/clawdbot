@@ -6,8 +6,8 @@ import {
   countUnsafeAssertions,
   isGovernedAssertionSourcePath,
   main,
-  parseAssertionSafetyBaseline,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
+import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,7 +40,11 @@ function git(cwd: string, args: string[]) {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+    cwd,
+    env,
+    stdio: "ignore",
+  });
 }
 
 afterEach(() => {
@@ -79,6 +83,21 @@ describe("check-assertion-safety-ratchet", () => {
     expect(isGovernedAssertionSourcePath("scripts/example.ts")).toBe(false);
   });
 
+  it("recognizes SAFETY comments after template substitutions and division", () => {
+    // A raw skipTrivia scanner never re-scans the `}` ending a template
+    // substitution, so the closing backtick opened a phantom template that
+    // swallowed every later comment; this pins the line-text approach.
+    const source = [
+      "const label = `count ${total} items`;",
+      "const half = total / 2;",
+      "// SAFETY: the schema parser established Shape.",
+      "const safe = value as Shape;",
+      "const unsafe = value as Shape;",
+    ].join("\n");
+
+    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(1);
+  });
+
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
     const root = tempDirs.make("openclaw-assertion-safety-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
@@ -87,13 +106,7 @@ describe("check-assertion-safety-ratchet", () => {
     const sourcePath = path.join(root, "src/example.ts");
     fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
     fs.writeFileSync(sourcePath, "export const first = value as string;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
       git(root, args);
     }
 
@@ -130,7 +143,9 @@ describe("check-assertion-safety-ratchet", () => {
     );
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(new Map());
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map());
   });
 
   it("allows rebaselining assertion debt already present in the base tree", () => {
@@ -150,8 +165,6 @@ describe("check-assertion-safety-ratchet", () => {
     );
     for (const args of [
       ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
       ["add", "."],
       ["commit", "-m", "base with stale assertion baseline"],
     ]) {
@@ -163,9 +176,9 @@ describe("check-assertion-safety-ratchet", () => {
 
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(
-      new Map([["src/example.ts", 2]]),
-    );
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map([["src/example.ts", 2]]));
   });
 
   it("compares an explicit moving base at the branch fork", () => {
@@ -178,14 +191,7 @@ describe("check-assertion-safety-ratchet", () => {
     );
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = value as string;\n");
     fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = value as string;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-      ["branch", "release"],
-    ]) {
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"], ["branch", "release"]]) {
       git(root, args);
     }
 

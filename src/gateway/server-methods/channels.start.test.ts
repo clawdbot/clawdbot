@@ -71,8 +71,8 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
-async function runChannelsStart(running: boolean) {
-  const startChannel = vi.fn();
+async function runChannelsStart(running: boolean, publicationPending?: boolean) {
+  const startChannel = vi.fn(async () => new Map([["default-account", { status: "handed-off" }]]));
   const respond = vi.fn();
 
   await expectDefined(
@@ -87,6 +87,8 @@ async function runChannelsStart(running: boolean) {
           getRuntimeConfig: mocks.getRuntimeConfig,
           startChannel,
           getRuntimeSnapshot: vi.fn(() => createChannelRuntimeSnapshot(running)),
+          getDeferredChannelReloads: () =>
+            publicationPending === undefined ? [] : [{ channel: "whatsapp", publicationPending }],
         } as unknown as GatewayRequestHandlerOptions["context"],
       },
     ),
@@ -124,6 +126,7 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: true,
+        outcome: { status: "handed-off" },
       },
       undefined,
     );
@@ -139,7 +142,28 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
+        outcome: { status: "handed-off" },
       },
+      undefined,
+    );
+  });
+
+  it("explains a successful manual start while configuration publication is deferred", async () => {
+    const { respond, startChannel } = await runChannelsStart(true, true);
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account", { manual: true });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        started: true,
+        statusIssues: [
+          expect.objectContaining({
+            channel: "whatsapp",
+            accountId: "default-account",
+            kind: "config",
+            message: expect.stringContaining("previous configuration is still in use"),
+          }),
+        ],
+      }),
       undefined,
     );
   });
@@ -174,19 +198,17 @@ describe("channelsHandlers channels.stop", () => {
           context: {
             getRuntimeConfig: mocks.getRuntimeConfig,
             stopChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {},
-                channelAccounts: {
-                  whatsapp: {
-                    "default-account": {
-                      accountId: "default-account",
-                      running: false,
-                    },
+            getRuntimeSnapshot: vi.fn((): ChannelRuntimeSnapshot => ({
+              channels: {},
+              channelAccounts: {
+                whatsapp: {
+                  "default-account": {
+                    accountId: "default-account",
+                    running: false,
                   },
                 },
-              }),
-            ),
+              },
+            })),
           } as unknown as GatewayRequestHandlerOptions["context"],
         },
       ),

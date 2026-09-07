@@ -103,11 +103,6 @@ function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
 }
 
-function asProviderBaseUrl(value: unknown): string | undefined {
-  const trimmed = asTrimmedString(value);
-  return trimmed || undefined;
-}
-
 const TALK_ADMIN_SCOPE = "operator.admin";
 
 function requiresAdminToSetVoice(params: {
@@ -153,7 +148,7 @@ export default definePluginEntry({
         const providerId = active.provider;
         const providerLabel = resolveProviderLabel(providerId);
         const apiKey = asTrimmedString(active.config.apiKey);
-        const baseUrl = asProviderBaseUrl(active.config.baseUrl);
+        const baseUrl = normalizeOptionalString(active.config.baseUrl);
 
         const currentVoiceId = asTrimmedString(active.config.voiceId);
 

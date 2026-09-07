@@ -50,12 +50,9 @@ describe("openclaw-working-phrase", () => {
     expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS - 5_000)).toBe("");
   });
 
-  it("shows a phrase once the wait drags on", async () => {
-    expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000)).toMatch(PHRASE_TEXT);
-  });
-
   it("is stable within a rotation and changes across rotations", async () => {
     const first = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
+    expect(first).toMatch(PHRASE_TEXT);
     const stillFirst = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 10_000);
     expect(stillFirst).toBe(first);
 

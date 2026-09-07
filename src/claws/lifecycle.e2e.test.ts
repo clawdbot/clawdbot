@@ -1,6 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,11 +28,11 @@ async function runOpenClaw(
     VITEST: "",
   };
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
-      { cwd: process.cwd(), env, maxBuffer: 1024 * 1024 },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
+      cwd: process.cwd(),
+      env,
+      maxBuffer: 1024 * 1024,
+    });
     if (options?.expectFailure) {
       throw new Error(`expected command to fail: ${args.join(" ")}`);
     }
@@ -162,6 +162,66 @@ describe("claws lifecycle cli e2e", () => {
         workspace: join(canonicalStateDir, ".openclaw", "workspace-internal-triage"),
       }),
     });
+  });
+
+  it("adds an agent beside an explicit keyed include without rewriting the include file", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-include-e2e-");
+    const configPath = join(stateDir, "openclaw.json");
+    const tonyPath = join(stateDir, "tony.json5");
+    const tonyRaw = `{
+  // This file remains owned by the keyed include.
+  workspace: "/w/tony",
+}\n`;
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(tonyPath, tonyRaw, "utf8");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          agents: {
+            ownership: "explicit",
+            entries: { tony: { $include: "./tony.json5" } },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const preview = await runOpenClaw(
+      ["claws", "add", "src/claws/fixtures/minimal-agent.claw.json", "--dry-run", "--json"],
+      { stateDir },
+    );
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        "src/claws/fixtures/minimal-agent.claw.json",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir },
+    );
+
+    expect(parseJson(result.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "complete",
+      agent: { finalId: "internal-triage" },
+      configCommitted: true,
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      agents?: { ownership?: string; entries?: Record<string, unknown> };
+    };
+    expect(config.agents?.ownership).toBe("explicit");
+    expect(config.agents?.entries).toEqual({
+      tony: { $include: "./tony.json5" },
+      "internal-triage": expect.objectContaining({ name: "Internal Triage" }),
+    });
+    await expect(readFile(tonyPath, "utf8")).resolves.toBe(tonyRaw);
   });
 
   it("creates declared bootstrap and supporting files in the new workspace", async () => {

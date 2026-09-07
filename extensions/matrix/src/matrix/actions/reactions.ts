@@ -1,14 +1,78 @@
 // Matrix plugin module implements reactions behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixReactionRelationsPath,
   selectOwnMatrixReactionEventIds,
   summarizeMatrixReactionEvents,
 } from "../reaction-common.js";
+import { parseMxc } from "../sdk/event-helpers.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
 import type { MatrixActionClientOpts, MatrixRawEvent, MatrixReactionSummary } from "./types.js";
 
 type ActionClient = NonNullable<MatrixActionClientOpts["client"]>;
+type MatrixEmoji = { name: string; identifier: string; url: string };
+
+export async function listMatrixEmojis(
+  roomId: string,
+  opts: MatrixActionClientOpts & { limit?: number } = {},
+): Promise<MatrixEmoji[]> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const [roomState, personalPack] = await Promise.all([
+      client.doRequest("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/state`),
+      client.getAccountData("im.ponies.user_emotes"),
+    ]);
+    if (!Array.isArray(roomState)) {
+      throw new Error("Matrix room state response is invalid.");
+    }
+
+    const packs = roomState
+      .filter(
+        (event): event is Record<string, unknown> =>
+          isRecord(event) &&
+          event.type === "im.ponies.room_emotes" &&
+          typeof event.state_key === "string",
+      )
+      .map((event) => event.content);
+    if (personalPack) {
+      packs.push(personalPack);
+    }
+
+    const emojis: MatrixEmoji[] = [];
+    for (const pack of packs) {
+      if (!isRecord(pack) || !isRecord(pack.images)) {
+        continue;
+      }
+      const packUsage = isRecord(pack.pack) ? pack.pack.usage : undefined;
+      for (const [rawName, image] of Object.entries(pack.images)) {
+        const name = rawName.trim();
+        if (!name || !isRecord(image) || typeof image.url !== "string") {
+          continue;
+        }
+        const url = image.url.trim();
+        const usage = image.usage === undefined ? packUsage : image.usage;
+        if (
+          !parseMxc(url) ||
+          (usage !== undefined &&
+            (!Array.isArray(usage) ||
+              usage.some((value) => typeof value !== "string") ||
+              !usage.includes("emoticon")))
+        ) {
+          continue;
+        }
+        // Matrix reactions send the annotation key literally; MSC2545 supplies no
+        // universal custom-reaction key, so preserve its shortcode and expose the MXC URI.
+        emojis.push({ name, identifier: name, url });
+      }
+    }
+
+    return emojis
+      .toSorted(
+        (left, right) => left.name.localeCompare(right.name) || left.url.localeCompare(right.url),
+      )
+      .slice(0, Math.min(resolveMatrixActionLimit(opts.limit, 100), 100));
+  });
+}
 
 async function listMatrixReactionEvents(
   client: ActionClient,

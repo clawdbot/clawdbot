@@ -23,25 +23,37 @@ describe("acp session manager", () => {
     const controller = new AbortController();
     store.setActiveRun(session.sessionId, "run-1", controller);
 
-    expect(store.getSessionByRunId("run-1")?.sessionId).toBe(session.sessionId);
+    expect(session.activeRunId).toBe("run-1");
+    expect(session.abortController).toBe(controller);
 
     const cancelled = store.cancelActiveRun(session.sessionId);
     expect(cancelled).toBe(true);
-    expect(store.getSessionByRunId("run-1")).toBeUndefined();
+    expect(controller.signal.aborted).toBe(true);
+    expect(session.activeRunId).toBeNull();
+    expect(session.abortController).toBeNull();
   });
 
-  it("removes stale run lookup entries when rebinding an active run", () => {
-    const session = store.createSession({
-      sessionKey: "acp:rebind",
-      cwd: "/tmp",
-    });
+  it.each(["clear", "cancel"] as const)(
+    "does not let stale %s ownership remove a replacement run",
+    (operation) => {
+      const session = store.createSession({
+        sessionKey: "acp:replacement",
+        cwd: "/tmp",
+      });
+      store.setActiveRun(session.sessionId, "run-old", new AbortController());
+      const replacementController = new AbortController();
+      store.setActiveRun(session.sessionId, "run-new", replacementController);
 
-    store.setActiveRun(session.sessionId, "run-old", new AbortController());
-    store.setActiveRun(session.sessionId, "run-new", new AbortController());
+      if (operation === "clear") {
+        store.clearActiveRun(session.sessionId, "run-old");
+      } else {
+        expect(store.cancelActiveRun(session.sessionId, "run-old")).toBe(false);
+      }
 
-    expect(store.getSessionByRunId("run-old")).toBeUndefined();
-    expect(store.getSessionByRunId("run-new")?.sessionId).toBe(session.sessionId);
-  });
+      expect(session.activeRunId).toBe("run-new");
+      expect(replacementController.signal.aborted).toBe(false);
+    },
+  );
 
   it("deletes sessions and aborts active runs on close", () => {
     const session = store.createSession({
@@ -56,7 +68,6 @@ describe("acp session manager", () => {
 
     expect(controller.signal.aborted).toBe(true);
     expect(store.hasSession(session.sessionId)).toBe(false);
-    expect(store.getSessionByRunId("run-close")).toBeUndefined();
   });
 
   it("reports false when deleting a missing session", () => {

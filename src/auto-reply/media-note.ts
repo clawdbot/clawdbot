@@ -1,7 +1,9 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
 import type { RuntimeMsgContext as MsgContext } from "./templating.js";
@@ -41,9 +43,7 @@ function sanitizeInlineMediaNoteValue(value: string | undefined): string {
 }
 
 function formatMediaAttachedLine(params: {
-  path: string;
-  url?: string;
-  type?: string;
+  fact: MediaFact;
   index?: number;
   total?: number;
 }): string {
@@ -51,15 +51,20 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const pathValue = sanitizeInlineMediaNoteValue(params.path);
-  const typeRaw = sanitizeInlineMediaNoteValue(params.type);
+  const pathValue = sanitizeInlineMediaNoteValue(params.fact.path);
+  const typeRaw = sanitizeInlineMediaNoteValue(params.fact.contentType ?? params.fact.kind);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
-  const urlRaw = sanitizeInlineMediaNoteValue(params.url);
+  const urlRaw = sanitizeInlineMediaNoteValue(params.fact.url);
   // When the channel mirrors the local path into the fact URL (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).
   const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
-  return `${prefix}${pathValue}${typePart}${urlPart}]`;
+  const fileName = truncateUtf16Safe(
+    sanitizeInlineMediaNoteValue(basenameFromAnyPath(params.fact.fileName ?? "")),
+    256,
+  );
+  const fileNamePart = fileName ? ` ${JSON.stringify(fileName)}` : "";
+  return `${prefix}${pathValue}${typePart}${urlPart}${fileNamePart}]`;
 }
 
 // WebM is ambiguous, while WMA and ALAC do not have canonical extension mappings.
@@ -141,8 +146,6 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
           {
             fact,
             path: mediaPath,
-            type: fact.contentType ?? fact.kind,
-            url: fact.url,
             index,
           },
         ]
@@ -161,7 +164,9 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
   const visibleEntries = entries.filter((entry) => {
     // Strip audio attachments when transcription succeeded - the transcript is already
     // available in the context, raw audio binary would only waste tokens (issue #4197)
-    const normalizedType = normalizeLowercaseStringOrEmpty(entry.type);
+    const normalizedType = normalizeLowercaseStringOrEmpty(
+      entry.fact.contentType ?? entry.fact.kind,
+    );
     const isAudioByMime = normalizedType === "audio" || normalizedType.startsWith("audio/");
     const isAudioEntry = entry.fact.kind === "audio" || isAudioPath(entry.path) || isAudioByMime;
     if (!isAudioEntry) {
@@ -185,13 +190,10 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
   }));
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
-  if (visibleEntries.length === 1) {
+  const firstVisibleEntry = visibleEntries[0];
+  if (visibleEntries.length === 1 && firstVisibleEntry) {
     return {
-      text: formatMediaAttachedLine({
-        path: visibleEntries[0]?.path ?? "",
-        type: visibleEntries[0]?.type,
-        url: visibleEntries[0]?.url,
-      }),
+      text: formatMediaAttachedLine({ fact: firstVisibleEntry.fact }),
       media,
       mediaIndexes,
     };
@@ -202,11 +204,9 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
   for (const [idx, entry] of visibleEntries.entries()) {
     lines.push(
       formatMediaAttachedLine({
-        path: entry.path,
+        fact: entry.fact,
         index: idx + 1,
         total: count,
-        type: entry.type,
-        url: entry.url,
       }),
     );
   }

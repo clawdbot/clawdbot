@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   buildChannelInboundEventContext,
   buildHostChannelInboundEventContext,
@@ -10,20 +11,36 @@ import {
   consumeChannelAdmissionEvidence,
   copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
-  registerChannelAdmissionEvidenceOwner,
+  readChannelContextGatewayContextResolver,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
+import { registerChannelIngressHostOwner } from "./ingress-host-owner.js";
 import { resolveStableChannelMessageIngress } from "./runtime.js";
 
-async function buildAdmittedContext(participantId: string, allowFrom = [participantId]) {
+async function buildAdmittedContext(
+  participantId: string,
+  allowFrom = [participantId],
+  resolveGatewayContext?: GatewayContextResolver,
+  authentication?: "verified" | "asserted" | "unverified" | "mutable",
+) {
   const record = {};
   const epoch = {};
-  const owner = { channelId: "test", record, epoch, isLive: () => true };
-  const dispose = registerChannelAdmissionEvidenceOwner(owner);
+  const owner = {
+    channelId: "test",
+    record,
+    epoch,
+    isLive: () => true,
+    resolveGatewayContext,
+  };
+  const dispose = registerChannelIngressHostOwner(owner);
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
     accountId: "acct:primary",
-    subject: { stableId: participantId },
+    identity: authentication ? { authentication: "verified" } : undefined,
+    subject: {
+      stableId: participantId,
+      ...(authentication ? { authentication: { stableId: authentication } } : {}),
+    },
     conversation: { kind: "direct", id: "dm-1" },
     contextBinding: {
       agentId: "main",
@@ -33,6 +50,7 @@ async function buildAdmittedContext(participantId: string, allowFrom = [particip
     },
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
+    ...(authentication ? { policy: { minIdentifierAuthentication: "unverified" } } : {}),
     allowFrom,
   });
   try {
@@ -62,6 +80,22 @@ function inspectChannelContext(context: object) {
 }
 
 describe("channel admission evidence", () => {
+  it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
+    const gatewayContext = { owner: "gateway-a" } as never;
+    let live = true;
+    const source = await buildAdmittedContext("person:42", ["person:42"], () =>
+      live ? gatewayContext : undefined,
+    );
+    const copied = { ...source };
+
+    copyChannelParticipantAdmissionEvidence(source, copied);
+
+    expect(readChannelContextGatewayContextResolver(source)?.()).toBe(gatewayContext);
+    expect(readChannelContextGatewayContextResolver(copied)?.()).toBe(gatewayContext);
+    live = false;
+    expect(readChannelContextGatewayContextResolver(source)?.()).toBeUndefined();
+  });
+
   it("carries the resolver participant to one run admission without route inference", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
@@ -78,6 +112,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
+        identifierAuthentication: "evaluated",
       });
       expect(Object.isFrozen(consumed)).toBe(true);
       expect(Object.isFrozen(consumed.invoker)).toBe(true);
@@ -85,6 +120,26 @@ describe("channel admission evidence", () => {
         ingressState: "unknown",
         invoker: { state: "unknown" },
         decisionCoverage: "unknown",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("carries only the redacted identifier-policy explanation through host-owned evidence", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const context = await buildAdmittedContext(
+        "private-person",
+        ["private-person"],
+        undefined,
+        "unverified",
+      );
+      const consumed = inspectChannelContext(context);
+
+      expect(consumed).toMatchObject({
+        ingressState: "present",
+        identifierAuthentication: "evaluated",
       });
     } finally {
       cleanup();
@@ -201,6 +256,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
+        identifierAuthentication: "evaluated",
       });
       expect(
         consumeChannelAdmissionEvidence(
@@ -314,7 +370,7 @@ describe("channel admission evidence", () => {
   it("keeps ordinary public and ownerless host builders non-authoritative", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     const owner = { channelId: "public-test", record: {}, epoch: {}, isLive: () => true };
-    const dispose = registerChannelAdmissionEvidenceOwner(owner);
+    const dispose = registerChannelIngressHostOwner(owner);
     try {
       const ingress = await resolveStableChannelMessageIngress({
         channelId: "public-test",

@@ -7,32 +7,32 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
 import {
-  isAcpSessionKey,
-  isIncognitoSessionKey,
-  isSubagentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../routing/session-key.js";
-import {
+  createSessionVisibilityDecisionChecker,
   listSpawnedSessionKeysWithResult,
   logSessionOwnershipLookupFailure,
-  lookupFailedDenialMessage,
+  renderSessionVisibilityDenial,
+  resolveIncognitoSessionAccessDecision,
+  sessionOwnershipLookupDenied,
+  type SessionVisibilityDecisionAction,
+  type SessionVisibilityDecisionMode,
+  type SessionVisibilityDecisionPolicy,
+  type SessionVisibilityDecisionRow,
+  type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
 } from "./session-visibility-internal.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
 /** Configured visibility mode for session tools and session-related commands. */
-export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+export type SessionToolsVisibility = SessionVisibilityDecisionMode;
 
 /** Agent-to-agent access policy compiled from `tools.agentToAgent` config. */
-export type AgentToAgentPolicy = {
-  enabled: boolean;
+export type AgentToAgentPolicy = SessionVisibilityDecisionPolicy & {
   matchesAllow: (agentId: string) => boolean;
-  isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
 /** Session operation whose visibility error copy should be rendered. */
-export type SessionAccessAction = "history" | "send" | "list" | "status";
+export type SessionAccessAction = SessionVisibilityDecisionAction;
 
 /** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
@@ -63,7 +63,7 @@ function resolveScopedSessionAccess(
 ): ScopedSessionAccessGrant | undefined {
   // Incognito transcripts must never be re-persisted through another session,
   // including host-scoped access paths that bypass normal visibility policy.
-  if (resolveIncognitoSessionAccessDenial(request.targetSessionKey)) {
+  if (resolveIncognitoSessionAccessDecision(request.targetSessionKey)) {
     return undefined;
   }
   for (const provider of scopedSessionAccessProviders) {
@@ -81,13 +81,7 @@ function resolveScopedSessionAccess(
 }
 
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
-export type SessionVisibilityRow = {
-  key: string;
-  agentId?: string;
-  ownerSessionKey?: string;
-  spawnedBy?: string;
-  parentSessionKey?: string;
-};
+export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 
 /** Public compatibility wrapper; direct guards use the richer private result. */
 export async function listSpawnedSessionKeys(params: {
@@ -106,7 +100,7 @@ export async function listSpawnedSessionKeys(params: {
   return result.value;
 }
 
-/** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -114,7 +108,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
-  return "tree";
+  return "all";
 }
 
 /** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
@@ -205,11 +199,13 @@ function matchesCompiledWildcard(
 /** Compile agent-to-agent allow rules into reusable matching predicates. */
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled === true;
+  const enabled = routingA2A?.enabled !== false;
   const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
   const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
+    // Agent-to-agent is on by default; omitted/empty `allow` permits every agent pair.
+    // Blank entries compile to `deny`, so a configured-but-blank list still fails closed.
     if (allowPatterns.length === 0) {
       return true;
     }
@@ -239,77 +235,18 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
   return { enabled, matchesAllow, isAllowed };
 }
 
-function actionPrefix(action: SessionAccessAction): string {
-  if (action === "history") {
-    return "Session history";
-  }
-  if (action === "send") {
-    return "Session send";
-  }
-  if (action === "status") {
-    return "Session status";
-  }
-  return "Session list";
-}
-
-function a2aDisabledMessage(action: SessionAccessAction): string {
-  if (action === "history") {
-    return "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
-  }
-  if (action === "send") {
-    return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";
-  }
-  if (action === "status") {
-    return "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
-  }
-  return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
-}
-
-function a2aDeniedMessage(action: SessionAccessAction): string {
-  if (action === "history") {
-    return "Agent-to-agent history denied by tools.agentToAgent.allow.";
-  }
-  if (action === "send") {
-    return "Agent-to-agent messaging denied by tools.agentToAgent.allow.";
-  }
-  if (action === "status") {
-    return "Agent-to-agent status denied by tools.agentToAgent.allow.";
-  }
-  return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
-}
-
-function crossVisibilityMessage(action: SessionAccessAction): string {
-  const suffix =
-    "Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.";
-  if (action === "history") {
-    return `Session history visibility is restricted. ${suffix}`;
-  }
-  if (action === "send") {
-    return `Session send visibility is restricted. ${suffix}`;
-  }
-  if (action === "status") {
-    return `Session status visibility is restricted. ${suffix}`;
-  }
-  return `Session list visibility is restricted. ${suffix}`;
-}
-
-function selfVisibilityMessage(action: SessionAccessAction): string {
-  return `${actionPrefix(action)} visibility is restricted to the current session (tools.sessions.visibility=self).`;
-}
-
-function resolveIncognitoSessionAccessDenial(
+function toSessionAccessResult(
+  decision: SessionVisibilityDecision,
+  action: SessionAccessAction,
   targetSessionKey: string,
-): SessionAccessResult | undefined {
-  // Session-tool output is persisted into the caller transcript. Process-only
-  // incognito sessions must stay hidden even from owners and scoped grants.
-  if (!isIncognitoSessionKey(targetSessionKey)) {
-    return undefined;
-  }
-  return {
-    allowed: false,
-    status: "forbidden",
-    error: `Session not visible from session tools: ${targetSessionKey}`,
-  };
+): SessionAccessResult {
+  return decision.allowed
+    ? decision
+    : {
+        allowed: false,
+        status: "forbidden",
+        error: renderSessionVisibilityDenial(decision, { action, targetSessionKey }),
+      };
 }
 
 type SessionVisibilityCheckerParams = {
@@ -329,12 +266,12 @@ function createSessionVisibilityCheckerWithResult(
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   let lookupFailureLogged = false;
-  const rowChecker = createSessionVisibilityRowChecker(params);
+  const decisionChecker = createSessionVisibilityDecisionChecker(params);
 
   const check = (targetSessionKey: string): SessionAccessResult => {
-    const incognitoDenial = resolveIncognitoSessionAccessDenial(targetSessionKey);
+    const incognitoDenial = resolveIncognitoSessionAccessDecision(targetSessionKey);
     if (incognitoDenial) {
-      return incognitoDenial;
+      return toSessionAccessResult(incognitoDenial, params.action, targetSessionKey);
     }
     if (params.action !== "list") {
       const scoped = resolveScopedSessionAccess({
@@ -348,12 +285,12 @@ function createSessionVisibilityCheckerWithResult(
     }
     const spawnedKeySet = spawnedKeys?.ok ? spawnedKeys.value : undefined;
     const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
-    const result = rowChecker.check({
+    const result = decisionChecker.check({
       key: targetSessionKey,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
     if (!result.allowed) {
-      const ownedResult = rowChecker.check({
+      const ownedResult = decisionChecker.check({
         key: targetSessionKey,
         spawnedBy: params.requesterSessionKey,
       });
@@ -373,14 +310,14 @@ function createSessionVisibilityCheckerWithResult(
             failure: spawnedKeys.error,
           });
         }
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: lookupFailedDenialMessage(params.action, spawnedKeys.error.kind),
-        };
+        return toSessionAccessResult(
+          sessionOwnershipLookupDenied(spawnedKeys.error.kind),
+          params.action,
+          targetSessionKey,
+        );
       }
     }
-    return result;
+    return toSessionAccessResult(result, params.action, targetSessionKey);
   };
 
   return { check };
@@ -402,113 +339,14 @@ export const createSessionVisibilityChecker = Object.assign(createSessionVisibil
   resolveScopedAccess: resolveScopedSessionAccess,
 });
 
-function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: string): boolean {
-  return (
-    row.ownerSessionKey === requesterSessionKey ||
-    row.spawnedBy === requesterSessionKey ||
-    row.parentSessionKey === requesterSessionKey
-  );
-}
-
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: SessionVisibilityCheckerParams): {
   check: (row: SessionVisibilityRow) => SessionAccessResult;
 } {
-  const requesterAgentId =
-    normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
-    resolveAgentIdFromSessionKey(params.requesterSessionKey, params.defaultAgentId);
-  const check = (row: SessionVisibilityRow): SessionAccessResult => {
-    const targetSessionKey = row.key;
-    const incognitoDenial = resolveIncognitoSessionAccessDenial(targetSessionKey);
-    if (incognitoDenial) {
-      return incognitoDenial;
-    }
-    const isRequesterSession =
-      targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
-    let targetAgentId = normalizeLowercaseStringOrEmpty(row.agentId);
-    if (
-      !targetAgentId &&
-      (targetSessionKey === "current" ||
-        (targetSessionKey === params.requesterSessionKey && !params.defaultAgentId?.trim()))
-    ) {
-      targetAgentId = requesterAgentId;
-    }
-    if (!targetAgentId) {
-      try {
-        targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey, params.defaultAgentId);
-      } catch {
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`,
-        };
-      }
-    }
-    const isRequesterOwned =
-      rowOwnedByRequester(row, params.requesterSessionKey) ||
-      (params.visibility === "tree" &&
-        targetAgentId === requesterAgentId &&
-        params.requesterSessionKey === params.mainSessionKey);
-    const isCrossAgent = targetAgentId !== requesterAgentId;
-    // Row ownership is stronger than agent ids: ACP children may use a backend
-    // agent id while still belonging to the requester that spawned them. Only
-    // native child namespaces can cross that agent boundary; ordinary sessions
-    // remain subject to A2A policy even if malformed lineage claims otherwise.
-    if (
-      !isRequesterSession &&
-      isRequesterOwned &&
-      (!isCrossAgent ||
-        isAcpSessionKey(targetSessionKey) ||
-        isSubagentSessionKey(targetSessionKey)) &&
-      (params.visibility === "tree" || params.visibility === "all")
-    ) {
-      return { allowed: true };
-    }
-    if (isCrossAgent) {
-      if (params.visibility !== "all") {
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: crossVisibilityMessage(params.action),
-        };
-      }
-      if (!params.a2aPolicy.enabled) {
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: a2aDisabledMessage(params.action),
-        };
-      }
-      if (!params.a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-        return {
-          allowed: false,
-          status: "forbidden",
-          error: a2aDeniedMessage(params.action),
-        };
-      }
-      return { allowed: true };
-    }
-
-    if (params.visibility === "self" && !isRequesterSession) {
-      return {
-        allowed: false,
-        status: "forbidden",
-        error: selfVisibilityMessage(params.action),
-      };
-    }
-
-    if (params.visibility === "tree" && !isRequesterSession && !isRequesterOwned) {
-      return {
-        allowed: false,
-        status: "forbidden",
-        error: `${actionPrefix(params.action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`,
-      };
-    }
-
-    return { allowed: true };
+  const checker = createSessionVisibilityDecisionChecker(params);
+  return {
+    check: (row) => toSessionAccessResult(checker.check(row), params.action, row.key),
   };
-
-  return { check };
 }
 
 /** Create a visibility guard, loading spawned-session ownership when direct keys need it. */

@@ -1,8 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayWsClient } from "../ws-types.js";
-import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 function moduleNotFoundError(filePath: string): Error {
   return Object.assign(new Error(`Cannot find module '${filePath}'`), {
@@ -31,56 +29,30 @@ describe("authenticated request dispatcher load failures", () => {
         throw error;
       },
     }));
-    const { createGatewayAuthenticatedRequestDispatcher } =
-      await import("./authenticated-request-dispatch.js");
-    const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
-    const dispatcher = createGatewayAuthenticatedRequestDispatcher({
-      handler: {
-        connId: "stale-install-dispatch",
-        extraHandlers: {},
-        buildRequestContext: () => ({}) as never,
-        send,
-        close: vi.fn(),
-        isClosed: () => false,
-        setCloseCause: vi.fn(),
-        logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      } as unknown as GatewayWsMessageHandlerParams,
-      isWebchatConnect: () => false,
-    });
-    const client = {
-      socket: {},
-      connId: "stale-install-dispatch",
-      usesSharedGatewayAuth: false,
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-    } as GatewayWsClient;
+    // Imported after doMock so the harness binds a dispatcher whose lazy runtime
+    // load hits the mocked failing module.
+    const { createDispatchTestHarness, createOperatorWsClient } =
+      await import("./authenticated-request-dispatch.test-support.js");
+    const harness = createDispatchTestHarness({ connId: "stale-install-dispatch" });
+    const client = createOperatorWsClient({ connId: "stale-install-dispatch" });
 
-    await dispatcher.dispatch(
+    await harness.dispatcher.dispatch(
       { type: "req", id: "stale-install", method: "status", params: {} },
       client,
     );
 
-    await vi.waitFor(() => {
-      expect(send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: "stale-install",
-          ok: false,
-          error: expect.objectContaining({
-            code: "UNAVAILABLE",
-            retryable: false,
-            message: expect.stringContaining("openclaw --profile r13 gateway restart"),
-            details: {
-              code: "STALE_INSTALL",
-              restartCommand: "openclaw --profile r13 gateway restart",
-            },
-          }),
-        }),
-      );
+    expect(await harness.awaitResponseFrame("stale-install")).toMatchObject({
+      id: "stale-install",
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: false,
+        message: expect.stringContaining("openclaw --profile r13 gateway restart"),
+        details: {
+          code: "STALE_INSTALL",
+          restartCommand: "openclaw --profile r13 gateway restart",
+        },
+      },
     });
   });
 });

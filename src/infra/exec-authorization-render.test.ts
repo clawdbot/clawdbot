@@ -94,9 +94,10 @@ describe("exec authorization renderer", () => {
   });
 
   it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
+    const binDir = makeExecApprovalsTempDir();
     const plan = await planShellAuthorization({
       command: "env rg -n needle",
-      env: POSIX_ENV,
+      env: makePathEnv(binDir),
     });
 
     const command = renderOk(
@@ -178,6 +179,21 @@ describe("exec authorization renderer", () => {
     // Builtins run in the shell, not via a filesystem executable, so enforced
     // mode must not rewrite `cd` to a resolved path like /usr/bin/cd.
     expect(command).toBe("cd .");
+  });
+
+  it("rejects shell expansion in safe builtins without rewriting them", async () => {
+    const plan = await planShellAuthorization({
+      command: "true *.txt && head -n 1",
+      env: POSIX_ENV,
+    });
+
+    expect(
+      buildAuthorizedShellCommandFromPlan({
+        plan,
+        mode: "enforced",
+        segmentSatisfiedBy: ["safeBuiltins", "allowlist"],
+      }),
+    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
   it("rewrites quoted POSIX executable source spans", async () => {

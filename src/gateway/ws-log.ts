@@ -7,7 +7,6 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
-import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -23,15 +22,7 @@ const WS_LOG_REDACT_OPTIONS = {
   patterns: getDefaultRedactPatterns(),
 };
 
-type WsInflightEntry = {
-  ts: number;
-  method?: string;
-  meta?: Record<string, unknown>;
-};
-
-const wsInflightCompact = new Map<string, WsInflightEntry>();
 let wsLastCompactConnId: string | undefined;
-const wsInflightOptimized = new Map<string, number>();
 const wsInflightSince = new Map<string, number>();
 const wsLog = createSubsystemLogger("gateway/ws");
 
@@ -96,9 +87,17 @@ function logWsInfoLine(params: {
   wsLog.info(tokens.join(" "));
 }
 
-/** Returns true when gateway WebSocket logging is enabled for the current console. */
-export function shouldLogWs(): boolean {
-  return shouldLogSubsystemToConsole("gateway/ws");
+/** Returns true when a frame can produce console output or required timing state. */
+function shouldLogWs(direction: "in" | "out", kind: string): boolean {
+  if (isVerbose()) {
+    return wsLog.isEnabled("info");
+  }
+  if (kind === "parse-error") {
+    return wsLog.isEnabled("warn");
+  }
+  const recordsTiming = direction === "in" && kind === "req";
+  const readsTiming = direction === "out" && kind === "res";
+  return (recordsTiming || readsTiming) && wsLog.isEnabled("info");
 }
 
 /** Compacts long ids while keeping enough entropy for log correlation. */
@@ -292,43 +291,47 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   return extra;
 }
 
-export function logWs(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
-  if (!shouldLogSubsystemToConsole("gateway/ws")) {
+export function logWs(
+  direction: "in" | "out",
+  kind: string,
+  metaInput?: Record<string, unknown> | (() => Record<string, unknown>),
+) {
+  if (!shouldLogWs(direction, kind)) {
     return;
   }
+  const meta = typeof metaInput === "function" ? metaInput() : metaInput;
+  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
+  const id = typeof meta?.id === "string" ? meta.id : undefined;
+  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
+  let durationMs: number | undefined;
+  if (direction === "in" && kind === "req" && inflightKey) {
+    wsInflightSince.set(inflightKey, Date.now());
+    // Unanswered requests must stay bounded in every log style.
+    if (wsInflightSince.size > 2000) {
+      wsInflightSince.clear();
+    }
+  } else if (direction === "out" && kind === "res" && inflightKey) {
+    const startedAt = wsInflightSince.get(inflightKey);
+    wsInflightSince.delete(inflightKey);
+    if (startedAt !== undefined) {
+      durationMs = Date.now() - startedAt;
+    }
+  }
+
   const style = getGatewayWsLogStyle();
   if (!isVerbose()) {
-    logWsOptimized(direction, kind, meta);
+    logWsOptimized(direction, kind, meta, durationMs);
     return;
   }
 
   if (style === "compact" || style === "auto") {
-    logWsCompact(direction, kind, meta);
+    logWsCompact(direction, kind, meta, durationMs);
     return;
   }
 
-  const now = Date.now();
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
   const method = typeof meta?.method === "string" ? meta.method : undefined;
   const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
   const event = typeof meta?.event === "string" ? meta.event : undefined;
-
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-  if (direction === "in" && kind === "req" && inflightKey) {
-    wsInflightSince.set(inflightKey, now);
-  }
-  const durationMs =
-    direction === "out" && kind === "res" && inflightKey
-      ? (() => {
-          const startedAt = wsInflightSince.get(inflightKey);
-          if (startedAt === undefined) {
-            return undefined;
-          }
-          wsInflightSince.delete(inflightKey);
-          return now - startedAt;
-        })()
-      : undefined;
 
   const dirArrow = direction === "in" ? "←" : "→";
   const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
@@ -352,21 +355,16 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
   logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
 }
 
-function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
+function logWsOptimized(
+  direction: "in" | "out",
+  kind: string,
+  meta: Record<string, unknown> | undefined,
+  durationMs: number | undefined,
+) {
   const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
   const id = typeof meta?.id === "string" ? meta.id : undefined;
   const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
   const method = typeof meta?.method === "string" ? meta.method : undefined;
-
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-
-  if (direction === "in" && kind === "req" && inflightKey) {
-    wsInflightOptimized.set(inflightKey, Date.now());
-    if (wsInflightOptimized.size > 2000) {
-      wsInflightOptimized.clear();
-    }
-    return;
-  }
 
   if (kind === "parse-error") {
     const errorMsg = typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
@@ -385,12 +383,6 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
   if (direction !== "out" || kind !== "res") {
     return;
   }
-
-  const startedAt = inflightKey ? wsInflightOptimized.get(inflightKey) : undefined;
-  if (inflightKey) {
-    wsInflightOptimized.delete(inflightKey);
-  }
-  const durationMs = typeof startedAt === "number" ? Date.now() - startedAt : undefined;
 
   const shouldLog =
     ok === false || (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS);
@@ -416,16 +408,17 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
   });
 }
 
-function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
-  const now = Date.now();
+function logWsCompact(
+  direction: "in" | "out",
+  kind: string,
+  meta: Record<string, unknown> | undefined,
+  durationMs: number | undefined,
+) {
   const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
   const id = typeof meta?.id === "string" ? meta.id : undefined;
   const method = typeof meta?.method === "string" ? meta.method : undefined;
   const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-
-  if (kind === "req" && direction === "in" && inflightKey) {
-    wsInflightCompact.set(inflightKey, { ts: now, method, meta });
+  if (kind === "req" && direction === "in" && connId && id) {
     return;
   }
 
@@ -446,15 +439,7 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
 
   const statusToken = buildWsStatusToken(kind, ok);
 
-  const startedAt =
-    kind === "res" && direction === "out" && inflightKey
-      ? wsInflightCompact.get(inflightKey)?.ts
-      : undefined;
-  if (kind === "res" && direction === "out" && inflightKey) {
-    wsInflightCompact.delete(inflightKey);
-  }
-  const durationToken =
-    typeof startedAt === "number" ? chalk.dim(`${now - startedAt}ms`) : undefined;
+  const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
   const headline = buildWsHeadline({
     kind,

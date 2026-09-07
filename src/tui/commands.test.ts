@@ -56,6 +56,47 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each(["think", "fast"])("offers /%s default to clear the session override", (name) => {
+    const command = getSlashCommands().find((candidate) => candidate.name === name);
+
+    expect(command?.getArgumentCompletions?.("default")).toEqual([
+      { value: "default", label: "default" },
+    ]);
+  });
+
+  it.each([
+    { command: "think", alias: "thinking", level: "max" },
+    { command: "think", alias: "t", level: "max" },
+    { command: "think", alias: "t", level: "default" },
+    { command: "verbose", alias: "v", level: "full" },
+    { command: "reasoning", alias: "reason", level: "stream" },
+    { command: "elevated", alias: "elev", level: "ask" },
+  ])("keeps /$command $level completion on its /$alias alias", ({ command, alias, level }) => {
+    for (const local of [false, true]) {
+      const commands = getSlashCommands({
+        local,
+        thinkingLevels: [{ id: "max", label: "max" }],
+      });
+      const canonical = commands.find((candidate) => candidate.name === command);
+      const alternate = commands.find((candidate) => candidate.name === alias);
+
+      expect(alternate?.getArgumentCompletions?.(level)).toEqual(
+        canonical?.getArgumentCompletions?.(level),
+      );
+      expect(shouldSubmitExactArgumentCompletion(`/${alias} ${level}`, commands)).toBe(true);
+    }
+  });
+
+  it.each([{}, { local: true }])("exposes usage cost in completion and help", (options) => {
+    const commands = getSlashCommands(options);
+    const usage = commands.find((command) => command.name === "usage");
+
+    expect(usage?.description).toContain("cost summary");
+    expect(usage?.getArgumentCompletions?.("co")).toEqual([{ value: "cost", label: "cost" }]);
+    expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
+    expect(helpText(options)).toContain("/usage <off|tokens|full|cost|reset|");
+  });
+
   it.each([
     { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
     { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
@@ -74,9 +115,12 @@ describe("getSlashCommands", () => {
   it("keeps session status on the shared command path and exposes gateway status separately", () => {
     const commands = getSlashCommands();
     const status = commands.find((command) => command.name === "status");
+    const identityAlias = commands.find((command) => command.name === "id");
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
     const openclaw = commands.find((command) => command.name === "openclaw");
     expect(status?.description).toBe("Show current status.");
+    expect(identityAlias?.description).toBe("Show your sender id.");
+    expect(identityAlias?.getArgumentCompletions?.("")).toBeUndefined();
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(openclaw?.description).toBe("Return to OpenClaw");
   });
@@ -122,6 +166,7 @@ describe("getSlashCommands", () => {
     expect(completions).toEqual([
       { value: "off", label: "off" },
       { value: "adaptive", label: "adaptive" },
+      { value: "default", label: "default" },
     ]);
   });
 
@@ -153,7 +198,7 @@ describe("getSlashCommands", () => {
       dynamicCommands: [
         {
           name: "dreaming",
-          textAliases: ["/dreaming"],
+          textAliases: ["/dreaming", "/dream"],
           description: "Enable or disable memory dreaming.",
           source: "plugin",
           scope: "both",
@@ -165,6 +210,9 @@ describe("getSlashCommands", () => {
     expect(commands.find((command) => command.name === "dreaming")?.description).toBe(
       "Enable or disable memory dreaming.",
     );
+    expect(
+      commands.find((command) => command.name === "dream")?.getArgumentCompletions?.(""),
+    ).toBeUndefined();
   });
 
   it("only advertises shared commands that local mode can route", () => {
@@ -192,11 +240,34 @@ describe("helpText", () => {
     },
   );
 
+  it("uses session-supported thinking levels in help before the provider fallback", () => {
+    const model = { provider: "minimax", model: "MiniMax-M3" };
+
+    expect(
+      helpText({
+        ...model,
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "max", label: "max" },
+        ],
+      }),
+    ).toContain("/think <off|max|default>");
+    expect(helpText({ ...model, thinkingLevels: [] })).toContain("/think <off|adaptive|default>");
+  });
+
+  it("documents default reset values for model, thinking, and fast mode", () => {
+    const output = helpText();
+
+    expect(output).toContain("/model <provider/model|default>");
+    expect(output).toMatch(/\/think <[^>]+\|default>/u);
+    expect(output).toContain("/fast <status|auto|on|off|default>");
+  });
+
   it("includes slash command help for aliases", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");
     expect(output).toContain("/elev <on|off|ask|full>");
-    expect(output).toContain("/fast <status|auto|on|off>");
+    expect(output).toContain("/fast <status|auto|on|off|default>");
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/openclaw [request]");

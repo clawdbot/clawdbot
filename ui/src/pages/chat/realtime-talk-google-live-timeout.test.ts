@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import type {
   RealtimeTalkCallbacks,
   RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -95,8 +96,9 @@ function createSession(): RealtimeTalkJsonPcmWebSocketSessionResult {
   };
 }
 
-function createTransport(callbacks: RealtimeTalkCallbacks = {}) {
+async function createTransport(callbacks: RealtimeTalkCallbacks = {}) {
   return new GoogleLiveRealtimeTalkTransport(createSession(), {
+    input: await prepareRealtimeTalkTestInput(),
     callbacks,
     client: { request: vi.fn(), addEventListener: vi.fn() } as never,
     sessionKey: "main",
@@ -128,10 +130,11 @@ describe("Google Live setup timeout", () => {
     stopInputTrack = vi.fn();
     vi.stubGlobal("WebSocket", FakeGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", FakeAudioContext);
+    const inputTrack = Object.assign(new EventTarget(), { stop: stopInputTrack });
     vi.stubGlobal("navigator", {
       mediaDevices: {
         getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: stopInputTrack }],
+          getTracks: () => [inputTrack],
         })),
       },
     });
@@ -145,9 +148,10 @@ describe("Google Live setup timeout", () => {
   it("releases browser resources when the WebSocket never opens", async () => {
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
-    const transport = createTransport({ onStatus, onTalkEvent });
+    const transport = await createTransport({ onStatus, onTalkEvent });
 
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
     socket.readyState = 0;
     const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
     await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
@@ -164,9 +168,10 @@ describe("Google Live setup timeout", () => {
 
   it("times out an open socket that never completes Google setup", async () => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const transport = await createTransport({ onStatus });
 
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
     socket.emitOpen();
     const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
     await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
@@ -178,15 +183,17 @@ describe("Google Live setup timeout", () => {
   });
 
   it("does not publish provisional terminal callbacks when setup times out", async () => {
-    const onStatus = vi.fn(() => {
-      throw new Error("status callback must remain provisional");
-    });
+    const onStatus = vi.fn();
     const onTalkEvent = vi.fn(() => {
       throw new Error("talk callback must remain provisional");
     });
-    const transport = createTransport({ onStatus, onTalkEvent });
+    const transport = await createTransport({ onStatus, onTalkEvent });
 
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
+    onStatus.mockImplementation(() => {
+      throw new Error("status callback must remain provisional");
+    });
     socket.readyState = 0;
     const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
     await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
@@ -205,8 +212,9 @@ describe("Google Live setup timeout", () => {
     ["error", "Realtime connection failed"],
   ] as const)("rejects startup when the WebSocket emits %s", async (event, detail) => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const transport = await createTransport({ onStatus });
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
     const rejected = expect(start).rejects.toThrow(detail);
 
     if (event === "close") {
@@ -224,8 +232,9 @@ describe("Google Live setup timeout", () => {
 
   it("rejects when the socket closes after setup but before activation", async () => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const transport = await createTransport({ onStatus });
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
     socket.emitOpen();
     socket.emitMessage({ setupComplete: {} });
     await Promise.resolve();
@@ -241,11 +250,13 @@ describe("Google Live setup timeout", () => {
   });
 
   it("releases resources when a readiness callback throws during activation", async () => {
-    const onStatus = vi.fn(() => {
+    const onStatus = vi.fn();
+    const transport = await createTransport({ onStatus });
+    const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
+    onStatus.mockImplementation(() => {
       throw new Error("consumer failed");
     });
-    const transport = createTransport({ onStatus });
-    const { start, socket } = await beginTransport(transport);
     socket.emitOpen();
     socket.emitMessage({ setupComplete: {} });
     await expect(start).resolves.toBe("ready");
@@ -259,7 +270,7 @@ describe("Google Live setup timeout", () => {
   it("reclaims the meter when an input-level callback cancels activation", async () => {
     let stopDuringActivation: () => void = () => undefined;
     const onInputLevel = vi.fn(() => stopDuringActivation());
-    const transport = createTransport({ onInputLevel });
+    const transport = await createTransport({ onInputLevel });
     stopDuringActivation = () => transport.stop({ emitClosed: false });
     const { start, socket } = await beginTransport(transport);
     socket.emitOpen();
@@ -275,9 +286,10 @@ describe("Google Live setup timeout", () => {
 
   it("clears the deadline after Google setup completes", async () => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const transport = await createTransport({ onStatus });
 
     const { start, socket } = await beginTransport(transport);
+    onStatus.mockClear();
     socket.emitOpen();
     socket.emitMessage({ setupComplete: {} });
     await expect(start).resolves.toBe("ready");
@@ -291,9 +303,10 @@ describe("Google Live setup timeout", () => {
 
   it("clears the deadline when the transport stops", async () => {
     const onStatus = vi.fn();
-    const transport = createTransport({ onStatus });
+    const transport = await createTransport({ onStatus });
 
     const { start } = await beginTransport(transport);
+    onStatus.mockClear();
     transport.stop();
     await expect(start).resolves.toBe("cancelled");
     await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);

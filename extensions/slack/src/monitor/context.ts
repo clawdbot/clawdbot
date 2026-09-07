@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -18,8 +19,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackError } from "../errors.js";
 import { buildSlackChannelIdCandidates } from "../group-policy.js";
+import { renameSlackSession, setSlackSessionStatus } from "../session-status.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -33,17 +36,17 @@ import { normalizeSlackChannelType } from "./channel-type.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
+import { saveRemoteMedia } from "./media.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import { isGovSlackClient } from "./slack-client-kind.js";
 import {
   type SlackSuggestedPromptsInput,
+  type SlackSuggestedPromptsOutcome,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
-export {
-  buildSlackAssistantThreadMetadata,
-  parseSlackAssistantThreadMetadata,
-} from "./assistant-thread-context.js";
+export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -60,11 +63,17 @@ type SlackChannelCacheEntry = {
   metadataLoaded: boolean;
 };
 
-type SlackUserInfo = { name?: string; error?: unknown };
+type SlackUserInfo = { name?: string; imageUrl?: string; error?: unknown };
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
+const SLACK_AVATAR_CACHE_MAX_ENTRIES = 128;
+const SLACK_AVATAR_MAX_BYTES = 256 * 1024;
+const SLACK_AVATAR_SSRF_POLICY = {
+  allowedHostnames: ["avatars.slack-edge.com", "*.slack-edge.com"],
+  hostnameAllowlist: ["avatars.slack-edge.com", "*.slack-edge.com"],
+};
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
 const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
@@ -76,6 +85,7 @@ export type SlackMonitorContext = {
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   buildContext?: BuildChannelInboundContext;
+  dispatchReplyFromConfig?: ChannelInboundTurnPlan["dispatchReplyFromConfig"];
 
   botUserId: string;
   botId?: string;
@@ -108,7 +118,6 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 
@@ -143,13 +152,20 @@ export type SlackMonitorContext = {
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
-  setSlackThreadStatus: (params: {
+  resolveUserAvatar: (userId: string, eventScope?: SlackEventScope) => string | undefined;
+  setSlackSessionStatus: (params: {
     channelId: string;
     threadTs?: string;
-    status: string;
-    loadingMessages?: string[];
+    status: "processing" | "active" | "suspended";
+    title?: string;
     eventScope?: SlackEventScope;
   }) => Promise<void>;
+  recordSlackSessionTitle: (params: {
+    channelId: string;
+    threadTs: string;
+    title: string;
+    eventScope?: SlackEventScope;
+  }) => void;
   getSlackAssistantThreadContext: (
     channelId: string | undefined,
     threadTs: string | undefined,
@@ -159,7 +175,9 @@ export type SlackMonitorContext = {
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
     eventScope?: SlackEventScope,
   ) => void;
-  setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
+  setSlackSuggestedPrompts: (
+    params: SlackSuggestedPromptsInput,
+  ) => Promise<SlackSuggestedPromptsOutcome>;
   recordSlackAgentView: () => Promise<void>;
   isSlackAgentView: () => Promise<boolean>;
   recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
@@ -203,14 +221,15 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<string, SlackChannelCacheEntry>();
-  const userCache = new Map<string, { name?: string }>();
+  const userCache = new Map<string, { name?: string; imageUrl?: string }>();
+  const avatarCache = new Map<string, string>();
+  const pendingAvatars = new Set<string>();
   // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
   const channelDenialWarnings = createDedupeCache({
     ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
@@ -341,7 +360,11 @@ export function createSlackMonitorContext(params: {
       });
       const profile = info.user?.profile;
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
-      const entry = { name };
+      const imageUrl =
+        normalizeOptionalString(profile?.image_192) ??
+        normalizeOptionalString(profile?.image_512) ??
+        normalizeOptionalString(profile?.image_72);
+      const entry = { name, imageUrl };
       writeLruMapEntry(userCache, cacheKey, entry, SLACK_USER_CACHE_MAX_ENTRIES);
       return entry;
     } catch (error) {
@@ -349,26 +372,88 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const setSlackThreadStatus = async (p: {
-    channelId: string;
-    threadTs?: string;
-    status: string;
-    loadingMessages?: string[];
-    eventScope?: SlackEventScope;
-  }) => {
-    if (!p.threadTs) {
+  const resolveUserAvatar = (userId: string, eventScope?: SlackEventScope) => {
+    const client = eventScope?.client ?? params.app.client;
+    if (isGovSlackClient(client)) {
+      return undefined;
+    }
+    const imageUrl = readLruMapEntry(userCache, scopedKey(userId, eventScope))?.imageUrl;
+    if (!imageUrl) {
+      return undefined;
+    }
+    const cacheKey = scopedKey(`${userId}\0${imageUrl}`, eventScope);
+    const cached = readLruMapEntry(avatarCache, cacheKey);
+    if (cached) {
+      return cached;
+    }
+    if (pendingAvatars.has(cacheKey) || pendingAvatars.size >= SLACK_AVATAR_CACHE_MAX_ENTRIES) {
+      return undefined;
+    }
+    pendingAvatars.add(cacheKey);
+    void saveRemoteMedia({
+      url: imageUrl,
+      filePathHint: "conversation-avatar.png",
+      maxBytes: SLACK_AVATAR_MAX_BYTES,
+      ssrfPolicy: SLACK_AVATAR_SSRF_POLICY,
+    })
+      .then((media) => {
+        writeLruMapEntry(avatarCache, cacheKey, media.path, SLACK_AVATAR_CACHE_MAX_ENTRIES);
+      })
+      .catch((error: unknown) => {
+        logger.debug(
+          { error: formatSlackError(error), userId },
+          "Slack conversation avatar download failed",
+        );
+      })
+      .finally(() => {
+        pendingAvatars.delete(cacheKey);
+      });
+    return undefined;
+  };
+
+  const sessionTitles = new Map<string, string>();
+  const recordSlackSessionTitle: SlackMonitorContext["recordSlackSessionTitle"] = (p) => {
+    writeLruMapEntry(
+      sessionTitles,
+      scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope),
+      truncateUtf16Safe(p.title, 200),
+      1024,
+    );
+  };
+  const updateSessionStatus: SlackMonitorContext["setSlackSessionStatus"] = async (p) => {
+    const key = scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope);
+    const previousTitle = readLruMapEntry(sessionTitles, key);
+    const client = p.eventScope?.client ?? params.app.client;
+    const updated = await setSlackSessionStatus({
+      ...p,
+      client,
+      token: params.botToken,
+      runtime: params.runtime,
+    });
+    if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
       return;
     }
-    try {
-      await (p.eventScope?.client ?? params.app.client).assistant.threads.setStatus({
-        token: params.botToken,
-        channel_id: p.channelId,
-        thread_ts: p.threadTs,
-        status: p.status,
-        ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
-      });
-    } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
+    const title = truncateUtf16Safe(p.title, 200);
+    // A user rename received while the status request was in flight wins.
+    if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
+      return;
+    }
+    // setStatus only names newly created sessions. Rename existing sessions once
+    // per display-name change; inbound user renames update this same cache.
+    if (
+      updated.title === title ||
+      (previousTitle !== title &&
+        (await renameSlackSession({
+          client,
+          token: params.botToken,
+          channelId: p.channelId,
+          threadTs: p.threadTs,
+          title,
+        })))
+    ) {
+      if (readLruMapEntry(sessionTitles, key) === previousTitle) {
+        recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
+      }
     }
   };
 
@@ -503,6 +588,7 @@ export function createSlackMonitorContext(params: {
     return false;
   };
 
+  const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
   const ctx: SlackMonitorContext = {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -510,8 +596,8 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
-    buildContext: (params.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-      .buildContext,
+    buildContext: channelRuntime?.inbound.buildContext,
+    dispatchReplyFromConfig: channelRuntime?.reply?.dispatchReplyFromConfig,
     botUserId: params.botUserId,
     botId: params.botId,
     identityHealth: params.identityHealth,
@@ -544,7 +630,6 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
-    ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
@@ -555,7 +640,9 @@ export function createSlackMonitorContext(params: {
     rememberSlackChannelType,
     recallSlackChannelType,
     resolveUserName,
-    setSlackThreadStatus,
+    resolveUserAvatar,
+    setSlackSessionStatus: updateSessionStatus,
+    recordSlackSessionTitle,
     getSlackAssistantThreadContext: assistantThreadContextStore.get,
     saveSlackAssistantThreadContext: assistantThreadContextStore.save,
     setSlackSuggestedPrompts,

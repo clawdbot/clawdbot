@@ -11,6 +11,10 @@ import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../../logging/diagnostic-session-state.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
+import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
@@ -34,6 +38,51 @@ describe("embedded-agent runner run registry", () => {
     resetDiagnosticSessionStateForTest();
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
+  });
+
+  it.each([true, false])(
+    "accepts a replacement permission acknowledgement only from the same owner: %s",
+    async (sameOwner) => {
+      const sessionId = "permission-owner";
+      const completed = createDeferredCore<boolean>();
+      const coordinator = createEmbeddedRunPermissionChanges({});
+      const replacementCoordinator = createEmbeddedRunPermissionChanges({});
+      const original = {
+        ...createEmbeddedRunHandle({ runId: "same-run-id" }),
+        permissionChangeOwner: coordinator.forAttempt().owner,
+        applyPermissionMode: () => completed.promise,
+      };
+      const replacement = {
+        ...createEmbeddedRunHandle({ runId: "same-run-id" }),
+        permissionChangeOwner: sameOwner
+          ? coordinator.forAttempt().owner
+          : replacementCoordinator.forAttempt().owner,
+      };
+      setActiveEmbeddedRun(sessionId, original);
+      const change = prepareEmbeddedRunPermissionChange(sessionId);
+      if (change.kind !== "active") {
+        throw new Error("expected an active permission change");
+      }
+      const acknowledgement = change.apply("full", vi.fn());
+      setActiveEmbeddedRun(sessionId, replacement);
+      completed.resolve(true);
+      await expect(acknowledgement).resolves.toBe(sameOwner);
+      coordinator.close();
+      replacementCoordinator.close();
+    },
+  );
+
+  it("does not deliver a captured permission change to a replacement run", async () => {
+    const sessionId = "permission-stale-before-apply";
+    const applyPermissionMode = vi.fn(async () => true);
+    setActiveEmbeddedRun(sessionId, { ...createEmbeddedRunHandle(), applyPermissionMode });
+    const change = prepareEmbeddedRunPermissionChange(sessionId);
+    if (change.kind !== "active") {
+      throw new Error("expected an active permission change");
+    }
+    setActiveEmbeddedRun(sessionId, createEmbeddedRunHandle());
+    await expect(change.apply("full", vi.fn())).resolves.toBe(false);
+    expect(applyPermissionMode).not.toHaveBeenCalled();
   });
 
   it("aborts only compacting runs in compacting mode", () => {
@@ -195,6 +244,57 @@ describe("embedded-agent runner run registry", () => {
     );
     expect(order).toEqual(["record", "cancel:superseded"]);
     expect(supersedeEmbeddedAgentRunByRunId("missing-run", vi.fn())).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "stopped",
+      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
+        handle.isStopped = () => true;
+      },
+    },
+    {
+      name: "aborted",
+      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
+        handle.isAborted = () => true;
+      },
+    },
+    {
+      name: "non-abortable",
+      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
+        handle.isAbortable = () => false;
+      },
+    },
+  ])("does not supersede a $name exact embedded owner", ({ configure }) => {
+    const cancel = vi.fn();
+    const abort = vi.fn();
+    const beforeCancel = vi.fn();
+    const handle = createEmbeddedRunHandle({ abort, runId: "run-terminal" });
+    handle.cancel = cancel;
+    configure(handle);
+    setActiveEmbeddedRun("session-terminal", handle);
+
+    expect(supersedeEmbeddedAgentRunByRunId("run-terminal", beforeCancel)).toBe(false);
+    expect(beforeCancel).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an exact embedded lifecycle probe throws", () => {
+    const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const cancel = vi.fn();
+    const beforeCancel = vi.fn();
+    const handle = createEmbeddedRunHandle({ runId: "run-throwing" });
+    handle.cancel = cancel;
+    handle.isStopped = () => {
+      throw new Error("probe failed");
+    };
+    setActiveEmbeddedRun("session-throwing", handle);
+
+    expect(supersedeEmbeddedAgentRunByRunId("run-throwing", beforeCancel)).toBe(false);
+    expect(beforeCancel).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("lifecycle_check_failed"));
   });
 
   it("passes restart ownership to every aborted run", () => {

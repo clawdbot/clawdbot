@@ -1,32 +1,26 @@
 // Shared model catalog data contracts for provider manifests and normalized rows.
+import {
+  MODEL_DATA_APIS,
+  MODEL_DATA_THINKING_FORMATS,
+  MODEL_DATA_THINKING_LEVELS,
+  type ModelDataCostRates,
+  type ModelDataImageInputConfig,
+  type ModelDataMediaInputConfig,
+  type ModelDataRawPricingTier,
+  type ModelDataThinkingLevelMap,
+  type ModelRoutingMaxPrice,
+  type ModelRoutingPercentiles,
+  type ModelRoutingSortConfig,
+} from "../../llm-core/src/model-data.js";
 
 /** Supported API protocols for model catalog entries. */
-export const MODEL_CATALOG_APIS = [
-  "openai-completions",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-  "google-vertex",
-  "github-copilot",
-  "bedrock-converse-stream",
-  "ollama",
-  "azure-openai-responses",
-] as const;
+export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
 
 /** API protocol for a model catalog entry. */
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
 
 /** Supported model thinking/reasoning wire formats. */
-export const MODEL_CATALOG_THINKING_FORMATS = [
-  "openai",
-  "openrouter",
-  "deepseek",
-  "together",
-  "qwen",
-  "qwen-chat-template",
-  "zai",
-] as const;
+export const MODEL_CATALOG_THINKING_FORMATS = [...MODEL_DATA_THINKING_FORMATS] as const;
 
 /** Thinking/reasoning wire format for model compatibility. */
 export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
@@ -43,6 +37,8 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
@@ -86,35 +82,10 @@ export type ModelCatalogOpenRouterRouting = {
   only?: string[];
   ignore?: string[];
   quantizations?: string[];
-  sort?:
-    | string
-    | {
-        by?: string;
-        partition?: string | null;
-      };
-  max_price?: {
-    prompt?: number | string;
-    completion?: number | string;
-    image?: number | string;
-    audio?: number | string;
-    request?: number | string;
-  };
-  preferred_min_throughput?:
-    | number
-    | {
-        p50?: number;
-        p75?: number;
-        p90?: number;
-        p99?: number;
-      };
-  preferred_max_latency?:
-    | number
-    | {
-        p50?: number;
-        p75?: number;
-        p90?: number;
-        p99?: number;
-      };
+  sort?: string | ModelRoutingSortConfig;
+  max_price?: ModelRoutingMaxPrice;
+  preferred_min_throughput?: number | ModelRoutingPercentiles;
+  preferred_max_latency?: number | ModelRoutingPercentiles;
 };
 
 /** Vercel AI Gateway routing preferences. */
@@ -124,35 +95,17 @@ export type ModelCatalogVercelGatewayRouting = {
 };
 
 /** Image input limits for a model. */
-export type ModelCatalogImageInputConfig = {
-  maxBytes?: number;
-  maxPixels?: number;
-  maxSidePx?: number;
-  preferredSidePx?: number;
-  tokenMode?: "tile" | "detail" | "provider";
-};
+export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
 /** Media input limits for a model. */
-export type ModelCatalogMediaInputConfig = {
-  image?: ModelCatalogImageInputConfig;
-};
+export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
 /** Supported input modality for a model. */
 export type ModelCatalogInput = "text" | "image" | "document";
 /** Model-level thinking settings carried by provider catalog metadata. */
-export const MODEL_CATALOG_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
-export type ModelCatalogThinkingLevelMap = Partial<
-  Record<ModelCatalogThinkingLevel, string | null>
->;
+export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
 /** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
 /** Availability state for a model. */
@@ -202,22 +155,21 @@ export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
 };
 
 /** Tiered token cost row. */
-export type ModelCatalogTieredCost = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  range: [number, number] | [number];
-};
+export type ModelCatalogTieredCost = ModelDataRawPricingTier;
 
 /** Token cost metadata for one model. */
-export type ModelCatalogCost = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
+export type ModelCatalogCost = Partial<ModelDataCostRates> & {
   tieredPricing?: ModelCatalogTieredCost[];
 };
+
+/** Bounded provider-declared context-window choice for one model. */
+export type ModelCatalogContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
+export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 
 /** Provider manifest model entry. */
 export type ModelCatalogModel = {
@@ -229,6 +181,8 @@ export type ModelCatalogModel = {
   input?: ModelCatalogInput[];
   reasoning?: boolean;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
@@ -273,6 +227,8 @@ export type ModelCatalogSuppression = {
   provider: string;
   model: string;
   reason?: string;
+  /** Explicit retirement and optional provider-local successor; otherwise doctor clears overrides. */
+  retirement?: { replacedBy?: string };
   when?: {
     baseUrlHosts?: string[];
     providerConfigApiIn?: string[];
@@ -281,6 +237,8 @@ export type ModelCatalogSuppression = {
 
 /** Raw model catalog manifest shape. */
 export type ModelCatalog = {
+  /** Publication-time opt-in: owned OpenClaw provider id -> models.dev provider id. */
+  modelsDev?: Record<string, string>;
   providers?: Record<string, ModelCatalogProvider>;
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
@@ -289,9 +247,8 @@ export type ModelCatalog = {
 };
 
 /** Normalized model catalog row used by runtime lookup and UI surfaces. */
-export type NormalizedModelCatalogRow = {
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
   provider: string;
-  id: string;
   ref: string;
   mergeKey: string;
   name: string;
@@ -299,18 +256,4 @@ export type NormalizedModelCatalogRow = {
   input: ModelCatalogInput[];
   reasoning: boolean;
   status: ModelCatalogStatus;
-  api?: ModelCatalogApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  contextWindow?: number;
-  contextTokens?: number;
-  maxTokens?: number;
-  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
-  cost?: ModelCatalogCost;
-  compat?: ModelCatalogCompatConfig;
-  mediaInput?: ModelCatalogMediaInputConfig;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
 };

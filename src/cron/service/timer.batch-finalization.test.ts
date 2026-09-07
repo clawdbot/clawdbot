@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
@@ -20,11 +21,12 @@ import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
   createCompletedCronRunOutcomeDrain,
   finalizeCompletedCronRunOutcomes,
 } from "./timer-outcome-finalization.js";
-import { runMissedJobs } from "./timer.js";
+import { authorCronRunCompletion, runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -45,13 +47,9 @@ function createBatchState(params: {
   onEvent?: Parameters<typeof createCronServiceState>[0]["onEvent"];
   isAgentAvailable?: Parameters<typeof createCronServiceState>[0]["isAgentAvailable"];
 }) {
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: () => params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
     isAgentAvailable: params.isAgentAvailable,
     maxMissedJobsPerRestart: 40,
@@ -74,6 +72,13 @@ function findCronTask(jobId: string) {
   return listTaskRecordsUnsorted().find(
     (task) => task.runtime === "cron" && task.sourceId === jobId,
   );
+}
+
+function authorOutcome(
+  state: ReturnType<typeof createCronServiceState>,
+  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
+) {
+  return authorCronRunCompletion(state, outcome.job, outcome);
 }
 
 describe("cron batch outcome finalization", () => {
@@ -161,13 +166,9 @@ describe("cron batch outcome finalization", () => {
         status: "ok" as const,
         summary: "finished before terminal store failure",
       }));
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
         onEvent: (event) => events.push(event),
       });
@@ -212,13 +213,9 @@ describe("cron batch outcome finalization", () => {
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-        recoveryState = createCronServiceState({
-          cronEnabled: true,
+        recoveryState = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => startedAt + 1,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => events.push(event),
         });
@@ -360,14 +357,16 @@ describe("cron batch outcome finalization", () => {
     const outcomeDrain = createCompletedCronRunOutcomeDrain(state);
 
     for (const job of jobs) {
-      outcomeDrain.enqueue({
-        jobId: job.id,
-        job,
-        activeJobMarker: markCronJobActive(job.id),
-        status: "ok",
-        startedAt: dueAt,
-        endedAt: dueAt,
-      });
+      outcomeDrain.enqueue(
+        authorOutcome(state, {
+          jobId: job.id,
+          job,
+          activeJobMarker: markCronJobActive(job.id),
+          status: "ok",
+          startedAt: dueAt,
+          endedAt: dueAt,
+        }),
+      );
     }
 
     expect(await outcomeDrain.flush()).toHaveLength(jobs.length);
@@ -425,7 +424,7 @@ describe("cron batch outcome finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
     await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: job.id,
         job: structuredClone(job),
         activeJobMarker: markCronJobActive(job.id),
@@ -433,7 +432,7 @@ describe("cron batch outcome finalization", () => {
         error: "cron: job execution timed out at /private/agent/work",
         startedAt: dueAt,
         endedAt: dueAt + 10,
-      },
+      }),
     ]);
 
     expect(order).toEqual(["notify", "heartbeat"]);
@@ -457,7 +456,12 @@ describe("cron batch outcome finalization", () => {
       sessionKey: undefined,
     });
     expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: `cron:${job.id}:auto-disabled`, agentId: "main" }),
+      expect.objectContaining({
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "main",
+      }),
     );
     expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
       enabled: false,
@@ -507,7 +511,7 @@ describe("cron batch outcome finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
     const finalized = await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: job.id,
         job: structuredClone(job),
         activeJobMarker: markCronJobActive(job.id),
@@ -515,7 +519,7 @@ describe("cron batch outcome finalization", () => {
         startedAt: dueAt,
         endedAt: dueAt + 10,
         nextCheck: { delayMs: MAX_DATE_TIMESTAMP_MS },
-      },
+      }),
     ]);
 
     expect(finalized).toHaveLength(1);
@@ -555,13 +559,9 @@ describe("cron batch outcome finalization", () => {
     job.state.runningAtMs = dueAt;
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt + 10,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const database = openOpenClawStateDatabase().db;
@@ -578,7 +578,7 @@ describe("cron batch outcome finalization", () => {
     try {
       await expect(
         finalizeCompletedCronRunOutcomes(state, [
-          {
+          authorOutcome(state, {
             jobId: job.id,
             job: structuredClone(job),
             activeJobMarker: markCronJobActive(job.id),
@@ -586,7 +586,7 @@ describe("cron batch outcome finalization", () => {
             error: "tenth failure",
             startedAt: dueAt,
             endedAt: dueAt + 10,
-          },
+          }),
         ]),
       ).rejects.toThrow("terminal write failed");
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -622,7 +622,7 @@ describe("cron batch outcome finalization", () => {
       await finalizeCompletedCronRunOutcomes(
         state,
         [
-          {
+          authorOutcome(state, {
             jobId: job.id,
             job,
             activeJobMarker,
@@ -630,7 +630,7 @@ describe("cron batch outcome finalization", () => {
             error: "setup timed out before runner start",
             startedAt: dueAt,
             endedAt: dueAt,
-          },
+          }),
         ],
         { clearOnFailure: false, discardWhenStopped: true },
       ),

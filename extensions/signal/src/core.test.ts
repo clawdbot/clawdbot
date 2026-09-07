@@ -394,6 +394,55 @@ describe("probeSignal", () => {
   });
 });
 
+describe("signalPlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      signal: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: {
+            account: "+15550000001",
+            transport: { kind: "external-native" as const, url: "http://alpha.test" },
+          },
+          beta: {
+            account: "+15550000002",
+            transport: { kind: "external-native" as const, url: "http://beta.test" },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    {
+      name: "the approved account",
+      accountId: "beta",
+      account: "+15550000002",
+      baseUrl: "http://beta.test",
+    },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      account: "+15550000001",
+      baseUrl: "http://alpha.test",
+    },
+  ])("sends the approval from $name", async ({ accountId, account, baseUrl }) => {
+    const signalRpcRequest = vi
+      .spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValue({ timestamp: 1_700_000_000_000 } as never);
+
+    await signalPlugin.pairing!.notifyApproval!({
+      cfg: pairingCfg,
+      id: "+15551234567",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(signalRpcRequest).toHaveBeenCalledTimes(1);
+    expect(signalRpcRequest.mock.calls[0]?.[1]).toMatchObject({ account });
+    expect(signalRpcRequest.mock.calls[0]?.[2]).toMatchObject({ baseUrl });
+  });
+});
+
 describe("signal outbound", () => {
   it("resolves aliases through the message target resolver", async () => {
     const resolved = await signalPlugin.messaging?.targetResolver?.resolveTarget?.({
@@ -1260,6 +1309,37 @@ describe("signal outbound", () => {
           });
           expect(result?.receipt.platformMessageIds).toEqual(["signal-media-1"]);
         },
+        payload: () => {
+          expect(signalPlugin.outbound?.renderPresentation).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.sendFormattedText).toBeTypeOf("function");
+        },
+        replyTo: async () => {
+          await registerSignalReplyContext({
+            to: "signal:+15555550123",
+            replyToId: "1700000000001",
+            author: "+15555550123",
+            body: "original message",
+          });
+          await signalPlugin.message?.send?.text?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "reply",
+            replyToId: "1700000000001",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenLastCalledWith(
+            "+15555550123",
+            "reply",
+            expect.objectContaining({ replyToId: "1700000000001" }),
+          );
+        },
+        messageSendingHooks: () => {
+          expect(signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.renderPresentation).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.afterDeliverPayload).toBeTypeOf("function");
+        },
       },
     });
 
@@ -1267,12 +1347,12 @@ describe("signal outbound", () => {
       { capability: "text", status: "verified" },
       { capability: "media", status: "verified" },
       { capability: "poll", status: "not_declared" },
-      { capability: "payload", status: "not_declared" },
+      { capability: "payload", status: "verified" },
       { capability: "silent", status: "not_declared" },
-      { capability: "replyTo", status: "not_declared" },
+      { capability: "replyTo", status: "verified" },
       { capability: "thread", status: "not_declared" },
       { capability: "nativeQuote", status: "not_declared" },
-      { capability: "messageSendingHooks", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "verified" },
       { capability: "batch", status: "not_declared" },
       { capability: "reconcileUnknownSend", status: "not_declared" },
       { capability: "afterSendSuccess", status: "not_declared" },

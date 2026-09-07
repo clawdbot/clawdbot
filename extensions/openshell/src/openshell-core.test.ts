@@ -7,27 +7,25 @@ import {
   buildExecRemoteCommand,
   disposeSshSandboxSession,
   shellEscape,
-  type CreateSandboxBackendParams,
 } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import {
-  createSandboxBrowserConfig,
-  createSandboxPruneConfig,
-  createSandboxSshConfig,
-  createSandboxTestContext,
-} from "openclaw/plugin-sdk/test-fixtures";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenShellSandboxBackend } from "./backend.types.js";
+import type { OpenShellMirrorBackend, OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildValidatedExecRemoteCommand,
   createOpenShellSshSession,
   runOpenShellCli,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import {
+  createOpenShellBackendSandboxConfig,
+  createOpenShellRuntimeEntryFixture,
+} from "./openshell.test-support.js";
 
 const openShellTestWorkspaceRoot = resolvePreferredOpenClawTmpDir();
 
@@ -46,6 +44,8 @@ const cliMocks = vi.hoisted(() => ({
 const sandboxMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
+  cleanupPreparedExec: vi.fn(),
   remoteRoot: "",
   remoteAgentRoot: "",
 }));
@@ -61,6 +61,7 @@ async function installOpenShellBackendMocks() {
     return {
       ...actual,
       disposeSshSandboxSession: sandboxMocks.disposeSshSandboxSession,
+      prepareSshSandboxExec: sandboxMocks.prepareSshSandboxExec,
       runSshSandboxCommand: sandboxMocks.runSshSandboxCommand,
     };
   });
@@ -89,6 +90,23 @@ function resetOpenShellBackendMocks() {
     configPath: "/tmp/openclaw-openshell-test-ssh-config",
     host: "openshell-test",
   });
+  sandboxMocks.cleanupPreparedExec.mockResolvedValue(undefined);
+  sandboxMocks.prepareSshSandboxExec.mockImplementation(
+    async (params: {
+      session: { command: string; configPath: string; host: string };
+      tty?: boolean;
+    }) => ({
+      argv: [
+        params.session.command,
+        "-F",
+        params.session.configPath,
+        ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        params.session.host,
+        "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
+      ],
+      cleanup: sandboxMocks.cleanupPreparedExec,
+    }),
+  );
   sandboxMocks.runSshSandboxCommand.mockImplementation(
     async (params: { remoteCommand: string; stdin?: Buffer | string; allowFailure?: boolean }) => {
       const remoteCommand = params.remoteCommand
@@ -135,16 +153,13 @@ describe("openshell cli helpers", () => {
     expect(shellEscape(`a'b`)).toBe(`'a'"'"'b'`);
   });
 
-  it("wraps exec commands with env and workdir", () => {
+  it("wraps exec commands with workdir when no environment is supplied", () => {
     const command = buildExecRemoteCommand({
       command: "pwd && printenv TOKEN",
       workdir: "/sandbox/project",
-      env: {
-        TOKEN: "abc 123",
-      },
+      env: {},
     });
-    expect(command).toContain(`'env'`);
-    expect(command).toContain(`'TOKEN=abc 123'`);
+    expect(command).not.toContain(`'env'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
   });
 
@@ -336,6 +351,29 @@ describe("openshell backend manager", () => {
     );
   });
 
+  it.each([
+    ["gateway authentication expired", "gateway authentication expired"],
+    ["", "openshell sandbox get failed"],
+  ])(
+    "does not create a sandbox after a failed control-plane lookup: %s",
+    async (stderr, expected) => {
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 1, stdout: "", stderr });
+      const factory = createOpenShellSandboxBackendFactory({
+        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+      });
+      const backend = await factory({
+        sessionKey: "agent:main:turn",
+        scopeKey: "agent:main",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: createOpenShellBackendSandboxConfig(),
+      });
+
+      await expect(backend.runShellCommand({ script: "true" })).rejects.toThrow(expected);
+      expect(cliMocks.runOpenShellCli).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not execute a registered legacy sandbox that is no longer ready", async () => {
     const scopeKey = "agent:main";
     const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
@@ -414,17 +452,11 @@ describe("openshell backend manager", () => {
       await fs.writeFile(path.join(skillsWorkspaceDir, "SKILL.md"), "# Skill\n", "utf8");
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-      const factory = createOpenShellSandboxBackendFactory({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
-      });
-      const backend = (await factory({
-        sessionKey: "agent:main:turn",
-        scopeKey: "agent:main",
+      const backend = await createOpenShellBackendFixture({
         workspaceDir,
-        agentWorkspaceDir: workspaceDir,
         skillsWorkspaceDir,
-        cfg: createOpenShellBackendSandboxConfig(),
-      })) as OpenShellSandboxBackend;
+        mode: "remote",
+      });
       if (!backend.runRemoteShellScript) {
         throw new Error("Expected OpenShell remote script boundary");
       }
@@ -457,17 +489,11 @@ describe("openshell backend manager", () => {
       await fs.writeFile(path.join(skillsWorkspaceDir, "SKILL.md"), "# Skill\n", "utf8");
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-      const factory = createOpenShellSandboxBackendFactory({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
-      });
-      const backend = (await factory({
-        sessionKey: "agent:main:turn",
-        scopeKey: "agent:main",
+      const backend = await createOpenShellBackendFixture({
         workspaceDir,
-        agentWorkspaceDir: workspaceDir,
         skillsWorkspaceDir,
-        cfg: createOpenShellBackendSandboxConfig(),
-      })) as OpenShellSandboxBackend;
+        mode: "remote",
+      });
       if (!backend.runRemoteShellScript) {
         throw new Error("Expected OpenShell remote script boundary");
       }
@@ -482,7 +508,7 @@ describe("openshell backend manager", () => {
   it("checks runtime status with config override from OpenClaw config", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
-      stdout: "{}",
+      stdout: JSON.stringify({ phase: "Ready" }),
       stderr: "",
     });
 
@@ -494,16 +520,7 @@ describe("openshell backend manager", () => {
     });
 
     const result = await manager.describeRuntime({
-      entry: {
-        containerName: "openclaw-session-1234",
-        backendId: "openshell",
-        runtimeLabel: "openclaw-session-1234",
-        sessionKey: "agent:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "custom-source",
-        configLabelKind: "Source",
-      },
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234", "custom-source"),
       config: {
         plugins: {
           entries: {
@@ -533,11 +550,32 @@ describe("openshell backend manager", () => {
         sandboxName: "openclaw-session-1234",
         config: expectedConfig,
       },
-      args: ["sandbox", "get", "openclaw-session-1234"],
+      args: ["sandbox", "get", "openclaw-session-1234", "--output", "json"],
     });
   });
 
-  it("removes runtimes via openshell sandbox delete", async () => {
+  it.each(["Provisioning", "Stopped", "Error", "Deleting"])(
+    "does not report an OpenShell runtime in phase %s as running",
+    async (phase) => {
+      cliMocks.runOpenShellCli.mockResolvedValue({
+        code: 0,
+        stdout: JSON.stringify({ phase }),
+        stderr: "",
+      });
+      const manager = createOpenShellSandboxBackendManager({
+        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+      });
+
+      await expect(
+        manager.describeRuntime({
+          entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234"),
+          config: {},
+        }),
+      ).resolves.toMatchObject({ running: false });
+    },
+  );
+
+  it("removes runtimes using the current OpenShell control-plane configuration", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
       stdout: "",
@@ -552,16 +590,7 @@ describe("openshell backend manager", () => {
     });
 
     await manager.removeRuntime({
-      entry: {
-        containerName: "openclaw-session-5678",
-        backendId: "openshell",
-        runtimeLabel: "openclaw-session-5678",
-        sessionKey: "agent:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw",
-        configLabelKind: "Source",
-      },
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
       config: {},
     });
 
@@ -576,6 +605,58 @@ describe("openshell backend manager", () => {
       },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
+
+    await manager.removeRuntime({
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+      config: {
+        plugins: {
+          entries: {
+            openshell: {
+              enabled: true,
+              config: {
+                command: "/opt/openshell/bin/openshell",
+                gateway: "research",
+                workspace: "team-1",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
+      context: {
+        sandboxName: "openclaw-session-5678",
+        config: resolveOpenShellPluginConfig({
+          command: "/opt/openshell/bin/openshell",
+          gateway: "research",
+          workspace: "team-1",
+        }),
+      },
+      args: ["sandbox", "delete", "openclaw-session-5678"],
+    });
+  });
+
+  it.each([
+    ["gateway unavailable", "gateway unavailable"],
+    ["", "openshell sandbox delete failed"],
+  ])("preserves deletion failures for sandbox lifecycle owners: %s", async (stderr, expected) => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr,
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+
+    await expect(
+      manager.removeRuntime({
+        entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+        config: {},
+      }),
+    ).rejects.toThrow(expected);
   });
 
   it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
@@ -602,74 +683,248 @@ describe("openshell backend manager", () => {
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   });
 
-  it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {
-    await using workspace = await createOpenShellTestWorkspace("workspace");
-    const workspaceDir = workspace.dir;
-    const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(shadowFile, "local shadow", "utf8");
-
-    const originalRename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      const source = String(from);
-      const target = String(to);
-      const shadowDir = path.dirname(shadowFile);
-      const isFallbackStagedMove = path.basename(source).startsWith(".fs-safe-move-");
-      if (source === shadowDir || (target === shadowDir && !isFallbackStagedMove)) {
-        throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
-      }
-      return await originalRename(from, to);
-    });
-    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
-      if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = expectDefined(args[4], "OpenShell download destination");
-        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
-        await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
-          recursive: true,
-        });
-        await fs.writeFile(
-          path.join(tmpDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
-          "generated",
-          "utf8",
-        );
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-
-    const factory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-        mode: "mirror",
-      }),
-    });
-    const backend = await factory({
-      sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg: createOpenShellBackendSandboxConfig(),
-    });
-
-    try {
-      await backend.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: undefined,
+  it.each(["completed", "failed"] as const)(
+    "stages exec environment outside SSH argv and finalizes %s before session disposal",
+    async (status) => {
+      const sentinel = "synthetic-openshell-env-value";
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+        stdout: Buffer.from("1\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: "/tmp/openclaw-synthetic-workspace",
+        mode: "remote",
       });
 
-      expect(renameSpy).toHaveBeenCalled();
-      await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
-      await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
-        "remote",
+      const execSpec = await backend.buildExecSpec({
+        command: "printenv SYNTHETIC_VALUE",
+        workdir: "/sandbox",
+        env: { SYNTHETIC_VALUE: sentinel },
+        usePty: true,
+      });
+
+      expect(sandboxMocks.prepareSshSandboxExec).toHaveBeenCalledWith({
+        session: expect.objectContaining({ host: "openshell-test" }),
+        remoteCommand: expect.stringContaining("printenv SYNTHETIC_VALUE"),
+        env: { SYNTHETIC_VALUE: sentinel },
+        tty: true,
+      });
+      expect(execSpec.argv.join(" ")).not.toContain(sentinel);
+      expect(execSpec.argv).toContain("-tt");
+      expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
+      expect(execSpec.stdinMode).toBe("pipe-open");
+
+      sandboxMocks.disposeSshSandboxSession.mockClear();
+      await backend.finalizeExec?.({
+        status,
+        exitCode: status === "completed" ? 0 : 1,
+        timedOut: false,
+        token: execSpec.finalizeToken,
+      });
+
+      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
+      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "openshell-test" }),
       );
-      await expectPathMissing(
-        path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+      expect(sandboxMocks.cleanupPreparedExec.mock.invocationCallOrder[0]).toBeLessThan(
+        expectDefined(
+          sandboxMocks.disposeSshSandboxSession.mock.invocationCallOrder[0],
+          "OpenShell SSH session disposal invocation",
+        ),
       );
-    } finally {
-      renameSpy.mockRestore();
-    }
+    },
+  );
+
+  it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    sandboxMocks.prepareSshSandboxExec.mockRejectedValueOnce(
+      new Error("synthetic staging failure"),
+    );
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/openclaw-synthetic-workspace",
+      mode: "remote",
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "true",
+        env: { SYNTHETIC_VALUE: "synthetic-openshell-env-value" },
+        usePty: false,
+      }),
+    ).rejects.toThrow("synthetic staging failure");
+
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    "success",
+    "source cleanup failure",
+    "retained source replacement",
+    "restore cleanup failure",
+  ] as const)(
+    "preserves and reports a local shadow when cross-filesystem mirror sync ends with %s",
+    async (outcome) => {
+      await using workspace = await createOpenShellTestWorkspace("workspace");
+      const workspaceDir = workspace.dir;
+      const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(shadowFile, "local shadow", "utf8");
+      const sourceContents = new Map([["user-note.txt", "local shadow"]]);
+      if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
+        sourceContents.set("second-note.txt", "second shadow");
+        await fs.writeFile(path.join(path.dirname(shadowFile), "second-note.txt"), "second shadow");
+      }
+
+      let preservedPath: string | undefined;
+      let sourceCleanupFailed = false;
+      const removedSourceFiles: string[] = [];
+      let retainedSourceFile: string | undefined;
+      let sourceAtCleanupFailure: string[] = [];
+      const originalRename = fs.rename.bind(fs);
+      const originalUnlink = fs.unlink.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        const source = String(from);
+        const target = String(to);
+        const shadowDir = path.dirname(shadowFile);
+        const isFallbackStagedMove = path.basename(source).startsWith(".fs-safe-move-");
+        if (source === shadowDir || (target === shadowDir && !isFallbackStagedMove)) {
+          throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+        }
+        await originalRename(from, to);
+        if (isFallbackStagedMove && path.basename(target) === "shadow") {
+          // Observe a real completed destination publication before injecting a source race.
+          preservedPath = target;
+          if (outcome === "retained source replacement") {
+            await originalUnlink(shadowFile);
+            await fs.writeFile(shadowFile, "concurrent replacement", "utf8");
+          }
+        }
+      });
+      const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+        const cleanupRoot =
+          outcome === "source cleanup failure"
+            ? path.dirname(shadowFile)
+            : outcome === "restore cleanup failure"
+              ? preservedPath
+              : undefined;
+        const sourceCleanup =
+          cleanupRoot !== undefined && path.dirname(String(target)) === cleanupRoot;
+        if (sourceCleanup && removedSourceFiles.length === 1 && !sourceCleanupFailed) {
+          retainedSourceFile = String(target);
+          sourceAtCleanupFailure = await fs.readdir(
+            expectDefined(cleanupRoot, "source cleanup root"),
+          );
+          sourceCleanupFailed = true;
+          // The first source unlink completed; the second is refused before dispatch.
+          throw Object.assign(new Error("source cleanup failed after publication"), {
+            code: "EACCES",
+          });
+        }
+        await originalUnlink(target);
+        if (sourceCleanup) {
+          removedSourceFiles.push(String(target));
+        }
+      });
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "sandbox" && args[1] === "download") {
+          const tmpDir = expectDefined(args[4], "OpenShell download destination");
+          await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+          await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
+            recursive: true,
+          });
+          await fs.writeFile(
+            path.join(tmpDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+            "generated",
+            "utf8",
+          );
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+
+      const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
+
+      try {
+        let finalizeError: unknown;
+        try {
+          await backend.finalizeExec?.({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: undefined,
+          });
+        } catch (error) {
+          finalizeError = error;
+        }
+
+        expect(renameSpy).toHaveBeenCalled();
+        expect(preservedPath).toBeDefined();
+        if (outcome === "success") {
+          expect(finalizeError).toBeUndefined();
+          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
+          await expect(
+            fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
+          ).resolves.toBe("remote");
+        } else {
+          expect(finalizeError).toMatchObject({
+            cause: { code: outcome === "retained source replacement" ? "ESTALE" : "EACCES" },
+          });
+          const backup = expectDefined(preservedPath, "completed shadow publication");
+          const completeCopy =
+            outcome === "restore cleanup failure" ? path.dirname(shadowFile) : backup;
+          for (const [name, contents] of sourceContents) {
+            await expect(fs.readFile(path.join(completeCopy, name), "utf8")).resolves.toBe(
+              contents,
+            );
+          }
+          if (outcome === "restore cleanup failure") {
+            await expect(
+              fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
+            ).resolves.toBe("remote");
+          } else {
+            await expectPathMissing(path.join(workspaceDir, "from-remote.txt"));
+          }
+          if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
+            expect(sourceCleanupFailed).toBe(true);
+            expect(removedSourceFiles).toHaveLength(1);
+            await expectPathMissing(expectDefined(removedSourceFiles[0], "removed source file"));
+            const retained = expectDefined(retainedSourceFile, "refused source unlink");
+            expect(sourceAtCleanupFailure).toEqual([path.basename(retained)]);
+            await expect(fs.readFile(retained, "utf8")).resolves.toBe(
+              sourceContents.get(path.basename(retained)),
+            );
+          } else {
+            await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("concurrent replacement");
+          }
+          // The caller must be able to locate its retained original after a partial move.
+          expect(
+            String(finalizeError),
+            JSON.stringify({
+              outcome,
+              sourceFiles: await fs.readdir(path.dirname(shadowFile)),
+              backupFiles: await fs.readdir(backup),
+              sourceAtCleanupFailure,
+            }),
+          ).toContain(backup);
+        }
+        await expectPathMissing(
+          path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+        );
+      } finally {
+        renameSpy.mockRestore();
+        unlinkSpy.mockRestore();
+        if (preservedPath) {
+          await fs.rm(path.dirname(preservedPath), { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it("drops non-directory materialized sandbox skills from mirror downloads", async () => {
     await using workspace = await createOpenShellTestWorkspace("workspace");
@@ -684,19 +939,7 @@ describe("openshell backend manager", () => {
       return { code: 0, stdout: "", stderr: "" };
     });
 
-    const factory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-        mode: "mirror",
-      }),
-    });
-    const backend = await factory({
-      sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg: createOpenShellBackendSandboxConfig(),
-    });
+    const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
 
     await backend.finalizeExec?.({
       status: "completed",
@@ -711,77 +954,185 @@ describe("openshell backend manager", () => {
     await expectPathMissing(path.join(workspaceDir, ".openclaw", "sandbox-skills"));
   });
 
-  it("restores a local sandbox skills shadow when mirror download has a file parent", async () => {
-    await using workspace = await createOpenShellTestWorkspace("workspace");
-    const workspaceDir = workspace.dir;
-    const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(shadowFile, "local shadow", "utf8");
-    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
-      if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = expectDefined(args[4], "OpenShell download destination");
-        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
-        await fs.writeFile(path.join(tmpDir, ".openclaw"), "poison", "utf8");
+  it.each(["original", "replaced"] as const)(
+    "restores only the %s backup when mirror download has a file parent",
+    async (backupState) => {
+      await using workspace = await createOpenShellTestWorkspace("workspace");
+      const workspaceDir = workspace.dir;
+      const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
+      const parentPath = path.join(workspaceDir, ".openclaw");
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(shadowFile, "local shadow", "utf8");
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "sandbox" && args[1] === "download") {
+          const tmpDir = expectDefined(args[4], "OpenShell download destination");
+          await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+          await fs.writeFile(path.join(tmpDir, ".openclaw"), "poison", "utf8");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      let preservedPath: string | undefined;
+      let replaced = false;
+      const rename = fs.rename;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (path.basename(String(to)) === "shadow") {
+          preservedPath = String(to);
+        }
+      });
+      const lstat = fs.lstat;
+      let parentConflictCreated = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        let stat;
+        try {
+          stat = await lstat(...args);
+        } catch (error) {
+          if (
+            !preservedPath ||
+            parentConflictCreated ||
+            String(args[0]) !== parentPath ||
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            error.code !== "ENOENT"
+          ) {
+            throw error;
+          }
+          // Mirror removed the empty ancestor; exercise restoration's file-parent contract.
+          await fs.writeFile(parentPath, "poison", "utf8");
+          parentConflictCreated = true;
+          stat = await lstat(...args);
+        }
+        if (
+          backupState === "replaced" &&
+          !replaced &&
+          preservedPath &&
+          String(args[0]) === parentPath &&
+          stat.isFile()
+        ) {
+          // Change backup ownership during the last awaited parent check before restoration.
+          await rename(preservedPath, `${preservedPath}-original`);
+          await fs.mkdir(preservedPath);
+          await fs.writeFile(path.join(preservedPath, "replacement.txt"), "replacement backup");
+          replaced = true;
+        }
+        return stat;
+      });
+      const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
+      try {
+        const finalization = backend.finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: undefined,
+        });
+        if (backupState === "replaced") {
+          await expect(finalization).rejects.toThrow("unverified workspace shadow");
+          expect(replaced).toBe(true);
+          const backup = expectDefined(preservedPath, "published original shadow");
+          await expect(fs.readFile(parentPath, "utf8")).resolves.toBe("poison");
+          await expect(fs.readFile(path.join(backup, "replacement.txt"), "utf8")).resolves.toBe(
+            "replacement backup",
+          );
+          await expect(
+            fs.readFile(path.join(`${backup}-original`, "user-note.txt"), "utf8"),
+          ).resolves.toBe("local shadow");
+        } else {
+          await finalization;
+          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
+          expect((await fs.stat(parentPath)).isDirectory()).toBe(true);
+        }
+        expect(parentConflictCreated).toBe(true);
+        await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
+          "remote",
+        );
+      } finally {
+        renameSpy.mockRestore();
+        lstatSpy.mockRestore();
+        if (preservedPath) {
+          await fs.rm(path.dirname(preservedPath), { recursive: true, force: true });
+        }
       }
-      return { code: 0, stdout: "", stderr: "" };
+    },
+  );
+  it("reports completed restoration cleanup accurately and restores earlier shadows", async () => {
+    await using workspace = await createOpenShellTestWorkspace("workspace");
+    await using agentWorkspace = await createOpenShellTestWorkspace("agent-workspace");
+    const skillsDir = path.join(workspace.dir, ".openclaw", "sandbox-skills");
+    const agentShadowDir = path.join(workspace.dir, "nested", "agent");
+    for (const directory of [skillsDir, agentShadowDir]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "note.txt"), path.basename(directory), "utf8");
+    }
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    const preservationRoots = new Set<string>();
+    let failedCleanupRoot: string | undefined;
+    let cleanupFailed = false;
+    const cleanupError = Object.assign(new Error("preservation directory cleanup denied"), {
+      code: "EACCES",
     });
-
-    const factory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-        mode: "mirror",
-      }),
+    const rename = fs.rename;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (path.basename(String(to)) === "shadow") {
+        const preserveRoot = path.dirname(String(to));
+        preservationRoots.add(preserveRoot);
+        if (String(from) === skillsDir) {
+          failedCleanupRoot = preserveRoot;
+        }
+      }
     });
-    const backend = await factory({
-      sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg: createOpenShellBackendSandboxConfig(),
+    const rmdir = fs.rmdir;
+    const rmdirSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+      if (String(args[0]) === failedCleanupRoot) {
+        const leftover = expectDefined(failedCleanupRoot, "completed restoration cleanup root");
+        await expect(fs.readdir(leftover)).resolves.toEqual([]);
+        await expectPathMissing(path.join(leftover, "shadow"));
+        await expect(fs.readFile(path.join(skillsDir, "note.txt"), "utf8")).resolves.toBe(
+          "sandbox-skills",
+        );
+        cleanupFailed = true;
+        throw cleanupError;
+      }
+      return await rmdir(...args);
     });
-
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: undefined,
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: workspace.dir,
+      agentWorkspaceDir: agentWorkspace.dir,
+      remoteAgentWorkspaceDir: "/sandbox/nested/agent",
+      mode: "mirror",
     });
-
-    await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
-      "remote",
-    );
-    await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
-    expect((await fs.stat(path.join(workspaceDir, ".openclaw"))).isDirectory()).toBe(true);
+    try {
+      const result = await backend
+        .finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: undefined,
+        })
+        .catch((error: unknown) => error);
+      expect(cleanupFailed).toBe(true);
+      expect(preservationRoots.size).toBe(2);
+      expect(result).toMatchObject({ cause: cleanupError });
+      for (const directory of [skillsDir, agentShadowDir]) {
+        await expect(fs.readFile(path.join(directory, "note.txt"), "utf8")).resolves.toBe(
+          path.basename(directory),
+        );
+      }
+      const leftover = expectDefined(failedCleanupRoot, "retained preservation directory");
+      expect(String(result)).toContain(leftover);
+      expect(String(result)).not.toContain(path.join(leftover, "shadow"));
+      expect(String(result)).toContain("was restored");
+    } finally {
+      renameSpy.mockRestore();
+      rmdirSpy.mockRestore();
+      for (const directory of preservationRoots) {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }
   });
 });
 
 const executableWorkspaces: TempWorkspace[] = [];
-
-function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
-  return {
-    mode: "all",
-    backend: "openshell",
-    scope: "session",
-    workspaceAccess: "rw",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "configured",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: [],
-      env: {},
-    },
-    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
-    browser: createSandboxBrowserConfig(),
-    tools: { allow: ["*"], deny: [] },
-    prune: createSandboxPruneConfig(),
-  };
-}
 
 async function makeExecutable(params: { name: string; script: string }): Promise<string> {
   const workspace = await createOpenShellTestWorkspace("bin");
@@ -841,33 +1192,155 @@ afterEach(async () => {
   await Promise.all(executableWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 
-function createMirrorBackendMock(): OpenShellSandboxBackend {
+function createMirrorBackendMock(): OpenShellMirrorBackend {
   return {
-    id: "openshell",
-    runtimeId: "openshell-test",
-    runtimeLabel: "openshell-test",
-    workdir: "/sandbox",
-    env: {},
-    remoteWorkspaceDir: "/sandbox",
     remoteAgentWorkspaceDir: "/agent",
-    buildExecSpec: vi.fn(),
-    runShellCommand: vi.fn(),
-    runRemoteShellScript: vi.fn().mockResolvedValue({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }),
     mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
     renameRemotePath: vi.fn().mockResolvedValue(undefined),
     removeRemotePath: vi.fn().mockResolvedValue(undefined),
     syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
-  } as unknown as OpenShellSandboxBackend;
+  };
+}
+
+async function createOpenShellBackendFixture(params: {
+  workspaceDir: string;
+  mode: "mirror" | "remote";
+  skillsWorkspaceDir?: string;
+  agentWorkspaceDir?: string;
+  remoteAgentWorkspaceDir?: string;
+}): Promise<OpenShellSandboxBackend> {
+  const factory = createOpenShellSandboxBackendFactory({
+    pluginConfig: resolveOpenShellPluginConfig({
+      command: "openshell",
+      mode: params.mode,
+      ...(params.remoteAgentWorkspaceDir
+        ? { remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir }
+        : {}),
+    }),
+  });
+  return (await factory({
+    sessionKey: "agent:main:turn",
+    scopeKey: "agent:main",
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir ?? params.workspaceDir,
+    ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
+    cfg: createOpenShellBackendSandboxConfig(),
+  })) as OpenShellSandboxBackend;
+}
+
+async function createMirrorFsBridgeFixture(
+  workspaceDir: string,
+  backend: OpenShellMirrorBackend = createMirrorBackendMock(),
+  workspaceAccess: "rw" | "none" | "ro" = "rw",
+) {
+  const sandbox = createSandboxTestContext({
+    overrides: {
+      backendId: "openshell",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      workspaceAccess,
+      containerWorkdir: "/sandbox",
+    },
+  });
+  const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+  return { backend, bridge: createOpenShellFsBridge({ sandbox, backend }) };
 }
 
 describe("openshell fs bridges", () => {
   beforeAll(installOpenShellBackendMocks);
   afterAll(uninstallOpenShellBackendMocks);
   beforeEach(resetOpenShellBackendMocks);
+
+  it.each(["/sandbox/../outside.txt", "/sandbox/nested/../../outside.txt"])(
+    "rejects workspace container paths that escape the managed root: %s",
+    async (filePath) => {
+      await using workspace = await createOpenShellTestWorkspace("fs-path");
+      const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+
+      expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
+      await expect(bridge.readDirectory({ filePath })).rejects.toThrow(
+        "Sandbox path escapes allowed mounts",
+      );
+    },
+  );
+
+  it("rejects agent container paths that escape the managed root", async () => {
+    await using workspace = await createOpenShellTestWorkspace("fs-path");
+    await using agentWorkspace = await createOpenShellTestWorkspace("fs-agent");
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir: workspace.dir,
+        agentWorkspaceDir: agentWorkspace.dir,
+        workspaceAccess: "rw",
+        containerWorkdir: "/sandbox",
+      },
+    });
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend: createMirrorBackendMock() });
+
+    expect(() => bridge.resolvePath({ filePath: "/agent/../outside.txt" })).toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
+  });
+
+  it.each(["remote", "mirror"] as const)(
+    "keeps the factory backend as the canonical owner of the %s filesystem bridge",
+    async (mode) => {
+      await using workspace = await createOpenShellTestWorkspace("fs-owner");
+      const workspaceDir = workspace.dir;
+      sandboxMocks.remoteRoot = workspaceDir;
+      sandboxMocks.remoteAgentRoot = workspaceDir;
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const backend = await createOpenShellBackendFixture({ workspaceDir, mode });
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+      const bridge = backend.createFsBridge?.({ sandbox });
+      if (!bridge) {
+        throw new Error("Expected an OpenShell filesystem bridge");
+      }
+      expect(bridge.resolvePath({ filePath: "owner.txt" })).toEqual({
+        ...(mode === "mirror" ? { hostPath: path.join(workspaceDir, "owner.txt") } : {}),
+        relativePath: "owner.txt",
+        containerPath: "/sandbox/owner.txt",
+      });
+
+      if (mode === "remote") {
+        const runRemoteShellScript = vi.spyOn(backend, "runRemoteShellScript").mockResolvedValue({
+          stdout: Buffer.from("0\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        });
+        await expect(bridge.stat({ filePath: "owner.txt" })).resolves.toBeNull();
+        expect(runRemoteShellScript).toHaveBeenCalledOnce();
+        return;
+      }
+
+      await bridge.writeFile({ filePath: "owner.txt", data: "owner" });
+      await expect(fs.readFile(path.join(workspaceDir, "owner.txt"), "utf8")).resolves.toBe(
+        "owner",
+      );
+      expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({ sandboxName: backend.runtimeId }),
+          args: [
+            "sandbox",
+            "upload",
+            "--no-git-ignore",
+            backend.runtimeId,
+            path.join(workspaceDir, "owner.txt"),
+            "/sandbox/owner.txt",
+          ],
+        }),
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects remote-only symlink parents in pinned mirror mutations",
@@ -876,42 +1349,51 @@ describe("openshell fs bridges", () => {
       const stateDir = stateWorkspace.dir;
       const remoteRoot = path.join(stateDir, "sandbox");
       const remoteAgentRoot = path.join(stateDir, "agent");
+      const hostRoot = path.join(stateDir, "host");
       const outsideDir = path.join(stateDir, "outside");
       await fs.mkdir(remoteRoot, { recursive: true });
       await fs.mkdir(remoteAgentRoot, { recursive: true });
       await fs.mkdir(outsideDir, { recursive: true });
+      await fs.mkdir(hostRoot, { recursive: true });
+      await fs.mkdir(path.join(hostRoot, "alias"), { recursive: true });
+      await fs.writeFile(path.join(hostRoot, "source.txt"), "payload", "utf8");
       await fs.writeFile(path.join(remoteRoot, "source.txt"), "payload", "utf8");
       await fs.symlink(outsideDir, path.join(remoteRoot, "alias"));
       sandboxMocks.remoteRoot = remoteRoot;
       sandboxMocks.remoteAgentRoot = remoteAgentRoot;
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-      const factory = createOpenShellSandboxBackendFactory({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: hostRoot,
+        mode: "mirror",
       });
-      const backend = (await factory({
-        sessionKey: "agent:main:turn",
-        scopeKey: "agent:main",
-        workspaceDir: stateDir,
-        agentWorkspaceDir: stateDir,
-        cfg: createOpenShellBackendSandboxConfig(),
-      })) as OpenShellSandboxBackend;
-      if (!backend.mkdirpRemotePath || !backend.renameRemotePath || !backend.removeRemotePath) {
-        throw new Error("Expected OpenShell remote path mutation boundaries");
+      const bridge = backend.createFsBridge?.({
+        sandbox: createSandboxTestContext({
+          overrides: {
+            backendId: "openshell",
+            workspaceDir: hostRoot,
+            agentWorkspaceDir: hostRoot,
+            containerWorkdir: "/sandbox",
+            backend,
+          },
+        }),
+      });
+      if (!bridge) {
+        throw new Error("Expected OpenShell mirror filesystem bridge");
       }
 
-      await expect(backend.mkdirpRemotePath("/sandbox/safe/nested")).resolves.toBeUndefined();
+      await expect(bridge.mkdirp({ filePath: "/sandbox/safe/nested" })).resolves.toBeUndefined();
       await expect(fs.stat(path.join(remoteRoot, "safe", "nested"))).resolves.toBeDefined();
 
-      await expect(backend.mkdirpRemotePath("/sandbox/..cache/file")).resolves.toBeUndefined();
+      await expect(bridge.mkdirp({ filePath: "/sandbox/..cache/file" })).resolves.toBeUndefined();
       await expect(fs.stat(path.join(remoteRoot, "..cache", "file"))).resolves.toBeDefined();
 
-      await expect(backend.mkdirpRemotePath("/sandbox/alias/escaped")).rejects.toThrow(
+      await expect(bridge.mkdirp({ filePath: "/sandbox/alias/escaped" })).rejects.toThrow(
         "unsafe remote directory symlink",
       );
       await expectPathMissing(path.join(outsideDir, "escaped"));
 
       await expect(
-        backend.renameRemotePath("/sandbox/source.txt", "/sandbox/alias/escaped.txt"),
+        bridge.rename({ from: "/sandbox/source.txt", to: "/sandbox/alias/escaped.txt" }),
       ).rejects.toThrow("unsafe remote directory symlink");
       await expect(fs.readFile(path.join(remoteRoot, "source.txt"), "utf8")).resolves.toBe(
         "payload",
@@ -920,19 +1402,17 @@ describe("openshell fs bridges", () => {
 
       await fs.writeFile(path.join(remoteRoot, "victim.txt"), "delete me", "utf8");
       await expect(
-        backend.removeRemotePath("/sandbox/alias/victim.txt", { recursive: false }),
+        bridge.remove({ filePath: "/sandbox/alias/victim.txt", recursive: false }),
       ).rejects.toThrow("unsafe remote directory symlink");
       await expect(
-        backend.removeRemotePath("/sandbox/missing-parent/victim.txt", {
+        bridge.remove({
+          filePath: "/sandbox/missing-parent/victim.txt",
           recursive: false,
-          ignoreMissing: true,
+          force: true,
         }),
       ).resolves.toBeUndefined();
       await expect(
-        backend.removeRemotePath("/sandbox/alias/victim.txt", {
-          recursive: false,
-          ignoreMissing: true,
-        }),
+        bridge.remove({ filePath: "/sandbox/alias/victim.txt", recursive: false, force: true }),
       ).rejects.toThrow("unsafe remote directory symlink");
       await expect(fs.readFile(path.join(remoteRoot, "victim.txt"), "utf8")).resolves.toBe(
         "delete me",
@@ -941,49 +1421,64 @@ describe("openshell fs bridges", () => {
     },
   );
 
-  it("writes locally and syncs the file to the remote workspace", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
+  it.each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      const { backend, bridge } = await createMirrorFsBridgeFixture(
         workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
+        undefined,
+        workspaceAccess,
+      );
+      if (workspaceAccess === "ro") {
+        await expect(bridge.writeFile({ filePath: "file.txt", data: "blocked" })).rejects.toThrow(
+          "read-only",
+        );
+        expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+        return;
+      }
+      await bridge.writeFile({
+        filePath: "nested/file.txt",
+        data: "hello",
+        mkdir: true,
+      });
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
-    await bridge.writeFile({
-      filePath: "nested/file.txt",
-      data: "hello",
-      mkdir: true,
-    });
-
-    expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe("hello");
-    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
-      path.join(workspaceDir, "nested", "file.txt"),
-      "/sandbox/nested/file.txt",
-    );
-  });
+      expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe(
+        "hello",
+      );
+      expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
+        path.join(workspaceDir, "nested", "file.txt"),
+        "/sandbox/nested/file.txt",
+      );
+      const skillRelativePath =
+        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+      const skillPath = path.join(workspaceDir, skillRelativePath);
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(skillPath, "managed instructions");
+      const mutate =
+        mutation === "write"
+          ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+          : mutation === "remove"
+            ? bridge.remove({ filePath: ".agents", recursive: true })
+            : bridge.rename({ from: ".agents", to: "moved-instructions" });
+      await expect(mutate).rejects.toThrow("read-only");
+      await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
+    },
+  );
 
   it("creates mirror files exclusively before syncing them", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
     const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
     expect(createFileExclusive).toBeTypeOf("function");
 
@@ -1004,17 +1499,7 @@ describe("openshell fs bridges", () => {
     const workspaceDir = workspace.dir;
     const backend = createMirrorBackendMock();
     backend["syncLocalPathToRemote"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
     const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
     expect(createFileExclusive).toBeTypeOf("function");
 
@@ -1029,41 +1514,18 @@ describe("openshell fs bridges", () => {
   it("creates remote mirror directories through the pinned backend operation", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
     await bridge.mkdirp({ filePath: "nested/dir" });
 
     await expect(fs.stat(path.join(workspaceDir, "nested", "dir"))).resolves.toBeDefined();
     expect(backend["mkdirpRemotePath"]).toHaveBeenCalledWith("/sandbox/nested/dir", undefined);
-    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
   it("renames remote mirror paths through the pinned backend operation", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "source.txt"), "payload", "utf8");
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
     await bridge.rename({ from: "source.txt", to: "nested/target.txt" });
 
     await expect(
@@ -1074,7 +1536,6 @@ describe("openshell fs bridges", () => {
       "/sandbox/nested/target.txt",
       undefined,
     );
-    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
   it("rejects cross-root mirror renames before the remote backend commit", async () => {
@@ -1113,18 +1574,7 @@ describe("openshell fs bridges", () => {
       const workspaceDir = workspace.dir;
       await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
       await fs.symlink("target.txt", path.join(workspaceDir, "link.txt"));
-      const backend = createMirrorBackendMock();
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
       await expect(bridge.rename({ from: "link.txt", to: "moved-link.txt" })).rejects.toThrow(
         "Sandbox symlink rename sources are not supported",
@@ -1143,18 +1593,7 @@ describe("openshell fs bridges", () => {
       const sourcePath = path.join(workspaceDir, "source.txt");
       await fs.writeFile(sourcePath, "payload", "utf8");
       await fs.link(sourcePath, path.join(workspaceDir, "other-link.txt"));
-      const backend = createMirrorBackendMock();
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
       await expect(bridge.rename({ from: "source.txt", to: "moved.txt" })).rejects.toThrow(
         "Sandbox hardlinked rename sources are not supported",
@@ -1169,18 +1608,7 @@ describe("openshell fs bridges", () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
     await bridge.remove({ filePath: "target.txt", force: true });
 
     await expectPathMissing(path.join(workspaceDir, "target.txt"));
@@ -1189,7 +1617,6 @@ describe("openshell fs bridges", () => {
       signal: undefined,
       ignoreMissing: true,
     });
-    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
   it("removes recursive local mirror directories without raw path deletion", async () => {
@@ -1197,18 +1624,7 @@ describe("openshell fs bridges", () => {
     const workspaceDir = workspace.dir;
     await fs.mkdir(path.join(workspaceDir, "nested", "child"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "nested", "child", "target.txt"), "payload", "utf8");
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
     await bridge.remove({ filePath: "nested", recursive: true, force: true });
 
     await expectPathMissing(path.join(workspaceDir, "nested"));
@@ -1230,18 +1646,7 @@ describe("openshell fs bridges", () => {
       await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "nested", "link.txt"));
-      const backend = createMirrorBackendMock();
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
       await bridge.remove({ filePath: "nested", recursive: true, force: true });
 
       await expectPathMissing(path.join(workspaceDir, "nested"));
@@ -1259,18 +1664,7 @@ describe("openshell fs bridges", () => {
       const outsideTarget = path.join(outsideDir, "target.txt");
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "link.txt"));
-      const backend = createMirrorBackendMock();
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
       await bridge.remove({ filePath: "link.txt", force: false });
 
       await expectPathMissing(path.join(workspaceDir, "link.txt"));
@@ -1297,17 +1691,7 @@ describe("openshell fs bridges", () => {
         await fs.rm(slotPath, { recursive: true, force: true });
         await fs.symlink(outsideDir, slotPath);
       });
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
       await expect(bridge.mkdirp({ filePath: "slot/escaped" })).rejects.toThrow();
       await expectPathMissing(path.join(outsideDir, "escaped"));
@@ -1331,17 +1715,7 @@ describe("openshell fs bridges", () => {
         await fs.rm(slotPath, { recursive: true, force: true });
         await fs.symlink(outsideDir, slotPath);
       });
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
       await expect(bridge.remove({ filePath: "slot/target.txt", force: true })).rejects.toThrow();
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
@@ -1364,17 +1738,7 @@ describe("openshell fs bridges", () => {
         await fs.rm(slotPath, { recursive: true, force: true });
         await fs.symlink(outsideDir, slotPath);
       });
-      const sandbox = createSandboxTestContext({
-        overrides: {
-          backendId: "openshell",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          containerWorkdir: "/sandbox",
-        },
-      });
-
-      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
       await expect(
         bridge.rename({ from: "source.txt", to: "slot/parent/moved.txt" }),
@@ -1389,17 +1753,7 @@ describe("openshell fs bridges", () => {
     const workspaceDir = workspace.dir;
     const backend = createMirrorBackendMock();
     backend["mkdirpRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
     await expect(bridge.mkdirp({ filePath: "alias/escaped" })).rejects.toThrow("remote rejected");
     await expectPathMissing(path.join(workspaceDir, "alias"));
@@ -1412,17 +1766,7 @@ describe("openshell fs bridges", () => {
     await fs.writeFile(targetPath, "payload", "utf8");
     const backend = createMirrorBackendMock();
     backend["removeRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
     await expect(bridge.remove({ filePath: "target.txt", force: true })).rejects.toThrow(
       "remote rejected",
@@ -1438,17 +1782,7 @@ describe("openshell fs bridges", () => {
     await fs.writeFile(sourcePath, "payload", "utf8");
     const backend = createMirrorBackendMock();
     backend["renameRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir, backend);
 
     await expect(bridge.rename({ from: "source.txt", to: "nested/target.txt" })).rejects.toThrow(
       "remote rejected",
@@ -1463,18 +1797,7 @@ describe("openshell fs bridges", () => {
     await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
     const outsideDir = outsideWorkspace.dir;
     await fs.symlink(outsideDir, path.join(workspaceDir, "alias"));
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
     await expect(
       bridge.writeFile({
@@ -1494,18 +1817,7 @@ describe("openshell fs bridges", () => {
     const linkedTarget = path.join(workspaceDir, "existing.txt");
     await fs.writeFile(linkedTarget, "keep", "utf8");
     await fs.symlink("existing.txt", path.join(workspaceDir, "link.txt"));
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
     await expect(
       bridge.writeFile({
@@ -1526,43 +1838,31 @@ describe("openshell fs bridges", () => {
     const outsideDir = outsideWorkspace.dir;
     await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
     await fs.symlink(outsideDir, path.join(workspaceDir, "subdir"));
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
+    await expect(bridge.readDirectory({ filePath: "subdir" })).rejects.toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
   });
 
-  it("reads regular files through the shared safe fs root", async () => {
+  it("reads regular files and directories through the shared safe fs root", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
-    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "subdir", "nested"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
 
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
-
+    await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+      { name: "subdir", isDirectory: true },
+    ]);
+    await expect(bridge.readDirectory({ filePath: ".", cwd: "/sandbox/subdir" })).resolves.toEqual([
+      { name: "nested", isDirectory: true },
+      { name: "secret.txt", isDirectory: false },
+    ]);
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
     );
@@ -1574,65 +1874,80 @@ describe("openshell fs bridges", () => {
     );
   });
 
-  it("reads materialized sandbox skills from the protected skills workspace", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    await using skillsWorkspace = await createOpenShellTestWorkspace("skills");
-    const skillsWorkspaceDir = skillsWorkspace.dir;
-    const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
-    const shadowFile = path.join(
-      workspaceDir,
-      ".openclaw",
-      "sandbox-skills",
-      "skills",
-      "demo",
-      "SKILL.md",
-    );
-    await fs.mkdir(path.dirname(skillFile), { recursive: true });
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
-    await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
-
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
+  it.each(["external", "nested"] as const)(
+    "reads materialized sandbox skills from a protected %s skills workspace",
+    async (location) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      await using skillsWorkspace = await createOpenShellTestWorkspace("skills");
+      const skillsWorkspaceDir =
+        location === "external" ? skillsWorkspace.dir : path.join(workspaceDir, "materialized");
+      const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
+      const shadowFile = path.join(
         workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        skillsWorkspaceDir,
-        workspaceAccess: "rw",
-        containerWorkdir: "/sandbox",
-      },
-    });
+        ".openclaw",
+        "sandbox-skills",
+        "skills",
+        "demo",
+        "SKILL.md",
+      );
+      await fs.mkdir(path.dirname(skillFile), { recursive: true });
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
+      await fs.writeFile(path.join(path.dirname(skillFile), "examples.md"), "examples", "utf8");
+      await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
 
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          skillsWorkspaceDir,
+          workspaceAccess: "rw",
+          containerWorkdir: "/sandbox",
+        },
+      });
 
-    await expect(
-      bridge.readFile({
-        filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-      }),
-    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
-    await expect(
-      bridge.readFile({
-        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-      }),
-    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
-    await expect(
-      bridge.writeFile({
-        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-        data: "owned",
-      }),
-    ).rejects.toThrow(/read-only/);
-    await expect(
-      bridge.writeFile({
-        filePath: shadowFile,
-        data: "owned",
-      }),
-    ).rejects.toThrow(/read-only/);
-    expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
-    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
-  });
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(
+        bridge.readDirectory({ filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo" }),
+      ).resolves.toEqual([
+        { name: "SKILL.md", isDirectory: false },
+        { name: "examples.md", isDirectory: false },
+      ]);
+      await expect(
+        bridge.readFile({
+          filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        }),
+      ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+      await expect(
+        bridge.readFile({
+          filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        }),
+      ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+      await expect(
+        bridge.writeFile({
+          filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+          data: "owned",
+        }),
+      ).rejects.toThrow(/read-only/);
+      await expect(
+        bridge.writeFile({
+          filePath: shadowFile,
+          data: "owned",
+        }),
+      ).rejects.toThrow(/read-only/);
+      await expect(bridge.writeFile({ filePath: skillFile, data: "owned" })).rejects.toThrow(
+        /read-only/,
+      );
+      await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("materialized");
+      expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
+      expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects reads of a symlinked leaf", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
@@ -1646,18 +1961,7 @@ describe("openshell fs bridges", () => {
       path.join(workspaceDir, "subdir", "secret.txt"),
     );
 
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
@@ -1676,18 +1980,7 @@ describe("openshell fs bridges", () => {
       path.join(workspaceDir, "subdir", "secret.txt"),
     );
 
-    const backend = createMirrorBackendMock();
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
@@ -1716,6 +2009,70 @@ describe("openshell fs bridges", () => {
     const resolved = bridge.resolvePath({ filePath: "/agent/note.txt" });
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
+    await expect(bridge.readDirectory({ filePath: "/agent" })).resolves.toEqual([
+      { name: "note.txt", isDirectory: false },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "nested agent root",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox/nested/agent",
+      target: "/sandbox/nested/agent/note.txt",
+      owner: "agent",
+    },
+    {
+      name: "nested primary root",
+      workspaceRemote: "/sandbox/agent/project",
+      agentRemote: "/sandbox/agent",
+      target: "/sandbox/agent/project/note.txt",
+      owner: "workspace",
+    },
+    {
+      name: "equal roots",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox",
+      target: "/sandbox/note.txt",
+      owner: "workspace",
+    },
+    {
+      name: "relative path under a nested agent root",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox/nested/agent",
+      target: "nested/agent/note.txt",
+      owner: "agent",
+    },
+    {
+      name: "relative path under equal roots",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox",
+      target: "note.txt",
+      owner: "workspace",
+    },
+  ])("routes $name to the authoritative host workspace", async (scenario) => {
+    await using workspace = await createOpenShellTestWorkspace("fs");
+    await using agentWorkspace = await createOpenShellTestWorkspace("agent");
+    const backend = {
+      ...createMirrorBackendMock(),
+      remoteAgentWorkspaceDir: scenario.agentRemote,
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir: workspace.dir,
+        agentWorkspaceDir: agentWorkspace.dir,
+        workspaceAccess: "ro",
+        containerWorkdir: scenario.workspaceRemote,
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const resolved = bridge.resolvePath({ filePath: scenario.target });
+    expect(resolved.hostPath).toBe(
+      path.join(scenario.owner === "agent" ? agentWorkspace.dir : workspace.dir, "note.txt"),
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

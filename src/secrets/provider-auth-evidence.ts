@@ -29,7 +29,9 @@ function expandAuthEvidencePath(
   }
   let unresolvedPlaceholder = false;
   let explicitOverride = false;
-  const expanded = trimmed.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_match, name: string) => {
+  const placeholderPattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu;
+  const invalidPlaceholder = trimmed.replace(placeholderPattern, "").includes("${");
+  const expanded = trimmed.replace(placeholderPattern, (_match, name: string) => {
     const value =
       name === "HOME"
         ? (normalizeOptionalPathInput(env.HOME) ?? os.homedir())
@@ -43,7 +45,7 @@ function expandAuthEvidencePath(
     }
     return value;
   });
-  return unresolvedPlaceholder || expanded.includes("${")
+  return unresolvedPlaceholder || invalidPlaceholder
     ? undefined
     : { path: expanded, explicitOverride };
 }

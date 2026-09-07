@@ -16,6 +16,6 @@ describe("findRestartRecoveryUnsafeChatAdmissionHook", () => {
       ]),
     );
 
-    expect(findRestartRecoveryUnsafeChatAdmissionHook()).toBe("before_message_write");
+    expect(findRestartRecoveryUnsafeChatAdmissionHook("agent")).toBe("before_message_write");
   });
 });

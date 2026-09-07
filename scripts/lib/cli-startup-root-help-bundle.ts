@@ -10,7 +10,7 @@ export function resolveCliStartupRootHelpBundleIdentity(
   distDir: string,
 ): { bundleName: string; signature: string } | null {
   for (const bundleName of readdirSync(distDir).toSorted()) {
-    if (!bundleName.startsWith("root-help-") || !bundleName.endsWith(".js")) {
+    if (!bundleName.startsWith("root-help-") || !/\.m?js$/u.test(bundleName)) {
       continue;
     }
     const bundleContents = readFileSync(path.join(distDir, bundleName), "utf8");

@@ -9,12 +9,12 @@ import type {
   WorkerProfile,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -774,48 +774,6 @@ describe("worker environment store", () => {
     ).toThrow("lease id is immutable");
   });
 
-  it("persists a credential-bound local receipt without SSH metadata", () => {
-    createIntent("worker-node", { settings: { device: "device-1" } });
-    store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
-
-    const ready = store.transition({
-      environmentId: "worker-node",
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        leaseId: "device-lease-1",
-        sshEndpoint: null,
-        sharedHost: true,
-        ...readyPatch({ ...BOOTSTRAP_RECEIPT, installKind: "local" }),
-      },
-    });
-
-    expect(ready).toMatchObject({
-      state: "ready",
-      leaseId: "device-lease-1",
-      sshEndpoint: null,
-      bootstrapReceipt: {
-        ...BOOTSTRAP_RECEIPT,
-        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
-        installKind: "local",
-      },
-      sharedHost: true,
-      ownerEpoch: 1,
-    });
-    expect(store.get("worker-node")).toEqual(ready);
-    expect(
-      database.db
-        .prepare(
-          "SELECT ssh_host, ssh_host_key, bootstrap_install_kind FROM worker_environments WHERE environment_id = ?",
-        )
-        .get("worker-node"),
-    ).toEqual({
-      ssh_host: null,
-      ssh_host_key: null,
-      bootstrap_install_kind: "local",
-    });
-  });
-
   it("enforces one credential-bound session and teardown fencing", () => {
     const bootstrapping = seedBootstrapping("worker-multi-session", "lease-multi-session");
     const ready = readyPatch();
@@ -1004,10 +962,16 @@ describe("worker environment store", () => {
   });
 
   it("persists retryable errors without a self-transition", () => {
+    const initialVersion = store.inventoryVersion();
     createIntent();
+    const createdVersion = store.inventoryVersion();
+    expect(createdVersion).toBeGreaterThan(initialVersion);
     nowMs = 1_010;
     store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    const provisioningVersion = store.inventoryVersion();
+    expect(provisioningVersion).toBeGreaterThan(createdVersion);
     const stateChangedAtMs = store.get("worker-1")?.stateChangedAtMs;
+    expect(store.inventoryVersion()).toBe(provisioningVersion);
 
     nowMs = 1_020;
     expect(
@@ -1022,6 +986,7 @@ describe("worker environment store", () => {
       updatedAtMs: 1_020,
       lastError: "provider temporarily unavailable",
     });
+    expect(store.inventoryVersion()).toBeGreaterThan(provisioningVersion);
   });
 
   it("accepts only SecretRef metadata for persisted SSH keys", () => {

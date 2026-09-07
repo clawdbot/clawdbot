@@ -17,7 +17,7 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
-import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
@@ -39,6 +39,7 @@ import {
   type MSTeamsPollStore,
 } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
+import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
@@ -48,11 +49,6 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  deleteMSTeamsActivityWithReference,
-  sendMSTeamsActivityWithReference,
-  updateMSTeamsActivityWithReference,
-} from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   createMSTeamsExpressAdapter,
@@ -698,65 +694,6 @@ function buildActivityHandler(): MSTeamsActivityHandler {
   };
 
   return handler;
-}
-
-function createMSTeamsReplayContext(
-  activity: MSTeamsTurnContext["activity"],
-  app: MSTeamsApp,
-  serviceUrlBoundary: ReturnType<typeof resolveMSTeamsSdkCloudOptions>,
-): MSTeamsTurnContext {
-  const rawConversationId = activity.conversation?.id ?? "";
-  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-  const conversationType = activity.conversation?.conversationType ?? "personal";
-  const threadActivityId =
-    conversationType.toLowerCase() === "channel"
-      ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId)
-      : undefined;
-  const tenantId = activity.channelData?.tenant?.id ?? activity.conversation?.tenantId;
-  const reference = {
-    activityId: activity.id,
-    user: activity.from,
-    agent: activity.recipient,
-    conversation: {
-      id: conversationId,
-      conversationType,
-      ...(tenantId ? { tenantId } : {}),
-    },
-    channelId: activity.channelId,
-    serviceUrl: activity.serviceUrl,
-    locale: activity.locale,
-    ...(tenantId ? { tenantId } : {}),
-    ...(activity.from?.aadObjectId ? { aadObjectId: activity.from.aadObjectId } : {}),
-  };
-  const proactiveOptions = {
-    ...(threadActivityId ? { threadActivityId } : {}),
-    serviceUrlBoundary,
-  };
-  const sendActivity: MSTeamsTurnContext["sendActivity"] = (outbound) =>
-    sendMSTeamsActivityWithReference(app, reference, outbound, proactiveOptions);
-  return {
-    activity,
-    sendActivity,
-    sendActivities: async (activities) => {
-      const results: unknown[] = [];
-      for (const outbound of activities) {
-        results.push(await sendActivity(outbound));
-      }
-      return results;
-    },
-    updateActivity: async (outbound) =>
-      (await updateMSTeamsActivityWithReference(
-        app,
-        reference,
-        typeof outbound.id === "string" ? outbound.id : "",
-        outbound,
-        proactiveOptions,
-      )) as { id?: string } | void,
-    deleteActivity: async (activityId) => {
-      await deleteMSTeamsActivityWithReference(app, reference, activityId, proactiveOptions);
-    },
-    getTeamDetails: (teamId) => app.api.teams.getById(teamId),
-  };
 }
 
 /**

@@ -1,7 +1,8 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -18,11 +19,18 @@ import {
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  applyCompletionsAnthropicCacheControl,
+  resolveCompletionsCacheControl,
+} from "./openai-completions-cache-control.js";
+import {
+  detectOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
+import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import {
   applyCompletionsReplay,
@@ -53,7 +61,7 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   if (!model.baseUrl.trim()) {
     return true;
   }
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
     return true;
   }
@@ -246,21 +254,27 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
 
 function convertTools(
   tools: NonNullable<Context["tools"]>,
-  compat: ReturnType<typeof getCompat>,
+  compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
+  mode: "direct" | "managed",
 ) {
   const projection = projectOpenAITools(tools);
-  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(
-    projection,
-    resolveOpenAIStrictToolSetting(model, {
-      transport: "stream",
-      supportsStrictMode: compat?.supportsStrictMode,
-    }),
-    {
-      transport: "completions",
-      model,
-    },
-  );
+  const strict =
+    mode === "direct"
+      ? compat.supportsStrictMode
+        ? false
+        : undefined
+      : resolveOpenAIStrictToolFlagWithDiagnostics(
+          projection,
+          resolveOpenAIStrictToolSetting(model, {
+            transport: "stream",
+            supportsStrictMode: compat?.supportsStrictMode,
+          }),
+          {
+            transport: "completions",
+            model,
+          },
+        );
   return {
     projection,
     tools: sortTransportToolsByName(projection.tools).map((tool) => {
@@ -272,17 +286,16 @@ function convertTools(
       } = {
         name: tool.name,
         description: tool.description,
-        parameters: normalizeOpenAIStrictToolParameters(
-          tool.parameters,
-          strict === true,
-          model.compat,
-        ),
+        parameters:
+          mode === "direct"
+            ? tool.parameters
+            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
       };
       if (strict !== undefined) {
         functionTool.strict = strict;
       }
       return {
-        type: "function",
+        type: "function" as const,
         function: functionTool,
       };
     }),
@@ -294,27 +307,67 @@ export function buildOpenAICompletionsParams(
   context: Context,
   options: OpenAICompletionsOptions | undefined,
 ) {
-  const compat = getCompat(model);
-  const compatDetection = detectOpenAICompletionsCompat(model);
-  const completionsContext = context.systemPrompt
-    ? {
-        ...context,
-        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-      }
-    : context;
-  let messages = convertMessages(model as never, completionsContext, compat as never);
-  applyCompletionsReplay(messages as unknown[], context, model, compat);
-  if (compat.strictMessageKeys) {
-    messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
+  return buildOpenAICompletionsRequest(model, context, options, { mode: "managed" });
+}
+
+type CompletionsRequestPolicy =
+  | { mode: "managed" }
+  | { mode: "direct"; compat: ResolvedOpenAICompletionsCompat; cacheRetention: CacheRetention };
+
+type CompletionsRequest = Record<string, unknown> & {
+  model: string;
+  messages: unknown[];
+  stream: true;
+  tools?: ReturnType<typeof convertTools>["tools"];
+};
+
+export function buildOpenAICompletionsRequest(
+  model: OpenAIModeModel,
+  context: Context,
+  options: OpenAICompletionsOptions | undefined,
+  policy: CompletionsRequestPolicy,
+): CompletionsRequest {
+  const resolvedPolicy =
+    policy.mode === "direct" ? policy : { ...policy, compat: getCompat(model) };
+  const compat = resolvedPolicy.compat;
+  const managedCompat = resolvedPolicy.mode === "managed" ? resolvedPolicy.compat : undefined;
+  const endpointDetection = detectOpenAICompletionsCompat(model);
+  const compatDetection = policy.mode === "managed" ? endpointDetection : undefined;
+  const { endpointClass } = endpointDetection.capabilities;
+  const cacheRetention =
+    policy.mode === "direct"
+      ? policy.cacheRetention
+      : resolveCacheRetention(options?.cacheRetention);
+  const cacheControl = resolveCompletionsCacheControl(
+    compat,
+    cacheRetention,
+    endpointClass === "openrouter" ||
+      (endpointClass === "default" && model.provider === "openrouter"),
+  );
+  const markTools =
+    endpointClass !== "modelstudio-native" &&
+    !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
+  const cacheOptOutIndexes = new Set<number>();
+  let messages: unknown[] = convertMessages(model as never, context, compat as never, {
+    cacheOptOutIndexes,
+    preserveSystemPromptCacheBoundary:
+      cacheControl !== undefined && !managedCompat?.requiresStringContent,
+  });
+  if (managedCompat) {
+    applyCompletionsReplay(messages, context, model, managedCompat);
+    if (managedCompat.strictMessageKeys) {
+      messages = stripCompletionMessagesToRoleContent(messages);
+    }
+    if (managedCompat.requiresStringContent) {
+      messages = flattenCompletionMessagesToStringContent(messages);
+    }
   }
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
-  const params: Record<string, unknown> = {
+  const params: CompletionsRequest = {
     model: model.id,
-    messages: compat.requiresStringContent
-      ? flattenCompletionMessagesToStringContent(messages)
-      : messages,
+    messages,
     stream: true,
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
   if (compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
@@ -322,60 +375,65 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsStore) {
     params.store = false;
   }
-  if (compat.supportsPromptCacheKey && promptCacheKey) {
-    params.prompt_cache_key = promptCacheKey;
-    // When the caller explicitly opted into long retention, forward the
-    // canonical prompt_cache_retention value alongside the cache key so
-    // OpenAI-compatible completions backends (oMLX, llama.cpp, official
-    // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
-    // the key reaches the wire but the retention preference is silently dropped.
-    if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
-      params.prompt_cache_retention = "24h";
-    }
+  if (policy.mode === "direct" || (compat.supportsPromptCacheKey && promptCacheKey)) {
+    params.prompt_cache_key = compat.supportsPromptCacheKey ? promptCacheKey : undefined;
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
-  if (options?.topP !== undefined) {
+  if (policy.mode === "managed" && options?.topP !== undefined) {
     params.top_p = options.topP;
   }
-  const responseFormat = resolveOpenAICompletionsResponseFormat(
-    shouldOmitOllamaCompatResponseFormat({
-      provider: model.provider,
-      baseUrl: model.baseUrl,
-      hasTools: () => Boolean(context.tools?.length),
-    })
+  const requestedResponseFormat = options?.responseFormat;
+  const responseFormat =
+    policy.mode === "direct" && requestedResponseFormat === undefined
       ? undefined
-      : options?.responseFormat,
-    compat.supportsJsonSchemaResponseFormat,
-  );
+      : resolveOpenAICompletionsResponseFormat(
+          shouldOmitOllamaCompatResponseFormat({
+            provider: model.provider,
+            baseUrl: model.baseUrl,
+            hasTools: () => Boolean(context.tools?.length),
+          })
+            ? undefined
+            : requestedResponseFormat,
+          compat.supportsJsonSchemaResponseFormat,
+        );
   if (responseFormat !== undefined) {
     params.response_format = responseFormat;
   }
-  if (options?.frequencyPenalty !== undefined) {
+  if (policy.mode === "managed" && options?.frequencyPenalty !== undefined) {
     params.frequency_penalty = options.frequencyPenalty;
   }
-  if (options?.presencePenalty !== undefined) {
+  if (policy.mode === "managed" && options?.presencePenalty !== undefined) {
     params.presence_penalty = options.presencePenalty;
   }
-  if (options?.seed !== undefined) {
+  if (policy.mode === "managed" && options?.seed !== undefined) {
     params.seed = options.seed;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
   }
-  if (supportsModelTools(model)) {
+  let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
+  if (policy.mode === "direct" || supportsModelTools(model)) {
     if (context.tools) {
-      const converted = convertTools(context.tools, compat, model);
+      const converted = convertTools(context.tools, compat, model, policy.mode);
+      if (policy.mode === "direct") {
+        directToolProjection = converted.projection;
+      }
       if (
         converted.tools.length > 0 ||
-        (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+        (policy.mode === "managed" &&
+          converted.projection.inputToolCount === 0 &&
+          converted.projection.diagnostics.length === 0)
       ) {
         params.tools = converted.tools;
       } else if (hasToolCallHistory(context.messages)) {
         params.tools = [];
       }
-      if (options?.toolChoice) {
+      if (policy.mode === "direct" && compat.zaiToolStream && converted.tools.length > 0) {
+        params.tool_stream = true;
+      }
+      if (policy.mode === "managed" && options?.toolChoice) {
         const toolChoice = reconcileOpenAICompletionsToolChoice(
           options.toolChoice,
           converted.projection,
@@ -384,7 +442,7 @@ export function buildOpenAICompletionsParams(
           params.tool_choice = toolChoice;
         }
       } else if (
-        compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+        compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
         Array.isArray(params.tools) &&
         params.tools.length > 0
       ) {
@@ -394,7 +452,7 @@ export function buildOpenAICompletionsParams(
       params.tools = [];
     }
     if (
-      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
       Array.isArray(params.tools) &&
       params.tools.length === 0
     ) {
@@ -402,8 +460,28 @@ export function buildOpenAICompletionsParams(
       delete params.tool_choice;
     }
   }
+  if (policy.mode === "direct" && compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      markTools,
+    );
+  }
+  if (policy.mode === "direct" && options?.toolChoice) {
+    const toolChoice = reconcileOpenAICompletionsToolChoice(
+      options.toolChoice,
+      directToolProjection ?? projectOpenAITools([]),
+    );
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice;
+    }
+  }
   {
-    const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+    const maxTokenBudget =
+      policy.mode === "direct"
+        ? { maxTokens: options?.maxTokens, clampToModelMaxTokens: true }
+        : resolveOpenAICompletionsMaxTokens(model, options);
     const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
     let clampedMaxTokens = effectiveMaxTokens;
@@ -415,15 +493,17 @@ export function buildOpenAICompletionsParams(
       clampedMaxTokens > modelMaxTokens
     ) {
       clampedMaxTokens = modelMaxTokens;
-      emitModelTransportDebug(
-        log,
-        `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
-          `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
-          `modelMaxTokens=${modelMaxTokens}`,
-      );
+      if (policy.mode === "managed") {
+        emitModelTransportDebug(
+          log,
+          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+            `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+            `modelMaxTokens=${modelMaxTokens}`,
+        );
+      }
     }
     if (
-      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
@@ -439,7 +519,7 @@ export function buildOpenAICompletionsParams(
         );
       }
     }
-    if (clampedMaxTokens) {
+    if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = clampedMaxTokens;
       } else {
@@ -447,12 +527,16 @@ export function buildOpenAICompletionsParams(
       }
     }
   }
+  if (policy.mode === "direct") {
+    applyDirectCompletionsReasoningAndRouting(params, model, options, compat);
+    return params;
+  }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
     ? resolveOpenAIReasoningEffortForModel({
         model,
         effort: completionsReasoningEffort,
-        fallbackMap: compat.reasoningEffortMap,
+        fallbackMap: managedCompat?.reasoningEffortMap,
       })
     : undefined;
   const omitChatCompletionsToolReasoningEffort =
@@ -497,6 +581,15 @@ export function buildOpenAICompletionsParams(
     !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
+  }
+  if (compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      markTools,
+      !managedCompat?.requiresStringContent,
+    );
   }
   return params;
 }

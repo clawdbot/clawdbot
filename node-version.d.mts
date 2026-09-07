@@ -11,3 +11,5 @@ export function isNodeVersionAtLeast(
 ): boolean;
 export function isSupportedOpenClawNodeVersion(value: unknown): boolean;
 export const PROCESS_NODE_VERSION_CHECK: string;
+
+export const SUPPORTED_NODE_VERSIONS: string;

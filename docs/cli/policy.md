@@ -14,7 +14,7 @@ conformance layer over existing OpenClaw settings, not a second configuration
 system. You author requirements in `policy.jsonc`; OpenClaw observes the active
 workspace as evidence; policy reports drift through `doctor --lint`. Policy
 does not enforce tool calls or rewrite runtime behavior at request time, and it
-does not attest per-agent credential stores such as `auth-profiles.json`.
+does not attest per-agent credential stores such as `openclaw-agent.sqlite`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
@@ -199,7 +199,7 @@ Cross-cutting notes not obvious from the rule tables below:
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
-  per-agent credential stores such as `auth-profiles.json`.
+  per-agent credential stores such as `openclaw-agent.sqlite`.
 - Data-handling evidence is config-level posture (telemetry capture toggle,
   session maintenance mode, transcript-indexing setting) plus the always-on log
   redaction invariant. It does not inspect logs, telemetry exports,
@@ -521,6 +521,12 @@ only reviewed exec approval posture for selected agents.
 | `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
 | `tools.alsoAllow.expected`      | `tools.alsoAllow` and per-agent `tools.alsoAllow`           | Require exact `alsoAllow` entries and report missing or unexpected additive tool grants.                 |
 | `tools.denyTools`               | `tools.deny` and `agents.entries.*.tools.deny`              | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
+
+Tool requirements use the same group membership, aliases, and `*` matching as
+core tool policy. For example, `group:fs` includes `ls`, `group:runtime` includes
+`secrets`, `cron` resolves to `automations`, and the image-understanding tool is
+`view_image`. A required deny list must cover every tool in a required group;
+an empty list covers nothing, and denying `write` does not deny `apply_patch`.
 
 ## Run checks
 

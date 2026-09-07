@@ -16,8 +16,21 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-/* .agents-main is a 14px-gap grid (components.css); settings sections need
-   more whitespace between each other than panel chrome does. */
-.agents-main > .settings-section:not(:first-child) {
-  margin-top: var(--space-4);
+@media (max-width: 640px) {
+  .agents-layout,
+  .agents-main {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .agents-layout > *,
+  .agents-main > * {
+    min-width: 0;
+  }
+
+  .agents-toolbar-actions {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }

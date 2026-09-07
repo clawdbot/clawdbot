@@ -12,7 +12,10 @@ scenario:
     retryCount: 0
     config:
       matrixConfigOverrides:
-        streaming: partial
+        streaming:
+          mode: partial
+          progress:
+            commandText: raw
         toolProfile: coding
 
 flow:

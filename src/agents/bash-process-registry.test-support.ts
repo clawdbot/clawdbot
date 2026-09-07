@@ -4,12 +4,12 @@ type BashProcessRegistryTestApi = {
   resetProcessRegistryForTests(): void;
 };
 
-function getTestApi(): BashProcessRegistryTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.bashProcessRegistryTestApi")
-  ] as BashProcessRegistryTestApi;
-}
+// Bind cleanup to the imported registry; a later module evaluation may replace
+// the global slot while existing callers still own the original instance.
+const testApi = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.bashProcessRegistryTestApi")
+] as BashProcessRegistryTestApi;
 
 export function resetProcessRegistryForTests(): void {
-  getTestApi().resetProcessRegistryForTests();
+  testApi.resetProcessRegistryForTests();
 }

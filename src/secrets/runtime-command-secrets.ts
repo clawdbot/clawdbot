@@ -1,6 +1,7 @@
 /** Resolves command-scoped secrets, including web provider override credentials. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
@@ -43,7 +44,7 @@ function applyProviderOverridesToConfig(
   if (!hasProviderOverrides(overrides)) {
     return config;
   }
-  const next = structuredClone(config);
+  const next = cloneConfigWithResolutionFacts(config);
   const tools = (next.tools ??= {}) as Record<string, unknown>;
   const web = (tools.web ??= {}) as Record<string, unknown>;
   const webSearch = normalizeOptionalString(overrides?.webSearch);

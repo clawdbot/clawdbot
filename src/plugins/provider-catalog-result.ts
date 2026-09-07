@@ -83,12 +83,14 @@ export function copyProviderCatalogOutcomes(
     }
     const provider = readRecordValue(entry, "provider");
     const profileId = readRecordValue(entry, "profileId");
+    const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
       (profileId !== undefined &&
         (typeof profileId !== "string" || profileId.trim().length === 0)) ||
+      (rejectionScope !== undefined && rejectionScope !== "catalog") ||
       typeof status !== "string" ||
       !PROVIDER_CATALOG_OUTCOME_STATUSES.has(status as ProviderCatalogOutcome["status"])
     ) {
@@ -98,6 +100,7 @@ export function copyProviderCatalogOutcomes(
       {
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
+        ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
       },
     ];
@@ -117,13 +120,17 @@ export function copyProviderCatalogResultEntries(params: {
 }
 
 /** Copies model definitions from provider catalog provider config. */
-export function copyProviderCatalogModels(
+function copyProviderCatalogModels(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig["models"] {
-  return copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+  const models: ModelDefinitionConfig[] = [];
+  for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
     const copied = copyProviderCatalogModel(entry);
-    return copied ? [copied] : [];
-  });
+    if (copied) {
+      models.push(copied);
+    }
+  }
+  return models;
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {

@@ -1,5 +1,5 @@
 // Memory Host SDK module implements response snippet behavior.
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -63,7 +63,10 @@ export async function readResponseJsonWithLimit(
     throw responseTooLarge(options.errorPrefix, contentLength, maxBytes);
   }
 
-  const text = await readResponseTextWithLimit(res, maxBytes, options.errorPrefix, options.signal);
+  const prefix = await readResponsePrefix(res, maxBytes, options.signal, options.errorPrefix);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(
+    joinChunks(prefix.bytes, prefix.length),
+  );
 
   try {
     return JSON.parse(text);
@@ -85,15 +88,15 @@ async function readChunkWithAbort(
     return await reader.read();
   }
   if (signal.aborted) {
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
     throw toAbortError(signal, fallbackMessage);
   }
 
   let removeAbortListener: (() => void) | undefined;
   const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
     const onAbort = () => {
+      reject(toAbortError(signal, fallbackMessage)); // Cancel resolves pending reads.
       void reader.cancel().catch(() => undefined);
-      reject(toAbortError(signal, fallbackMessage));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -110,6 +113,7 @@ async function readResponsePrefix(
   res: Response,
   maxBytes: number,
   signal?: AbortSignal,
+  errorPrefix?: string,
 ): Promise<ResponsePrefix> {
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -118,93 +122,38 @@ async function readResponsePrefix(
 
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
-  let length = 0;
-  let truncated = false;
-
+  let result: { size: number; truncated: boolean };
   try {
-    while (true) {
-      const { done, value } = await readChunkWithAbort(
-        reader,
-        signal,
-        "Response snippet body read aborted",
-      );
-      if (done) {
-        break;
-      }
-      if (!value?.length) {
-        continue;
-      }
-
-      const remaining = maxBytes - length;
-      if (value.length >= remaining) {
-        // Keep only the configured prefix and cancel the body so callers do not
-        // accidentally buffer large provider error responses.
-        if (remaining > 0) {
-          chunks.push(value.subarray(0, remaining));
-          length += remaining;
+    result = await consumeResponseBytes({
+      maxBytes,
+      stopAtLimit: errorPrefix === undefined,
+      read: () =>
+        readChunkWithAbort(
+          reader,
+          signal,
+          errorPrefix === undefined
+            ? "Response snippet body read aborted"
+            : `${errorPrefix}: response body read aborted`,
+        ),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: (size) => {
+        void reader.cancel().catch(() => undefined);
+        if (errorPrefix !== undefined) {
+          throw responseTooLarge(errorPrefix, size, maxBytes);
         }
-        truncated = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
-
-      chunks.push(value);
-      length += value.length;
-    }
+      },
+    });
   } finally {
     try {
       reader.releaseLock();
     } catch {}
   }
 
-  return { bytes: chunks, length, truncated };
-}
-
-async function readResponseTextWithLimit(
-  res: Response,
-  maxBytes: number,
-  errorPrefix: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const body = res.body;
-  if (!body || typeof body.getReader !== "function") {
-    return "";
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await readChunkWithAbort(
-        reader,
-        signal,
-        `${errorPrefix}: response body read aborted`,
-      );
-      if (done) {
-        break;
-      }
-      if (!value?.length) {
-        continue;
-      }
-
-      const nextLength = length + value.length;
-      if (nextLength > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw responseTooLarge(errorPrefix, nextLength, maxBytes);
-      }
-
-      chunks.push(value);
-      length = nextLength;
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-
-  return new TextDecoder("utf-8", { fatal: true }).decode(joinChunks(chunks, length));
+  return {
+    bytes: chunks,
+    length: result.truncated ? Math.max(0, maxBytes) : result.size,
+    truncated: result.truncated,
+  };
 }
 
 async function cancelResponseBody(res: Response): Promise<void> {
@@ -212,7 +161,7 @@ async function cancelResponseBody(res: Response): Promise<void> {
   if (!body || typeof body.cancel !== "function") {
     return;
   }
-  await body.cancel().catch(() => undefined);
+  void body.cancel().catch(() => undefined);
 }
 
 function parseContentLength(raw: string | null, errorPrefix: string): number | undefined {

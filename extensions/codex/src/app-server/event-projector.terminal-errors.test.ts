@@ -3,9 +3,11 @@ import {
   registerCodexEventProjectorTestLifecycle,
   expect,
   it,
+  THREAD_ID,
   TURN_ID,
   createProjector,
   buildEmptyToolTelemetry,
+  createParams,
   readAttemptTerminal,
   expectUsageLimitPromptError,
   forCurrentTurn,
@@ -15,11 +17,47 @@ import {
   turnCompleted,
   turnWithStatus,
   pendingCommandStarted,
+  vi,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
+  it.each([
+    { codexErrorInfo: "rateLimitExceeded", status: 429 },
+    { codexErrorInfo: "serverOverloaded", status: 503, code: "OVERLOADED" },
+    { codexErrorInfo: "internalServerError", status: 500 },
+    ...[
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ].map((variant) => ({
+      codexErrorInfo: { [variant]: { httpStatusCode: 503 } },
+      status: 503,
+    })),
+    { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 404 } }, status: 404 },
+  ])(
+    "preserves terminal provider facts for $codexErrorInfo",
+    async ({ codexErrorInfo, ...facts }) => {
+      for (const method of ["error", "turn/completed"] as const) {
+        const projector = await createProjector();
+        const error = { message: "The model is not available.", codexErrorInfo };
+        await projector.handleNotification(
+          forCurrentTurn(
+            method,
+            method === "error"
+              ? { error, willRetry: false }
+              : { turn: { id: TURN_ID, status: "failed", items: [], error } },
+          ),
+        );
+        const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
+        expect(terminal.promptError).toBeInstanceOf(Error);
+        expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
+      }
+    },
+  );
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 
@@ -161,11 +199,16 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(agentMessageDelta("still working"));
     await projector.handleNotification(
-      appServerError({ message: "stream disconnected", willRetry: true }),
+      appServerError({
+        message: "Rate limit reached",
+        willRetry: true,
+        codexErrorInfo: "rateLimitExceeded",
+      }),
     );
     await projector.handleNotification(
       turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
@@ -180,6 +223,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(result.lastAssistant?.stopReason).toBe("stop");
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: { phase: "retrying", message: "Rate limited. The provider is retrying." },
+      }),
+    );
   });
 
   it("uses nested app-server error messages for terminal errors", async () => {
@@ -199,9 +248,71 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it.each([
+    {
+      label: "biological-risk",
+      message: "This content was flagged for possible biological risk. Try rephrasing it.",
+      codexErrorInfo: "other",
+      category: "bio",
+    },
+    {
+      label: "typed cyber",
+      message: "This request was blocked by the provider's cyber policy.",
+      codexErrorInfo: "cyberPolicy",
+      category: "cyber",
+    },
+    {
+      label: "typed misalignment",
+      message: "This request was blocked due to a misalignment policy violation.",
+      codexErrorInfo: "misalignmentPolicyViolation",
+      category: "misalignment",
+    },
+  ])(
+    "keeps $label refusals terminal when error is followed by failed turn completion",
+    async ({ message, codexErrorInfo, category }) => {
+      const projector = await createProjector();
+      const error = { message, codexErrorInfo };
+
+      await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: { id: TURN_ID, status: "failed", items: [], error },
+        }),
+      );
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      const terminalAssistant = result.currentAttemptAssistant;
+
+      expect(readAttemptTerminal(result)).toMatchObject({
+        promptError: null,
+        promptErrorSource: null,
+      });
+      expect(terminalAssistant).toMatchObject({
+        stopReason: "error",
+        errorMessage: message,
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            details: { provider: "openai", category },
+          },
+        ],
+      });
+      expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      expect(
+        result.messagesSnapshot.filter(
+          (candidate) =>
+            candidate.role === "assistant" &&
+            candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
+    { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",
     async ({ codexErrorInfo, expected }) => {
@@ -212,8 +323,109 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       );
 
       expect(projector.settledTurnFailureFinalizationAllowed).toBe(expected);
+      expect(
+        readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry())).promptErrorSource,
+      ).toBe("prompt");
     },
   );
+
+  it("keeps an active native compaction failure scoped through the failed turn", async () => {
+    const onAgentEvent = vi.fn();
+    const onContextCompacted = vi.fn();
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { onContextCompacted },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "contextCompaction", id: "compact-failed" },
+      }),
+    );
+    await projector.handleNotification(
+      appServerError({
+        message: "remote compaction failed",
+        willRetry: false,
+        codexErrorInfo: "other",
+      }),
+    );
+
+    expect(readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()))).toMatchObject({
+      promptError: "remote compaction failed",
+      promptErrorSource: "compaction",
+    });
+    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: { message: "remote compaction failed", codexErrorInfo: "other" },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: "remote compaction failed",
+      promptErrorSource: "compaction",
+    });
+    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
+    expect(projector.isCompacting()).toBe(false);
+    expect(result.itemLifecycle).toEqual({ startedCount: 0, completedCount: 0, activeCount: 0 });
+    expect(result.compactionCount).toBeUndefined();
+    expect(onContextCompacted).not.toHaveBeenCalled();
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction"),
+    ).toEqual([
+      {
+        stream: "compaction",
+        data: {
+          phase: "start",
+          backend: "codex-app-server",
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          itemId: "compact-failed",
+        },
+      },
+      {
+        stream: "compaction",
+        data: {
+          phase: "end",
+          backend: "codex-app-server",
+          completed: false,
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          itemId: "compact-failed",
+        },
+      },
+    ]);
+  });
+
+  it("keeps other errors prompt-scoped after native compaction completes", async () => {
+    const projector = await createProjector();
+    const compaction = { item: { type: "contextCompaction", id: "compact-completed" } };
+
+    await projector.handleNotification(forCurrentTurn("item/started", compaction));
+    await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+    await projector.handleNotification(
+      appServerError({
+        message: "unrelated provider failure",
+        willRetry: false,
+        codexErrorInfo: "other",
+      }),
+    );
+
+    expect(readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()))).toMatchObject({
+      promptError: "unrelated provider failure",
+      promptErrorSource: "prompt",
+    });
+    expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+  });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;

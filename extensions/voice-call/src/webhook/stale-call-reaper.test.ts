@@ -1,4 +1,5 @@
 // Voice Call tests cover stale call reaper plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startStaleCallReaper } from "./stale-call-reaper.js";
 
@@ -54,14 +55,12 @@ describe("startStaleCallReaper", () => {
     stop?.();
   });
 
-  it("does not overlap stale-call reaps and retries after an unsuccessful attempt settles", async () => {
-    let resolveFirstEndCall!: (result: { success: false; error: string }) => void;
-    const firstEndCall = new Promise<{ success: false; error: string }>((resolve) => {
-      resolveFirstEndCall = resolve;
-    });
+  it("does not overlap reaps, logs typed failure, and retries after settlement", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const firstEndCall = createDeferred<{ success: false; error: string }>();
     const endCall = vi
       .fn()
-      .mockImplementationOnce(() => firstEndCall)
+      .mockImplementationOnce(() => firstEndCall.promise)
       .mockResolvedValue({ success: true });
     const manager = {
       getActiveCalls: vi.fn(() => [
@@ -84,9 +83,10 @@ describe("startStaleCallReaper", () => {
 
     expect(endCall).toHaveBeenCalledTimes(1);
 
-    resolveFirstEndCall({ success: false, error: "network" });
-    await firstEndCall;
+    firstEndCall.resolve({ success: false, error: "network" });
+    await firstEndCall.promise;
     await Promise.resolve();
+    expect(warn).toHaveBeenCalledWith("[voice-call] Reaper failed to end call call-stale: network");
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(endCall).toHaveBeenCalledTimes(2);

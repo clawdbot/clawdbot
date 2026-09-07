@@ -41,6 +41,19 @@ describe("addGatewayClientOptions", () => {
       });
     },
   );
+
+  it("registers and parses a local Gateway port", async () => {
+    const program = new Command().exitOverride();
+    const action = vi.fn((_opts: GatewayRpcOpts) => {});
+    addGatewayClientOptions(program.command("gateway-command")).action(action);
+
+    await program.parseAsync(["gateway-command", "--port", "19083"], { from: "user" });
+
+    expect(action).toHaveBeenCalledWith(
+      expect.objectContaining({ port: "19083" }),
+      expect.anything(),
+    );
+  });
 });
 
 describe("callGatewayFromCliRuntime", () => {
@@ -95,6 +108,30 @@ describe("callGatewayFromCliRuntime", () => {
     );
   });
 
+  it("projects --port to the canonical local Gateway override", async () => {
+    await callGatewayFromCliRuntime("cron.status", { port: "19083" });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ localPortOverride: 19_083 }),
+    );
+  });
+
+  it.each([
+    { opts: { port: "" }, error: "--port must be an integer between 1 and 65535." },
+    { opts: { port: " \t " }, error: "--port must be an integer between 1 and 65535." },
+    {
+      opts: { url: "ws://127.0.0.1:19083", port: "19083" },
+      error: "Use either --url or --port, not both.",
+    },
+  ])(
+    "rejects invalid target $opts before opening a Gateway connection",
+    async ({ opts, error }) => {
+      await expect(callGatewayFromCliRuntime("cron.status", opts)).rejects.toThrow(error);
+
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: "token", auth: { token: "test-gateway-token" } },
     { name: "password", auth: { password: "test-gateway-password" } },
@@ -148,7 +185,9 @@ describe("callGatewayFromCliRuntime", () => {
   });
 
   it("passes strict integer timeouts to the gateway call", async () => {
-    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" });
+    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" }, undefined, {
+      defaultTimeoutMs: 10 * 60_000,
+    });
 
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({

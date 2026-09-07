@@ -13,18 +13,18 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import { resolveAmbientHeartbeatAgentId, type HeartbeatConfig } from "./heartbeat-runner-config.js";
+import type { HeartbeatConfig } from "./heartbeat-runner-config.js";
 
 export function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveAmbientHeartbeatAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId);
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
@@ -119,7 +119,7 @@ export function resolveHeartbeatSessionKey(
 
 export function resolveHeartbeatSession(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -135,7 +135,7 @@ export function resolveHeartbeatSession(
   };
 }
 
-export function resolveIsolatedHeartbeatSessionKey(params: {
+function resolveIsolatedHeartbeatSessionKey(params: {
   agentId: string;
   sessionKey: string;
   configuredSessionKey: string;
@@ -194,6 +194,50 @@ export function resolveIsolatedHeartbeatSessionKey(params: {
     isolatedSessionKey: `${params.sessionKey}:heartbeat`,
     isolatedBaseSessionKey: params.sessionKey,
   };
+}
+
+/** Selects the event queue, execution key and descriptive conversation before delivery. */
+export function resolveHeartbeatSessionSelection(
+  cfg: OpenClawConfig,
+  agentId: string,
+  heartbeat?: HeartbeatConfig,
+  forcedSessionKey?: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const session = resolveHeartbeatSession(cfg, agentId, heartbeat, forcedSessionKey, env);
+  if (heartbeat?.isolatedSession !== true) {
+    return {
+      ...session,
+      run: { kind: "shared", sessionKey: session.sessionKey },
+      conversationEntry: session.entry,
+      inspectsRunQueue: true,
+    } as const;
+  }
+  const configured = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, undefined, env);
+  const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+    agentId,
+    sessionKey: session.sessionKey,
+    configuredSessionKey: configured.sessionKey,
+    sessionEntry: session.entry,
+  });
+  return {
+    ...session,
+    run: {
+      kind: "isolated",
+      sessionKey: isolatedSessionKey,
+      baseSessionKey: isolatedBaseSessionKey,
+    },
+    conversationEntry:
+      isolatedBaseSessionKey === session.sessionKey
+        ? session.entry
+        : loadSessionEntry({
+            storePath: session.storePath,
+            sessionKey: isolatedBaseSessionKey,
+            env,
+          }),
+    // Legacy isolated queues retain their route after the execution key is canonicalized.
+    inspectsRunQueue: session.sessionKey !== isolatedBaseSessionKey,
+  } as const;
 }
 
 export function resolveStaleHeartbeatIsolatedSessionKey(params: {

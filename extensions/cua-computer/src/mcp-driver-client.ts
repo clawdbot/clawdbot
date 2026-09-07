@@ -1,6 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
+import type { mcpStdioRuntime } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
@@ -9,14 +9,20 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+import { CuaMcpResponseDecoder } from "./mcp-response-decoder.js";
+
+type McpStdioRuntime = Awaited<ReturnType<typeof mcpStdioRuntime.load>>;
+type McpStdioClient = ReturnType<McpStdioRuntime["createMcpStdioClient"]>;
+type McpMessage = Parameters<
+  InstanceType<McpStdioRuntime["OpenClawStdioClientTransport"]>["send"]
+>[0];
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_STARTUP_TIMEOUT_MS = 10_000;
 const MCP_REQUEST_TIMEOUT_MS = 120_000;
-const MCP_SHUTDOWN_TIMEOUT_MS = 2_000;
-const MAX_MCP_LINE_BYTES = 256 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_STDERR_BYTES = 32 * 1024;
+const MCP_DESKTOP_TARGET = { kind: "desktop", display_id: "primary" } as const;
 
 const ACTION_RESULT_TOOLS = new Set([
   "click",
@@ -40,21 +46,6 @@ const ACTION_RESULT_TOOLS = new Set([
   "browser_pointer",
   "browser_type",
 ]);
-
-type JsonRpcResponse = {
-  jsonrpc?: unknown;
-  id?: unknown;
-  result?: unknown;
-  error?: { code?: unknown; message?: unknown };
-};
-
-type PendingRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-  signal?: AbortSignal;
-  onAbort?: () => void;
-};
 
 type McpToolResult = {
   content?: Array<{ type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown }>;
@@ -187,50 +178,35 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   };
 }
 
+type CuaMcpConnection = Pick<McpStdioClient, "request" | "isTimeout"> & {
+  retire: () => Promise<void>;
+  terminate: () => Promise<void>;
+  dispose: () => Promise<"closed" | "uncertain">;
+};
+
 class CuaMcpProxyClient {
-  private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, PendingRequest>();
+  private readonly startup: Promise<void>;
   private readonly ready: Promise<void>;
-  private nextId = 0;
-  private stdout = Buffer.alloc(0);
+  private rejectFatal?: (error: Error) => void;
+  private readonly fatal = new Promise<never>((_resolve, reject) => {
+    this.rejectFatal = reject;
+  });
+  private readonly decoder = new CuaMcpResponseDecoder((message, cause) => {
+    const error = driverProtocolError(message, cause);
+    this.fail(error);
+    return error;
+  });
+  private connection?: CuaMcpConnection;
+  private shutdown?: Promise<void>;
+  private inFlight = 0;
   private stderr = Buffer.alloc(0);
   private available = false;
   private failure: Error | undefined;
   private stopped = false;
 
   constructor(binaryPath: string, socketPath: string, env: NodeJS.ProcessEnv) {
-    const proxyEnvironment = { ...env };
-    for (const key of Object.keys(proxyEnvironment)) {
-      if (key.startsWith("CUA_DRIVER_") || key === "CUA_TELEMETRY_ENABLED") {
-        delete proxyEnvironment[key];
-      }
-    }
-    this.child = spawn(binaryPath, ["mcp", "--embedded", "--socket", socketPath], {
-      env: {
-        ...proxyEnvironment,
-        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
-        CUA_DRIVER_RS_UPDATE_CHECK: "false",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    this.child.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
-    this.child.stderr.on("data", (chunk: Buffer) => {
-      this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_STDERR_BYTES);
-    });
-    this.child.once("error", (error) =>
-      this.fail(driverUnavailable("failed to start CUA MCP proxy", error)),
-    );
-    this.child.once("exit", (code, signal) => {
-      if (!this.stopped) {
-        const detail = this.stderr.toString("utf8").trim();
-        this.fail(
-          driverUnavailable(
-            `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
-          ),
-        );
-      }
-    });
-    this.ready = this.initialize();
+    this.startup = this.initialize(binaryPath, socketPath, env);
+    this.ready = Promise.race([this.startup, this.fatal]);
     void this.ready.catch(() => {});
   }
 
@@ -251,139 +227,200 @@ class CuaMcpProxyClient {
   }
 
   async stop(): Promise<void> {
-    if (this.stopped) {
-      return;
-    }
     this.stopped = true;
     this.available = false;
-    this.rejectPending(driverUnavailable("CUA MCP proxy is stopping"));
-    this.child.stdin.end();
-    if (await this.waitForExit(MCP_SHUTDOWN_TIMEOUT_MS)) {
-      return;
-    }
-    this.child.kill("SIGTERM");
-    if (await this.waitForExit(MCP_SHUTDOWN_TIMEOUT_MS)) {
-      return;
-    }
-    this.child.kill("SIGKILL");
+    // Pending SDK rejections must retain the CUA terminal reason.
+    this.failure ??= driverUnavailable("CUA MCP proxy is stopping");
+    this.rejectFatal?.(this.failure);
+    void this.connection?.retire().catch(() => undefined);
+    this.beginShutdown();
+    await this.startup.catch(() => undefined);
+    await this.shutdown;
   }
 
-  private async initialize(): Promise<void> {
-    const initialized = record(
-      await this.request(
-        "initialize",
-        {
-          protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: "openclaw-cua-computer", version: "1" },
+  private async initialize(
+    binaryPath: string,
+    socketPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    const proxyEnvironment = { ...env };
+    for (const key of Object.keys(proxyEnvironment)) {
+      if (key.startsWith("CUA_DRIVER_") || key === "CUA_TELEMETRY_ENABLED") {
+        delete proxyEnvironment[key];
+      }
+    }
+    // The normal Windows/Linux SDK route never loads the MCP runtime graph.
+    const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+    const {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient,
+      disposeMcpClient,
+    } = await mcpStdioRuntime.load();
+    if (this.stopped) {
+      throw driverUnavailable("CUA MCP proxy is stopping");
+    }
+    const failWrite = (error: unknown) =>
+      this.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
+    class CuaTransport extends OpenClawStdioClientTransport {
+      override async send(message: McpMessage): Promise<void> {
+        if ("method" in message && message.method === "notifications/cancelled") {
+          return;
+        }
+        try {
+          // Keep the proxy's one-based wire IDs while SDK correlation remains zero-based.
+          await super.send(
+            "id" in message && typeof message.id === "number"
+              ? { ...message, id: message.id + 1 }
+              : message,
+          );
+        } catch (error) {
+          failWrite(error);
+          throw error;
+        }
+      }
+    }
+    const transport = new CuaTransport({
+      command: binaryPath,
+      args: ["mcp", "--embedded", "--socket", socketPath],
+      env: {
+        ...proxyEnvironment,
+        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+        CUA_DRIVER_RS_UPDATE_CHECK: "false",
+      },
+      exactEnv: true,
+      stderr: "pipe",
+      decoder: this.decoder,
+    });
+    const protocol = createMcpStdioClient();
+    const stderr = (chunk: Buffer) => {
+      this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_STDERR_BYTES);
+    };
+    transport.stderr?.on("data", stderr);
+    const callbacks: Pick<typeof transport, "onerror" | "onexit"> = {
+      onerror: (error) => this.fail(driverUnavailable("failed to start CUA MCP proxy", error)),
+      onexit: ({ code, signal }) => {
+        if (!this.stopped && !this.failure) {
+          const detail = this.stderr.toString("utf8").trim();
+          this.fail(
+            driverUnavailable(
+              `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+            ),
+          );
+        }
+      },
+    };
+    Object.assign(transport, callbacks);
+    this.connection = {
+      request: protocol.request,
+      retire: () => transport.retire(),
+      terminate: () => transport.terminate(),
+      dispose: () =>
+        disposeMcpClient({
+          client: protocol,
+          transport,
+          transportType: "stdio",
+          detachStderr: () => {
+            transport.stderr?.off("data", stderr);
+          },
+        }),
+      isTimeout: protocol.isTimeout,
+    };
+    try {
+      await connectMcpClient({
+        client: {
+          connect: async (target, options) => {
+            const signal = options?.signal;
+            const onAbort = () =>
+              this.fail(
+                driverUnavailable(`CUA MCP initialize timed out after ${MCP_STARTUP_TIMEOUT_MS}ms`),
+              );
+            signal?.addEventListener("abort", onAbort, { once: true });
+            try {
+              if (signal?.aborted) {
+                onAbort();
+                signal.throwIfAborted();
+              }
+              await protocol.connect(target);
+              const initialized = record(
+                await this.request(
+                  "initialize",
+                  {
+                    protocolVersion: MCP_PROTOCOL_VERSION,
+                    capabilities: {},
+                    clientInfo: { name: "openclaw-cua-computer", version: "1" },
+                  },
+                  MCP_STARTUP_TIMEOUT_MS,
+                ),
+              );
+              if (initialized?.protocolVersion !== MCP_PROTOCOL_VERSION) {
+                throw driverProtocolError(
+                  "CUA MCP proxy returned an incompatible protocol version",
+                );
+              }
+              await protocol.notification("notifications/initialized", {});
+              this.available = !this.stopped && !this.failure;
+            } finally {
+              signal?.removeEventListener("abort", onAbort);
+            }
+          },
+          close: () => protocol.close(),
         },
-        MCP_STARTUP_TIMEOUT_MS,
-      ),
-    );
-    if (initialized?.protocolVersion !== MCP_PROTOCOL_VERSION) {
-      throw driverProtocolError("CUA MCP proxy returned an incompatible protocol version");
+        transport,
+        timeoutMs: MCP_STARTUP_TIMEOUT_MS,
+      });
+    } catch (error) {
+      this.fail(
+        error instanceof Error ? error : driverUnavailable("failed to start CUA MCP proxy", error),
+      );
+      throw this.failure ?? error;
     }
-    this.notify("notifications/initialized", {});
-    this.available = true;
   }
 
-  private request(
+  private async request(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<unknown> {
     if (this.failure) {
-      return Promise.reject(this.failure);
+      throw this.failure;
     }
     if (this.stopped) {
-      return Promise.reject(driverUnavailable("CUA MCP proxy is stopping"));
+      throw driverUnavailable("CUA MCP proxy is stopping");
     }
     if (signal?.aborted) {
-      return Promise.reject(driverUnavailable("CUA MCP request was cancelled", signal.reason));
+      throw driverUnavailable("CUA MCP request was cancelled", signal.reason);
     }
-    if (this.pending.size >= MAX_PENDING_REQUESTS) {
-      return Promise.reject(driverUnavailable("CUA MCP proxy has too many pending requests"));
+    if (this.inFlight >= MAX_PENDING_REQUESTS) {
+      throw driverUnavailable("CUA MCP proxy has too many pending requests");
     }
-    const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+    const connection = this.connection;
+    if (!connection) {
+      throw driverUnavailable("CUA MCP proxy is not connected");
+    }
+    this.inFlight += 1;
+    const onAbort = () =>
+      this.fail(driverUnavailable("CUA MCP request was cancelled", signal?.reason));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let result: Record<string, unknown>;
+    try {
+      result = await connection.request(method, params, timeoutMs);
+    } catch (error) {
+      if (connection.isTimeout(error)) {
         this.fail(driverUnavailable(`CUA MCP ${method} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      timer.unref?.();
-      const pending: PendingRequest = { resolve, reject, timer, signal };
-      if (signal) {
-        pending.onAbort = () =>
-          this.fail(driverUnavailable("CUA MCP request was cancelled", signal.reason));
-        signal.addEventListener("abort", pending.onAbort, { once: true });
       }
-      this.pending.set(id, pending);
-      this.write({ jsonrpc: "2.0", id, method, params });
-    });
-  }
-
-  private notify(method: string, params: Record<string, unknown>): void {
-    this.write({ jsonrpc: "2.0", method, params });
-  }
-
-  private write(value: Record<string, unknown>): void {
-    this.child.stdin.write(`${JSON.stringify(value)}\n`, (error) => {
-      if (error) {
-        this.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
-      }
-    });
-  }
-
-  private handleStdout(chunk: Buffer): void {
-    if (this.failure || this.stopped) {
-      return;
+      throw this.failure ?? error;
+    } finally {
+      this.inFlight -= 1;
+      signal?.removeEventListener("abort", onAbort);
     }
-    this.stdout = Buffer.concat([this.stdout, chunk]);
-    if (this.stdout.length > MAX_MCP_LINE_BYTES) {
-      this.fail(driverProtocolError("CUA MCP response exceeded the line-size limit"));
-      return;
+    if (result.error) {
+      const error = record(result.error);
+      const message = typeof error?.message === "string" ? error.message : "unknown JSON-RPC error";
+      throw driverProtocolError(`CUA MCP request failed: ${message}`);
     }
-    while (true) {
-      const newline = this.stdout.indexOf(0x0a);
-      if (newline < 0) {
-        return;
-      }
-      const line = this.stdout.subarray(0, newline);
-      this.stdout = this.stdout.subarray(newline + 1);
-      if (line.length === 0) {
-        continue;
-      }
-      let response: JsonRpcResponse;
-      try {
-        response = JSON.parse(line.toString("utf8")) as JsonRpcResponse;
-      } catch (error) {
-        this.fail(driverProtocolError("CUA MCP proxy returned invalid JSON", error));
-        return;
-      }
-      if (response.jsonrpc !== "2.0") {
-        this.fail(driverProtocolError("CUA MCP proxy returned an invalid JSON-RPC version"));
-        return;
-      }
-      if (typeof response.id !== "number" || !Number.isSafeInteger(response.id)) {
-        this.fail(driverProtocolError("CUA MCP proxy returned an invalid response id"));
-        return;
-      }
-      const pending = this.pending.get(response.id);
-      if (!pending) {
-        continue;
-      }
-      this.pending.delete(response.id);
-      this.clearPending(pending);
-      if (response.error) {
-        const message =
-          typeof response.error.message === "string"
-            ? response.error.message
-            : "unknown JSON-RPC error";
-        pending.reject(driverProtocolError(`CUA MCP request failed: ${message}`));
-      } else {
-        pending.resolve(response.result);
-      }
-    }
+    return result.value;
   }
 
   private fail(error: Error): void {
@@ -392,41 +429,22 @@ class CuaMcpProxyClient {
     }
     this.failure = error;
     this.available = false;
-    this.rejectPending(error);
-    this.child.kill("SIGTERM");
+    this.rejectFatal?.(error);
+    // Retirement clears the SDK request registry immediately; shutdown retains the process receipt.
+    void this.connection?.terminate().catch(() => undefined);
+    this.beginShutdown();
   }
 
-  private rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      this.clearPending(pending);
-      pending.reject(error);
+  private beginShutdown(): void {
+    if (!this.connection) {
+      return;
     }
-    this.pending.clear();
-  }
-
-  private clearPending(pending: PendingRequest): void {
-    clearTimeout(pending.timer);
-    if (pending.signal && pending.onAbort) {
-      pending.signal.removeEventListener("abort", pending.onAbort);
-    }
-  }
-
-  private async waitForExit(timeoutMs: number): Promise<boolean> {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) {
-      return true;
-    }
-    return await new Promise<boolean>((resolve) => {
-      const onExit = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        this.child.removeListener("exit", onExit);
-        resolve(false);
-      }, timeoutMs);
-      timer.unref?.();
-      this.child.once("exit", onExit);
+    this.shutdown ??= this.connection.dispose().then((outcome) => {
+      if (outcome !== "closed") {
+        throw driverUnavailable("CUA MCP proxy cleanup could not be confirmed");
+      }
     });
+    void this.shutdown.catch(() => {});
   }
 }
 
@@ -479,12 +497,9 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
 
 class McpCuaDriverSession implements CuaDriverSession {
   readonly generation = randomUUID();
-  private readonly windowPublicSession = `openclaw-window-${randomUUID()}`;
-  private readonly desktopPublicSession = `openclaw-desktop-${randomUUID()}`;
-  private windowStartPromise: Promise<void> | undefined;
-  private desktopStartPromise: Promise<void> | undefined;
-  private windowStarted = false;
-  private desktopStarted = false;
+  private readonly publicSession = `openclaw-${randomUUID()}`;
+  private startPromise: Promise<void> | undefined;
+  private started = false;
   private disposed = false;
 
   constructor(private readonly client: CuaMcpProxyClient) {}
@@ -496,44 +511,38 @@ class McpCuaDriverSession implements CuaDriverSession {
   resetAvailabilityCache(): void {}
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    await this.ensureStarted("window", signal);
-    return await this.client.callTool(name, { ...args, session: this.windowPublicSession }, signal);
+    return await this.sessionTool(name, args, signal);
   }
 
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.desktopTool(name, args, signal);
+  async getCursorPosition(signal?: AbortSignal) {
+    return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
   async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
-    await this.ensureStarted("desktop", signal);
-    const result = await this.client.callTool(
-      "get_session_state",
-      { session: this.desktopPublicSession },
-      signal,
-    );
+    const result = await this.sessionTool("get_session_state", {}, signal);
     return sessionState(result);
   }
 
   async getDesktopState(signal?: AbortSignal) {
-    return await this.desktopTool("get_desktop_state", {}, signal);
+    return await this.sessionTool("get_desktop_state", {}, signal);
   }
 
   async getScreenSize(signal?: AbortSignal) {
-    return await this.desktopTool("get_screen_size", {}, signal);
+    return await this.sessionTool("get_screen_size", {}, signal);
   }
 
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "click",
       {
         x: input.x,
         y: input.y,
         button: ["left", "right", "middle"][input.button],
         count: input.count,
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
@@ -543,7 +552,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "drag",
       {
         from_x: input.fromX,
@@ -551,16 +560,16 @@ class McpCuaDriverSession implements CuaDriverSession {
         to_x: input.toX,
         to_y: input.toY,
         ...(input.durationMs === undefined ? {} : { duration_ms: Number(input.durationMs) }),
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
   }
 
   async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "move_cursor",
-      { x: input.x, y: input.y, scope: "desktop" },
+      { x: input.x, y: input.y, target: MCP_DESKTOP_TARGET },
       signal,
     );
   }
@@ -569,7 +578,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "scroll",
       {
         x: input.x,
@@ -577,20 +586,20 @@ class McpCuaDriverSession implements CuaDriverSession {
         direction: ["up", "down", "left", "right"][input.direction],
         by: "line",
         amount: Number(input.amount),
-        scope: "desktop",
+        target: MCP_DESKTOP_TARGET,
       },
       signal,
     );
   }
 
   async typeText(text: string, signal?: AbortSignal) {
-    return await this.desktopTool("type_text", { text, scope: "desktop" }, signal);
+    return await this.sessionTool("type_text", { text, target: MCP_DESKTOP_TARGET }, signal);
   }
 
   async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await this.desktopTool(
+    return await this.sessionTool(
       "press_key",
-      { key: input.key, modifiers: input.modifiers, scope: "desktop" },
+      { key: input.key, modifiers: input.modifiers, target: MCP_DESKTOP_TARGET },
       signal,
     );
   }
@@ -601,29 +610,16 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
-    const startResults = await Promise.allSettled([
-      this.windowStartPromise,
-      this.desktopStartPromise,
-    ]);
-    for (const result of startResults) {
-      if (result.status === "rejected") {
-        failure ??= result.reason;
-      }
+    try {
+      await this.startPromise;
+    } catch (error) {
+      failure = error;
     }
-    if (this.client.isAvailable()) {
-      if (this.windowStarted) {
-        try {
-          await this.client.callTool("end_session", { session: this.windowPublicSession });
-        } catch (error) {
-          failure ??= error;
-        }
-      }
-      if (this.desktopStarted) {
-        try {
-          await this.client.callTool("end_session", { session: this.desktopPublicSession });
-        } catch (error) {
-          failure ??= error;
-        }
+    if (this.client.isAvailable() && this.started) {
+      try {
+        await this.client.callTool("end_session", { session: this.publicSession });
+      } catch (error) {
+        failure ??= error;
       }
     }
     try {
@@ -638,49 +634,40 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
   }
 
-  private async desktopTool(
+  private async sessionTool(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CuaToolResult> {
-    await this.ensureStarted("desktop", signal);
-    return await this.client.callTool(
-      name,
-      { ...args, session: this.desktopPublicSession },
-      signal,
-    );
+    await this.ensureStarted(signal);
+    return await this.client.callTool(name, { ...args, session: this.publicSession }, signal);
   }
 
-  private async ensureStarted(scope: "window" | "desktop", signal?: AbortSignal): Promise<void> {
+  private async ensureStarted(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       throw driverUnavailable("cua-computer is stopping");
     }
-    const isWindow = scope === "window";
-    const startedKey = isWindow ? "windowStarted" : "desktopStarted";
-    const startPromiseKey = isWindow ? "windowStartPromise" : "desktopStartPromise";
-    const current = this[startPromiseKey];
-    if (!current) {
-      const publicSession = isWindow ? this.windowPublicSession : this.desktopPublicSession;
+    if (!this.startPromise) {
       const start = this.client
-        .callTool("start_session", { session: publicSession, capture_scope: scope }, signal)
+        .callTool("start_session", { session: this.publicSession }, signal)
         .then((result) => {
           if (result.isError) {
             throw driverProtocolError(result.text || "CUA MCP start_session failed");
           }
-          this[startedKey] = true;
+          this.started = true;
         });
-      this[startPromiseKey] = start;
+      this.startPromise = start;
       try {
         await start;
       } catch (error) {
-        if (this[startPromiseKey] === start) {
-          this[startPromiseKey] = undefined;
+        if (this.startPromise === start) {
+          this.startPromise = undefined;
         }
         throw error;
       }
       return;
     }
-    await current;
+    await this.startPromise;
   }
 }
 

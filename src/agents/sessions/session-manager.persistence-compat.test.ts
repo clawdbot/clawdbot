@@ -11,8 +11,13 @@ import {
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
+  resolveSessionTranscriptDatabasePath,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,14 +29,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
@@ -66,15 +64,20 @@ describe("SessionManager persistence compatibility", () => {
     ].join("\n");
     const codeExample = buildAssistantMessage(codeExampleText);
     const indentedCode = buildAssistantMessage("    [[reply_to_current]]\n    [[audio_as_voice]]");
+    const malformed = buildAssistantMessage("[[reply_to_current]\nVisible reply");
+    const laterLiteral = buildAssistantMessage("Visible reply\n[[reply_to_current] literally");
+    const ordinaryRelativeMedia = buildAssistantMessage("Generated image\nMEDIA:./render.png");
     manager.appendMessage(tagged);
     manager.appendMessage(codeExample);
     manager.appendMessage(indentedCode);
+    manager.appendMessage(malformed);
+    manager.appendMessage(laterLiteral);
+    manager.appendMessage(ordinaryRelativeMedia);
 
     expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
     expect(tagged).toMatchObject({
       openclawDelivery: {
         audioAsVoice: true,
-        replyToCurrent: true,
         replyToId: "message-7",
         tts: {
           tagged: true,
@@ -91,15 +94,32 @@ describe("SessionManager persistence compatibility", () => {
     expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);
     expect(codeExample).not.toHaveProperty("openclawDelivery");
     expect(indentedCode).not.toHaveProperty("openclawDelivery");
+    expect(malformed.content).toEqual([{ type: "text", text: "Visible reply" }]);
+    expect(malformed).not.toHaveProperty("openclawDelivery");
+    expect(laterLiteral.content).toEqual([
+      { type: "text", text: "Visible reply\n[[reply_to_current] literally" },
+    ]);
+    expect(laterLiteral).not.toHaveProperty("openclawDelivery");
+    expect(ordinaryRelativeMedia).not.toHaveProperty("openclawDelivery");
 
     const persistedMessages = (await loadTranscriptEvents(scope))
       .filter((event) => (event as { type?: unknown }).type === "message")
       .map((event) => (event as { message: unknown }).message);
-    expect(persistedMessages).toEqual([tagged, codeExample, indentedCode]);
+    expect(persistedMessages).toEqual([
+      tagged,
+      codeExample,
+      indentedCode,
+      malformed,
+      laterLiteral,
+      ordinaryRelativeMedia,
+    ]);
     expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
       tagged,
       codeExample,
       indentedCode,
+      malformed,
+      laterLiteral,
+      ordinaryRelativeMedia,
     ]);
   });
 
@@ -170,6 +190,105 @@ describe("SessionManager persistence compatibility", () => {
     expect(SessionManager).not.toHaveProperty("openFile");
   });
 
+  it.each(["sqlite", "bounded-sqlite", "identity", "writer", "lifecycle"])(
+    "keeps the live tree unchanged after a rejected %s tail rewrite",
+    async (failure) => {
+      const dir = tempDirs.make("openclaw-session-manager-tail-");
+      const scope = {
+        agentId: "main",
+        sessionId: "tail-rewrite",
+        sessionKey: "agent:main:tail-rewrite",
+        storePath: path.join(dir, "openclaw-agent.sqlite"),
+      };
+      const initialEntry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        activeWriterRunId: "original-writer",
+        lifecycleRevision: "original-lifecycle",
+      };
+      await upsertSessionEntryCore(scope, initialEntry);
+      const seed = SessionManager.open(scope, dir);
+      seed.appendMessage({ role: "user", content: "earlier history", timestamp: 1 });
+      seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
+      const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
+      seed.appendCustomEntry("preserved-state", { retained: true });
+      seed.appendLabelChange(temporaryId, "temporary label");
+      const manager = SessionManager.open(
+        scope,
+        dir,
+        failure === "bounded-sqlite" ? { maxEvents: 3, maxBytes: 4096 } : undefined,
+      );
+      const database = openOpenClawAgentDatabase({
+        agentId: scope.agentId,
+        path: resolveSessionTranscriptDatabasePath(scope),
+      });
+      const readRows = () =>
+        database.db
+          .prepare(
+            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
+          )
+          .all(scope.sessionId);
+      const readManager = () => ({
+        entries: manager.getEntries(),
+        leafId: manager.getLeafId(),
+        appendParentId: manager.getAppendParentId(),
+        label: manager.getLabel(temporaryId),
+        target: manager.getSessionTarget(),
+        context: manager.buildSessionContext(),
+      });
+      const beforeRows = readRows();
+      const beforeManager = structuredClone(readManager());
+      if (failure.endsWith("sqlite")) {
+        database.db.exec(`CREATE TRIGGER reject_tail_rewrite BEFORE INSERT ON transcript_events
+          BEGIN SELECT RAISE(ABORT, 'tail rewrite failed'); END;`);
+      } else {
+        await updateSessionEntry(scope, () =>
+          failure === "identity"
+            ? { sessionId: "replacement-session" }
+            : failure === "writer"
+              ? { activeWriterRunId: "replacement-writer" }
+              : { lifecycleRevision: "replacement-lifecycle" },
+        );
+      }
+      const remove = () =>
+        manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
+          preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
+        });
+      const rewrite = () =>
+        withOwnedSessionTranscriptWrites(
+          {
+            ...(failure === "writer" || failure === "lifecycle"
+              ? {
+                  sessionTarget: {
+                    ...scope,
+                    expectedWriterRunId: initialEntry.activeWriterRunId,
+                    expectedLifecycleRevision: initialEntry.lifecycleRevision,
+                  },
+                }
+              : {}),
+            withTranscriptWrite: async (run) => await run(),
+          },
+          async () => remove(),
+        );
+
+      await expect(rewrite()).rejects.toThrow();
+      expect(readRows()).toEqual(beforeRows);
+      expect(readManager()).toEqual(beforeManager);
+
+      if (failure.endsWith("sqlite")) {
+        database.db.exec("DROP TRIGGER reject_tail_rewrite");
+      } else {
+        await upsertSessionEntryCore(scope, initialEntry);
+      }
+      await expect(rewrite()).resolves.toBe(1);
+      expect(manager.getEntry(temporaryId)).toBeUndefined();
+      expect(manager.getLabel(temporaryId)).toBeUndefined();
+      expect(SessionManager.open(scope, dir).getPersistedEntries()).toEqual(
+        manager.getPersistedEntries(),
+      );
+    },
+  );
+
   it("keeps the default fixture cwd independent from its transcript directory", async () => {
     const dir = tempDirs.make("openclaw-session-manager-compat-");
     const manager = openFileBackedSessionManagerForTest(path.join(dir, "session.jsonl"));
@@ -204,7 +323,7 @@ describe("SessionManager persistence compatibility", () => {
     expect(inMemory).toHaveBeenCalledWith(dir);
   });
 
-  it("separates appended records from a final unterminated JSONL record", async () => {
+  it("keeps file fixture appends and rewrites readable after an unterminated record", async () => {
     const dir = tempDirs.make("openclaw-session-manager-compat-");
     const sessionFile = path.join(dir, "unterminated.jsonl");
     await fs.writeFile(
@@ -217,7 +336,8 @@ describe("SessionManager persistence compatibility", () => {
         cwd: dir,
       }),
     );
-    openFileBackedSessionManagerForTest(sessionFile, dir).appendMessage({
+    const manager = openFileBackedSessionManagerForTest(sessionFile, dir);
+    manager.appendMessage({
       role: "user",
       content: "appended",
       timestamp: 1,
@@ -225,6 +345,10 @@ describe("SessionManager persistence compatibility", () => {
     expect(
       openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
     ).toEqual([expect.objectContaining({ content: "appended", role: "user" })]);
+    expect(manager.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
+    expect(
+      openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
+    ).toEqual([]);
   });
 
   it("rotates new-session fixtures without rewriting the previous file", async () => {

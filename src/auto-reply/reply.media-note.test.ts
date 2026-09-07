@@ -22,6 +22,7 @@ describe("getReplyFromConfig media note plumbing", () => {
       isBareSessionReset: false,
       startupAction: "new",
       prefixedBody: sessionCtx.BodyForAgent,
+      sourceReplyDeliveryMode: "automatic",
     });
     const prompt = envelope.prefixedCommandBody;
 
@@ -30,11 +31,11 @@ describe("getReplyFromConfig media note plumbing", () => {
       "[media attached 1/2: /tmp/a.png (application/octet-stream)]",
       "[media attached 2/2: /tmp/b.png (application/octet-stream)]",
     ].join("\n");
-    const replyHint =
-      "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
-    expect(prompt).toBe(`${mediaNote}\n${replyHint}\nhello`);
-    expect(envelope.queuedBody).toBe(`${mediaNote}\n${replyHint}\nhello`);
+    expect(prompt).toBe(`${mediaNote}\nhello`);
+    expect(envelope.queuedBody).toBe(`${mediaNote}\nhello`);
     expect(envelope.transcriptCommandBody).toBe(`${mediaNote}\nhello`);
+    expect(prompt).not.toContain("message tool");
+    expect(envelope.queuedBody).not.toContain("message tool");
     expect(envelope.media?.map(({ path }) => path)).toEqual(["/tmp/a.png", "/tmp/b.png"]);
     const idxA = prompt.indexOf("[media attached 1/2: /tmp/a.png");
     const idxB = prompt.indexOf("[media attached 2/2: /tmp/b.png");

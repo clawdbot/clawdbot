@@ -1,18 +1,19 @@
 // Openai tests cover video generation provider plugin behavior.
 import fs from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -30,7 +31,12 @@ const {
 
 let buildOpenAIVideoGenerationProvider: typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider;
 
+let modelAuth: Parameters<
+  typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider
+>[0];
+
 beforeAll(async () => {
+  modelAuth = createCapturedPluginRegistration().api.runtime.modelAuth;
   ({ buildOpenAIVideoGenerationProvider } = await import("./video-generation-provider.js"));
 });
 
@@ -110,11 +116,11 @@ function streamedJsonResponse(payload: unknown): Response {
 
 describe("openai video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
+    expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider(modelAuth));
   });
 
   it("does not claim size or duration controls for OpenAI video edits", () => {
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
 
     expect(provider.capabilities.videoToVideo).toEqual({
       enabled: true,
@@ -125,7 +131,7 @@ describe("openai video generation provider", () => {
 
   it("advertises OpenAI video for an actual config-only API key", () => {
     expect(
-      buildOpenAIVideoGenerationProvider().isConfigured?.({
+      buildOpenAIVideoGenerationProvider(modelAuth).isConfigured?.({
         cfg: {
           models: {
             providers: {
@@ -163,7 +169,9 @@ describe("openai video generation provider", () => {
         { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
-      expect(buildOpenAIVideoGenerationProvider().isConfigured?.({ agentDir })).toBe(false);
+      expect(buildOpenAIVideoGenerationProvider(modelAuth).isConfigured?.({ agentDir })).toBe(
+        false,
+      );
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       if (previousOpenAIKey === undefined) {
@@ -171,6 +179,10 @@ describe("openai video generation provider", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAIKey;
       }
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -181,7 +193,7 @@ describe("openai video generation provider", () => {
       mode: "oauth",
     } as never);
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await expect(
       provider.generateVideo({
         provider: "openai",
@@ -224,7 +236,7 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const result = await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
@@ -266,7 +278,7 @@ describe("openai video generation provider", () => {
       });
 
       await expect(
-        buildOpenAIVideoGenerationProvider().generateVideo({
+        buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
           provider: "openai",
           model: "sora-2",
           prompt: "A scene that cannot be generated",
@@ -306,7 +318,7 @@ describe("openai video generation provider", () => {
       ),
     );
 
-    const result = await buildOpenAIVideoGenerationProvider().generateVideo({
+    const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "A scene already generated",
@@ -357,7 +369,7 @@ describe("openai video generation provider", () => {
       });
 
       await expect(
-        buildOpenAIVideoGenerationProvider().generateVideo({
+        buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
           provider: "openai",
           model: "sora-2",
           prompt: "Reject an invalid generated video",
@@ -391,74 +403,66 @@ describe("openai video generation provider", () => {
       const socketClosed = new Promise<boolean>((resolve) => {
         notifySocketClosed = resolve;
       });
-      const server = createServer((request, response) => {
-        request.socket.once("close", () => notifySocketClosed?.(true));
-        response.writeHead(200, { "content-type": "application/json" });
-        response.write('{"error":"still streaming');
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
+      await withServer(
+        (request, response) => {
+          request.socket.once("close", () => notifySocketClosed?.(true));
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"error":"still streaming');
+        },
+        async (baseUrl) => {
+          postMultipartRequestMock.mockResolvedValueOnce({
+            response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
+            release: vi.fn(async () => {}),
+          });
+          const upstreamUrl = `${baseUrl}/videos/vid_unread/content`;
+          const downloadRelease = vi.fn(async () => {});
+          if (allowPrivateNetwork) {
+            fetchWithTimeoutGuardedMock.mockImplementationOnce(async () => ({
+              response: await fetch(upstreamUrl),
+              finalUrl: upstreamUrl,
+              release: downloadRelease,
+            }));
+          } else {
+            fetchWithTimeoutMock.mockImplementationOnce(async () => await fetch(upstreamUrl));
+          }
 
-      try {
-        postMultipartRequestMock.mockResolvedValueOnce({
-          response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
-          release: vi.fn(async () => {}),
-        });
-        const { port } = server.address() as AddressInfo;
-        const upstreamUrl = `http://127.0.0.1:${port}/videos/vid_unread/content`;
-        const downloadRelease = vi.fn(async () => {});
-        if (allowPrivateNetwork) {
-          fetchWithTimeoutGuardedMock.mockImplementationOnce(async () => ({
-            response: await fetch(upstreamUrl),
-            finalUrl: upstreamUrl,
-            release: downloadRelease,
-          }));
-        } else {
-          fetchWithTimeoutMock.mockImplementationOnce(async () => await fetch(upstreamUrl));
-        }
-
-        await expect(
-          buildOpenAIVideoGenerationProvider().generateVideo({
-            provider: "openai",
-            model: "sora-2",
-            prompt: "Reject an unending public video error response",
-            cfg: allowPrivateNetwork
-              ? {
-                  models: {
-                    providers: {
-                      openai: {
-                        baseUrl: `http://127.0.0.1:${port}/v1`,
-                        request: { allowPrivateNetwork: true },
-                        models: [],
+          await expect(
+            buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
+              provider: "openai",
+              model: "sora-2",
+              prompt: "Reject an unending public video error response",
+              cfg: allowPrivateNetwork
+                ? {
+                    models: {
+                      providers: {
+                        openai: {
+                          baseUrl: `${baseUrl}/v1`,
+                          request: { allowPrivateNetwork: true },
+                          models: [],
+                        },
                       },
                     },
-                  },
-                }
-              : {},
-          }),
-        ).rejects.toThrow("OpenAI generated video download: malformed video response");
-
-        await expect(
-          Promise.race([
-            socketClosed,
-            new Promise<boolean>((resolve) => {
-              setTimeout(() => resolve(false), 250);
+                  }
+                : {},
             }),
-          ]),
-        ).resolves.toBe(true);
-        if (allowPrivateNetwork) {
-          expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
-          expect(downloadRelease).toHaveBeenCalledOnce();
-        } else {
-          expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
-        }
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+          ).rejects.toThrow("OpenAI generated video download: malformed video response");
+
+          await expect(
+            Promise.race([
+              socketClosed,
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => resolve(false), 250);
+              }),
+            ]),
+          ).resolves.toBe(true);
+          if (allowPrivateNetwork) {
+            expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
+            expect(downloadRelease).toHaveBeenCalledOnce();
+          } else {
+            expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+          }
+        },
+      );
     },
   );
 
@@ -493,7 +497,7 @@ describe("openai video generation provider", () => {
         fetchWithTimeoutMock.mockResolvedValueOnce(response);
       }
 
-      const generation = buildOpenAIVideoGenerationProvider().generateVideo({
+      const generation = buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
         provider: "openai",
         model: "sora-2",
         prompt: "Reject a cloned, unending video error",
@@ -563,7 +567,7 @@ describe("openai video generation provider", () => {
       );
 
       await expect(
-        buildOpenAIVideoGenerationProvider().generateVideo({
+        buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
           provider: "openai",
           model: "sora-2",
           prompt: "Preserve the malformed public video response error",
@@ -596,7 +600,7 @@ describe("openai video generation provider", () => {
       })
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await expect(
       provider.generateVideo({
         provider: "openai",
@@ -629,14 +633,16 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
+    const input = Buffer.from("!png-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Animate this frame",
       cfg: {},
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      inputImages: [{ buffer: input, mimeType: "image/png" }],
     });
+    input.fill(0);
 
     const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
@@ -676,7 +682,7 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
@@ -722,7 +728,7 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
@@ -806,7 +812,7 @@ describe("openai video generation provider", () => {
         release: secondRelease,
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     const result = await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
@@ -872,7 +878,7 @@ describe("openai video generation provider", () => {
         release: secondRelease,
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await expect(
       provider.generateVideo({
         provider: "openai",
@@ -918,14 +924,16 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
+    const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Remix this clip",
       cfg: {},
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+      inputVideos: [{ buffer: input, mimeType: "video/mp4" }],
     });
+    input.fill(0);
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
@@ -935,6 +943,9 @@ describe("openai video generation provider", () => {
     expect(form.get("prompt")).toBe("Remix this clip");
     expect(form.get("model")).toBeNull();
     expect(form.get("video")).toBeInstanceOf(File);
+    expect(Buffer.from(await (form.get("video") as File).arrayBuffer())).toEqual(
+      Buffer.from("mp4-bytes"),
+    );
     expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);
@@ -953,7 +964,7 @@ describe("openai video generation provider", () => {
     });
 
     await expect(
-      buildOpenAIVideoGenerationProvider().generateVideo({
+      buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
         provider: "openai",
         model: "sora-2",
         prompt: "Remix this clip",
@@ -977,7 +988,7 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("completed-edit"),
       });
 
-    const result = await buildOpenAIVideoGenerationProvider().generateVideo({
+    const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Remix this clip",
@@ -1011,7 +1022,7 @@ describe("openai video generation provider", () => {
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
       });
 
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
@@ -1043,7 +1054,7 @@ describe("openai video generation provider", () => {
   });
 
   it("rejects multiple reference assets", async () => {
-    const provider = buildOpenAIVideoGenerationProvider();
+    const provider = buildOpenAIVideoGenerationProvider(modelAuth);
 
     await expect(
       provider.generateVideo({

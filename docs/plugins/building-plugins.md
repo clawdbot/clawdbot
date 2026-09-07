@@ -25,6 +25,8 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
+- All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+  Pin your OpenClaw host version and test each version you declare compatible.
 - Node 22.22.3+, Node 24.15+, or Node 25.9+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
@@ -46,6 +48,9 @@ Bare package specs still install from npm during the launch cutover. Use the
   <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
     Register agent tools.
   </Card>
+  <Card title="Feature plugin" icon="panels-top-left" href="/plugins/feature-plugins">
+    Build typed operations, native pages, and Control UI replacements.
+  </Card>
 </CardGroup>
 
 ## Quickstart
@@ -64,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.39"
+    "typebox": "1.3.18"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -244,12 +249,17 @@ loads the owning plugin runtime.
 
 Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
-`requesterSenderId`.
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
 
 ```typescript
 register(api) {
   api.registerTool(
-    {
+    (toolContext) => ({
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
@@ -258,13 +268,16 @@ register(api) {
         { additionalProperties: false },
       ),
       async execute(_id, params) {
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
         return {
           content: [{ type: "text", text: params.pipeline }],
           details: { pipeline: params.pipeline },
         };
       },
-    },
-    { optional: true },
+    }),
+    { name: "workflow_tool", optional: true },
   );
 }
 ```

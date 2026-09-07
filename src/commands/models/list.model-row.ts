@@ -15,6 +15,14 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
+export function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
+  const parsed = input?.filter(
+    (item): item is NonNullable<ListRowModel["input"]>[number] =>
+      item === "text" || item === "image" || item === "document",
+  );
+  return parsed?.length ? parsed : ["text"];
+}
+
 /** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {
   model?: ListRowModel;
@@ -34,6 +42,16 @@ export function toModelRow(params: {
     authAvailability,
     authAvailabilityAuthoritative = false,
   } = params;
+  const mergedTags = new Set(tags);
+  if (aliases.length > 0) {
+    for (const tag of mergedTags) {
+      if (tag === "alias" || tag.startsWith("alias:")) {
+        mergedTags.delete(tag);
+      }
+    }
+    mergedTags.add(`alias:${aliases.join(",")}`);
+  }
+
   if (!model) {
     return {
       key,
@@ -42,7 +60,7 @@ export function toModelRow(params: {
       contextWindow: null,
       local: null,
       available: null,
-      tags: [...tags, "missing"],
+      tags: [...mergedTags, "missing"],
       missing: true,
     };
   }
@@ -58,18 +76,6 @@ export function toModelRow(params: {
     : availableKeys !== undefined
       ? modelIsAvailable
       : (authAvailability ?? (modelIsAvailable ? true : null));
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
-      }
-    }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
-  }
 
   return {
     key,

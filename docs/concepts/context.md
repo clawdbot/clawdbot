@@ -160,6 +160,18 @@ What persists across messages depends on the mechanism:
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
 
+For embedded Responses requests, current request metadata stays after the user
+message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
+previous response across tool rounds without dropping live context. A later user
+turn in an OpenAI Responses-family session preserves hidden runtime-context
+carriers append-only, so the previous turn, including tool calls and results,
+remains an unchanged cached prefix. Retained carriers count toward the context
+window until compaction, which does not split a user message from its carrier.
+Carriers contain only the delimited context body; interpretation guidance lives
+once in the stable system prompt.
+Other transports keep transient metadata at the request tail to preserve their cached
+history prefix when the next user turn removes it.
+
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 
 By default, OpenClaw uses the built-in `legacy` context engine for assembly and

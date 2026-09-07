@@ -1,5 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { canCallGatewayMethod } from "../gateway-methods.ts";
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { t } from "../../i18n/index.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
+import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
 import {
@@ -47,6 +51,7 @@ export type RuntimeConfigCapability = {
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
@@ -60,7 +65,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: RuntimeConfigState) => void) => () => void;
@@ -71,6 +76,12 @@ export function createRuntimeConfigCapability(
   gateway: RuntimeConfigGateway,
 ): RuntimeConfigCapability {
   const state = createInitialConfigState(gateway.snapshot);
+  // Raw edits never autosave; form edits and outstanding writes also remain
+  // owned by this capability when a worker update or reconnect wants to reload.
+  const stopReloadGuard = registerControlUiReloadGuard(
+    () => !state.configFormDirty && !state.configSaving && !state.configApplying,
+    () => showToast({ message: t("configView.reloadBlocked") }),
+  );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   let configLoad: Promise<void> | null = null;
   let schemaLoad: Promise<void> | null = null;
@@ -87,7 +98,7 @@ export function createRuntimeConfigCapability(
         phase: gateway.snapshot.phase,
       },
       method,
-      "operator.admin",
+      method === "config.schema" ? "operator.read" : "operator.admin",
       options,
     );
   const publish = () => {
@@ -141,12 +152,13 @@ export function createRuntimeConfigCapability(
       state.connected &&
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
-    refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
+    refresh: (isCurrent) =>
+      loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
-  const refreshConnectionState = () => {
-    const config = run(() => loadConfig(state));
+  const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
+    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
     void trackLoad("config", config);
-    if (state.configSchemaVersion !== null && canCallConfigMethod("config.schema")) {
+    if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void trackLoad(
         "schema",
         run(() => loadConfigSchema(state)),
@@ -183,8 +195,23 @@ export function createRuntimeConfigCapability(
     }
     appliedRefresh.reconcile();
   };
+  // Schema reads fail open like operator-access: only a definitive denial
+  // (method advertised absent, or advertised scopes without read) skips the
+  // load, so legacy scope-less gateways keep schema-driven settings pages.
+  const canLoadConfigSchema = () => {
+    const snapshot = gateway.snapshot;
+    if (!snapshot.client || snapshot.phase !== "connected") {
+      return false;
+    }
+    if (isGatewayMethodAdvertised(snapshot, "config.schema") === false) {
+      return false;
+    }
+    return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+  };
   const ensureSchemaLoaded = () =>
-    state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
+    state.configSchema || !canLoadConfigSchema()
+      ? Promise.resolve()
+      : loadOnce("schema", () => loadConfigSchema(state));
 
   return {
     get state() {
@@ -231,6 +258,7 @@ export function createRuntimeConfigCapability(
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
     save: writes.save,
+    retry: writes.retry,
     apply: writes.apply,
     openFile: () =>
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })
@@ -247,6 +275,7 @@ export function createRuntimeConfigCapability(
       return () => listeners.delete(listener);
     },
     dispose() {
+      stopReloadGuard();
       disposed = true;
       writes.dispose();
       listeners.clear();

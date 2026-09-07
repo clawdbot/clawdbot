@@ -1,46 +1,18 @@
 // Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
-
-function createSkill() {
-  return {
-    name: "Repo Skill",
-    description: "Skill description",
-    source: "workspace",
-    filePath: "/tmp/skill",
-    baseDir: "/tmp",
-    skillKey: "repo-skill",
-    always: false,
-    disabled: false,
-    blockedByAllowlist: false,
-    eligible: true,
-    requirements: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
-  };
-}
 
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -109,7 +81,7 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
           },
         }),
       ),
@@ -119,34 +91,15 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
-  });
-
-  it("shows a model-catalog failure and lets the operator retry", () => {
-    const container = document.createElement("div");
-    const onModelCatalogRetry = vi.fn();
-    render(
-      renderAgents(
-        createProps({ modelCatalogError: "model catalog unavailable", onModelCatalogRetry }),
-      ),
-      container,
-    );
-
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("model catalog unavailable");
-    const retry = Array.from(alert?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === t("common.retry"),
-    );
-    retry?.click();
-
-    expect(onModelCatalogRetry).toHaveBeenCalledOnce();
+    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
   });
 
   it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
-    const globalNextWakeAtMs = Date.now() + 60_000;
-    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const nextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
     render(
       renderAgents(
@@ -154,7 +107,7 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
             jobs: [job],
             jobsTotal: 1,
             jobsHasMore: false,
@@ -188,7 +141,7 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
       formatNextRun(scopedNextWakeAtMs),
     );
-    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -227,7 +180,7 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               jobs: cronState.cronJobs,
               jobsTotal: cronState.cronJobsTotal,
               jobsHasMore: cronState.cronJobsHasMore,
@@ -375,7 +328,15 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        entries: { alpha: {}, beta: {} },
+        entries: {
+          alpha: {
+            models: {
+              "local/unlisted-model": { alias: "Alpha local model" },
+              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
+            },
+          },
+          beta: {},
+        },
       },
     };
 
@@ -429,7 +390,10 @@ describe("renderAgents", () => {
     expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
     expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
+    expect(options.get("google/gemini-3-flash-preview")).toBe(
+      "Alpha Flash (google/gemini-3-flash-preview)",
+    );
   });
 
   it.each([
@@ -634,17 +598,16 @@ describe("renderAgents", () => {
         container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"),
       ).map((button) => button.textContent?.trim());
 
-      expect(tabLabels).toEqual([
-        "概览",
-        "文件",
-        "工具",
-        "技能",
-        "频道",
-        t("agents.tabs.cronJobs"),
-        "记忆",
-      ]);
+      const chinese = flattenTranslations(zh_CN);
+      const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
+      expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
       const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
-      expect(sectionDescs.some((desc) => desc.textContent?.includes("上次刷新：从未"))).toBe(true);
+      const lastRefresh = chinese
+        .get("agents.channels.lastRefresh")
+        ?.replace("{time}", chinese.get("common.never") ?? "");
+      expect(sectionDescs.map((desc) => desc.textContent?.replace(/\s+/gu, " ").trim())).toContain(
+        `${chinese.get("agents.channels.subtitle")} ${lastRefresh}`,
+      );
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();

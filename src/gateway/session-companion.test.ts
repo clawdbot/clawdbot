@@ -4,6 +4,7 @@ import {
   resolveSessionToolAccess,
 } from "../agents/tools/sessions-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import {
@@ -93,7 +94,9 @@ describe("session companion asks", () => {
 
     expect(harness.run).toHaveBeenCalledOnce();
     const call = harness.run.mock.calls[0]?.[0];
-    expect(call?.systemPrompt).toContain("read-only companion observing session agent:main:main");
+    expect(call?.systemPrompt).toContain(
+      "read-only Side chat assistant observing session agent:main:main",
+    );
     expect(call?.systemPrompt).toContain("not the session agent");
     expect(call?.systemPrompt).toContain("do not perform first-run or identity flows");
     expect(call?.systemPrompt).toContain("Answer only the operator's current question");
@@ -379,6 +382,30 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it.each(["global", "agent:work:selected"])(
+    "deletion preserves qualified ownership while scoping bare keys (%s)",
+    async (sessionKey) => {
+      vi.useFakeTimers();
+      const harness = createHarness();
+      const selected = { agentId: "work", sessionKey };
+      const other = { agentId: "main", sessionKey: "global" };
+      await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
+      await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
+
+      emitSessionIdentityMutation({
+        agentId: sessionKey === "global" ? "work" : "main",
+        kind: "delete",
+        previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
+      });
+
+      expect(harness.service.state(selected)).toEqual({ exchanges: [] });
+      expect(harness.service.state(other).exchanges).toEqual([
+        expect.objectContaining({ question: "Main?" }),
+      ]);
+      harness.service.dispose();
+    },
+  );
+
   it("enforces the per-connection rate window", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
@@ -516,6 +543,49 @@ describe("session companion asks", () => {
       exchanges: [],
     });
     harness.service.dispose();
+  });
+
+  it("times out a pending context read and fences it from a replacement ask", async () => {
+    vi.useFakeTimers();
+    const context = {
+      kind: "ready" as const,
+      context: { empty: true, messages: [], sessionId: "session-1" },
+    };
+    const pendingContext = deferred<Awaited<ReturnType<SessionCompanionContextReader["read"]>>>();
+    let reads = 0;
+    const harness = createHarness({
+      readContext: () => (reads++ === 0 ? pendingContext.promise : Promise.resolve(context)),
+    });
+    const request = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      question: "Old?",
+      connId: "conn-1",
+    };
+    let failure: unknown;
+    const active = harness.service.ask(request).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "Side chat timed out." });
+      await expect(
+        harness.service.ask({ ...request, question: "Replacement?" }),
+      ).resolves.toMatchObject({
+        answer: "Evidence says the build is green.",
+      });
+      pendingContext.resolve(context);
+      await active;
+      await Promise.resolve();
+      expect(harness.run).toHaveBeenCalledOnce();
+      expect(harness.service.state(request).exchanges).toEqual([
+        { question: "Replacement?", answer: "Evidence says the build is green.", ts: 100 },
+      ]);
+    } finally {
+      pendingContext.resolve(context);
+      await active;
+      harness.service.dispose();
+    }
   });
 
   it("reset clears state and cancels an active ask", async () => {
@@ -683,7 +753,7 @@ describe("session companion tool scope", () => {
     expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
     expect(cfg.tools?.sessions?.visibility).toBe("self");
     expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
-    expect(cfg.tools?.codeMode).toMatchObject({ enabled: false });
+    expect(cfg.tools?.codeMode).toBe(true);
 
     const targetAccess = await resolveSessionToolAccess({
       action: "history",

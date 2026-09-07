@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   buildPluginApi,
   registerSingleProviderPlugin,
@@ -334,6 +336,37 @@ describe("amazon-bedrock provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const provider = await registerWithConfig();
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: NON_ANTHROPIC_MODEL,
+                  input: ["text", "image"],
+                },
+              ],
+            },
+          },
+        },
+      },
+      env: { AWS_PROFILE: "default", AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
+    expect(result.provider.models[0]).toMatchObject({
+      id: NON_ANTHROPIC_MODEL,
+      input: ["text"],
+    });
+  });
+
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -464,25 +497,33 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
-  it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+  it.each([
+    [ANTHROPIC_MODEL, false],
+    ["us.anthropic.claude-fable-5-1-v1:0", true],
+    ["global.anthropic.claude-mythos-5-1-v1:0", false],
+  ])(
+    "owns Anthropic-style replay policy for Bedrock %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "amazon-bedrock",
-        modelApi: "bedrock-converse-stream",
-        modelId: ANTHROPIC_MODEL,
-      } as never),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(
+        provider.buildReplayPolicy?.({
+          provider: "amazon-bedrock",
+          modelApi: "bedrock-converse-stream",
+          modelId,
+        }),
+      ).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it("disables prompt caching for non-Anthropic Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
@@ -997,21 +1038,22 @@ describe("amazon-bedrock provider plugin", () => {
     async function callWrappedStreamWithPayload(
       provider: RegisteredProviderPlugin,
       modelId: string,
-      modelDescriptor: never,
+      modelDescriptor: Model,
       options: Record<string, unknown>,
       payload: Record<string, unknown>,
+      context: Context = { messages: [] },
     ): Promise<Record<string, unknown>> {
       const wrapped = provider.wrapStreamFn?.({
         provider: "amazon-bedrock",
         modelId,
+        model: modelDescriptor,
         streamFn: spyStreamFn,
       } as never);
 
-      const result = wrapped?.(
-        modelDescriptor,
-        { messages: [] } as never,
-        options,
-      ) as unknown as Record<string, unknown>;
+      const result = wrapped?.(modelDescriptor, context, options) as unknown as Record<
+        string,
+        unknown
+      >;
 
       if (typeof result?.onPayload === "function") {
         await (
@@ -1065,6 +1107,88 @@ describe("amazon-bedrock provider plugin", () => {
         expect(content).toHaveLength(2);
         expect(content[1]).toEqual({ cachePoint: { type: "default" } });
       }
+    });
+
+    it("keeps opaque-profile fallback checkpoints before dynamic system context and out of transient history", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload = {
+        system: [{ text: "Stable workspace" }, { text: "Dynamic suffix" }],
+        messages: [{ role: "user", content: [{ text: "Request with transient context" }] }],
+      };
+      await callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        { cacheRetention: "long" },
+        payload,
+        {
+          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          messages: [
+            {
+              role: "user",
+              content: "Request with transient context",
+              runtimeContextCarrier: true,
+              timestamp: 0,
+            },
+          ],
+        },
+      );
+      expect(payload.system).toEqual([
+        { text: "Stable workspace" },
+        { cachePoint: { type: "default", ttl: "1h" } },
+        { text: "Dynamic suffix" },
+      ]);
+      expect(payload.messages[0]?.content).toEqual([{ text: "Request with transient context" }]);
+    });
+
+    it("leaves canonical-profile runtime checkpoints unchanged", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload = {
+        system: [
+          { text: "Stable workspace" },
+          { cachePoint: { type: "default" } },
+          { text: "Dynamic suffix" },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [{ text: "Stable request" }, { cachePoint: { type: "default" } }],
+          },
+          { role: "user", content: [{ text: "Transient context" }] },
+        ],
+      };
+      const expected = structuredClone(payload);
+      await callWrappedStreamWithPayload(
+        provider,
+        APP_INFERENCE_PROFILE_ARN,
+        {
+          id: APP_INFERENCE_PROFILE_ARN,
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+          name: "Test profile",
+          params: { canonicalModelId: "claude-haiku-4-5" },
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 200000,
+          maxTokens: 1024,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        { cacheRetention: "short" },
+        payload,
+        {
+          messages: [
+            { role: "user", content: "Stable request", timestamp: 0 },
+            {
+              role: "user",
+              content: "Transient context",
+              runtimeContextCarrier: true,
+              timestamp: 1,
+            },
+          ],
+        },
+      );
+      expect(payload).toEqual(expected);
     });
 
     it("does not double-inject cache points if already present", async () => {

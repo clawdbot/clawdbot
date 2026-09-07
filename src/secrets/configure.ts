@@ -1,7 +1,7 @@
 /** Interactive and noninteractive secrets configure workflow. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { confirm, select, text } from "@clack/prompts";
+import { log, confirm, select, text } from "@clack/prompts";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -12,9 +12,11 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  coerceSecretRef,
   isValidEnvSecretRefId,
   type ManualExecSecretProviderConfig,
   type SecretProviderConfig,
@@ -25,6 +27,7 @@ import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
+import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
   buildConfigureCandidatesForScope,
@@ -48,7 +51,7 @@ import {
 } from "./ref-contract.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
-import { isRecord } from "./shared.js";
+import { isNonEmptyString, isRecord } from "./shared.js";
 
 /** Result returned after interactive secrets configure builds and preflights an apply plan. */
 type SecretsConfigureResult = {
@@ -265,11 +268,11 @@ async function promptOptionalPositiveInt(params: {
 }
 
 function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   path: string;
   agentId?: string;
 }): string {
-  if (candidate.configFile === "auth-profiles.json") {
+  if (candidate.configFile === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
   return `openclaw:${candidate.path}`;
@@ -329,6 +332,39 @@ function loadAuthProfileStoreForConfigure(params: {
   );
 }
 
+/**
+ * Counts plaintext (non-SecretRef) credentials in the canonical shared
+ * auth-profile store. `secrets configure` only edits the selected agent's
+ * local store; shared profiles are not writable here. Surfacing the count
+ * lets an operator know a shared plaintext migration is pending so they do
+ * not mistake "no shared candidate" for "shared store is clean".
+ *
+ * Classification mirrors `secrets audit` (audit.ts): the raw shared row is
+ * read without normalization so a stored `key` survives even when a sibling
+ * `keyRef` is present (the normalized loader drops `key` in that case), and
+ * an authored value that is itself a supported SecretRef shorthand
+ * (`$ENV` / `${ENV}`) is treated as a reference, not plaintext.
+ */
+function countSharedAuthProfilePlaintext(env: NodeJS.ProcessEnv): number {
+  const shared = readPersistedSharedAuthProfileStoreRaw(env);
+  if (!isRecord(shared) || !isRecord(shared.profiles)) {
+    return 0;
+  }
+  let plaintext = 0;
+  for (const entry of iterateAuthProfileCredentials(shared.profiles)) {
+    if (entry.kind !== "api_key" && entry.kind !== "token") {
+      continue;
+    }
+    if (coerceSecretRef(entry.value)) {
+      continue;
+    }
+    if (isNonEmptyString(entry.value)) {
+      plaintext += 1;
+    }
+  }
+  return plaintext;
+}
+
 async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {
   const profileId = assertNoCancel(
     await text({
@@ -374,7 +410,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
       path: `profiles.${profileIdTrimmed}.token`,
       pathSegments: ["profiles", profileIdTrimmed, "token"],
       label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
-      configFile: "auth-profiles.json",
+      configFile: "auth-profile-store",
       agentId,
       authProfileProvider: providerTrimmed,
       expectedResolvedValue: "string",
@@ -385,7 +421,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
     path: `profiles.${profileIdTrimmed}.key`,
     pathSegments: ["profiles", profileIdTrimmed, "key"],
     label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     agentId,
     authProfileProvider: providerTrimmed,
     expectedResolvedValue: "string",
@@ -846,6 +882,20 @@ export async function runSecretsConfigureInteractive(
         store: authStore,
       },
     });
+    // `secrets configure` only edits the selected agent's local auth-profile
+    // store. Shared-store credentials are not writable here (routing a shared
+    // SecretRef through this plan would write to the per-agent database).
+    // Warn when the canonical shared store still carries plaintext so the
+    // operator knows a shared migration is pending rather than already clean.
+    const sharedPlaintextCount = countSharedAuthProfilePlaintext(env);
+    if (sharedPlaintextCount > 0) {
+      log.warn(
+        `Shared auth-profile store has ${sharedPlaintextCount} plaintext credential(s). ` +
+          "`secrets configure` edits the selected agent's local store only and cannot migrate shared credentials. " +
+          "Run `openclaw secrets audit` to review them; a shared-store SecretRef migration path is tracked separately.",
+        { output: process.stderr },
+      );
+    }
     if (candidates.length === 0) {
       throw new Error("No configurable secret-bearing fields found for this agent scope.");
     }
@@ -862,7 +912,9 @@ export async function runSecretsConfigureInteractive(
         value: configureCandidateKey(candidate),
         label: candidate.label,
         hint: [
-          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
+          // Auth profiles live in the agent's SQLite store; naming the retired
+          // JSON file here sent operators looking for a file that no longer exists.
+          candidate.configFile === "auth-profile-store" ? "auth profile store" : "openclaw.json",
           candidate.isDerived === true ? "derived" : undefined,
         ]
           .filter(Boolean)

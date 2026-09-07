@@ -48,6 +48,8 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 | `--accent-glow`   | `rgba(255,92,92,0.2)` | Focus rings, glow effects                      | Not as background                        |
 | `--primary`       | `#d13c3c`             | Filled primary buttons (white text, ~4.8:1 AA) | Not interchangeable with `--accent`      |
 
+For connections bound to an authenticated Gateway profile, the profile's `ui.accent` preference overrides the gateway-wide `ui.prefs.accent` setting, which overrides `ui.seamColor`, which overrides the active theme's default accent. Connections without an authenticated profile retain the existing gateway-wide precedence. Every override updates the accent, primary, and focus token families together; `--accent-foreground` and `--primary-foreground` automatically switch between dark and white ink according to the accent's relative luminance. Clearing a profile preference restores the gateway-wide accent, configured seam color, or theme defaults without changing anyone else's appearance.
+
 ## Accent 2 (Teal)
 
 | Token               | Value                  | Use                                       |

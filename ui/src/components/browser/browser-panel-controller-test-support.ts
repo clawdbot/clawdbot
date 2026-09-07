@@ -1,6 +1,6 @@
 import type { ReactiveController } from "lit";
 import { afterEach, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import {
   BrowserPanelController,
@@ -13,6 +13,9 @@ const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
+  target?: "host" | "node";
+  node?: string;
+  query?: Record<string, unknown>;
   body?: Record<string, unknown>;
 };
 
@@ -26,14 +29,29 @@ export function setupBrowserPanelTestCleanup(): void {
 
 export function createBrowserClient(
   handleRequest: (envelope: BrowserRequestEnvelope) => Promise<unknown>,
+  options: { screencast?: boolean } = {},
 ) {
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method !== "browser.request") {
       throw new Error(`Unexpected Gateway method: ${method}`);
     }
-    return await handleRequest(params as BrowserRequestEnvelope);
+    const envelope = params as BrowserRequestEnvelope;
+    if (envelope.path === "/screencast" && !options.screencast) {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Screencast unavailable",
+        details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+      });
+    }
+    return await handleRequest(envelope);
   });
-  return { client: { request } as unknown as GatewayBrowserClient, request };
+  return {
+    client: {
+      request,
+      gatewayUrl: "https://gateway.example.test",
+    } as unknown as GatewayBrowserClient,
+    request,
+  };
 }
 
 export function createBrowserPanelTestTab(id: string, url: string, title: string) {
@@ -54,7 +72,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
-  readonly basePath = "";
+  readonly resourceBasePath = "";
   readonly authToken = null;
   available = true;
   isConnected = true;

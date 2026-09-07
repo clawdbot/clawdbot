@@ -1,17 +1,19 @@
 // Discord plugin module implements runtime.guild behavior.
-import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { resolveDefaultDiscordAccountId } from "../accounts.js";
-import { getPresence } from "../monitor/presence-cache.js";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 import {
-  type ActionGate,
   jsonResult,
   readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-  type DiscordActionConfig,
-  type OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import { getGateway } from "../monitor/gateway-registry.js";
+import { getPresence } from "../monitor/presence-cache.js";
 import { discordGuildActionRuntime } from "./runtime-deps.js";
 import {
   createDiscordMessagingActionContext,
@@ -104,14 +106,6 @@ const guildAdminActionGuards: Partial<Record<string, GuildAdminActionGuard>> = {
   channelPermissionRemove: channelPermissionGuard,
 };
 
-function isThreadChannelType(channelType: number | undefined) {
-  return (
-    channelType === ChannelType.GuildNewsThread ||
-    channelType === ChannelType.GuildPublicThread ||
-    channelType === ChannelType.GuildPrivateThread
-  );
-}
-
 function isLockedThreadChannel(channel: unknown) {
   if (!channel || typeof channel !== "object") {
     return false;
@@ -184,7 +178,7 @@ async function resolveGuildAdminActionPermissions(params: {
     createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
   );
   const channelType = "type" in channel ? channel.type : undefined;
-  if (!isThreadChannelType(channelType)) {
+  if (!isDiscordThreadChannelType(channelType)) {
     return params.guard.permissions;
   }
 
@@ -327,6 +321,12 @@ export async function handleDiscordGuildAction(
   });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg, accountId, extra });
+  // Sender-scoped media policy must reach every guild action that reads a host-local source.
+  const mediaPolicyOptions = {
+    mediaAccess: options?.mediaAccess,
+    mediaLocalRoots: options?.mediaLocalRoots,
+    mediaReadFile: options?.mediaReadFile,
+  };
   const assertGuildMetadataReadAllowed = async (
     guildId: string,
     readOptions?: { filteredResults?: boolean },
@@ -376,12 +376,31 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("reactions")) {
         throw new Error("Discord reactions are disabled.");
       }
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
+      const guildId = await resolveGuildIdForGuildAdminAction({ values: params, accountId, cfg });
+      if (!guildId) {
+        throw new Error("Discord emoji listing requires guildId or a server channel.");
+      }
       await assertGuildMetadataReadAllowed(guildId);
-      const emojis = await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts());
-      return jsonResult({ ok: true, emojis });
+      const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 100, 100);
+      const fetchEmojis = async () =>
+        (await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts()))
+          .flatMap(({ name, id, animated }) =>
+            name && id
+              ? [{ name, identifier: `${name}:${id}`, ...(animated ? { animated } : {}) }]
+              : [],
+          )
+          .toSorted(
+            (left, right) =>
+              left.name.localeCompare(right.name) ||
+              left.identifier.localeCompare(right.identifier),
+          );
+      // The account GatewayPlugin owns this bounded client cache and invalidates
+      // guild emoji entries on GuildEmojisUpdate; gateway-free CLI reads stay uncached.
+      const gateway = getGateway(accountId ?? resolveDefaultDiscordAccountId(cfg));
+      const emojis = gateway
+        ? await gateway.fetchGuildEmojis(guildId, fetchEmojis)
+        : await fetchEmojis();
+      return jsonResult({ ok: true, emojis: emojis.slice(0, limit) });
     }
     case "emojiUpload": {
       if (!isActionEnabled("emojiUploads")) {
@@ -402,7 +421,7 @@ export async function handleDiscordGuildAction(
           mediaUrl,
           roleIds: roleIds?.length ? roleIds : undefined,
         },
-        withOpts(),
+        createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
       return jsonResult({ ok: true, emoji });
     }
@@ -429,7 +448,7 @@ export async function handleDiscordGuildAction(
           tags,
           mediaUrl,
         },
-        withOpts(),
+        createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
       return jsonResult({ ok: true, sticker });
     }
@@ -537,9 +556,7 @@ export async function handleDiscordGuildAction(
       const entityTypeRaw = readStringParam(params, "entityType");
       const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
       const image = imageUrl
-        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
-            localRoots: options?.mediaLocalRoots,
-          })
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, mediaPolicyOptions)
         : undefined;
       const payload = {
         name,

@@ -12,8 +12,8 @@ import type {
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
-import type { SessionsRouteData } from "./route.ts";
-import type { TranscriptSearchState } from "./view.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -35,7 +35,6 @@ export type TestSessionsPage = HTMLElement & {
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
   loadCheckpoint: (sessionKey: string) => Promise<void>;
@@ -52,7 +51,7 @@ export type TestSessionsPage = HTMLElement & {
   ) => void;
   patchSession: (
     key: string,
-    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
@@ -60,7 +59,7 @@ export type TestSessionsPage = HTMLElement & {
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
+  runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
 type MutableGateway = {
@@ -75,7 +74,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -122,6 +121,11 @@ function sessionListKey(options: SessionListOptions | SessionRefreshOptions): st
   } = options as SessionRefreshOptions;
   return JSON.stringify(scope);
 }
+
+const managedListPublishers = new WeakMap<
+  SessionCapability,
+  (options: SessionListOptions, snapshot: SessionListSnapshot) => void
+>();
 
 export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
@@ -182,6 +186,7 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
+  managedListPublishers.set(sessions, publish);
   return { sessions, publish, listSnapshot, subscribeList, refreshList };
 }
 
@@ -194,6 +199,7 @@ export function createContext(
     basePath: "",
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {
@@ -204,9 +210,9 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
+    plugins: {
+      registrations: vi.fn(() => []),
+      reportError: vi.fn(),
       subscribe,
     },
     navigate: vi.fn(),
@@ -220,15 +226,22 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
+  const query = sessionsPageListQuery(context, {
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter,
+    deepLinkSessionKey: expandedSessionKey,
+  });
+  const publish = managedListPublishers.get(context.sessions);
+  if (publish) {
+    publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });
+  } else {
+    await context.sessions.refreshList(query);
+  }
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
   page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: context.gateway.snapshot,
-    sessions: context.sessions,
-    result,
-    loading: false,
-    error: null,
     expandedSessionKey,
     statusFilter,
   };

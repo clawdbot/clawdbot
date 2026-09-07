@@ -3,6 +3,7 @@ name: OpenClaw Scheduled Live And E2E Checks
 on:
   schedule:
     - cron: "23 4 * * *"
+    - cron: "41 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -20,6 +21,7 @@ env:
 
 jobs:
   live_and_openwebui_checks:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *'
     permissions:
       actions: read
       contents: read
@@ -46,6 +48,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -83,3 +86,24 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  weekly_upgrade_survivors:
+    if: github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ github.sha }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      allow_unreleased_changelog: true
+      docker_lanes: update-migration
+      published_upgrade_survivor_baselines: 2026.7.1 2026.8.1
+      published_upgrade_survivor_scenarios: mobile-pairing-reconnect watchos-direct-node
+      shared_image_artifact_namespace: scheduled-upgrade-survivors
+      shared_image_policy: no-push-artifact

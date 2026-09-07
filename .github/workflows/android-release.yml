@@ -12,7 +12,19 @@ on:
         required: true
         type: string
       release_publish_branch:
-        description: Branch used by the approving OpenClaw Release Publish run
+        description: Branch or protected tag used by the approving OpenClaw Release Publish run
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish run attempt
+        required: true
+        type: string
+      release_publish_full_ref:
+        description: Exact approving workflow full ref, including refs/heads/ or refs/tags/
+        required: true
+        type: string
+      release_publish_workflow_sha:
+        description: Frozen approving workflow commit SHA
         required: true
         type: string
       release_target_sha:
@@ -20,7 +32,7 @@ on:
         required: true
         type: string
       direct_release_recovery:
-        description: Allow a completed parent run and published release for explicit backfill or recovery
+        description: Allow a failed completed parent run for explicit backfill or recovery
         required: true
         default: false
         type: boolean
@@ -37,7 +49,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   publish_signed_android_apk:
@@ -45,9 +57,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: android-release
+    env:
+      DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
+      EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+      EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+      EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+      EXPECTED_WORKFLOW_SHA: ${{ inputs.release_publish_workflow_sha }}
+      RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -66,23 +87,13 @@ jobs:
         id: release_approval
         env:
           APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
-          DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
             echo "Android APK publishing requires a final or correction OpenClaw release tag: ${RELEASE_TAG}" >&2
             exit 1
           fi
-          if [[ "${EXPECTED_WORKFLOW_BRANCH}" != "main" && ! "${EXPECTED_WORKFLOW_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "release_publish_branch must be main or release/YYYY.M.PATCH." >&2
-            exit 1
-          fi
-
           expected_source_ref="refs/tags/${RELEASE_TAG}"
           if [[ "${GITHUB_REF}" != "${expected_source_ref}" ]]; then
             echo "Android publication must run from ${expected_source_ref}, got ${GITHUB_REF}." >&2
@@ -96,36 +107,11 @@ jobs:
           gh attestation verify "${APPROVAL_PATH}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml" \
-            --source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}" \
+            --source-ref "${EXPECTED_WORKFLOW_FULL_REF}" \
+            --source-digest "${EXPECTED_WORKFLOW_SHA}" \
             --deny-self-hosted-runners
-          run_json="$(gh run view "${RELEASE_PUBLISH_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json workflowName,headBranch,event,status,conclusion,url)"
-          printf '%s' "${run_json}" | node scripts/validate-release-publish-approval.mjs
-          tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          if [[ "${RELEASE_TARGET_SHA}" != "${tag_sha}" ]]; then
-            echo "Release target SHA ${RELEASE_TARGET_SHA} does not match ${RELEASE_TAG} (${tag_sha})." >&2
-            exit 1
-          fi
-
-          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,createdAt,assets,url)"
-          if [[ "$(printf '%s' "${release_json}" | jq -r '.tagName')" != "${RELEASE_TAG}" ]]; then
-            echo "GitHub release tag does not match ${RELEASE_TAG}." >&2
-            exit 1
-          fi
-          if [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" == "true" ]]; then
-            echo "Android APK publishing requires a stable GitHub release." >&2
-            exit 1
-          fi
-          if [[ "${DIRECT_RELEASE_RECOVERY}" != "true" && "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "true" ]]; then
-            echo "Normal Android promotion requires the target GitHub release to remain a draft." >&2
-            exit 1
-          fi
-          release_created_at="$(printf '%s' "${release_json}" | jq -er '.createdAt')"
-          build_timestamp="$(date -u -d "${release_created_at}" +%Y-%m-%dT%H:%M:%SZ)"
+          build_timestamp="$(node scripts/validate-release-publish-approval.mjs)"
           echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
-          unexpected_assets="$(printf '%s' "${release_json}" | jq -r '[.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | join(", ")')"
-          if [[ -n "${unexpected_assets}" ]]; then
-            echo "Target release already contains Android assets: ${unexpected_assets}. Immutable recovery accepts them only after rebuilding identical bytes." >&2
-          fi
 
       - name: Verify release source and Android version
         id: release_source
@@ -165,12 +151,13 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           install-bun: "true"
-          install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: read-write
 
       - name: Create apps-signing read token
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
@@ -185,7 +172,7 @@ jobs:
 
       - name: Checkout encrypted Android signing assets
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/apps-signing
           ref: main
@@ -349,15 +336,21 @@ jobs:
             fi
           fi
 
+      - name: Revalidate release approval before Android provenance
+        env:
+          APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/validate-release-publish-approval.mjs > /dev/null
+
       - name: Attest Android APK provenance
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/OpenClaw-Android.apk
 
       - name: Upload immutable Android release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
         run: |
           set -euo pipefail
           attach_or_verify_asset() {
@@ -376,6 +369,9 @@ jobs:
               }
               return
             fi
+            # Each irreversible write needs fresh authority after any awaited
+            # asset lookup. This is a boundary recheck, not an atomic API guard.
+            node scripts/validate-release-publish-approval.mjs > /dev/null || return 1
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
           }
 

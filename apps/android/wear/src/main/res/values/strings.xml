@@ -4,8 +4,6 @@
     <string name="chat">Chat</string>
     <string name="session">Session</string>
     <string name="model">Model</string>
-    <string name="previous_item">Previous %1$s</string>
-    <string name="next_item">Next %1$s</string>
     <string name="controls">Controls</string>
     <string name="talk">Talk</string>
     <string name="real_time_audio_failed">Watch audio failed</string>
@@ -43,6 +41,17 @@
     <string name="start_conversation">Start a conversation</string>
     <string name="start_conversation_detail">Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.</string>
     <string name="current_session">Current session</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation">%1$s: %2$s</string>
+    <string name="close" tools:ignore="MissingTranslation">Close</string>
+    <string name="search" tools:ignore="MissingTranslation">Search</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation">Search sessions</string>
+    <string name="search_models" tools:ignore="MissingTranslation">Search models</string>
+    <string name="load_more" tools:ignore="MissingTranslation">Load more</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation">Active on phone</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation">Open on watch</string>
+    <string name="no_matches" tools:ignore="MissingTranslation">No matches</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation">Find a session</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation">Find a model</string>
     <string name="appearance">Appearance</string>
     <string name="theme_dark">Dark</string>
     <string name="theme_light">Light</string>

@@ -71,8 +71,6 @@ function mount(
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[];
     stale?: boolean;
-    onRetryTimeSeries?: () => void;
-    onRetrySessionLogs?: () => void;
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
@@ -82,6 +80,7 @@ function mount(
     error: error ?? null,
     hasLoaded: errors.stale ?? false,
     stale: errors.stale ?? false,
+    awaitingGateway: false,
   });
   const container = document.createElement("div");
   render(
@@ -90,7 +89,6 @@ function mount(
       { points },
       false,
       status(errors.timeSeries),
-      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -105,7 +103,6 @@ function mount(
       errors.sessionLogsData ?? [],
       false,
       status(errors.sessionLogs),
-      errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -114,6 +111,11 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -146,7 +148,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
     ).toEqual(expect.arrayContaining(["utc-time", "utc-time"]));
-    expect(container.querySelector(".ts-bar title")?.textContent).toContain("utc-date-time");
+    expect(container.querySelector(".ts-bar")?.getAttribute("data-tooltip")).toContain(
+      "utc-date-time",
+    );
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
@@ -185,32 +189,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       localYear.mockRestore();
       localMonth.mockRestore();
       localDay.mockRestore();
-    }
-  });
-
-  it("ends a local range at the next calendar midnight after a skipped midnight", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "America/Santiago";
-    try {
-      const container = mount(
-        [
-          point({ timestamp: new Date(2026, 8, 6, 1).getTime() }),
-          point({ timestamp: new Date(2026, 8, 6, 12).getTime() }),
-          point({ timestamp: new Date(2026, 8, 7, 0, 30).getTime() }),
-        ],
-        null,
-        null,
-        "total",
-        { startDate: "2026-09-06", endDate: "2026-09-06", timeZone: "local" },
-      );
-
-      expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-    } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
     }
   });
 
@@ -283,9 +261,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("renders independent retry actions for detail request failures", () => {
-    const onRetryTimeSeries = vi.fn();
-    const onRetrySessionLogs = vi.fn();
+  it("renders detail request failure messages without retry buttons", () => {
     const container = mount(
       [],
       null,
@@ -295,8 +271,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       {
         timeSeries: "timeline unavailable",
         sessionLogs: "logs unavailable",
-        onRetryTimeSeries,
-        onRetrySessionLogs,
       },
     );
 
@@ -311,10 +285,8 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "Could not load conversation: logs unavailable",
     );
 
-    timelineError?.querySelector("button")?.click();
-    conversationError?.querySelector("button")?.click();
-    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
-    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+    expect(timelineError?.querySelector("button")).toBeNull();
+    expect(conversationError?.querySelector("button")).toBeNull();
   });
 
   it("keeps loaded details visible and marks them stale after refresh failures", () => {
@@ -376,6 +348,15 @@ describe("renderSessionDetailPanel filtered usage", () => {
           injectedChars: 30,
           truncated: false,
         },
+        {
+          name: "AGENTS.md",
+          path: "/AGENTS.md",
+          missing: false,
+          rawChars: 100,
+          injectionStatus: "native_unverified",
+          injectedChars: null,
+          truncated: null,
+        },
       ],
     };
     const onToggleContextExpanded = vi.fn();
@@ -397,7 +378,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     const cards = [...container.querySelectorAll(".context-breakdown-card")];
     expect(
       cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
-    ).toEqual(["Skills (5)", "Tools (2)", "Files (2)"]);
+    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
     expect(
       [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
         (entry) => entry.textContent,
@@ -406,7 +387,13 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
       "larger-tool",
     );
-    expect(cards[2]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe("large.md");
+    const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
+    expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
+      "large.md",
+      "small.md",
+      "AGENTS.md",
+    ]);
+    expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
     container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();

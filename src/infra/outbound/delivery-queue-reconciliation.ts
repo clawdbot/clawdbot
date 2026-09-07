@@ -2,29 +2,28 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
-import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import type { QueuedDelivery } from "./delivery-queue-types.js";
 
-type UnknownSendQueueEntry = {
-  id: string;
-  channel: string;
-  to: string;
-  accountId?: string;
-  enqueuedAt: number;
-  retryCount: number;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  renderedBatchPlan?: RenderedMessageBatchPlan;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
-  threadId?: string | number | null;
-  silent?: boolean;
-  session?: { agentId?: string };
-};
+type UnknownSendQueueEntry = Pick<
+  QueuedDelivery,
+  | "id"
+  | "channel"
+  | "to"
+  | "accountId"
+  | "enqueuedAt"
+  | "retryCount"
+  | "platformSendStartedAt"
+  | "effectiveReplyToId"
+  | "renderedBatchPlan"
+  | "reply"
+  | "threadId"
+  | "silent"
+  | "session"
+>;
 
 export function buildUnknownSendContext(params: {
   entry: UnknownSendQueueEntry;
@@ -48,8 +47,8 @@ export function buildUnknownSendContext(params: {
       : {}),
     payloads: params.payloads,
     ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
-    ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
-    ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
+    ...(entry.reply ? { replyToId: entry.reply.replyToId } : {}),
+    ...(entry.reply?.source === "implicit" ? { replyToMode: entry.reply.mode } : {}),
     ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
     ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
   };

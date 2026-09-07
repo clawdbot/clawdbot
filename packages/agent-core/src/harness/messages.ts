@@ -1,6 +1,7 @@
 // Agent Core module implements messages behavior.
 import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -127,6 +128,13 @@ export function createCustomMessage(
   };
 }
 
+/** Recognize the structured carrier marker shared with provider replay. */
+export function isRuntimeContextCarrier(message: AgentMessage): boolean {
+  return (
+    message.role === "custom" && asOptionalRecord(message.details)?.runtimeContextCarrier === true
+  );
+}
+
 /** Convert harness transcript messages into the LLM-facing message sequence. */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages
@@ -143,20 +151,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             timestamp: message.timestamp,
           };
         case "custom": {
+          if (message.excludeFromContext) {
+            return undefined;
+          }
           const content =
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]
               : message.content;
-          // Transient current-turn runtime-context carriers must not anchor a
-          // provider prompt-cache breakpoint (their bytes change every turn).
-          const runtimeContextCarrier =
-            (message.details as { runtimeContextCarrier?: unknown } | undefined)
-              ?.runtimeContextCarrier === true;
+          // Preserve carrier identity so provider-owned replay and cache policy
+          // can distinguish transient context from append-only context.
           return {
             role: "user",
             content,
             timestamp: message.timestamp,
-            ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
+            ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
           };
         }
         case "branchSummary":

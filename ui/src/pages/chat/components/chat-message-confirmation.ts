@@ -102,7 +102,7 @@ type ConfirmedActionParams = {
   preferenceName: string;
 };
 
-export function renderRewindButton(onRewind: () => void, disabled: boolean) {
+export function renderRewindButton(onRewind: () => void) {
   const label = t("chat.messages.rewind");
   const params: ConfirmedActionParams = {
     action: onRewind,
@@ -112,11 +112,10 @@ export function renderRewindButton(onRewind: () => void, disabled: boolean) {
   };
   return html`
     <span class="chat-confirm-wrap chat-rewind-wrap">
-      <openclaw-tooltip .content=${disabled ? t("chat.messages.rewindUnavailable") : label}>
+      <openclaw-tooltip .content=${label}>
         <button
           class="chat-group-rewind"
           aria-label=${label}
-          ?disabled=${disabled}
           @click=${(event: Event) =>
             openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
         >
@@ -260,6 +259,8 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
     dismissPopover();
     params.action();
   });
+  // Keep this portaled dialog's clicks from dismissing its owning context menu.
+  popover.addEventListener("click", (event) => event.stopPropagation());
   popover.addEventListener("keydown", containKeyboardFocus);
   document.addEventListener("contextmenu", closeOnContextMenu, true);
   window.addEventListener("keydown", closeOnEscape, true);

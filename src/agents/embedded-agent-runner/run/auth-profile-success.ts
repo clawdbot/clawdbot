@@ -38,11 +38,8 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   }
   const successProfileId = input.profileId;
   const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
-  const successProvider = resolveAuthProfileStateProvider(
-    input.profileStore,
-    successProfileId,
-    input.provider,
-  );
+  const successProvider =
+    input.profileStore.profiles[successProfileId]?.provider.trim() || input.provider;
   const successStarted = Date.now();
   void markAuthProfileSuccess({
     store: input.profileStore,
@@ -150,7 +147,7 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
     : input.pluginHarnessOwnsTransport
       ? ("plugin-harness" as const)
       : undefined;
-  const materializedRoute = resolveOpaqueHarnessMaterialization(input, credential);
+  const materializedRoute = resolveHarnessAuthMaterialization(input, credential);
   if (materializedRoute) {
     recordRuntimeAuthMaterialization({
       agentDir: input.agentDir,
@@ -182,13 +179,23 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   });
 }
 
-function resolveOpaqueHarnessMaterialization(
+function resolveHarnessAuthMaterialization(
   input: Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0],
   credential: AuthProfileStore["profiles"][string] | undefined,
 ) {
+  const preparedApiKeyProfileId = input.apiKeyInfo?.profileId;
+  // Prepared API-key routes are host-resolved before a harness turn. Only the
+  // exact SecretRef profile may turn that completed request into a catalog fact.
+  const resolvedReferencedApiKey =
+    credential?.type === "api_key" &&
+    credential.keyRef !== undefined &&
+    input.apiKeyInfo?.mode === "api-key" &&
+    preparedApiKeyProfileId !== undefined &&
+    preparedApiKeyProfileId === input.profileId &&
+    input.apiKeyInfo.source === `profile:${preparedApiKeyProfileId}`;
   if (
     !input.pluginHarnessOwnsAuthBootstrap ||
-    input.apiKeyInfo ||
+    (input.apiKeyInfo && !resolvedReferencedApiKey) ||
     hasInlineCredentialMaterial(credential) ||
     !isModelApi(input.modelApi)
   ) {
@@ -255,16 +262,4 @@ function resolvePluginHarnessApiKeyInfo(input: {
   }
   const resolvedApiKey = resolveSecretSentinel(apiKey);
   return resolvedApiKey ? { ...apiKeyInfo, apiKey: resolvedApiKey } : null;
-}
-
-function resolveAuthProfileStateProvider(
-  store: AuthProfileStore,
-  profileId: string,
-  fallbackProvider: string,
-): string {
-  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
-  if (profileProvider) {
-    return profileProvider;
-  }
-  return profileId.split(":", 1)[0]?.trim() || fallbackProvider;
 }

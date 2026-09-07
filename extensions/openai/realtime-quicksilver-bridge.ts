@@ -1,24 +1,22 @@
 // GPT-Live backend bridge over the Frameless Bidi WebSocket protocol used by Codex realtime v3.
 import { randomUUID } from "node:crypto";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
-import {
-  convertPcmToMulaw8k,
+  canonicalizeBase64,
+  rawDataToString,
+  createStreamingPcmResampler,
   mulawToPcm,
+  pcmToMulaw,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   RealtimeVoiceSessionLifecycle,
-  resamplePcm,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceSessionConnection,
   type RealtimeVoiceToolResultOptions,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket, { type RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
 import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocket,
@@ -38,12 +36,16 @@ import {
 const OPENAI_QUICKSILVER_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const OPENAI_QUICKSILVER_READY_TIMEOUT_MS = 15_000;
 const OPENAI_QUICKSILVER_SAMPLE_RATE = 24_000;
+// Private transport diagnostics retain activity only, never routes, session IDs, or frame content.
+const OPENAI_QUICKSILVER_CAPTURE_FLOW = "private-realtime";
+const OPENAI_QUICKSILVER_CAPTURE_URL = "wss://realtime.invalid/private";
 const WEBSOCKET_OPEN = 1;
 
 type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice?: string;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
+  logger?: Pick<PluginLogger, "warn">;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
 };
 
@@ -73,16 +75,34 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   readonly handlesInputAudioBargeIn = false;
 
   private socket: OpenAIQuicksilverSocket | undefined;
-  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
+  private readonly lifecycle: RealtimeVoiceSessionLifecycle;
+  private inboundTelephonyResampler = createStreamingPcmResampler(
+    8_000,
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+  );
+  private outboundTelephonyResampler = createStreamingPcmResampler(
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+    8_000,
+  );
   private activeDelegations = new Set<string>();
-  private readonly flowId = randomUUID();
   private readonly requestIds: OpenAIQuicksilverRequestIds = {
     realtimeSessionId: randomUUID(),
     sessionId: randomUUID(),
     threadId: randomUUID(),
   };
 
-  constructor(private readonly config: OpenAIQuicksilverVoiceBridgeConfig) {}
+  constructor(
+    private readonly config: OpenAIQuicksilverVoiceBridgeConfig,
+    private readonly runtime: OpenAIRealtimeHost,
+  ) {
+    this.lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow: () =>
+        (config.logger?.warn ?? console.warn)(
+          "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+        ),
+    });
+  }
 
   async connect(): Promise<void> {
     await this.lifecycle.connect((connection) => this.connectConnection(connection));
@@ -97,13 +117,16 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       }
       const url = buildOpenAIQuicksilverWebSocketUrl(this.config.model);
       const createSocket = this.config.webSocketFactory ?? this.createSocketFactory();
-      connected = await connectOpenAIQuicksilverSideband({
-        auth,
-        createSocket,
-        requestIds: this.requestIds,
-        signal: connection.signal,
-        url,
-      });
+      connected = await connectOpenAIQuicksilverSideband(
+        {
+          auth,
+          createSocket,
+          requestIds: this.requestIds,
+          signal: connection.signal,
+          url,
+        },
+        this.runtime,
+      );
     } catch (error) {
       if (
         !this.lifecycle.isCurrent(connection) ||
@@ -112,19 +135,18 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       this.failLifecycle(connection);
-      throw error;
+      throw this.redactError(error);
     }
     if (!this.lifecycle.isCurrent(connection) || connection.signal.aborted) {
       this.closeSocket("stale connection", connected.socket);
       return;
     }
-    const url = buildOpenAIQuicksilverWebSocketUrl(this.config.model);
     this.socket = connected.socket;
-    captureWsEvent({
-      url,
+    this.runtime.captureWsEvent({
+      url: OPENAI_QUICKSILVER_CAPTURE_URL,
       direction: "local",
       kind: "ws-open",
-      flowId: this.flowId,
+      flowId: OPENAI_QUICKSILVER_CAPTURE_FLOW,
       meta: { provider: "openai", capability: "gpt-live-voice" },
     });
 
@@ -169,7 +191,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       this.failLifecycle(connection);
-      failReady(error);
+      failReady(this.redactError(error));
       this.closeSocket(reason, connected.socket);
     };
     const readyTimeout = setTimeout(() => {
@@ -204,12 +226,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       const payload = rawDataToString(data);
-      captureWsEvent({
-        url,
+      this.runtime.captureWsEvent({
+        url: OPENAI_QUICKSILVER_CAPTURE_URL,
         direction: "inbound",
         kind: "ws-frame",
-        flowId: this.flowId,
-        payload,
+        flowId: OPENAI_QUICKSILVER_CAPTURE_FLOW,
         meta: { provider: "openai", capability: "gpt-live-voice" },
       });
       const event = parseOpenAIQuicksilverEvent(payload);
@@ -227,7 +248,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.fail(connection, error);
       }
     });
-    connected.socket.on("close", () => {
+    connected.socket.on("close", (code) => {
       if (!this.lifecycle.isCurrent(connection) || this.socket !== connected.socket) {
         return;
       }
@@ -244,12 +265,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.lifecycle.close(connection, "error");
         return;
       }
-      this.notifyClose(connection, "error");
+      this.notifyClose(connection, code === 1000 ? "completed" : "error");
     });
 
     const terminalEvent = connected.detachBuffer();
     this.sendEvent(
       buildOpenAIQuicksilverSessionUpdate({
+        model: this.config.model,
         instructions: this.config.instructions,
         voice: this.config.voice,
       }),
@@ -268,7 +290,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           ? terminalEvent.error
           : new Error("GPT-Live WebSocket closed during startup");
       if (reachedReady) {
-        if (this.fail(connection, error, "startup terminal event")) {
+        if (terminalEvent.kind === "close" && terminalEvent.code === 1000) {
+          this.notifyClose(connection, "completed");
+        } else if (this.fail(connection, error, "startup terminal event")) {
           this.notifyClose(connection, "error");
         }
       } else {
@@ -352,14 +376,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private createSocketFactory(): OpenAIQuicksilverSocketFactory {
-    return (url, options) => {
-      const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-      return new WebSocket(url, {
+    return (url, options) =>
+      new WebSocket(url, {
         ...options,
         maxPayload: OPENAI_QUICKSILVER_MAX_PAYLOAD_BYTES,
-        ...(proxyAgent ? { agent: proxyAgent } : {}),
       });
-    };
   }
 
   private async waitForConnection<T>(
@@ -409,6 +430,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       settleReady();
       return;
     }
+    if (event.kind === "audio-cleared") {
+      this.config.onEvent?.({ direction: "server", type: "output_audio_buffer.cleared" });
+      this.config.onClearAudio("barge-in");
+      return;
+    }
     if (event.kind === "audio") {
       const canonical = canonicalizeBase64(event.data);
       if (!canonical) {
@@ -416,15 +442,31 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       const pcm = Buffer.from(canonical, "base64");
-      this.config.onAudio(
+      const output =
         this.config.audioFormat?.encoding === "g711_ulaw"
-          ? convertPcmToMulaw8k(pcm, OPENAI_QUICKSILVER_SAMPLE_RATE)
-          : pcm,
-      );
+          ? pcmToMulaw(this.outboundTelephonyResampler.process(pcm))
+          : pcm;
+      if (output.length > 0) {
+        this.config.onAudio(output);
+      }
       this.config.onEvent?.({ direction: "server", type: "output_audio.delta" });
       return;
     }
     if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
+      if (
+        event.kind === "transcript-done" &&
+        event.role === "assistant" &&
+        this.config.audioFormat?.encoding === "g711_ulaw"
+      ) {
+        const tail = pcmToMulaw(this.outboundTelephonyResampler.flush());
+        this.outboundTelephonyResampler = createStreamingPcmResampler(
+          OPENAI_QUICKSILVER_SAMPLE_RATE,
+          8_000,
+        );
+        if (tail.length > 0) {
+          this.config.onAudio(tail);
+        }
+      }
       this.config.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
       this.config.onEvent?.({
         direction: "server",
@@ -452,12 +494,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       });
       return;
     }
-    const error = new Error(event.message);
+    const message = projectOpenAIQuicksilverErrorMessage("provider");
+    const error = new Error(message);
     if (!this.lifecycle.isReady()) {
       failStartup(error, "session start failed");
       return;
     }
-    this.config.onEvent?.({ direction: "server", type: "error", detail: event.message });
+    this.config.onEvent?.({ direction: "server", type: "error", detail: message });
     if (event.fatalAuth) {
       this.fail(connection, error, "authentication failed");
     } else {
@@ -468,8 +511,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private sendAudioNow(audio: Buffer): void {
     const pcm =
       this.config.audioFormat?.encoding === "g711_ulaw"
-        ? resamplePcm(mulawToPcm(audio), 8_000, OPENAI_QUICKSILVER_SAMPLE_RATE)
+        ? this.inboundTelephonyResampler.process(mulawToPcm(audio))
         : audio;
+    if (pcm.length === 0) {
+      return;
+    }
     this.sendEvent({ type: "input_audio.append", audio: pcm.toString("base64") });
   }
 
@@ -494,12 +540,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     const payload = JSON.stringify(event);
-    captureWsEvent({
-      url: buildOpenAIQuicksilverWebSocketUrl(this.config.model),
+    this.runtime.captureWsEvent({
+      url: OPENAI_QUICKSILVER_CAPTURE_URL,
       direction: "outbound",
       kind: "ws-frame",
-      flowId: this.flowId,
-      payload,
+      flowId: OPENAI_QUICKSILVER_CAPTURE_FLOW,
       meta: { provider: "openai", capability: "gpt-live-voice" },
     });
     this.socket.send(payload);
@@ -513,9 +558,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     if (!this.failLifecycle(connection)) {
       return false;
     }
-    this.config.onError?.(error);
+    this.config.onError?.(this.redactError(error));
     this.closeSocket(reason);
     return true;
+  }
+
+  private redactError(_error: unknown): Error {
+    return new Error(projectOpenAIQuicksilverErrorMessage("transport"));
   }
 
   private failLifecycle(connection: RealtimeVoiceSessionConnection): boolean {
@@ -528,6 +577,14 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private resetTerminalState(): void {
     this.activeDelegations.clear();
+    this.inboundTelephonyResampler = createStreamingPcmResampler(
+      8_000,
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+    );
+    this.outboundTelephonyResampler = createStreamingPcmResampler(
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+      8_000,
+    );
   }
 
   private closeSocket(reason: string, socket = this.socket): void {

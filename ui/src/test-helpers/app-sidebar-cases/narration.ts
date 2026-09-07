@@ -40,6 +40,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -69,7 +70,7 @@ describe("AppSidebar live narration", () => {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
     );
-    expect(link?.title).toContain("Final verification is running.");
+    expect(link?.hasAttribute("title")).toBe(false);
     expect(link?.querySelector("[aria-live]")).toBeNull();
 
     sessions.publishList({
@@ -91,6 +92,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -123,14 +125,23 @@ describe("AppSidebar live narration", () => {
     await sidebar.updateComplete;
 
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-    expect(row?.querySelector("[data-session-attention=question]")).not.toBeNull();
-    expect(row?.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
-      "Waiting for your answer",
-    );
+    const questionAttention = row?.querySelector("[data-session-attention=question]");
+    expect(questionAttention).not.toBeNull();
+    expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(
+      (
+        questionAttention?.closest("openclaw-tooltip") as
+          | (HTMLElement & {
+              content?: string;
+            })
+          | null
+      )?.content,
+    ).toBe("Waiting for your answer");
+    expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
     expect(row?.textContent).not.toContain("Checking the remaining files.");
     expect(
-      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.title,
-    ).not.toContain("Checking the remaining files.");
+      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.hasAttribute("title"),
+    ).toBe(false);
   });
 
   it("keeps only the six newest running subscriptions and evicts the old boundary", async () => {
@@ -140,6 +151,7 @@ describe("AppSidebar live narration", () => {
     const rows = keys.map((key, index) => runningRow(key, index + 1));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -170,6 +182,7 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = keys[0]!;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -186,6 +199,7 @@ describe("AppSidebar live narration", () => {
     sessions.publishList({ result: sessionsResult([runningRow(key, 1)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.sidebarLiveActivity = false;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -214,6 +228,7 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = openKey;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 

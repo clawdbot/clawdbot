@@ -50,6 +50,35 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
     expect(second).not.toContain("secret-token");
   });
 
+  it("separates plugin inventory across managed desktop generations", () => {
+    const base = {
+      appServer: {
+        start: {
+          transport: "stdio" as const,
+          command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+          args: ["app-server"],
+          headers: {},
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      runtimeIdentity: {
+        serverVersion: "0.20.0",
+        codexHome: "/tmp/openclaw-agent/codex-home",
+      },
+    };
+
+    const generationX = buildCodexPluginAppCacheKey({
+      ...base,
+      desktopGenerationFingerprint: "desktop-x",
+    });
+    const generationY = buildCodexPluginAppCacheKey({
+      ...base,
+      desktopGenerationFingerprint: "desktop-y",
+    });
+
+    expect(generationX).not.toEqual(generationY);
+  });
+
   it("fingerprints the remote app-server runtime used by thread bindings", () => {
     const first = buildCodexAppServerRuntimeFingerprint({
       appServer: {

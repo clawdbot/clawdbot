@@ -1,5 +1,5 @@
 // Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   planManifestModelCatalogRows,
   planManifestModelCatalogSuppressions,
@@ -7,7 +7,7 @@ import {
 
 describe("manifest model catalog planner", () => {
   it("overlays only declared providers and keeps remote transport fields inert", () => {
-    const plan = planManifestModelCatalogRows({
+    const params: Parameters<typeof planManifestModelCatalogRows>[0] = {
       registry: {
         plugins: [
           {
@@ -43,7 +43,8 @@ describe("manifest model catalog planner", () => {
         },
         undeclared: { models: [{ id: "ignored" }] },
       },
-    });
+    };
+    const plan = planManifestModelCatalogRows(params);
     expect(
       plan.rows.map((row) => [row.id, row.name, row.source, row.baseUrl, row.headers]),
     ).toEqual([
@@ -56,6 +57,26 @@ describe("manifest model catalog planner", () => {
         "https://model.api.anthropic.com",
         { "X-Trusted": "yes" },
       ],
+    ]);
+    const emptyOverlay = {
+      anthropic: { api: "openai-completions", models: [] },
+    } satisfies Parameters<typeof planManifestModelCatalogRows>[0]["remoteOverlay"];
+    const emptyRemotePlan = planManifestModelCatalogRows({
+      ...params,
+      remoteOverlay: emptyOverlay,
+    });
+    expect(emptyRemotePlan.rows.map((row) => [row.id, row.source, row.api, row.baseUrl])).toEqual([
+      ["kept", "manifest", "openai-completions", "https://api.anthropic.com"],
+      ["old", "manifest", "openai-completions", "https://model.api.anthropic.com"],
+    ]);
+    const absentRemotePlan = planManifestModelCatalogRows({
+      ...params,
+      remoteOverlay: emptyOverlay,
+      resolveRemoteProvider: () => undefined,
+    });
+    expect(absentRemotePlan.rows.map((row) => row.api)).toEqual([
+      "anthropic-messages",
+      "anthropic-messages",
     ]);
     const aliasPlan = planManifestModelCatalogRows({
       registry: {
@@ -76,6 +97,80 @@ describe("manifest model catalog planner", () => {
     expect(aliasPlan.rows).toMatchObject([
       { provider: "anthropic-alias", id: "old", name: "Remote alias", source: "runtime-refresh" },
     ]);
+  });
+
+  it("scopes requested merge keys while preserving alias overlays", () => {
+    const resolveRemoteProvider = vi.fn((provider: string) =>
+      provider === "anthropic"
+        ? {
+            models: [
+              { id: "requested", name: "Remote" },
+              { id: "unrelated", name: "Remote unrelated" },
+            ],
+          }
+        : undefined,
+    );
+    const params: Parameters<typeof planManifestModelCatalogRows>[0] = {
+      registry: {
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              aliases: {
+                "anthropic-alias": {
+                  provider: "anthropic",
+                  api: "anthropic-messages",
+                  baseUrl: "https://alias.anthropic.test",
+                },
+              },
+              providers: {
+                anthropic: {
+                  models: [{ id: "requested", name: "Bundled" }, { id: "unrelated" }],
+                },
+              },
+            },
+          },
+          {
+            id: "unrelated",
+            providers: ["unrelated"],
+            modelCatalog: {
+              providers: { unrelated: { models: [{ id: "unrelated" }] } },
+            },
+          },
+        ],
+      },
+      providerFilters: ["anthropic-alias"],
+      mergeKeyFilter: new Set(["anthropic-alias::requested"]),
+      resolveRemoteProvider,
+    };
+    const plan = planManifestModelCatalogRows(params);
+
+    expect(resolveRemoteProvider.mock.calls).toEqual([["anthropic"]]);
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.rows).toMatchObject([
+      {
+        provider: "anthropic-alias",
+        id: "requested",
+        name: "Remote",
+        api: "anthropic-messages",
+        baseUrl: "https://alias.anthropic.test",
+        source: "runtime-refresh",
+      },
+    ]);
+    resolveRemoteProvider.mockClear();
+    expect(planManifestModelCatalogRows({ ...params, providerFilters: [] })).toStrictEqual({
+      entries: [],
+      rows: [],
+      conflicts: [],
+    });
+    expect(resolveRemoteProvider.mock.calls).toEqual([]);
+    expect(planManifestModelCatalogRows({ ...params, mergeKeyFilter: new Set() })).toStrictEqual({
+      entries: [],
+      rows: [],
+      conflicts: [],
+    });
+    expect(resolveRemoteProvider.mock.calls).toEqual([["anthropic"]]);
   });
 
   it("selects static and supplemental rows at their owning catalog boundary", () => {
@@ -443,6 +538,81 @@ describe("manifest model catalog planner", () => {
     expect(plan.entries.map((entry) => entry.provider)).toEqual(["openai"]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["openai/gpt-5.4"]);
     expect(plan.rows.some((row) => row.provider === "azure-openai-responses")).toBe(false);
+  });
+
+  it("sorts fresh normalized rows without mutating frozen manifest inputs", () => {
+    const models = [{ id: "z" }, { id: "a" }];
+    models.forEach(Object.freeze);
+    Object.freeze(models);
+    const registry = {
+      plugins: [{ id: "owner", modelCatalog: { providers: { fixture: { models } } } }],
+    };
+    const plan = planManifestModelCatalogRows({ registry });
+    const repeated = planManifestModelCatalogRows({ registry });
+    const rows = [
+      {
+        id: "a",
+        provider: "fixture",
+        ref: "fixture/a",
+        mergeKey: "fixture::a",
+        name: "a",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+      {
+        id: "z",
+        provider: "fixture",
+        ref: "fixture/z",
+        mergeKey: "fixture::z",
+        name: "z",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+    ];
+    expect(plan).toStrictEqual({
+      entries: [{ pluginId: "owner", provider: "fixture", discovery: undefined, rows }],
+      rows,
+      conflicts: [],
+    });
+    expect(models).toStrictEqual([{ id: "z" }, { id: "a" }]);
+    expect(repeated).toStrictEqual(plan);
+    expect(repeated.rows).not.toBe(plan.rows);
+    expect(repeated.rows[0]).not.toBe(plan.rows[0]);
+    expect(plan.rows[0]).not.toBe(models[1]);
+    expect(plan.entries[0]?.rows[0]).toBe(plan.rows[0]);
+  });
+
+  it("resolves raw overlay IDs before reporting normalized ID conflicts", () => {
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "owner",
+            modelCatalog: { providers: { fixture: { models: [{ id: " a ", name: "Local" }] } } },
+          },
+        ],
+      },
+      remoteOverlay: { fixture: { models: [{ id: "a", name: "Remote" }] } },
+    });
+    expect(plan.entries[0]?.rows.map((row) => [row.id, row.name, row.source])).toEqual([
+      ["a", "Local", "manifest"],
+      ["a", "Remote", "runtime-refresh"],
+    ]);
+    expect(plan.rows).toEqual([]);
+    expect(plan.conflicts).toStrictEqual([
+      {
+        mergeKey: "fixture::a",
+        ref: "fixture/a",
+        provider: "fixture",
+        modelId: "a",
+        firstPluginId: "owner",
+        secondPluginId: "owner",
+      },
+    ]);
   });
 
   it("reports duplicate provider/model keys and excludes conflicted rows", () => {

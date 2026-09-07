@@ -25,26 +25,32 @@ final class EventKitPermissionRequester: @unchecked Sendable {
         self.store = store
     }
 
-    func requestWriteOnlyAccessToEvents() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { [self] completion in
-            self.store.requestWriteOnlyAccessToEvents { granted, _ in
-                completion(granted)
+    func requestWriteOnlyAccessToEvents(
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> Bool
+    {
+        await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { [self] completion in
+            self.store.requestWriteOnlyAccessToEvents { [self] granted, _ in
+                withExtendedLifetime(self) { completion(granted) }
             }
         }
     }
 
-    func requestFullAccessToEvents() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { [self] completion in
-            self.store.requestFullAccessToEvents { granted, _ in
-                completion(granted)
+    func requestFullAccessToEvents(
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> Bool
+    {
+        await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { [self] completion in
+            self.store.requestFullAccessToEvents { [self] granted, _ in
+                withExtendedLifetime(self) { completion(granted) }
             }
         }
     }
 
-    func requestFullAccessToReminders() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { [self] completion in
-            self.store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
+    func requestFullAccessToReminders(
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> Bool
+    {
+        await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { [self] completion in
+            self.store.requestFullAccessToReminders { [self] granted, _ in
+                withExtendedLifetime(self) { completion(granted) }
             }
         }
     }

@@ -11,12 +11,9 @@ import {
   SessionDeliveryDeferredError,
 } from "../../../infra/session-delivery-queue-storage.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
-import {
-  findTaskByRunId,
-  getTaskById,
-  publishTaskRecordAfterAtomicStore,
-} from "../../../tasks/runtime-internal.js";
+import { findTaskByRunId, getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
@@ -28,15 +25,17 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
+  blockSubagentCompletionDelivery,
+  publishCommittedRecords,
   settleSubagentCompletionDelivery,
+  SUSPENDED_RETENTION_MS,
 } from "./subagent-completion-admission.store.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-instructions.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_DELIVERY_GENERATION = 10;
-const CANONICAL_RESULT_PROMPT =
-  "A completed subagent task is ready for parent review. The canonical result follows.";
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
 type CompletionDeliveryRecoveryResult = {
   ok: boolean;
   reason?: string;
@@ -49,28 +48,13 @@ function resolveTask(entry: SubagentRunRecord): TaskRecord | undefined {
 }
 
 function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
+  // Child sessions are reused; only the exact task run owns its retained result.
   for (const entry of subagentRuns.values()) {
-    if (
-      (entry.taskRunId ?? entry.runId) === task.runId ||
-      (task.childSessionKey && entry.childSessionKey === task.childSessionKey)
-    ) {
+    if ((entry.taskRunId ?? entry.runId) === task.runId) {
       return entry;
     }
   }
   return undefined;
-}
-
-function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
-  const live = subagentRuns.get(subagent.runId);
-  if (live) {
-    for (const key of Object.keys(live)) {
-      Reflect.deleteProperty(live, key);
-    }
-    Object.assign(live, subagent);
-  } else {
-    subagentRuns.set(subagent.runId, subagent);
-  }
-  publishTaskRecordAfterAtomicStore(task);
 }
 
 function projectRedrivenTask(
@@ -152,15 +136,9 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
   return { id: queueEntry.id, claimed: admission.claimed, status: status ?? "pending" };
 }
 
-function canonicalResultMessage(entry: SubagentRunRecord): string {
-  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
-  return `${CANONICAL_RESULT_PROMPT}\n\n${result}`;
-}
-
-/** Resolves queue content from the canonical retained result at attempt time. */
 export function resolveCorrelatedSubagentDelivery(
   queued: QueuedSessionDelivery,
-): QueuedSessionDelivery {
+): QueuedSessionDelivery & { runtimeContextFragments?: RuntimeContextFragment[] } {
   if (queued.kind !== "agentTurn" || queued.owner?.kind !== "subagent_completion") {
     return queued;
   }
@@ -178,10 +156,17 @@ export function resolveCorrelatedSubagentDelivery(
   ) {
     throw new SessionDeliveryDeferredError("correlated subagent delivery owner mismatch");
   }
-  return { ...queued, message: canonicalResultMessage(entry) };
+  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
+  return {
+    ...queued,
+    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    runtimeContextFragments: [
+      { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
+      { kind: "conversation-data", text: result },
+    ],
+  };
 }
 
-/** Consumes durable queue settlement without allowing a stale generation to mutate its owner. */
 export async function settleCorrelatedSubagentDelivery(
   queued: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
@@ -218,20 +203,13 @@ export async function settleCorrelatedSubagentDelivery(
     projectedTask.terminalOutcome = "succeeded";
     projectedTask.error = undefined;
   } else {
-    Object.assign(delivery, {
-      status: "suspended" as const,
-      disposition: "permanent_failure" as const,
-      suspendedAt: now,
-      suspendedReason: "permanent_failure" as const,
-      lastError: queued.lastError ?? "completion delivery failed",
-      nextAttemptAt: undefined,
-      queueId: undefined,
+    blockSubagentCompletionDelivery({
+      subagent: current,
+      taskId: queued.owner.taskId,
+      reason: queued.lastError ?? "completion delivery failed",
+      suspendedReason: "permanent_failure",
     });
-    projectedTask.deliveryStatus = "failed";
-    projectedTask.terminalOutcome = "blocked";
-    projectedTask.error = delivery.lastError ?? undefined;
-    projectedTask.terminalSummary = "Task completed, but result delivery is blocked.";
-    projectedTask.cleanupAfter = now + SUSPENDED_RETENTION_MS;
+    return;
   }
   projectedTask.progressSummary =
     resolveSubagentCompletionResultText(subagent) ?? projectedTask.progressSummary;

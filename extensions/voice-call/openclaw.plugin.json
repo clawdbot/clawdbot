@@ -2,7 +2,7 @@
   "id": "voice-call",
   "doctorContract": {
     "resolveSessionStoreAgentIds": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }]
   },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
@@ -90,6 +90,11 @@
     },
     "tailscale.mode": {
       "label": "Tailscale Mode",
+      "advanced": true
+    },
+    "tailscale.port": {
+      "label": "Tailscale HTTPS Port",
+      "help": "External HTTPS port. Funnel supports 443, 8443, or 10000; Serve accepts any valid port.",
       "advanced": true
     },
     "tailscale.path": {
@@ -237,7 +242,7 @@
     },
     "agentId": {
       "label": "Response Agent ID",
-      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "help": "Agent used for voice responses and session storage. Defaults to the sole configured agent; set explicitly for a multi-agent fleet.",
       "advanced": true
     },
     "sessionScope": {
@@ -427,6 +432,12 @@
           "mode": {
             "type": "string",
             "enum": ["off", "serve", "funnel"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 443
           },
           "path": {
             "type": "string"

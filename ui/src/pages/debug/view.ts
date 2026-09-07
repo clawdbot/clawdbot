@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
@@ -12,14 +13,24 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+import type {
+  CommandLaneDynamicSummary,
+  CommandLaneSnapshot,
+} from "../../lib/gateway-diagnostics.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
+import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
+import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
+  connected: boolean;
+  offlineStable: boolean;
   loading: boolean;
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
   diagnosticsError: string | null;
   eventLog: readonly EventLogEntry[];
   methods: string[];
@@ -30,6 +41,7 @@ type DebugProps = {
   onCallMethodChange: (next: string) => void;
   onCallParamsChange: (next: string) => void;
   onRefresh: () => void;
+  onOpenOverlay: () => void;
   onCall: () => void;
 };
 
@@ -89,6 +101,21 @@ function renderDiagnosticsError(error: string | null) {
   `;
 }
 
+function renderSnapshotActivity(props: DebugProps) {
+  const active = props.connected ? props.loading : props.offlineStable;
+  if (!active) {
+    return nothing;
+  }
+  const refreshing = props.connected;
+  return renderSettingsRow({
+    title: renderSettingsStatus({
+      kind: refreshing ? "accent" : "muted",
+      label: t(refreshing ? "common.refreshing" : "common.offline"),
+    }),
+    description: t(refreshing ? "debug.refreshingSnapshots" : "debug.offlineSnapshots"),
+  });
+}
+
 function renderEventRow(evt: EventLogEntry) {
   return renderSettingsRow({
     title: evt.event,
@@ -100,21 +127,60 @@ ${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
 }
 
 export function renderDebug(props: DebugProps) {
+  const refreshPending = props.connected && props.loading;
   const snapshotsSection = renderSettingsSection(
     {
       title: t("debug.snapshotsTitle"),
       description: t("debug.snapshotsSubtitle"),
       actions: html`
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? t("common.refreshing") : t("common.refresh")}
+        <button
+          class="btn"
+          ?disabled=${!props.connected || props.loading}
+          @click=${props.onRefresh}
+        >
+          ${refreshPending ? t("common.refreshing") : t("common.refresh")}
         </button>
       `,
     },
     html`
-      ${renderDiagnosticsError(props.diagnosticsError)} ${renderSecurityRow(props)}
-      ${renderJsonRow(t("debug.status"), props.status)}
+      ${renderSnapshotActivity(props)} ${renderDiagnosticsError(props.diagnosticsError)}
+      ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
+    `,
+  );
+
+  const lanesSection = renderSettingsSection(
+    {
+      title: t("debug.lanes.title"),
+      description: t("debug.lanes.subtitle"),
+      actions: html`
+        <button class="btn" @click=${props.onOpenOverlay}>
+          ${
+            isNativeEmbedHost()
+              ? t("debug.overlay.open")
+              : t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })
+          }
+        </button>
+      `,
+    },
+    html`
+      <div class="data-table-container command-lanes-table-wrap">
+        <table class="data-table command-lanes-table settings-table--stacked" role="table">
+          <thead>
+            <tr>
+              <th scope="col">${t("debug.lanes.lane")}</th>
+              <th scope="col">${t("debug.lanes.active")}</th>
+              <th scope="col">${t("debug.lanes.queued")}</th>
+              <th scope="col">${t("debug.lanes.group")}</th>
+              <th scope="col">${t("debug.lanes.blocked")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderCommandLaneRows({ lanes: props.lanes, dynamic: props.dynamic })}
+          </tbody>
+        </table>
+      </div>
     `,
   );
 
@@ -130,9 +196,11 @@ export function renderDebug(props: DebugProps) {
             .value=${props.callMethod}
             @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
           >
-            ${!props.callMethod
-              ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
-              : nothing}
+            ${
+              !props.callMethod
+                ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
+                : nothing
+            }
             ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
           </select>
         `,
@@ -157,22 +225,26 @@ export function renderDebug(props: DebugProps) {
           <button class="btn primary" @click=${props.onCall}>${t("common.call")}</button>
         `,
       })}
-      ${props.callError
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
-              <pre class="code-block">${props.callError}</pre>
-            </div>
-          `
-        : nothing}
-      ${props.callResult
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-              <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
-            </div>
-          `
-        : nothing}
+      ${
+        props.callError
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
+                <pre class="code-block">${props.callError}</pre>
+              </div>
+            `
+          : nothing
+      }
+      ${
+        props.callResult
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
+                <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
+              </div>
+            `
+          : nothing
+      }
     `,
   );
 
@@ -194,7 +266,7 @@ ${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</p
   );
 
   return renderSettingsPage(
-    html`${snapshotsSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
+    html`${snapshotsSection} ${lanesSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
     { wide: true },
   );
 }

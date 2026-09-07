@@ -9,6 +9,10 @@ import {
 } from "../../node-version.mjs";
 import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  detectCurrentRuntimeSqliteVersion,
+  isSqliteWalResetSafeVersion,
+} from "./sqlite-runtime-version.js";
 
 // Runtime validation precedes console capture. Keep this direct sink aligned
 // with configured JSONL output without pulling in the full logger.
@@ -31,6 +35,8 @@ type Semver = {
   patch: number;
 };
 
+const MINIMUM_BUN_VERSION: Semver = { major: 1, minor: 4, patch: 0 };
+
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -41,6 +47,7 @@ type RuntimeDetails = {
   execPath: string | null;
   pathEnv: string;
   hasNodeSqlite: boolean;
+  sqliteVersion: string | null;
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
@@ -63,7 +70,7 @@ export function parseSemver(version: string | null): Semver | null {
 }
 
 /** Compares parsed semver triples against an inclusive minimum version. */
-export function isAtLeast(version: Semver | null, minimum: Semver): boolean {
+function isAtLeast(version: Semver | null, minimum: Semver): boolean {
   if (!version) {
     return false;
   }
@@ -81,23 +88,25 @@ function detectRuntime(): RuntimeDetails {
   const bunVersion = process.versions?.bun;
   const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
   const version = bunVersion ?? process.versions?.node ?? null;
+  const sqlite =
+    kind === "bun" ? detectCurrentRuntimeSqlite() : { available: false, version: null };
 
   return {
     kind,
     version,
     execPath: process.execPath ?? null,
     pathEnv: process.env.PATH ?? "(not set)",
-    hasNodeSqlite: currentRuntimeProvidesNodeSqlite(),
+    hasNodeSqlite: sqlite.available,
+    sqliteVersion: sqlite.version,
   };
 }
 
-// Bun >=1.4 (Rust rewrite) ships node:sqlite; older Buns do not. Feature-probe
-// instead of version-gating so the guard tracks the actual runtime capability.
-function currentRuntimeProvidesNodeSqlite(): boolean {
+function detectCurrentRuntimeSqlite(): { available: boolean; version: string | null } {
   try {
-    return Boolean(process.getBuiltinModule?.("node:sqlite"));
+    const version = detectCurrentRuntimeSqliteVersion();
+    return { available: version !== null, version };
   } catch {
-    return false;
+    return { available: false, version: null };
   }
 }
 
@@ -107,7 +116,12 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
     return isSupportedNodeVersion(details.version);
   }
   if (details.kind === "bun") {
-    return details.hasNodeSqlite;
+    return (
+      isSupportedBunVersion(details.version) &&
+      details.hasNodeSqlite &&
+      details.sqliteVersion !== null &&
+      isSqliteWalResetSafeVersion(details.sqliteVersion)
+    );
   }
   return false;
 }
@@ -120,6 +134,11 @@ export function isCurrentRuntimeSupported(): boolean {
 /** Checks a Node version label against OpenClaw's supported Node version range. */
 export function isSupportedNodeVersion(version: string | null): boolean {
   return isSupportedOpenClawNodeVersion(version);
+}
+
+/** Checks a Bun version label against OpenClaw's minimum supported release. */
+export function isSupportedBunVersion(version: string | null): boolean {
+  return isAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
 }
 
 /** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
@@ -189,19 +208,24 @@ export function assertSupportedRuntime(
   const execLabel = details.execPath ?? "unknown";
   const requirement =
     details.kind === "bun"
-      ? "openclaw cannot run under Bun because the runtime does not provide node:sqlite."
+      ? "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.";
   const retryHint =
     details.kind === "bun"
-      ? "Run OpenClaw with Node; Bun remains supported for installs and package scripts."
+      ? "Upgrade Bun or run OpenClaw with a supported Node release."
       : "Upgrade Node and re-run openclaw.";
 
   runtime.error(
     [
       requirement,
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
+      ...(details.kind === "bun"
+        ? [`Detected SQLite: ${details.sqliteVersion ?? "unavailable"}.`]
+        : []),
       `PATH searched: ${details.pathEnv}`,
-      "Install Node: https://nodejs.org/en/download",
+      details.kind === "bun"
+        ? "Install Bun: https://bun.com/docs/installation"
+        : "Install Node: https://nodejs.org/en/download",
       retryHint,
     ].join("\n"),
   );

@@ -1,4 +1,5 @@
 // Discord type declarations define plugin contracts.
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ButtonInteraction,
@@ -11,6 +12,7 @@ import type {
 } from "../internal/discord.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import type { formatDiscordUserTag } from "./format.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 
 export type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
@@ -36,10 +38,13 @@ export type DiscordChannelContext = {
 };
 
 export type AgentComponentContext = {
+  isPolicyCurrent?: () => boolean;
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   accountId: string;
   discordConfig?: DiscordAccountConfig;
   runtime?: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   token?: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   allowFrom?: string[];

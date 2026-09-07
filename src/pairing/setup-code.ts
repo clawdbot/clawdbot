@@ -67,12 +67,18 @@ type ResolvePairingSetupOptions = {
   preferRemoteUrl?: boolean;
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
+  issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
   localTlsFingerprint?: string;
   loadLocalTlsFingerprint?: () => Promise<string | undefined>;
 };
+
+export function resolveConfiguredPairingPublicUrl(config: OpenClawConfig): string | undefined {
+  const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 type PairingSetupResolution =
   | {
@@ -319,7 +325,7 @@ function resolvePairingSetupAuthLabel(
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-async function resolveGatewayUrl(
+export async function resolvePairingGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
     env: NodeJS.ProcessEnv;
@@ -494,7 +500,7 @@ export async function resolvePairingSetupFromConfig(
   if (authLabel.error) {
     return { ok: false, error: authLabel.error };
   }
-  const urlResult = await resolveGatewayUrl(cfgForAuth, {
+  const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,
@@ -541,10 +547,12 @@ export async function resolvePairingSetupFromConfig(
   if (directGatewayTlsFingerprintRaw !== undefined && !directGatewayTlsFingerprint) {
     return { ok: false, error: "Gateway TLS fingerprint is invalid." };
   }
-  const issued = await issueDevicePairSetupBootstrapToken({
-    baseDir: options.pairingBaseDir,
-    profile: issuedBootstrapProfile,
-  });
+  const issued =
+    options.issuedBootstrap ??
+    (await issueDevicePairSetupBootstrapToken({
+      baseDir: options.pairingBaseDir,
+      profile: issuedBootstrapProfile,
+    }));
 
   return {
     ok: true,

@@ -1,17 +1,18 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 
 type AttachmentPayload = {
+  blob?: Blob;
   dataUrl?: string;
   previewUrl?: string;
 };
 
 const payloads = new Map<string, AttachmentPayload>();
 
-function createObjectUrl(file: File): string | undefined {
+function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
-  return URL.createObjectURL(file);
+  return URL.createObjectURL(blob);
 }
 
 function revokeObjectUrl(url: string | undefined): void {
@@ -26,39 +27,68 @@ export function registerChatAttachmentPayload(params: {
   dataUrl: string;
   file: File;
 }): ChatAttachment {
-  const previous = payloads.get(params.attachment.id);
-  revokeObjectUrl(previous?.previewUrl);
-  const objectUrl = createObjectUrl(params.file);
-  const previewUrl = objectUrl ?? params.attachment.previewUrl;
+  releaseChatAttachmentPayload(params.attachment.id);
   payloads.set(params.attachment.id, {
+    blob: params.file,
     dataUrl: params.dataUrl,
-    ...(previewUrl ? { previewUrl } : {}),
   });
-  return {
-    ...params.attachment,
-    ...(previewUrl ? { previewUrl } : {}),
-  };
+  return params.attachment;
 }
 
 export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | null {
   return attachment.dataUrl ?? payloads.get(attachment.id)?.dataUrl ?? null;
 }
 
-// Stored data URLs keep previews available when this browser cannot create object URLs.
+function blobFromDataUrl(dataUrl: string): Blob | null {
+  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const metadata = match[1] ?? "";
+  const payload = match[2] ?? "";
+  try {
+    if (metadata.toLowerCase().includes(";base64")) {
+      const binary = atob(payload.replace(/\s+/gu, ""));
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
+    }
+    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
+      type: metadata.split(";", 1)[0],
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function getChatAttachmentBlob(attachment: ChatAttachment): Blob | null {
+  const stored = payloads.get(attachment.id);
+  if (stored?.blob) {
+    return stored.blob;
+  }
+  const dataUrl = getChatAttachmentDataUrl(attachment);
+  if (!dataUrl) {
+    return null;
+  }
+  const blob = blobFromDataUrl(dataUrl);
+  if (blob) {
+    payloads.set(attachment.id, { ...stored, blob, dataUrl });
+  }
+  return blob;
+}
+
+// Recovery prepares bytes without owning URLs. Allocate once when presented, so
+// stale reads cannot leak previews or replace a URL another pane still uses.
 export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string | null {
-  const storedPreview = payloads.get(attachment.id)?.previewUrl;
-  return attachment.previewUrl ?? storedPreview ?? getChatAttachmentDataUrl(attachment);
-}
-
-function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
-  const { dataUrl: _dataUrl, ...metadata } = attachment;
-  return metadata;
-}
-
-export function cloneChatAttachmentsMetadata(
-  attachments: readonly ChatAttachment[],
-): ChatAttachment[] {
-  return attachments.map(cloneChatAttachmentMetadata);
+  const preview = attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl;
+  if (preview) {
+    return preview;
+  }
+  const blob = getChatAttachmentBlob(attachment);
+  const objectUrl = blob && createObjectUrl(blob);
+  if (objectUrl) {
+    payloads.set(attachment.id, { ...payloads.get(attachment.id), previewUrl: objectUrl });
+  }
+  return objectUrl ?? getChatAttachmentDataUrl(attachment);
 }
 
 /** Gives another mounted composer payload ownership independent of the source. */

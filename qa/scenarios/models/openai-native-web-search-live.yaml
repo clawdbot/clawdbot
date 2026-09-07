@@ -5,8 +5,9 @@ scenario:
   surface: model-provider
   coverage:
     primary:
-      - web-search.web-search-exposure
+      - web-search.web-search-exposure-openai
     secondary:
+      - web-search.web-search-exposure
       - openai.canonical-openai-model-routing-openai
   objective: Verify a live OpenAI GPT model can use OpenAI native web_search when OpenClaw web search is enabled in auto mode.
   successCriteria:

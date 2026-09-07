@@ -1,41 +1,46 @@
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import {
+import type {
+  SetupInferenceActivationRejection,
+  SetupInferenceFailureStatus,
+} from "../../packages/gateway-protocol/src/schema/setup-inference.js";
+import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store.js";
-import { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+} from "../agents/auth-profiles/store-runtime.js";
+import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import {
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import type {
   detectInferenceBackends,
-  type InferenceBackendKind,
+  InferenceBackendKind,
 } from "../commands/onboard-inference.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  type ProviderAuthChoiceMetadata,
+import type { enablePluginInConfig } from "../plugins/enable.js";
+import type {
+  ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { probeLocalCommand } from "./probes.js";
+import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
-import {
+import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
+import type {
   captureSystemAgentOwnerPluginArtifacts,
-  type createSystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
+  createSystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
@@ -52,9 +57,6 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
-
-export const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
-  "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
 
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 
@@ -101,6 +103,10 @@ export type SetupInferenceDetection = {
   prepareOptions?: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
+  /** Native conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs?: SetupNativeSessionCatalogOption[];
+  /** True only while the Gateway still needs its first inference route. */
+  nativeSessionCatalogPreferenceRequired?: boolean;
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -108,21 +114,23 @@ export type SetupInferenceDetection = {
   setupComplete: boolean;
 };
 
-export type SetupInferenceStatus =
-  | "ok"
-  | "auth"
-  | "rate_limit"
-  | "billing"
-  | "timeout"
-  | "format"
-  | "unavailable"
-  | "unknown";
-
-export type SetupInferenceFailureStatus = Exclude<SetupInferenceStatus, "ok">;
+export type { SetupInferenceFailureStatus };
+export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      lines: string[];
+      gatewayRestartRequired?: true;
+    }
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      disposition?: SetupInferenceActivationRejection["disposition"];
+    };
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -184,6 +192,10 @@ export type ActivateSetupInferenceParams = {
   apiKey?: string;
   workspace?: string;
   surface: "cli" | "gateway";
+  /** Whether interactive provider secrets would be entered away from the Gateway host. */
+  isRemoteProviderAuth?: boolean;
+  /** Fresh-install opt-in for discovering existing native provider conversations. */
+  nativeSessionCatalogsEnabled?: boolean;
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
@@ -193,8 +205,18 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Lock the caller's cancellation boundary before the first durable setup effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
+  /** Preparation effects are complete; the selected route is ready for its live test. */
+  onPreparationComplete?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
+  /** Gateway callers await application only after releasing the setup queue and lane. */
+  onRuntimeApplication?: (
+    application: ReturnType<
+      typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
+    >,
+  ) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -250,14 +272,13 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
@@ -280,6 +301,8 @@ export type ActivateSetupInferenceDeps = {
 };
 
 export type DetectSetupInferenceDeps = {
+  /** Supplies prepared setup choices before native or provider discovery starts. */
+  onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
@@ -315,6 +338,23 @@ export function invalidSetupConfigError(snapshot: {
   return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
 }
 
+export async function redactSetupInferenceError(
+  message: string,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
+  const secrets = new Set(
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let redacted = message;
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
+}
+
 export function resolveCandidatePresentation(
   candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],
@@ -332,16 +372,12 @@ export function resolveCandidatePresentation(
   };
 }
 
-export async function resolveSetupInferenceWorkspace(params: {
-  configExists: boolean;
-  configValid: boolean;
-}): Promise<{ workspace: string; hasAuthoredSetup: boolean }> {
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig(params);
-  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  return {
-    workspace: resolveUserPath(
-      authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
-    ),
-    hasAuthoredSetup,
-  };
+export function resolveSetupInferenceWorkspace(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "config">,
+): string {
+  const config =
+    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : undefined;
+  return resolveUserPath(
+    config?.agents?.defaults?.workspace?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
 }

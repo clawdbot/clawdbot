@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -14,11 +13,17 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
-import { selectableAgentsList } from "../../lib/agents/display.ts";
+import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -33,6 +38,7 @@ import {
   loadChatMetadata,
   peekChatMetadata,
   revalidateChatMetadata,
+  subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -44,6 +50,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
@@ -72,7 +79,6 @@ import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
-
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
@@ -98,7 +104,8 @@ class AgentsPage
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
-  @state() chatModelCatalogError: string | null = null;
+  @state() chatModelCatalogStatus = createPanelRefreshStatus();
+  private chatModelCatalogPending: Promise<unknown> | null = null;
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -106,6 +113,7 @@ class AgentsPage
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
@@ -125,26 +133,45 @@ class AgentsPage
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
-  private chatModelCatalogAgentId: string | null = null;
-  private chatModelCatalogRequest: {
-    client: GatewayBrowserClient;
-    generation: number;
-    agentId: string;
+  private chatModelCatalogSubscription: {
+    isCurrent: () => boolean;
+    unsubscribe: () => void;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
+  private readonly githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => this.requestUpdate(),
+    runExternalMutation: (task, options) =>
+      this.context.runtimeConfig.runExternalMutation(task, options),
+  });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    onIdentityChange: () => this.resetForClientChange(),
+    onIdentityChange: () => this.resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
         return;
       }
       this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogError = null;
+      this.resetModelCatalog();
     },
-    onSnapshot: () => this.syncGatewayState(),
+    onSnapshot: ({ becameAvailable, becameConnected }) => {
+      this.syncGatewayState();
+      if (becameAvailable && !becameConnected) {
+        const subscription = this.chatModelCatalogSubscription;
+        void Promise.resolve(this.chatModelCatalogPending).then(() => {
+          const snapshot = this.gateway.snapshot;
+          const status = this.chatModelCatalogStatus;
+          if (
+            subscription?.isCurrent() &&
+            snapshot &&
+            isGatewayAvailable(snapshot) &&
+            (status.awaitingGateway || status.error !== null)
+          ) {
+            this.ensureModelCatalog({ refresh: true });
+          }
+        });
+      }
+    },
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -155,7 +182,7 @@ class AgentsPage
         this.hasBoundAgents = true;
         this.agentsSource = agents;
         if (resetForSourceBind) {
-          this.resetForAgentsSourceChange();
+          this.resetForSourceChange();
         }
         this.syncAgentState(agents);
         this.ensureInitialData();
@@ -247,6 +274,10 @@ class AgentsPage
     return this.context.sessions;
   }
 
+  get agents() {
+    return this.context.agents;
+  }
+
   get client() {
     return this.gateway.client;
   }
@@ -277,6 +308,7 @@ class AgentsPage
   }
 
   override disconnectedCallback() {
+    this.githubIdentity.dispose();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -310,10 +342,19 @@ class AgentsPage
     this.syncCurrentAgentFiles(agents);
   }
 
-  private ensureSelectedAgentInList(agentsList: AgentsListResult) {
-    const selected = this.agentsSelectedId;
-    if (!selected || !agentsList.agents.some((entry) => entry.id === selected)) {
-      this.agentsSelectedId = agentsList.defaultId ?? agentsList.agents[0]?.id ?? null;
+  private ensureSelectedAgentInList(
+    agentsList: AgentsListResult,
+    selected = this.routeData?.requestedAgentId ?? this.agentsSelectedId,
+  ) {
+    // Route intent survives hello/reconnect; only the roster is connection-scoped.
+    // Unknown explicit ids retain their URL while the picker uses the default.
+    const nextSelectedId =
+      selected && agentsList.agents.some((entry) => entry.id === selected)
+        ? selected
+        : (agentsList.defaultId ?? agentsList.agents[0]?.id ?? null);
+    if (nextSelectedId !== this.agentsSelectedId) {
+      this.agentsSelectedId = nextSelectedId;
+      this.resetSelectionState();
     }
   }
 
@@ -327,30 +368,22 @@ class AgentsPage
       return;
     }
     this.agentFilesList = status.list;
-    this.agentFilesError = status.error;
     void this.selectDefaultAgentFile(agentId);
   }
 
-  private async selectDefaultAgentFile(agentId: string) {
+  private async selectDefaultAgentFile(agentId: string, force = false) {
     const files = this.agentFilesList?.files ?? [];
     if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
       this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
     if (this.agentFileActive) {
-      await loadAgentFileContent(this, agentId, this.agentFileActive);
+      await loadAgentFileContent(this, agentId, this.agentFileActive, {
+        force,
+      });
     }
   }
 
-  private resetForClientChange() {
-    this.agentsList = null;
-    this.agentsSelectedId = null;
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
-    this.resetSelectionState();
-  }
-
-  private resetForAgentsSourceChange() {
+  private resetForSourceChange() {
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
@@ -364,8 +397,7 @@ class AgentsPage
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
-    this.toolsEffectiveLoading = false;
-    this.toolsEffectiveLoadingKey = null;
+    resetToolsEffectiveState(this);
     this.cron = {
       ...this.cron,
       cronLoading: false,
@@ -383,18 +415,11 @@ class AgentsPage
       return;
     }
     this.routeDataInitialized = true;
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      return;
-    }
-    if (data.agentsList) {
+    if (this.gateway.isRouteDataCurrent(data) && data.agentsList) {
       this.agentsList = data.agentsList;
-      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
-      if (nextSelectedId !== this.agentsSelectedId) {
-        this.agentsSelectedId = nextSelectedId;
-        // Route-driven agent switches (chip menu "Agent settings") must not
-        // carry per-agent panel caches or identity drafts across agents.
-        this.resetSelectionState();
-      }
+    }
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList, data.requestedAgentId);
     }
   }
 
@@ -428,17 +453,6 @@ class AgentsPage
     return Object.fromEntries(
       this.context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
     );
-  }
-
-  // Local /avatar/<id> images need a bearer credential when gateway auth is
-  // active; the agent select uses this to decide whether <img> URLs can load.
-  private controlUiAuthToken(): string | null {
-    const { snapshot, connection } = this.context.gateway;
-    return resolveControlUiAuthToken({
-      hello: snapshot.hello,
-      settings: connection,
-      password: connection.password,
-    });
   }
 
   private ensureInitialData() {
@@ -519,10 +533,19 @@ class AgentsPage
       return;
     }
     if (this.agentsPanel === "tools") {
+      this.syncGitHubIdentity(agentId);
       if (this.toolsCatalogResult?.agentId !== agentId && !this.toolsCatalogLoading) {
         void loadToolsCatalog(this, agentId);
       }
       this.loadEffectiveToolsForAgent(agentId);
+      if (
+        this.githubIdentity.statusReadable &&
+        !this.githubIdentity.status &&
+        !this.githubIdentity.loading &&
+        !this.githubIdentity.error
+      ) {
+        void this.githubIdentity.verify();
+      }
       return;
     }
     if (this.agentsPanel === "channels" && !this.context.channels.state.channelsSnapshot) {
@@ -543,61 +566,111 @@ class AgentsPage
     }
   }
 
+  private syncGitHubIdentity(agentId: string | null) {
+    const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
+    const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
+      canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
+    this.githubIdentity.sync({
+      client: this.client,
+      connected: this.connected,
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
+      statusReadable: hasScope("tools.github.status", "operator.read"),
+      configurable: hasScope("tools.github.configure", "operator.admin"),
+      authorizable: [
+        "tools.github.authorize.start",
+        "tools.github.authorize.poll",
+        "tools.github.authorize.cancel",
+      ].every((method) => hasScope(method, "operator.admin")),
+      clientRevision: this.requestGeneration,
+    });
+  }
+
+  private resetModelCatalog() {
+    this.chatModelCatalogSubscription?.unsubscribe();
+    this.chatModelCatalogSubscription = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogStatus = createPanelRefreshStatus();
+    this.chatModelCatalogPending = null;
+  }
+
   private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+    if (!this.chatModelCatalogSubscription?.isCurrent()) {
+      this.resetModelCatalog();
+      const generation = this.requestGeneration;
+      const gateway = this.context?.gateway;
+      const agents = this.context?.agents;
+      const subscription = {
+        isCurrent: () =>
+          this.chatModelCatalogSubscription === subscription &&
+          this.context?.gateway === gateway &&
+          this.isCurrentRequest(client, generation, agentId, { agents }),
+        unsubscribe: subscribeChatMetadata(client, { agentId }, (update) => {
+          if (!subscription.isCurrent()) {
+            return;
+          }
+          if (update.type === "invalidated") {
+            this.chatModelCatalogPending = null;
+            this.ensureModelCatalog({ refresh: true });
+          } else if (update.type === "error") {
+            this.chatModelCatalogStatus = failPanelRefresh(
+              this.chatModelCatalogStatus,
+              update.error,
+              this.gateway.snapshot,
+            );
+          } else {
+            this.chatModelCatalogStatus =
+              update.type === "loading"
+                ? beginPanelRefresh(this.chatModelCatalogStatus)
+                : completePanelRefresh();
+            if (update.type === "result") {
+              this.chatModelCatalog = update.result.models ?? [];
+            }
+          }
+        }),
+      };
+      this.chatModelCatalogSubscription = subscription;
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
-        this.chatModelCatalogAgentId = agentId;
-        this.chatModelCatalogError = null;
-        return;
+        this.chatModelCatalogStatus = completePanelRefresh();
       }
     }
-    const generation = this.requestGeneration;
-    const previousRequest = this.chatModelCatalogRequest;
     if (
-      previousRequest?.client === client &&
-      previousRequest.generation === generation &&
-      previousRequest.agentId === agentId
+      this.chatModelCatalogPending ||
+      (!options.refresh && this.chatModelCatalogStatus.hasLoaded)
     ) {
       return;
     }
-    if (this.chatModelCatalogAgentId !== agentId) {
-      this.chatModelCatalog = [];
-    }
-    const request = { client, generation, agentId };
-    this.chatModelCatalogRequest = request;
-    this.chatModelCatalogError = null;
-    // Chat metadata carries the selected agent's already-prepared startup models
-    // without initiating the live discovery reserved for explicit picker use.
+    // The store owns current publications and pending reads. A superseded promise
+    // must not overwrite its newer result or erase retained choices on failure.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
-    void metadataRequest
-      .then((result) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          const models = result.models ?? [];
-          this.chatModelCatalog = models;
-          this.chatModelCatalogAgentId = agentId;
-          this.chatModelCatalogError = null;
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = formatUiError(error);
-        }
-      })
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
+    const pending = metadataRequest
+      .catch(() => undefined)
       .finally(() => {
-        if (this.chatModelCatalogRequest === request) {
-          this.chatModelCatalogRequest = null;
+        if (this.chatModelCatalogPending === pending) {
+          this.chatModelCatalogPending = null;
         }
       });
+    this.chatModelCatalogPending = pending;
   }
 
   private async loadAgentsAndCommit() {
@@ -636,14 +709,13 @@ class AgentsPage
         return;
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
-      this.agentFilesError = agents.files(agentId).error;
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
       }
     }
     if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-      await this.selectDefaultAgentFile(agentId);
+      await this.selectDefaultAgentFile(agentId, force);
     }
   }
 
@@ -702,14 +774,13 @@ class AgentsPage
 
   private resetSelectionState() {
     this.gateway.invalidate();
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
+    this.resetModelCatalog();
     this.agentFilesList = null;
     this.agentFilesError = null;
     this.agentFileActive = null;
     this.agentFileContents = {};
     this.agentFileDrafts = {};
+    this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentSkillsReport = null;
@@ -823,17 +894,7 @@ class AgentsPage
     if (!this.canCall("agents.files.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
-    void saveAgentFile(this, agentId, name, content).then((saved) => {
-      if (saved && this.isCurrentRequest(client, generation, agentId, { agents })) {
-        void this.loadAgentFiles(agentId, true);
-      }
-    });
+    void saveAgentFile(this, agentId, name, content);
   }
 
   private reloadConfig() {
@@ -892,12 +953,13 @@ class AgentsPage
       canWriteFiles: this.canCall("agents.files.set", "operator.admin"),
       canRunCron: this.canCall("cron.run", "operator.admin"),
     };
+    this.syncGitHubIdentity(selectedAgentId);
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -905,7 +967,6 @@ class AgentsPage
         renderAgents({
           access,
           basePath: this.context.basePath,
-          authToken: this.controlUiAuthToken(),
           loading: agentsState.agentsLoading,
           error: agentsState.agentsError,
           agentsList: this.agentsList,
@@ -916,11 +977,7 @@ class AgentsPage
             loading: configState.configLoading,
             saving: configState.configSaving,
             dirty: configState.configFormDirty,
-            error:
-              configState.configAutoSaveStatus === "error" ||
-              configState.configAutoSaveStatus === "conflict"
-                ? configState.lastError
-                : null,
+            error: configState.lastError,
           },
           channels: {
             snapshot: this.context.channels.state.channelsSnapshot,
@@ -942,7 +999,7 @@ class AgentsPage
           agentFiles: {
             list: this.agentFilesList,
             loading: this.agentFilesLoading,
-            error: this.agentFilesError,
+            error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
             active: this.agentFileActive,
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,
@@ -971,10 +1028,13 @@ class AgentsPage
             error: this.toolsEffectiveError,
             result: this.toolsEffectiveResult,
           },
+          githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
-          modelCatalogError: this.chatModelCatalogError,
+          modelCatalogStatus: this.chatModelCatalogStatus,
           pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
@@ -1085,9 +1145,14 @@ class AgentsPage
             if (!target || !skillName.trim()) {
               return;
             }
-            const base = Array.isArray(target.entry.skills)
-              ? normalizeStringEntries(target.entry.skills)
-              : (this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ?? []);
+            const base =
+              resolveAgentSkillsFilter(
+                currentConfigObject(this.context.runtimeConfig.state),
+                agentId,
+              ) ??
+              this.agentSkillsReport?.agentSkillFilter ??
+              this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
+              [];
             const next = new Set(base);
             if (enabled) {
               next.add(skillName.trim());
@@ -1116,7 +1181,7 @@ class AgentsPage
           // Availability facts (provider keys added/removed, new models) go
           // stale in the per-agent cache; opening the picker re-reads them,
           // mirroring the chat composer's on-open refresh.
-          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
+          onModelCatalogOpen: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);

@@ -1,8 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-// Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
-import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
+import {
+  normalizeToolList,
+  normalizeToolPolicyName,
+  resolveToolProfilePolicy,
+} from "../../../../src/agents/tool-policy-shared.js";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -12,22 +15,23 @@ import type {
 } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
+import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
-  isAllowedByPolicy,
-  matchesList,
-  resolveAgentConfig,
   resolveToolProfileOptions,
-  resolveToolProfile,
   resolveToolSections,
-} from "../../lib/agents/display.ts";
+} from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -35,6 +39,7 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
@@ -169,12 +174,9 @@ function handleRuntimeToolJump(event: Event, anchorId: string) {
   window.history.replaceState(null, "", nextUrl);
 
   requestAnimationFrame(() => {
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView?.({
       block: "center",
-      behavior: reducedMotion ? "auto" : "smooth",
+      behavior: resolveScrollBehavior(),
     });
     target.querySelector<HTMLElement>("summary")?.focus();
   });
@@ -237,6 +239,8 @@ export function renderAgentTools(params: {
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   canUpdateConfig: boolean;
+  githubIdentity: GitHubIdentityController;
+  onOpenGitHubConnections: () => void;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -270,7 +274,7 @@ export function renderAgentTools(params: {
   const deny = hasAgentAllow ? [] : Array.isArray(agentTools.deny) ? agentTools.deny : [];
   const basePolicy = hasAgentAllow
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
-    : (resolveToolProfile(profile) ?? undefined);
+    : resolveToolProfilePolicy(profile);
   const toolIds = toolSections.flatMap((section) => section.tools.map((tool) => tool.id));
 
   const resolveAllowed = (toolId: string) => {
@@ -320,35 +324,10 @@ export function renderAgentTools(params: {
       return left.label.localeCompare(right.label);
     });
 
-  const updateTool = (toolId: string, nextEnabled: boolean) => {
-    const nextAllow = new Set(
-      alsoAllow.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const nextDeny = new Set(
-      deny.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const baseAllowed = resolveAllowed(toolId).baseAllowed;
-    const normalized = normalizeToolPolicyName(toolId);
-    if (nextEnabled) {
-      nextDeny.delete(normalized);
-      if (!baseAllowed) {
-        nextAllow.add(normalized);
-      }
-    } else {
-      nextAllow.delete(normalized);
-      nextDeny.add(normalized);
-    }
-    params.onOverridesChange(params.agentId, [...nextAllow], [...nextDeny]);
-  };
-
-  const updateAll = (nextEnabled: boolean) => {
-    const nextAllow = new Set(
-      alsoAllow.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const nextDeny = new Set(
-      deny.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    for (const toolId of toolIds) {
+  const updateTools = (targetIds: string[], nextEnabled: boolean) => {
+    const nextAllow = new Set(normalizeToolList(alsoAllow));
+    const nextDeny = new Set(normalizeToolList(deny));
+    for (const toolId of targetIds) {
       const baseAllowed = resolveAllowed(toolId).baseAllowed;
       const normalized = normalizeToolPolicyName(toolId);
       if (nextEnabled) {
@@ -367,7 +346,7 @@ export function renderAgentTools(params: {
   const runtimeAvailability = !params.runtimeSessionMatchesSelectedAgent
     ? renderSettingsEmpty(t("agentTools.switchAgent"))
     : params.toolsEffectiveLoading && !params.toolsEffectiveResult && !params.toolsEffectiveError
-      ? renderSettingsEmpty(t("agentTools.loadingAvailable"))
+      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingAvailable"), rows: 2 })
       : params.toolsEffectiveError
         ? renderSettingsEmpty(t("agentTools.availableError"))
         : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
@@ -390,40 +369,47 @@ export function renderAgentTools(params: {
                       </a>
                     `;
                   })}
-                  ${hiddenEffectiveToolCount > 0
-                    ? html`
-                        <span
-                          class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-                          title=${t("agentTools.moreLiveTitle", {
-                            count: String(hiddenEffectiveToolCount),
-                          })}
-                        >
-                          ${t("agentTools.moreLive", {
-                            count: String(hiddenEffectiveToolCount),
-                          })}
-                        </span>
-                      `
-                    : nothing}
+                  ${
+                    hiddenEffectiveToolCount > 0
+                      ? html`
+                          <span
+                            class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
+                            title=${t("agentTools.moreLiveTitle", {
+                              count: String(hiddenEffectiveToolCount),
+                            })}
+                          >
+                            ${t("agentTools.moreLive", {
+                              count: String(hiddenEffectiveToolCount),
+                            })}
+                          </span>
+                        `
+                      : nothing
+                  }
                 </div>
               </div>
             `;
 
   return html`
-    ${!params.configForm
-      ? html`<div class="callout info">${t("agentTools.loadConfig")}</div>`
-      : nothing}
-    ${hasAgentAllow
-      ? html`<div class="callout info">${t("agentTools.explicitAllowlist")}</div>`
-      : nothing}
-    ${hasGlobalAllow
-      ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
-      : nothing}
-    ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-      ? html`<div class="callout info">${t("agentTools.loadingCatalog")}</div>`
-      : nothing}
-    ${params.toolsCatalogError
-      ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
-      : nothing}
+    ${
+      !params.configForm
+        ? html`<div class="callout info">${t("agentTools.loadConfig")}</div>`
+        : nothing
+    }
+    ${
+      hasAgentAllow
+        ? html`<div class="callout info">${t("agentTools.explicitAllowlist")}</div>`
+        : nothing
+    }
+    ${
+      hasGlobalAllow
+        ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
+        : nothing
+    }
+    ${
+      params.toolsCatalogError
+        ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
+        : nothing
+    }
     ${renderSettingsSection(
       {
         title: t("agentTools.title"),
@@ -435,10 +421,18 @@ export function renderAgentTools(params: {
             })}</span
           >`,
         actions: html`
-          <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!editable}
+            @click=${() => updateTools(toolIds, true)}
+          >
             ${t("agentTools.enableAll")}
           </button>
-          <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(false)}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!editable}
+            @click=${() => updateTools(toolIds, false)}
+          >
             ${t("agentTools.disableAll")}
           </button>
           <button
@@ -469,11 +463,13 @@ export function renderAgentTools(params: {
           <dd><code>${liveToolCount}</code></dd>
           <dt>${t("agentTools.status")}</dt>
           <dd>
-            ${params.configSaving
-              ? t("agentTools.statusSaving")
-              : params.configDirty
-                ? t("agentTools.statusUnsaved")
-                : t("agentTools.statusSaved")}
+            ${
+              params.configSaving
+                ? t("agentTools.statusSaving")
+                : params.configDirty
+                  ? t("agentTools.statusUnsaved")
+                  : t("agentTools.statusSaved")
+            }
           </dd>
         </dl>
         ${renderSettingsRow({
@@ -512,10 +508,21 @@ export function renderAgentTools(params: {
       },
       html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
     )}
+    ${renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
-        <div class="agents-panel-body agent-tools-grid">
+        ${
+          params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+            ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingCatalog") })
+            : nothing
+        }
+        <div
+          class="agents-panel-body agent-tools-grid"
+          ?hidden=${
+            params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          }
+        >
           ${toolSections.map((section) => {
             const sortedTools = sortSectionTools(section.tools);
             const enabledSectionCount = section.tools.filter(
@@ -532,11 +539,13 @@ export function renderAgentTools(params: {
                   <span class="agent-tools-group__summary-main">
                     <span class="agent-tools-group__title">
                       ${section.label}
-                      ${section.source === "plugin" && section.pluginId
-                        ? html`<span class="settings-row__value"
-                            >${t("agentTools.plugin", { id: section.pluginId })}</span
-                          >`
-                        : nothing}
+                      ${
+                        section.source === "plugin" && section.pluginId
+                          ? html`<span class="settings-row__value"
+                              >${t("agentTools.plugin", { id: section.pluginId })}</span
+                            >`
+                          : nothing
+                      }
                     </span>
                     <span
                       class="agent-tools-group__preview"
@@ -548,13 +557,15 @@ export function renderAgentTools(params: {
                             >${tool.label}</span
                           >`,
                       )}
-                      ${remainingPreviewCount > 0
-                        ? html`<span
-                            >${t("agentTools.more", {
-                              count: String(remainingPreviewCount),
-                            })}</span
-                          >`
-                        : nothing}
+                      ${
+                        remainingPreviewCount > 0
+                          ? html`<span
+                              >${t("agentTools.more", {
+                                count: String(remainingPreviewCount),
+                              })}</span
+                            >`
+                          : nothing
+                      }
                     </span>
                   </span>
                   <span class="agent-tools-group__counts">
@@ -574,16 +585,18 @@ export function renderAgentTools(params: {
                         { count: String(enabledSectionCount) },
                       )}</span
                     >
-                    ${activeSectionCount > 0
-                      ? html`<span
-                          >${t(
-                            activeSectionCount === 1
-                              ? "agentTools.liveToolsOne"
-                              : "agentTools.liveTools",
-                            { count: String(activeSectionCount) },
-                          )}</span
-                        >`
-                      : nothing}
+                    ${
+                      activeSectionCount > 0
+                        ? html`<span
+                            >${t(
+                              activeSectionCount === 1
+                                ? "agentTools.liveToolsOne"
+                                : "agentTools.liveTools",
+                              { count: String(activeSectionCount) },
+                            )}</span
+                          >`
+                        : nothing
+                    }
                   </span>
                 </summary>
                 <div class="agent-tools-list agent-tools-list--stacked">
@@ -640,7 +653,7 @@ export function renderAgentTools(params: {
                                   : "agentTools.enableNamed",
                                 { name: tool.label },
                               ),
-                              onChange: (checked) => updateTool(tool.id, checked),
+                              onChange: (checked) => updateTools([tool.id], checked),
                             })}
                           </span>
                         </summary>
@@ -654,31 +667,35 @@ export function renderAgentTools(params: {
                               <div class="label">${t("agentTools.source")}</div>
                               <div>${formatToolSourceLabel(section, tool)}</div>
                             </div>
-                            ${defaultProfiles.length > 0
-                              ? html`
-                                  <div class="agent-tool-detail agent-tool-detail--inline">
-                                    <div class="label">${t("agentTools.defaultPresets")}</div>
-                                    <div class="agent-tool-badges">
-                                      ${defaultProfiles.map(
-                                        (profileId) =>
-                                          html`<span class="settings-row__value"
-                                            >${profileId}</span
-                                          >`,
-                                      )}
+                            ${
+                              defaultProfiles.length > 0
+                                ? html`
+                                    <div class="agent-tool-detail agent-tool-detail--inline">
+                                      <div class="label">${t("agentTools.defaultPresets")}</div>
+                                      <div class="agent-tool-badges">
+                                        ${defaultProfiles.map(
+                                          (profileId) =>
+                                            html`<span class="settings-row__value"
+                                              >${profileId}</span
+                                            >`,
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
-                                `
-                              : nothing}
+                                  `
+                                : nothing
+                            }
                             <div class="agent-tool-detail agent-tool-detail--inline">
                               <div class="label">${t("agentTools.session")}</div>
                               <div>
-                                ${activeEntry
-                                  ? t("agentTools.availableVia", {
-                                      source: renderEffectiveToolBadge(activeEntry),
-                                    })
-                                  : params.runtimeSessionMatchesSelectedAgent
-                                    ? t("agentTools.unavailableSession")
-                                    : t("agentTools.inspectAgent")}
+                                ${
+                                  activeEntry
+                                    ? t("agentTools.availableVia", {
+                                        source: renderEffectiveToolBadge(activeEntry),
+                                      })
+                                    : params.runtimeSessionMatchesSelectedAgent
+                                      ? t("agentTools.unavailableSession")
+                                      : t("agentTools.inspectAgent")
+                                }
                               </div>
                             </div>
                             <a class="agent-tool-jump" href="#${anchorId}">
@@ -726,12 +743,16 @@ export function renderAgentSkills(params: {
     !params.configLoading &&
     !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
-  const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
+  const explicitAllowlist = Array.isArray(config.entry?.skills)
+    ? normalizeStringEntries(config.entry.skills)
+    : undefined;
+  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
+  const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
+  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
   const canClear =
     params.canPatchConfig &&
-    usingAllowlist &&
+    explicitAllowlist !== undefined &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving;
@@ -752,15 +773,27 @@ export function renderAgentSkills(params: {
   const totalCount = rawSkills.length;
 
   return html`
-    ${!params.configForm
-      ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
-      : nothing}
-    ${usingAllowlist
-      ? html`<div class="callout info">${t("agents.skillsPanel.customAllowlist")}</div>`
-      : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`}
-    ${!reportReady && !params.loading
-      ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
-      : nothing}
+    ${
+      !params.configForm
+        ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
+        : nothing
+    }
+    ${
+      usingAllowlist
+        ? html`<div class="callout info">
+            ${t(
+              inheritedAllowlist
+                ? "agents.skillsPanel.inheritedAllowlist"
+                : "agents.skillsPanel.customAllowlist",
+            )}
+          </div>`
+        : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`
+    }
+    ${
+      !reportReady && !params.loading
+        ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
+        : nothing
+    }
     ${params.error ? html`<div class="callout danger">${params.error}</div>` : nothing}
     ${renderSettingsSection(
       {
@@ -768,13 +801,6 @@ export function renderAgentSkills(params: {
         description: html`${t("agents.skillsPanel.subtitle")}
         ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
           <button
             class="btn btn--sm"
             ?disabled=${!editable}
@@ -823,21 +849,24 @@ export function renderAgentSkills(params: {
             />
           `,
         })}
-        ${filtered.length === 0
-          ? renderSettingsEmpty(t("agents.skillsPanel.empty"))
-          : html`
-              <div class="agents-panel-body agent-skills-groups">
-                ${groups.map((group) =>
-                  renderAgentSkillGroup(group, {
-                    agentId: params.agentId,
-                    allowSet,
-                    usingAllowlist,
-                    editable,
-                    onToggle: params.onToggle,
-                  }),
-                )}
-              </div>
-            `}
+        ${
+          filtered.length === 0
+            ? renderSettingsEmpty(t("agents.skillsPanel.empty"))
+            : html`
+                <div class="agents-panel-body agent-skills-groups">
+                  ${groups.map((group) =>
+                    renderAgentSkillGroup(group, {
+                      agentId: params.agentId,
+                      allowSet,
+                      usingAllowlist,
+                      editable,
+                      filterActive: Boolean(filter),
+                      onToggle: params.onToggle,
+                    }),
+                  )}
+                </div>
+              `
+        }
       `,
     )}
   `;
@@ -850,10 +879,12 @@ function renderAgentSkillGroup(
     allowSet: Set<string>;
     usingAllowlist: boolean;
     editable: boolean;
+    filterActive: boolean;
     onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   },
 ) {
-  const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+  const collapsedByDefault =
+    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
   return html`
     <details class="agent-skills-group" ?open=${!collapsedByDefault}>
       <summary class="agent-skills-header">
@@ -896,16 +927,20 @@ function renderAgentSkillRow(
         >
         <span class="settings-row__desc">${skill.description}</span>
         ${renderSkillStatusChips({ skill })}
-        ${missing.length > 0
-          ? html`<span class="settings-row__desc">
-              ${t("agents.skillsPanel.missing", { items: missing.join(", ") })}
-            </span>`
-          : nothing}
-        ${reasons.length > 0
-          ? html`<span class="settings-row__desc">
-              ${t("agents.skillsPanel.reason", { items: reasons.join(", ") })}
-            </span>`
-          : nothing}
+        ${
+          missing.length > 0
+            ? html`<span class="settings-row__desc">
+                ${t("agents.skillsPanel.missing", { items: missing.join(", ") })}
+              </span>`
+            : nothing
+        }
+        ${
+          reasons.length > 0
+            ? html`<span class="settings-row__desc">
+                ${t("agents.skillsPanel.reason", { items: reasons.join(", ") })}
+              </span>`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${renderSettingsToggle({

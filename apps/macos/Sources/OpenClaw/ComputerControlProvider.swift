@@ -52,20 +52,15 @@ enum ComputerControlProvider: String, CaseIterable, Sendable {
 
     static func current(
         defaults: UserDefaults = AppDefaults.standard,
-        cuaAvailable: Bool = CuaDriverArtifact.bundledExecutableURL != nil) -> Self
+        cuaAvailable: Bool = CuaDriverArtifact.bundledExecutableURL != nil,
+        launchPlan: AppLaunchRuntimePlan = .current) -> Self
     {
+        guard launchPlan.allowsCuaComputerControl else { return .peekaboo }
         guard let rawValue = defaults.string(forKey: computerControlProviderKey),
               let provider = Self(rawValue: rawValue)
         else { return .peekaboo }
         if provider == .cua, !cuaAvailable { return .peekaboo }
         return provider
-    }
-
-    var displayName: String {
-        switch self {
-        case .peekaboo: "Peekaboo"
-        case .cua: "CUA"
-        }
     }
 }
 
