@@ -222,8 +222,9 @@ export class TeamReportsScheduler {
   }
 
   private closedDayCompleted(key: string): boolean {
+    // Include older completions even when newer successful runs cover other days.
     return this.options.store
-      .listRuns(1, { kind: "closed-day", status: "ok" })
+      .listRuns(-1, { status: "ok" })
       .some((run) => run.periods.some((period) => period.period === "day" && period.key === key));
   }
 

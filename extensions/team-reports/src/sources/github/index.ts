@@ -11,7 +11,7 @@ import type {
   SourceStatus,
 } from "../../types.js";
 import { checkAbort } from "../http.js";
-import { ABORT_LABEL, GithubClient, parse, pathWithQuery } from "./client.js";
+import { ABORT_LABEL, GithubClient, GithubHttpError, parse, pathWithQuery } from "./client.js";
 import {
   advisorySchema,
   collaboratorSchema,
@@ -28,7 +28,11 @@ import { search, searchPath, searchSeconds } from "./search.js";
 type Repository = z.infer<typeof repoSchema>;
 
 function newStatus(): SourceStatus {
-  return { ok: true, warnings: [], stats: { apiCalls: 0, reposScanned: 0, searchSplits: 0 } };
+  return {
+    ok: true,
+    warnings: [],
+    stats: { apiCalls: 0, reposScanned: 0, searchSplits: 0, advisoriesSkipped: 0 },
+  };
 }
 
 function repoPath(repo: string): string {
@@ -140,6 +144,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         }
       }
       checkAbort(runtime.signal, ABORT_LABEL);
+      runtime.logger.info(`team-reports: GitHub roster loaded: ${people.size} people`);
       return {
         people: [...people]
           .toSorted(([a], [b]) => a.localeCompare(b, "en"))
@@ -160,6 +165,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         throw new Error("Invalid GitHub activity window");
       }
       const repos = await listRepos(client, cfg);
+      runtime.logger.info(`team-reports: GitHub repos listed: ${repos.size}`);
       const items = new Map<string, GithubItem>();
       const active = new Set<string>();
       const seenIssues = new Set<string>();
@@ -200,7 +206,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           });
         }
       };
-      const strategies = new Set<string>();
+      const orgCandidates = new Map<string, Repository[]>();
       for (const org of new Set(cfg.orgs)) {
         const orgRepos = [...repos.values()].filter(
           (repo) =>
@@ -214,6 +220,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         const candidates = orgRepos.filter(
           (repo) => !repo.pushed_at || Date.parse(repo.pushed_at) >= window.sinceMs,
         );
+        orgCandidates.set(org, candidates);
         for (const repo of candidates) {
           active.add(repo.full_name.toLowerCase());
         }
@@ -290,6 +297,10 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             }
           });
         }
+      }
+      runtime.logger.info(`team-reports: GitHub issue searches done: ${items.size} items`);
+      const strategies = new Set<string>();
+      for (const [org, candidates] of orgCandidates) {
         if (candidates.length === 0) {
           continue;
         }
@@ -334,6 +345,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         }
       }
       status.stats.commitStrategy = strategies.size > 1 ? "mixed" : ([...strategies][0] ?? "none");
+      runtime.logger.info(
+        `team-reports: GitHub commits done: ${status.stats.commitStrategy}, ${[...items.values()].filter((item) => item.kind === "commit").length} items`,
+      );
       for (const key of [...active].toSorted()) {
         const repo = repos.get(key);
         if (!repo) {
@@ -366,36 +380,56 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           });
         }
         await client.attempt(`Advisories for ${repo.full_name}`, async () => {
-          for await (const advisory of client.pages(
-            pathWithQuery(`${repoPath(repo.full_name)}/security-advisories`, {}),
-            advisorySchema,
-          )) {
-            const date = inWindow(advisory.updated_at, window)
-              ? advisory.updated_at
-              : advisory.published_at;
-            if (!inWindow(date, window)) {
-              continue;
+          try {
+            for await (const advisory of client.pages(
+              pathWithQuery(`${repoPath(repo.full_name)}/security-advisories`, {}),
+              advisorySchema,
+            )) {
+              const date = inWindow(advisory.updated_at, window)
+                ? advisory.updated_at
+                : advisory.published_at;
+              if (!inWindow(date, window)) {
+                continue;
+              }
+              const actors = new Set(
+                [
+                  advisory.publisher?.login,
+                  ...(advisory.credits ?? []).map((credit) => credit.user?.login ?? credit.login),
+                ].filter((login): login is string => Boolean(login)),
+              );
+              for (const actor of actors) {
+                add({
+                  kind: "security_advisory",
+                  repo: repo.full_name,
+                  title: advisory.summary,
+                  url: advisory.html_url,
+                  atMs: Date.parse(date ?? ""),
+                  actor,
+                });
+              }
             }
-            const actors = new Set(
-              [
-                advisory.publisher?.login,
-                ...(advisory.credits ?? []).map((credit) => credit.user?.login),
-              ].filter((login): login is string => Boolean(login)),
-            );
-            for (const actor of actors) {
-              add({
-                kind: "security_advisory",
-                repo: repo.full_name,
-                title: advisory.summary,
-                url: advisory.html_url,
-                atMs: Date.parse(date ?? ""),
-                actor,
-              });
+          } catch (error) {
+            checkAbort(runtime.signal, ABORT_LABEL);
+            if (
+              error instanceof GithubHttpError &&
+              (error.status === 403 || error.status === 404)
+            ) {
+              status.stats.advisoriesSkipped = Number(status.stats.advisoriesSkipped) + 1;
+            } else {
+              throw error;
             }
           }
         });
       }
       checkAbort(runtime.signal, ABORT_LABEL);
+      runtime.logger.info(
+        `team-reports: GitHub comments/advisories scanned: ${status.stats.reposScanned} repos`,
+      );
+      if (Number(status.stats.advisoriesSkipped) > 0) {
+        runtime.logger.info(
+          `team-reports: GitHub advisories skipped: ${status.stats.advisoriesSkipped} repos (HTTP 403/404; no advisories visible)`,
+        );
+      }
       return {
         items: [...items.values()].toSorted(
           (a, b) =>

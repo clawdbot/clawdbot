@@ -136,6 +136,10 @@ describe("Discord report source", () => {
       { channelId: "22", parentChannelId: "20", channelName: "engineering/design" },
     ]);
     expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(3);
+    expect(context.logs).toEqual([
+      "team-reports: Discord channels/threads listed: 1 channels, 2 threads",
+      "team-reports: Discord messages done: 1 channels, 2 threads, 3 messages",
+    ]);
   });
 
   it.each([0.25, 3_000_000])(

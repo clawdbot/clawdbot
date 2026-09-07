@@ -84,9 +84,11 @@ openclaw team-reports status --json
 openclaw dashboard
 ```
 
-On startup, a missing report for yesterday triggers a catch-up run after
-60 seconds. Status shows the run, stored periods, next scheduled times, and
-source warnings. To request a report immediately, use:
+On startup, yesterday triggers a catch-up run after 60 seconds unless a
+successful run already includes that day. A completed manual run also satisfies
+catch-up, including one that finishes during the startup delay or deferred wait.
+Status shows the run, stored periods, next scheduled times, and source warnings.
+To request a report immediately, use:
 
 ```bash
 openclaw team-reports generate --intraday
@@ -359,6 +361,16 @@ excluded repositories, and Discord bot access to each configured channel and
 its history. Rate limits can delay a run. Regenerate affected days once access
 or rate limits recover, then refresh aggregates. Changing a secret requires
 a Gateway restart.
+
+Repository advisories are optional. An advisory request returning HTTP 403 or
+404 counts toward `advisoriesSkipped` in the GitHub source stats without adding
+a warning or marking the day stale. Rate-limit responses still wait and retry;
+other advisory failures retain their warnings.
+
+Long runs emit `team-reports:` progress lines in the Gateway log when roster,
+repository, issue-search, commit, comment/advisory, and Discord collection stages
+finish. These lines contain counts and the commit strategy, without tokens or
+message content.
 
 **A member is missing or Discord activity is unmatched.** Check the GitHub
 team roster and identity entries. Put aliases in the same `github` array,

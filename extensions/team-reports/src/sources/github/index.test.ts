@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SourceRuntime } from "../../types.js";
 import { createGithubSource } from "./index.js";
 import {
+  advisory,
   at,
   commit,
   config,
@@ -21,10 +22,11 @@ function source(
   route: (url: URL, init?: RequestInit) => Response | Promise<Response>,
   signal?: AbortSignal,
 ) {
+  const logs = { ...logger, info: vi.fn() };
   const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
     Promise.resolve(route(new URL(input), init)),
   );
-  return { api: createGithubSource({ logger, fetchImpl, signal }), fetchImpl };
+  return { api: createGithubSource({ logger: logs, fetchImpl, signal }), fetchImpl, logs };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -44,7 +46,7 @@ describe("GitHub reports source", () => {
   });
 
   it("paginates teams and direct collaborators, keeping only write access and eligible repos", async () => {
-    const { api, fetchImpl } = source((url, init) => {
+    const { api, fetchImpl, logs } = source((url, init) => {
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBe(`Bearer ${config.token}`);
       expect(headers.get("accept")).toBe("application/vnd.github+json");
@@ -84,6 +86,7 @@ describe("GitHub reports source", () => {
     expect(
       fetchImpl.mock.calls.filter(([url]) => String(url).includes("/collaborators")),
     ).toHaveLength(1);
+    expect(logs.info.mock.calls).toEqual([["team-reports: GitHub roster loaded: 5 people"]]);
   });
 
   it("qualifies every issue search by type for fine-grained tokens", async () => {
@@ -219,7 +222,7 @@ describe("GitHub reports source", () => {
   );
 
   it("collects commit coauthors from mapped login and noreply trailers, dropping unknown names", async () => {
-    const { api } = source((url) =>
+    const { api, logs } = source((url) =>
       url.pathname.endsWith("/commits")
         ? json([
             commit(
@@ -239,6 +242,7 @@ describe("GitHub reports source", () => {
       }),
     ]);
     expect(result.status.stats.commitStrategy).toBe("per-repo");
+    expect(logs.info).toHaveBeenCalledWith("team-reports: GitHub commits done: per-repo, 1 items");
   });
 
   it("splits commit searches and paginates their result pages", async () => {
@@ -367,8 +371,100 @@ describe("GitHub reports source", () => {
     );
   });
 
+  it.each([
+    { shape: "repository credits", credits: advisory.credits, actors: ["helper", "reviewer"] },
+    {
+      shape: "nested users",
+      credits: [{ user: { login: "reviewer" } }, { user: { login: "reviewer" } }],
+      actors: ["helper", "reviewer"],
+    },
+    {
+      shape: "mixed credits with nested user precedence",
+      credits: [
+        { login: "ignored", user: { login: "reviewer" } },
+        { login: "builder", user: null },
+      ],
+      actors: ["builder", "helper", "reviewer"],
+    },
+    { shape: "null credits", credits: null, actors: ["helper"] },
+    { shape: "omitted credits", credits: undefined, actors: ["helper"] },
+  ])(
+    "accepts advisory $shape and attributes visible actors without stale warnings",
+    async ({ credits, actors }) => {
+      const { api } = source((url) =>
+        url.pathname.endsWith("/security-advisories")
+          ? json([{ ...advisory, credits }])
+          : emptyRoute(url),
+      );
+      const result = await api.collect(config, window, roster);
+      expect(result.status.warnings).toEqual([]);
+      expect(result.status.stale).not.toBe(true);
+      expect(result.items.map(({ kind, actor }) => ({ kind, actor }))).toEqual(
+        actors.map((actor) => ({ kind: "security_advisory", actor })),
+      );
+    },
+  );
+
+  it.each([403, 404])(
+    "skips unreadable advisories (HTTP %s) without marking the day stale",
+    async (httpStatus) => {
+      const { api, logs } = source((url) => {
+        if (url.pathname === "/orgs/example/repos") {
+          return json([repo(), repo("other")]);
+        }
+        if (url.pathname.endsWith("/security-advisories")) {
+          return url.pathname.includes("/app/")
+            ? json({ message: config.token }, {}, httpStatus)
+            : json([advisory]);
+        }
+        return emptyRoute(url);
+      });
+      const result = await api.collect(config, window, roster);
+      expect(result.status.ok).toBe(true);
+      expect(result.status.warnings).toEqual([]);
+      expect(result.status.stale).not.toBe(true);
+      expect(result.status.stats.advisoriesSkipped).toBe(1);
+      expect(result.items).toEqual([
+        expect.objectContaining({
+          kind: "security_advisory",
+          repo: "example/other",
+          actor: "helper",
+        }),
+        expect.objectContaining({
+          kind: "security_advisory",
+          repo: "example/other",
+          actor: "reviewer",
+        }),
+      ]);
+      expect(logs.info).toHaveBeenCalledWith(
+        expect.stringMatching(/^team-reports: .*1.*no advisories visible/),
+      );
+      expect(JSON.stringify([result.status, logs.info.mock.calls])).not.toContain(config.token);
+    },
+  );
+
+  it.each([401, 500])(
+    "keeps advisory HTTP %s failures visible as stale warnings",
+    async (httpStatus) => {
+      vi.useFakeTimers();
+      const { api } = source((url) =>
+        url.pathname.endsWith("/security-advisories")
+          ? json({ message: config.token }, {}, httpStatus)
+          : emptyRoute(url),
+      );
+      const pending = api.collect(config, window, roster);
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result.status.stale).toBe(true);
+      expect(result.status.warnings).toEqual([
+        `Advisories for example/app: HTTP ${httpStatus}; check token permissions and repository access`,
+      ]);
+      expect(result.status.stats.advisoriesSkipped).toBe(0);
+    },
+  );
+
   it("emits opened/closed events and advisory credit within half-open windows", async () => {
-    const { api } = source((url) => {
+    const { api, logs } = source((url) => {
       if (url.pathname === "/search/issues" && url.searchParams.get("q")?.includes(" created:")) {
         const items = url.searchParams.get("q")?.includes(" is:pull-request ")
           ? [{ ...issue(2), pull_request: { merged_at: null }, closed_at: at }]
@@ -384,12 +480,8 @@ describe("GitHub reports source", () => {
       if (url.pathname.endsWith("/security-advisories")) {
         return json([
           {
-            summary: "Fix exposed input",
-            html_url: "https://github.test/advisory/1",
-            published_at: at,
-            updated_at: at,
+            ...advisory,
             credits: [{ user: { login: "reviewer" } }, { user: { login: "reviewer" } }],
-            publisher: { login: "helper" },
           },
         ]);
       }
@@ -409,6 +501,12 @@ describe("GitHub reports source", () => {
     expect(
       result.items.filter((item) => item.kind === "security_advisory").map((item) => item.actor),
     ).toEqual(["helper", "reviewer"]);
+    expect(logs.info.mock.calls).toEqual([
+      ["team-reports: GitHub repos listed: 1"],
+      ["team-reports: GitHub issue searches done: 4 items"],
+      ["team-reports: GitHub commits done: per-repo, 0 items"],
+      ["team-reports: GitHub comments/advisories scanned: 1 repos"],
+    ]);
   });
 
   it.each([403, 429])("waits for the rate reset on HTTP %s and records quota", async (code) => {

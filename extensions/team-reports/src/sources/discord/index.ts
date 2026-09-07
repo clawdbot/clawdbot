@@ -128,6 +128,12 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
       }
 
+      const channelCount = [...targets.values()].filter(
+        (target) => target.id === target.parentId,
+      ).length;
+      runtime.logger.info(
+        `team-reports: Discord channels/threads listed: ${channelCount} channels, ${targets.size - channelCount} threads`,
+      );
       for (const target of targets.values()) {
         let after = ((BigInt(window.sinceMs) - epochMs) << 22n).toString();
         try {
@@ -197,6 +203,9 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
             leftId.localeCompare(rightId),
         )
         .map(([, message]) => message);
+      runtime.logger.info(
+        `team-reports: Discord messages done: ${status.stats.channelsScanned} channels, ${status.stats.threadsScanned} threads, ${messages.length} messages`,
+      );
       return { messages, status };
     },
   };

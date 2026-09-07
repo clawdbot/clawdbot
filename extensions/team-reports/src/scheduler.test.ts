@@ -23,7 +23,7 @@ function setup(
     schedule?: Partial<TeamReportsConfig["schedule"]>;
     summaries?: boolean;
     discord?: boolean;
-    caughtUp?: boolean;
+    caughtUp?: false | "closed-day" | "manual" | "intraday";
   } = {},
 ) {
   const config = parseTeamReportsConfig({
@@ -68,7 +68,7 @@ function setup(
     const yesterday = describePeriod("day", Date.now() - 86_400_000);
     store.startRun({
       id: "previous-closed-day",
-      kind: "closed-day",
+      kind: options.caughtUp ?? "closed-day",
       startedAtMs: Date.now() - 3600_000,
       periods: [{ period: "day", key: yesterday.key }],
     });
@@ -232,12 +232,42 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(github.collect).toHaveBeenCalledTimes(2);
   });
 
-  it("skips startup catch-up when yesterday already has a successful closed-day run", async () => {
-    const { scheduler, store, github } = setup();
+  it.each(["closed-day", "manual", "intraday"] as const)(
+    "skips startup catch-up when yesterday has a successful %s run before newer unrelated runs",
+    async (kind) => {
+      const { scheduler, store, github } = setup({ caughtUp: kind });
+      for (let index = 0; index < 21; index++) {
+        const id = `newer-${index}`;
+        store.startRun({
+          id,
+          kind: "manual",
+          startedAtMs: Date.now() - index,
+          periods: [{ period: "day", key: "2026-08-18" }],
+        });
+        store.finishRun(id, { status: "ok", finishedAtMs: Date.now() });
+      }
+      scheduler.start();
+      expect(scheduler.status().nextDue.catchUp).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(github.collect).not.toHaveBeenCalled();
+      expect(store.listRuns(-1)).toHaveLength(22);
+    },
+  );
+
+  it("skips deferred catch-up after a manual run completes yesterday", async () => {
+    const { scheduler, store, github } = setup({ caughtUp: false });
+    const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
+    github.collect.mockImplementationOnce(() => blocked.promise);
     scheduler.start();
-    expect(scheduler.status().nextDue.catchUp).toBeUndefined();
+    const id = scheduler.generate({ date: "2026-08-19" });
+    await vi.advanceTimersByTimeAsync(19 * 60_000);
+    expect(github.collect).toHaveBeenCalledOnce();
+    expect(store.listRuns()).toMatchObject([{ id, kind: "manual", status: "running" }]);
+    blocked.resolve({ items: [], status: healthy });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.listRuns()).toMatchObject([{ id, kind: "manual", status: "ok" }]);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(github.collect).not.toHaveBeenCalled();
+    expect(github.collect).toHaveBeenCalledOnce();
     expect(store.listRuns()).toHaveLength(1);
   });
 
@@ -387,6 +417,7 @@ describe("Team Reports scheduler lifecycle", () => {
   it("closes the prior week and month while opening the current periods at calendar rollover", async () => {
     vi.setSystemTime(new Date("2026-06-01T00:04:00Z"));
     const { scheduler, store, github } = setup({
+      caughtUp: "manual",
       schedule: { closedDayUtc: "00:05", weekly: true, monthly: true },
     });
     scheduler.start();

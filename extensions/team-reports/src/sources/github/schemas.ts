@@ -47,6 +47,8 @@ export const advisorySchema = z.object({
   html_url: z.string(),
   published_at: date.nullish(),
   updated_at: date.nullish(),
-  credits: z.array(z.object({ user: userSchema.nullable() })).nullish(),
+  credits: z
+    .array(z.object({ login: z.string().optional(), user: userSchema.nullish() }))
+    .nullish(),
   publisher: userSchema.nullish(),
 });

@@ -8,6 +8,12 @@ export const ABORT_LABEL = "GitHub collection aborted";
 
 export class GithubSourceError extends Error {}
 
+export class GithubHttpError extends GithubSourceError {
+  constructor(readonly status: number) {
+    super(`HTTP ${status}; check token permissions and repository access`);
+  }
+}
+
 export const parse = createResponseParser(
   () => new GithubSourceError("Invalid API response; check API compatibility"),
 );
@@ -180,9 +186,7 @@ export class GithubClient {
         continue;
       }
       if (!response.ok) {
-        throw new GithubSourceError(
-          `HTTP ${response.status}; check token permissions and repository access`,
-        );
+        throw new GithubHttpError(response.status);
       }
       const next = response.headers
         .get("link")

@@ -63,6 +63,14 @@ export function commit(sha = "abc", message = "Ship the fix", repoName = "app") 
     repository: repo(repoName),
   };
 }
+export const advisory = {
+  summary: "Fix exposed input",
+  html_url: "https://github.test/advisory/1",
+  published_at: at,
+  updated_at: at,
+  credits: [{ login: "reviewer", type: "reporter" }],
+  publisher: { login: "helper" },
+};
 export function json(body: unknown, headers?: HeadersInit, status = 200) {
   return new Response(JSON.stringify(body), { status, headers });
 }
