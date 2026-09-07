@@ -474,7 +474,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
       gatewayUrl: params.gatewayUrl,
     },
     approvers: getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
-    authorizeActorAction: whatsappApprovalAuth.authorizeActorAction,
+    authorizeActorAction: (input) => whatsappApprovalAuth.authorizeActorAction(input),
     loadResolver: loadResolveApprovalOverGateway,
     clearTarget: () =>
       unregisterWhatsAppApprovalReactionTarget({

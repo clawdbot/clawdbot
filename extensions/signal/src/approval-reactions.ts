@@ -523,7 +523,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
       gatewayUrl: params.gatewayUrl,
     },
     approvers: getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
-    authorizeActorAction: signalApprovalAuth.authorizeActorAction,
+    authorizeActorAction: (input) => signalApprovalAuth.authorizeActorAction(input),
     loadResolver: loadResolveApprovalOverGateway,
     clearTarget: () =>
       unregisterSignalApprovalReactionTarget({

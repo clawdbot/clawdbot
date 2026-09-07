@@ -495,7 +495,7 @@ export async function handleIMessageApprovalReaction(params: {
     return { handled: false, stopPolling: false };
   }
 
-  const outcome = await settleApprovalReaction({
+  const settlement = await settleApprovalReaction({
     request: {
       cfg: params.cfg,
       approvalId: target.approvalId,
@@ -508,7 +508,7 @@ export async function handleIMessageApprovalReaction(params: {
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     },
     approvers: getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
-    authorizeActorAction: imessageApprovalAuth.authorizeActorAction,
+    authorizeActorAction: (input) => imessageApprovalAuth.authorizeActorAction(input),
     loadResolver: loadResolveApprovalOverGateway,
     clearTarget: () => {
       // Retire every GUID alias and its poll target, including losing surfaces.
@@ -541,9 +541,9 @@ export async function handleIMessageApprovalReaction(params: {
     },
     logVerboseMessage: params.logVerboseMessage,
   });
-  return outcome === "denied"
+  return settlement === "denied"
     ? { handled: true, stopPolling: false }
-    : { handled: true, stopPolling: true, stopPollingReason: outcome };
+    : { handled: true, stopPolling: true, stopPollingReason: settlement };
 }
 
 export async function maybeResolveIMessageApprovalReaction(params: {
