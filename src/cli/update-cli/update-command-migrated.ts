@@ -19,6 +19,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { resolveCliName } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -92,7 +93,7 @@ export async function inspectActivatedUpdateState(
 
 export type MigratedUpdateFinalizationInput = {
   params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
-    opts: Omit<FinishUpdateParams["opts"], "run"> & {
+    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<NonNullable<FinishUpdateParams["opts"]["run"]>, "requesterAuthority"> & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };
@@ -118,6 +119,11 @@ export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<{ result: UpdateRunResult; exitCode: number }> {
+  if (params.opts.recovery) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Durable worker continuation requires a reconciled handoff and fresh executor.",
+    );
+  }
   const run = params.opts.run;
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");

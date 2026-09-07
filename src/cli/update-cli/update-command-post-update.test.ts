@@ -8,6 +8,7 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { beginUpdateRecovery, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -176,6 +177,31 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  });
+
+  it("does not finalize or clean an active durable run without its live executor", async () => {
+    const home = tempDirs.make("finalizer-pending-recovery-");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: home };
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    const runtime = { root: home, nodePath: process.execPath, version: "1.0.0", buildId: null };
+    const record = beginUpdateRecovery(
+      { runId: run.runId, from: runtime, to: runtime },
+      { assertCurrent() {} },
+      { env },
+    );
+    const complete = vi.fn(async () => undefined);
+    await expect(
+      finishSuccessfulPackageSwitch(
+        { run: { runId: run.runId, env } },
+        {
+          packageTransaction: { backupRoot: home, rollback: vi.fn(), complete },
+        },
+      ),
+    ).rejects.toMatchObject({ name: "UpdateRecoveryRequiredError" });
+    expect(complete).not.toHaveBeenCalled();
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(mocks.printResult).not.toHaveBeenCalled();
+    expect(loadUpdateRecovery(run.runId, { env })).toEqual(record);
   });
 
   it("retains pending staged service load without legacy rollback or completion", async () => {

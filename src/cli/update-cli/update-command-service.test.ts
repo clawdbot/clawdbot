@@ -1,4 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  beginUpdateRecovery,
+  recordUpdateRecoveryIntent,
+  recordUpdateRecoveryObservation,
+  loadUpdateRecovery,
+} from "../../infra/update-run-recovery.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
+
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -88,6 +101,89 @@ describe("maybeRestartService", () => {
       gatewayBootId: "test-boot",
     });
   });
+
+  it.each([false, true])(
+    "persists private serving proof before success, revoked=%s",
+    async (revoked) => {
+      const home = tempDirs.make("serving-recovery-consumer-");
+      const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+      const admitted = createUpdateRun({ trigger: "cli" }, options);
+      let current = true;
+      const fence = {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("owner revoked");
+          }
+        },
+      };
+      const runtime = {
+        root: home,
+        nodePath: process.execPath,
+        version: receipt.gateway.version,
+        buildId: receipt.gateway.buildId,
+      };
+      let record = beginUpdateRecovery(
+        { runId: admitted.runId, from: runtime, to: runtime },
+        fence,
+        options,
+      );
+      record = recordUpdateRecoveryIntent(
+        record,
+        {
+          effectId: crypto.randomUUID(),
+          kind: "service-restart",
+          resourceId: "gateway",
+          runtime: "candidate",
+        },
+        fence,
+        options,
+      );
+      record = recordUpdateRecoveryObservation(
+        record,
+        { effectId: record.effects.at(-1)!.effectId, observedIdentity: receipt.gateway.bootId },
+        fence,
+        options,
+      );
+      const proof = { ...receipt, runId: admitted.runId };
+      mocks.verifyUpdateServing.mockImplementationOnce(async () => {
+        current = !revoked;
+        return { status: "verified", receipt: proof };
+      });
+      const onVerified = vi.fn(() => {
+        expect(loadUpdateRecovery(admitted.runId, options)?.verification?.receipt).toEqual(proof);
+      });
+      const opts = {
+        json: true,
+        run: { runId: admitted.runId, env: options.env },
+        recovery: {
+          getRecord: () => record,
+          onRecord: (next: typeof record) => {
+            record = next;
+          },
+          fence,
+          options,
+          assertReady: () => fence.assertCurrent(),
+        },
+      };
+      const verification = verifyUpdatedGateway({
+        opts,
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        serviceEnv: options.env,
+        gatewayPort: 18789,
+        expectedVersion: runtime.version,
+        expectedBuildId: runtime.buildId,
+        onVerified,
+      });
+      if (revoked) {
+        await expect(verification).rejects.toThrow("owner revoked");
+        expect(onVerified).not.toHaveBeenCalled();
+        expect(loadUpdateRecovery(admitted.runId, options)?.verification).toBeNull();
+      } else {
+        await expect(verification).resolves.toMatchObject({ ok: true });
+        expect(onVerified).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it.each(["seal refused", "target install failed", "missing entrypoint"])(
     "never falls back to restart after gated install failure: %s",

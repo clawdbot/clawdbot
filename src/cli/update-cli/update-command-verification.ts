@@ -18,6 +18,10 @@ import {
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
 import {
+  assertUpdateCommandRecovery,
+  persistUpdateCommandServingReceipt,
+} from "./update-command-recovery.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
 } from "./update-command-service-recovery.js";
@@ -79,6 +83,9 @@ export async function verifyUpdatedGateway(params: {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    if (params.opts.recovery) {
+      assertUpdateCommandRecovery(params.opts);
+    }
   };
   assertCurrent();
   const service = resolveGatewayService();
@@ -179,6 +186,8 @@ export async function verifyUpdatedGateway(params: {
       defaultRuntime.error(`Gateway serving verification failed: ${serving.reason}.`);
       return { ok: false, score: 7, summary: reason };
     }
+    persistUpdateCommandServingReceipt(params.opts, serving.receipt);
+    assertCurrent();
     params.onVerified?.(serving.receipt.verifiedAtMs);
     if (!params.opts.json) {
       defaultRuntime.log(
