@@ -24,8 +24,9 @@ import {
   evictArchivedSessionLineage,
   fetchChildSessionRows,
   fetchSessionLineage,
-  preserveActiveSessionLineageRows,
+  mergeRefreshedChildSessionRows,
   publishActiveSessionLineage,
+  retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
@@ -408,8 +409,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
           ? preserveRosterPresentationMetadata(canonical, previous)
           : (previous ?? null);
       }
-      // Keep child snapshots visible while expanded parents revalidate; the generation fences
-      // in-flight results. Operator-owned failures still block automatic refetches.
+      // Navigation retains snapshots for expanded or selected parents that revalidate and
+      // retires collapsed snapshots until reopened. Generation fencing and operator errors persist.
       this.resetChildSessionState(true);
       this.requestSessionDataUpdate();
     }
@@ -558,6 +559,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return refreshSidebarSessionList(this, this.sessionsAgentId, true);
   }
 
+  retireStaleChildSessions(revalidating: ReadonlySet<string>): void {
+    retireStaleChildSessionRows(this, this.activeSessionLineageRouteKey, revalidating);
+  }
+
   async loadChildSessions(parentKey: string): Promise<void> {
     if (
       !parentKey ||
@@ -583,17 +588,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       // Server rows replace the snapshot, so removed children disappear; only the
       // routed lineage survives omission because the selected pane still needs it.
-      const lineage =
-        preserveActiveSessionLineageRows(
-          this.activeSessionLineageRouteKey,
-          this.childSessionRowsByParent,
-        )[parentKey] ?? [];
-      for (const existing of lineage) {
-        if (!rows.some((row) => row.key === existing.key)) {
-          rows.push(existing);
-        }
-      }
-      this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
+      this.childSessionRowsByParent = mergeRefreshedChildSessionRows(
+        this.activeSessionLineageRouteKey,
+        this.childSessionRowsByParent,
+        parentKey,
+        rows,
+      );
       this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
     } catch (error) {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {

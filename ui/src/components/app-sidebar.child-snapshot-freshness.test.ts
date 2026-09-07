@@ -51,6 +51,32 @@ async function mountParent() {
 }
 
 describe("sidebar child snapshot freshness", () => {
+  it("clears a collapsed parent's cached child running indicator after a canonical refresh", async () => {
+    const { harness, sidebar, expand } = await mountParent();
+    harness.list.mockResolvedValueOnce(
+      result([{ ...child, status: "running", hasActiveRun: true }]),
+    );
+    expand();
+    await waitForFast(() =>
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1),
+    );
+    expand();
+    await sidebar.updateComplete;
+    const toggle = () => sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!;
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().classList.contains("sidebar-child-session-toggle--running")).toBe(true);
+
+    harness.publishList({
+      result: result([
+        { key: parentKey, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: false },
+      ]),
+    });
+    await sidebar.updateComplete;
+    await sidebar.updateComplete;
+    expect(toggle().classList.contains("sidebar-child-session-toggle--running")).toBe(false);
+    expect(harness.list).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps loaded children visible while a canonical refresh revalidates them", async () => {
     const { harness, sidebar, publishParent, expand } = await mountParent();
     const sibling = { ...child, key: "agent:worker:sibling", label: "Removed sibling" };
