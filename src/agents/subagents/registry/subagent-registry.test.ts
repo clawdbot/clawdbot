@@ -2353,32 +2353,42 @@ describe("subagent registry seam flow", () => {
 
   it("settles a requester-settle wake rejected before attempt admission", async () => {
     const endedAt = Date.now() - 1_000;
+    const runId = "run-settle-retry";
     mod.addSubagentRunForTests({
-      runId: "run-settle-retry",
+      runId,
       childSessionKey: "agent:main:subagent:settle-retry",
       task: "retry requester settle wake",
       expectsCompletionMessage: true,
       createdAt: endedAt - 1_000,
       endedAt,
       cleanupCompletedAt: endedAt,
+      completion: { required: true },
       delivery: { status: "delivered" },
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
-    mocks.maybeWakeRequesterAfterAllChildrenSettled.mockRejectedValueOnce(new Error("sqlite busy"));
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "requester settle run");
+    saveSubagentRegistryChangesToSqlite(new Map([[runId, entry]]), [runId]);
+    try {
+      mocks.maybeWakeRequesterAfterAllChildrenSettled.mockRejectedValueOnce(
+        new Error("sqlite busy"),
+      );
 
-    await mod.testing.sweepOnceForTests();
-    await waitForFast(() =>
-      expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1),
-    );
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await mod.testing.sweepOnceForTests();
+      await waitForFast(() =>
+        expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1),
+      );
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
-    expect(mod.getSubagentRunByRunId("run-settle-retry")).toMatchObject({
-      delivery: { status: "delivered" },
-      requesterSettleWake: undefined,
-    });
+      expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+        delivery: { status: "delivered" },
+        requesterSettleWake: undefined,
+      });
 
-    await mod.testing.sweepOnceForTests();
-    expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
+      await mod.testing.sweepOnceForTests();
+      expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
+    } finally {
+      saveSubagentRegistryChangesToSqlite(new Map(), [runId]);
+    }
   });
 
   it("keeps runs active instead of terminally failing on recoverable wait transport errors", async () => {

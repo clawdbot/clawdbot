@@ -11,7 +11,10 @@ import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import {
+  blockSubagentCompletionDelivery,
+  settleRejectedRequesterSettleWakeBatch,
+} from "../completion/subagent-completion-admission.store.js";
 import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
@@ -106,6 +109,66 @@ const completeRequesterSettleWakeBatch = (
     return;
   }
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
+  if (outcome?.delivered === false) {
+    const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
+    const batchEntries = entries.flatMap((entry) => {
+      const expectedWake = entry.requesterSettleWake;
+      if (!expectedWake) {
+        return [];
+      }
+      const settleDelivery =
+        entry.expectsCompletionMessage === true &&
+        ["pending", "in_progress", "failed"].includes(entry.delivery?.status ?? "pending");
+      const retainForRequesterTurn =
+        Boolean(entry.requesterTurnRunId) && entry.expectsCompletionMessage === true;
+      return [
+        {
+          subagent: entry,
+          ...(settleDelivery ? { taskId: params.resolveSubagentTask(entry).task?.taskId } : {}),
+          expectedWake: structuredClone(expectedWake),
+          settleDelivery,
+          retireAfterSettle: !retainForRequesterTurn && expectedWake.retireAfterSettle === true,
+          retireAfterRequesterTurn:
+            retainForRequesterTurn &&
+            (entry.retireAfterRequesterTurn === true || expectedWake.retireAfterSettle === true),
+        },
+      ];
+    });
+    if (batchEntries.length !== entries.length) {
+      throw new Error("requester settle wake owner changed before batch settlement");
+    }
+    const settled = settleRejectedRequesterSettleWakeBatch({
+      entries: batchEntries,
+      reason: error,
+      disposition: outcome.disposition,
+    });
+    if (!settled.settled) {
+      throw new Error(`subagent completion owner changed before settlement: ${settled.runId}`);
+    }
+    for (const batchEntry of batchEntries) {
+      const { runId } = batchEntry.subagent;
+      if (batchEntry.retireAfterSettle) {
+        params.runs.delete(runId);
+        subagentRuns.confirmRetirement(batchEntry.subagent);
+      }
+      const retryTimer = context.getRequesterSettleWakeTimer(runId);
+      if (retryTimer) {
+        clearTimeout(retryTimer.timer);
+        context.deleteRequesterSettleWakeTimer(runId);
+      }
+      if (batchEntry.subagent.requesterSettleWake === undefined || !params.runs.has(runId)) {
+        clearGatewayContextResolver(batchEntry.subagent);
+        params.resumedRuns.delete(runId);
+        params.clearPendingLifecycleError(runId);
+      }
+    }
+    for (const [nextRunId, entry] of params.runs) {
+      if (entry.requesterSettleWake && requesterSessionKeys.has(entry.requesterSessionKey)) {
+        scheduleRequesterSettleWake(context, nextRunId, entry);
+      }
+    }
+    return;
+  }
   const previousStates = entries.map((entry) => ({
     delivery: outcome?.delivered ? entry.delivery : structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),

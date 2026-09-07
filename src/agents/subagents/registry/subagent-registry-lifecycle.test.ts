@@ -102,6 +102,7 @@ const taskExecutorMocks = vi.hoisted(() => ({
 
 const completionDeliveryMocks = vi.hoisted(() => ({
   blockSubagentCompletionDelivery: vi.fn(),
+  settleRejectedRequesterSettleWakeBatch: vi.fn(),
 }));
 
 function mockBlockedCompletionDeliveryOwner(): void {
@@ -133,6 +134,33 @@ function mockBlockedCompletionDeliveryOwner(): void {
         subagent.suppressCompletionDelivery = true;
       }
       return true;
+    },
+  );
+}
+
+function mockRejectedRequesterSettleWakeBatch(): void {
+  completionDeliveryMocks.settleRejectedRequesterSettleWakeBatch.mockImplementation(
+    ({ entries, reason, disposition }) => {
+      for (const entry of entries) {
+        if (
+          entry.settleDelivery &&
+          !completionDeliveryMocks.blockSubagentCompletionDelivery({
+            subagent: entry.subagent,
+            taskId: entry.taskId ?? "",
+            reason,
+            disposition,
+          })
+        ) {
+          return { settled: false, runId: entry.subagent.runId } as const;
+        }
+      }
+      for (const entry of entries) {
+        entry.subagent.requesterSettleWake = undefined;
+        entry.subagent.retireAfterRequesterTurn = entry.retireAfterRequesterTurn
+          ? true
+          : entry.subagent.retireAfterRequesterTurn;
+      }
+      return { settled: true } as const;
     },
   );
 }
@@ -182,6 +210,8 @@ vi.mock("../completion/subagent-completion-admission.store.js", async (importOri
     typeof import("../completion/subagent-completion-admission.store.js")
   >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
+  settleRejectedRequesterSettleWakeBatch:
+    completionDeliveryMocks.settleRejectedRequesterSettleWakeBatch,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
@@ -560,6 +590,7 @@ describe("subagent registry lifecycle hardening", () => {
     taskExecutorMocks.failTaskRunByRunId.mockReset();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
     mockBlockedCompletionDeliveryOwner();
+    mockRejectedRequesterSettleWakeBatch();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockResolvedValue({});
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
@@ -4747,6 +4778,7 @@ describe("subagent registry lifecycle hardening", () => {
 describe("requester settle wake trigger", () => {
   beforeEach(() => {
     mockBlockedCompletionDeliveryOwner();
+    mockRejectedRequesterSettleWakeBatch();
     helperMocks.safeRemoveAttachmentsDir.mockClear();
     helperMocks.logAnnounceGiveUp.mockClear();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
@@ -5347,7 +5379,7 @@ describe("requester settle wake trigger", () => {
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
-  it("keeps committed blocked state when requester-settle bookkeeping persistence fails", async () => {
+  it("keeps the batch unchanged when atomic requester-settle persistence fails", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: true,
@@ -5356,10 +5388,8 @@ describe("requester settle wake trigger", () => {
     let settleParams:
       | Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
       | undefined;
-    const persistOrThrow = vi.fn();
     const controller = createLifecycleController({
       entry,
-      persistOrThrow,
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
         settleParams = params;
         return false;
@@ -5371,7 +5401,7 @@ describe("requester settle wake trigger", () => {
       terminalReply: { disposition: "empty" },
     });
     await waitForLifecycleState(() => expect(settleParams).toBeDefined());
-    persistOrThrow.mockImplementationOnce(() => {
+    completionDeliveryMocks.settleRejectedRequesterSettleWakeBatch.mockImplementationOnce(() => {
       throw new Error("bookkeeping write failed");
     });
 
@@ -5383,10 +5413,10 @@ describe("requester settle wake trigger", () => {
       }),
     ).toThrow("bookkeeping write failed");
     expect(entry).toMatchObject({
-      delivery: { status: "failed", lastError: "requester settle wake failed" },
-      suppressCompletionDelivery: true,
+      delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
     });
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
   });
 
   it("retains a delete-mode child after no-wake until its requester turn settles", async () => {
