@@ -535,9 +535,9 @@ install’s first update. Separate `$include` files must retain their pre-activa
 configuration content. Restoration holds the normal config writer lock and
 rechecks the captured hash before writing.
 When needed, rollback replaces the main config with the exact bytes captured before
-Doctor and owner-only permissions (`0600`), including the previous writer stamp, and reports
-`↩️ OpenClaw update rolled back`. Operator edits made after activation block
-restoration; the next action names the changed config file. A failure alone does not
+Doctor and owner-only permissions (`0600`), including the previous writer stamp.
+Operator edits made after activation block
+restoration, including edits between Doctor’s last write and the updater’s capture; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
 If the config file changed after the activation Doctor pass or the databases are

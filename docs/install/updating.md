@@ -714,7 +714,7 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that the config file still matches the content
-recorded immediately after the candidate’s activation Doctor pass.
+reported by the candidate’s activation Doctor writer.
 Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
@@ -734,10 +734,11 @@ Gateway hello handshake must match the expected artifact.
 
 The candidate’s own Doctor migrations in the main config file do not block rollback, including on
 a fresh install’s first update. The updater retains the config immediately before
-Doctor and records the file’s content hash after Doctor finishes. Rollback restores
+Doctor and checks the file against the content hash reported by Doctor’s writer. Rollback restores
 those original bytes only while the current file matches that hash. Restoration
 holds the normal config writer lock and rechecks the hash after acquiring it. Operator edits
-made after activation block restoration. Separate `$include` files must retain
+made after activation block restoration, including edits between Doctor’s last write
+and the updater’s capture. Separate `$include` files must retain
 their pre-activation configuration content; they are not restored by the root-file
 snapshot. The existing intentional-recovery
 allowance applies only to service commands, so the older-binary guard does not
@@ -746,8 +747,8 @@ block recovery; it is never saved in config or the service environment.
 Successful recovery leaves the previous Gateway running and finishes the run as
 `rolled-back`, with `after.version` set to the previous version and downtime
 measured from service stop through verified recovery. The headline is
-`↩️ OpenClaw update rolled back`; the report names the restored version and
-retains the original verification failure. The command still exits nonzero; recovery does not turn a
+`↩️ OpenClaw update rolled back to <previous>: <reason>`, retaining the original
+verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
 Use `openclaw update status` for the recorded reason and `openclaw triage` to

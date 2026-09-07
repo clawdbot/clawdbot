@@ -4,9 +4,16 @@ import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { guardUpdateDoctorSchemaUpgrade } from "../commands/doctor-update-schema-guard.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+  type UpdatePostInstallDoctorResult,
+} from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -59,6 +66,19 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+  const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+  return resultPath
+    ? captureUpdateDoctorConfigWrites(resolveConfigPath(), (capture) =>
+        runDoctorHealthFlowWithResult(runtime, options, { resultPath, capture }),
+      )
+    : runDoctorHealthFlowWithResult(runtime, options);
+}
+
+async function runDoctorHealthFlowWithResult(
+  runtime: RuntimeEnv | undefined,
+  options: DoctorOptions,
+  updateResult?: { resultPath: string; capture: { hash: string } },
+) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
@@ -76,14 +96,14 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
   });
 
   const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
-  const updateResult = await maybeOfferUpdateBeforeDoctor({
+  const offeredUpdate = await maybeOfferUpdateBeforeDoctor({
     runtime: effectiveRuntime,
     options,
     root,
     confirm: (p) => prompter.confirm(p),
     outro,
   });
-  if (updateResult.handled) {
+  if (offeredUpdate.handled) {
     return;
   }
 
@@ -99,6 +119,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
   const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
   const maintenance = await beginDoctorMaintenance({ options, root, runtime: effectiveRuntime });
   let exitCode: number | undefined;
+  let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   try {
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
     const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
@@ -172,21 +193,10 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       assertNoPendingLegacyExecApprovals({ operation: "doctor" });
     }
     await maintenance?.finish(ctx.cfg);
-    if (ctx.postInstallDoctorResult) {
-      const {
-        UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-        writeUpdatePostInstallDoctorResult,
-      } = await import("../infra/update-doctor-result.js");
-      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-      if (resultPath) {
-        await writeUpdatePostInstallDoctorResult({
-          resultPath,
-          result: ctx.postInstallDoctorResult,
-        });
-        exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
-        return;
-      }
+    doctorResult = ctx.postInstallDoctorResult ?? { status: "ok" };
+    if (updateResult && doctorResult.status === "advisory") {
+      exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
+      return;
     }
   } catch (error) {
     if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
@@ -196,7 +206,16 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
     }
     throw error;
   } finally {
-    await maintenance?.release();
+    try {
+      await maintenance?.release();
+    } finally {
+      if (updateResult) {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: updateResult.resultPath,
+          result: { ...doctorResult, configHash: updateResult.capture.hash },
+        });
+      }
+    }
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {

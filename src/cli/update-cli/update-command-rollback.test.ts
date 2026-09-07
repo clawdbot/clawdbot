@@ -9,6 +9,10 @@ import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  writeUpdatePostInstallDoctorResult,
+} from "../../infra/update-doctor-result.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -316,6 +320,7 @@ describe("verified package rollback", () => {
     { change: "doctor", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-include", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-include-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-capture-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-operator-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-locked-edit", previousVerified: true, restored: false, service: "stopped" },
     { change: "doctor-stop-edit", previousVerified: true, restored: false, service: "stopped" },
@@ -403,21 +408,33 @@ describe("verified package rollback", () => {
         fs.appendFileSync(configPath, "\n// Operator edit after activation.\n");
       if (change.startsWith("doctor")) {
         fs.writeFileSync(path.join(candidateRoot, "dist/entry.js"), "export {};\n");
-        vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async () => {
-          fs.writeFileSync(
-            configPath,
-            JSON.stringify({
-              ...authored,
-              meta: { migrations: { modelPolicyAllowlist: true }, lastTouchedVersion: "2026.9.3" },
-              agents: {
-                defaults: {
-                  ...authored.agents.defaults,
-                  modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+        vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async (step) => {
+          await captureUpdateDoctorConfigWrites(configPath, async (capture) => {
+            await createConfigIO({ env: process.env, pluginValidation: "skip" }).writeConfigFile(
+              {
+                ...config,
+                meta: {
+                  migrations: { modelPolicyAllowlist: true },
+                  lastTouchedVersion: "2026.9.3",
                 },
+                agents: {
+                  defaults: {
+                    ...authored.agents.defaults,
+                    modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+                  },
+                },
+                wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
               },
-              wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
-            }),
-          );
+              { lastTouchedVersionOverride: "2026.9.3", skipPluginValidation: true },
+            );
+            if (change === "doctor-capture-edit") {
+              operatorEdit();
+            }
+            await writeUpdatePostInstallDoctorResult({
+              resultPath: step.env!.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH!,
+              result: { status: "ok", configHash: capture.hash },
+            });
+          });
           return {
             name: "openclaw doctor",
             command: "doctor",

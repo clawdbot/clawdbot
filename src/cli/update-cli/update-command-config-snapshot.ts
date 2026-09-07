@@ -5,7 +5,12 @@ import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 
-export type UpdateConfigSnapshot = { path: string; raw: string | null; hash: string };
+export type UpdateConfigSnapshot = {
+  path: string;
+  raw: string | null;
+  hash: string;
+  doctorOwned?: boolean;
+};
 
 export async function readUpdateConfigSnapshot(path: string): Promise<UpdateConfigSnapshot> {
   const raw = await fs.readFile(path, "utf8").catch((error: unknown) => {

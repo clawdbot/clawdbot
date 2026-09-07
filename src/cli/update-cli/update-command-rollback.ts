@@ -131,6 +131,7 @@ export async function rollbackFailedUpdate(params: {
   let failureReason = "rollback-state-unverified";
   const assertConfigUnchanged = async () => {
     let unchanged =
+      params.activationConfig?.doctorOwned !== false &&
       (await readUpdateConfigSnapshot(configSnapshot.path)).hash === configSnapshot.hash;
     if (unchanged && params.configSnapshot.includedPaths?.length) {
       // Only the root file is restored. Resolve its captured include graph so

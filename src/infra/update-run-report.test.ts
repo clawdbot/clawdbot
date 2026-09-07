@@ -91,8 +91,7 @@ describe("update run report", () => {
       Run openclaw triage to diagnose and repair the failed update.",
         "ℹ️ OpenClaw update skipped: dry-run.
       Phases: staging (300ms)",
-        "↩️ OpenClaw update rolled back
-      Restored 2026.9.1 after build-failed.
+        "↩️ OpenClaw update rolled back to 2026.9.1: build-failed.
       Phases: staging (300ms)",
       ]
     `);

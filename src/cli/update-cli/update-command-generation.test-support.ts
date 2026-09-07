@@ -241,7 +241,9 @@ export function registerGenerationRecoveryTests(
         expect(completedStatus).toBe("rolled-back");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
-        expect(renderUpdateRunReport(record).headline).toBe("↩️ OpenClaw update rolled back");
+        expect(renderUpdateRunReport(record).headline).toBe(
+          `↩️ OpenClaw update rolled back to ${VERSION}: restart-unhealthy.`,
+        );
       }
     },
   );

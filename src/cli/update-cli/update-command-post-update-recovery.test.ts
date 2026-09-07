@@ -18,7 +18,6 @@ import * as runLedger from "../../infra/update-run-ledger.js";
 import {
   createUpdateRun,
   getUpdateRun,
-  recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
@@ -28,6 +27,9 @@ import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
+  gatewayCommand: vi.fn<
+    typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
+  >(async () => "accepted"),
   readRuntime: vi.fn(async (): Promise<{ status: string; pid?: number }> => ({
     status: "unknown",
   })),
@@ -49,7 +51,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => "accepted",
+  runUpdatedInstallGatewayCommand: mocks.gatewayCommand,
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -100,6 +102,7 @@ import { UpdatePreMutationError } from "./shared.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import * as servicePlan from "./update-command-service-plan.js";
 import * as verificationOwner from "./update-command-verification.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
@@ -880,8 +883,32 @@ describe("live repair ownership after activation", () => {
         OPENCLAW_CONFIG_PATH: configPath,
       };
       const run = { runId: createUpdateRun({ trigger: "api" }, { env }).runId, env };
-      recordUpdateRunPhase(run.runId, "restarting", undefined, { env });
+
       const serviceEnv = { ...env, OPENCLAW_STATE_DIR: tempDirs.make("update-repair-service-") };
+      vi.spyOn(servicePlan, "resolveGatewayServiceManagementBlockMessageForUpdate").mockReturnValue(
+        undefined,
+      );
+      const service = await vi.importActual<typeof import("./update-command-service.js")>(
+        "./update-command-service.js",
+      );
+      mocks.gatewayCommand.mockRejectedValueOnce(new Error("candidate restart failed"));
+      expect(
+        await service.maybeRestartService({
+          shouldRestart: true,
+          result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
+          opts: { json: true, run },
+          refreshServiceEnv: false,
+          serviceEnv,
+          serviceUpdateVerdict: { kind: "unresolved", root: "/repo", fingerprint: "fixture" },
+          gatewayPort: 19101,
+          timeoutMs: 1_000,
+        }),
+      ).toBe("failed");
+      expect(mocks.gatewayCommand).toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, { env })).toMatchObject({
+        status: "running",
+        phase: "verifying",
+      });
       const failed = { ok: false, score: 0, summary: "Candidate boot failed." };
       const verified = { ok: true, score: 1, summary: "Gateway is ready." };
       const verify = vi

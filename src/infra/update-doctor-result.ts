@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,13 +22,34 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-export type UpdatePostInstallDoctorResult = {
-  status: "advisory";
-  advisory: PackageUpdateStepAdvisory & {
-    reason: "deferred-configured-plugin-repair";
-    details: string[];
-  };
-};
+export type UpdatePostInstallDoctorResult = (
+  | { status: "ok" | "error" }
+  | {
+      status: "advisory";
+      advisory: PackageUpdateStepAdvisory & {
+        reason: "deferred-configured-plugin-repair";
+        details: string[];
+      };
+    }
+) & { configHash?: string };
+
+const doctorConfigWrites = new AsyncLocalStorage<{ path: string; hash: string }>();
+
+export function captureUpdateDoctorConfigWrites<T>(
+  configPath: string,
+  run: (capture: { path: string; hash: string }) => Promise<T>,
+): Promise<T> {
+  const capture = { path: path.resolve(configPath), hash: "unchanged" };
+  return doctorConfigWrites.run(capture, () => run(capture));
+}
+
+/** Record the serialized payload at publication, never a later filesystem read. */
+export function recordUpdateDoctorConfigWrite(configPath: string, hash: string): void {
+  const capture = doctorConfigWrites.getStore();
+  if (capture && capture.path === path.resolve(configPath)) {
+    capture.hash = hash;
+  }
+}
 
 export function createUpdatePostInstallDoctorResultPath(): string {
   return path.join(
@@ -98,6 +120,18 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
     return null;
   }
   const record = value as Record<string, unknown>;
+  const configHash = record.configHash;
+  if (
+    configHash !== undefined &&
+    (typeof configHash !== "string" ||
+      (configHash !== "unchanged" && !/^[0-9a-f]{64}$/u.test(configHash)))
+  ) {
+    return null;
+  }
+  const configWrite = configHash === undefined ? {} : { configHash };
+  if (record.status === "ok" || record.status === "error") {
+    return { status: record.status, ...configWrite };
+  }
   if (record.status !== "advisory") {
     return null;
   }
@@ -119,6 +153,7 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   }
   return {
     status: "advisory",
+    ...configWrite,
     advisory: {
       kind: "package-post-install-doctor",
       reason: "deferred-configured-plugin-repair",

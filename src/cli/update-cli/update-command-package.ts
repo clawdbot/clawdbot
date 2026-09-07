@@ -122,12 +122,18 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     },
     timeoutMs: params.timeoutMs,
   });
-  if (configSnapshot) {
-    // Keep pre-Doctor bytes with the hash of Doctor’s completed write for rollback.
-    const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
-    params.onConfigSnapshot?.({ ...configSnapshot, hash });
-  }
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+  if (configSnapshot) {
+    // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
+    const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
+    const doctorHash = doctorResult?.configHash;
+    params.onConfigSnapshot?.({
+      ...configSnapshot,
+      hash,
+      doctorOwned:
+        hash === (doctorHash === "unchanged" || !doctorHash ? configSnapshot.hash : doctorHash),
+    });
+  }
   const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
   params.progress?.onStepComplete?.({
     ...doctorProgressInfo,
