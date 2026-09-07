@@ -604,6 +604,9 @@ if [[ "$RUN_UPDATE_GROUP" == "1" ]]; then
       ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
       ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
+      -v "$HARNESS_ROOT/scripts/e2e/lib:/opt/openclaw-transition/scripts/e2e/lib:ro" \
+      -v "$UPDATE_DIR:/opt/openclaw-package:ro" \
+      -e OPENCLAW_CURRENT_PACKAGE_TGZ="/opt/openclaw-package/$UPDATE_TGZ_FILE" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=update \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
