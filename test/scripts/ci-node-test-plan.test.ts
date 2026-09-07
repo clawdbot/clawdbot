@@ -2100,6 +2100,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runnerBackend: "github",
     };
     const inventoryGrowthFile = "test/scripts/resolve-fs-safe-native-contract.test.ts";
+    const extraInventories = [
+      ["test/scripts/npm-package-locks-report.test.ts"],
+      Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
+    ];
+    const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>
       /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name);
     const isNumberedToolingGroup = (group: { shard_name: string }) =>
@@ -2129,7 +2134,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               ];
         })
         .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
-    const createPlanWithInventory = async (includeGrowthFile: boolean) => {
+    const createPlanWithInventory = async (
+      includeGrowthFile: boolean,
+      extraFiles: string[] = [],
+    ) => {
       vi.resetModules();
       vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
         const actual =
@@ -2139,9 +2147,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           listTrackedTestFiles(rootDir: string, suffix?: string) {
             const files = actual
               .listTrackedTestFiles(rootDir, suffix)
-              .filter((file) => file !== inventoryGrowthFile);
+              .filter((file) => !growthFiles.has(file));
             return rootDir === "test" && includeGrowthFile
-              ? [...files, inventoryGrowthFile].toSorted()
+              ? [...files, inventoryGrowthFile, ...extraFiles].toSorted()
               : files;
           },
         };
@@ -2208,6 +2216,44 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-tooling-2-hosted-2",
       "core-tooling-3-hosted-2",
     ]);
+
+    for (const extraFiles of extraInventories) {
+      const expanded = await createPlanWithInventory(true, extraFiles);
+      const expandedToolingFiles = expanded
+        .flatMap((job) => job.groups)
+        .filter(isNumberedToolingGroup)
+        .flatMap((group) => group.includePatterns ?? []);
+      expect(expanded.length).toBeLessThanOrEqual(80);
+      expect(new Set(expandedToolingFiles).size).toBe(expandedToolingFiles.length);
+      expect(expandedToolingFiles.toSorted()).toEqual(
+        [...new Set([...baselineToolingFiles, inventoryGrowthFile, ...extraFiles])].toSorted(),
+      );
+      const nonToolingPolicies = (plan: CompactNodeTestShard[]) =>
+        nonToolingPlacement(plan)
+          .flatMap(({ groups, ...policy }) => groups.map((group) => ({ group, ...policy })))
+          .toSorted((a, b) => a.group.localeCompare(b.group));
+      expect(nonToolingPolicies(expanded)).toEqual(nonToolingPolicies(baseline));
+      for (const job of expanded.filter((candidate) =>
+        candidate.groups.some(isHostedToolingGroup),
+      )) {
+        const families = job.groups
+          .filter(isHostedToolingGroup)
+          .map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
+        expect(new Set(families).size).toBe(families.length);
+        expect(job.requiresDist).toBe(false);
+        expect(job.planConcurrency).toBe(1);
+        expect(job.groups.length).toBeLessThanOrEqual(10);
+        if (job.groups.length > 1) {
+          expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+        }
+        expect(job.runner).toBe(job.groups[0]?.runner);
+        expect(
+          job.groups.every(
+            (group) => (runnerRanks.get(job.runner) ?? -1) >= (runnerRanks.get(group.runner) ?? 0),
+          ),
+        ).toBe(true);
+      }
+    }
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
