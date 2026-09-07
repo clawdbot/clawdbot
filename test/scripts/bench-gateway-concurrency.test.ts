@@ -12,6 +12,8 @@ type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
 function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
   return {
+    failures: [],
+    cleanup: { rootRemoved: true },
     controlPlane: [],
     controlUi: [],
     durationMs: 10,
@@ -379,7 +381,24 @@ describe("gateway concurrency benchmark script", () => {
     });
 
     expect(deadlines).toEqual([6_000, 14_000]);
-    expect(runs).toEqual([sample]);
+    expect(runs).toEqual({ runs: [sample], warmupRuns: [sample] });
+  });
+
+  it("retains earlier warmup and measured attempts when a later attempt fails", async () => {
+    const warmup = createBenchmarkRun({ durationMs: 1, failures: [] });
+    const measured = createBenchmarkRun({ durationMs: 2, failures: [] });
+    const failed = createBenchmarkRun({
+      durationMs: 3,
+      failures: [{ phase: "diagnostics", error: "timeline was incomplete" }],
+    });
+    const attempts = [warmup, measured, failed];
+    let calls = 0;
+    const result = await testing.runBenchmarkSamples({
+      options: testing.parseOptions(["--runs", "3", "--warmup", "1"]),
+      runSample: async () => attempts[calls++] ?? measured,
+    });
+    expect(result).toEqual({ warmupRuns: [warmup], runs: [measured, failed] });
+    expect(calls).toBe(3);
   });
 
   it("preserves HTTP and RPC failures in baseline probe diagnostics", async () => {
