@@ -1,13 +1,10 @@
 // Matrix plugin module implements replies behavior.
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
@@ -40,24 +37,13 @@ export function mergeMatrixReplyDeliveryResults(
       suppression: { reason: "no_visible_result" },
     };
   }
-  const receiptInputs: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
-  for (const result of visibleResults) {
-    if (result.receipt) {
-      receiptInputs.push({ receipt: result.receipt });
-      continue;
-    }
-    for (const messageId of result.messageIds ?? []) {
-      receiptInputs.push({ messageId });
-    }
+  const content = joinMatrixVisibleContent(visibleResults.map((result) => result.content));
+  if (visibleResults.some((result) => result.receipt || result.messageIds?.length)) {
+    return createAcceptedChannelDeliveryResult({ deliveryResults: visibleResults, content });
   }
-  const receipt =
-    receiptInputs.length > 0
-      ? createMessageReceiptFromOutboundResults({ results: receiptInputs })
-      : undefined;
   return {
-    ...(receipt ? { messageIds: listMessageReceiptPlatformIds(receipt), receipt } : {}),
     visibleReplySent: true,
-    content: joinMatrixVisibleContent(visibleResults.map((result) => result.content)),
+    content,
   };
 }
 
@@ -83,15 +69,10 @@ function createMatrixReplyDeliveryResult(
   if (results.length === 0) {
     return mergeMatrixReplyDeliveryResults([]);
   }
-  const receipt = createMessageReceiptFromOutboundResults({
+  return createAcceptedChannelDeliveryResult({
     results: results.map((result) => ({ receipt: result.receipt })),
-  });
-  return {
-    messageIds: listMessageReceiptPlatformIds(receipt),
-    receipt,
-    visibleReplySent: true,
     content: joinMatrixVisibleContent(results.map((result) => result.content)),
-  };
+  });
 }
 
 function resolveVisibleMatrixReplyText(text?: string): string | undefined {

@@ -13,7 +13,6 @@ import {
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -28,8 +27,8 @@ import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
-  filterDaemonEnv,
   formatRuntimeStatus,
+  projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
@@ -39,29 +38,6 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-
-function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
-  // JSON output can be copied into issues; redact service env before serialization.
-  const command = status.service.command;
-  if (!command) {
-    return status;
-  }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand: GatewayServiceCommandConfig = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
-  delete nextCommand.managedDefinition;
-  delete nextCommand.managedOverrides;
-  delete nextCommand.definitionPaths;
-  return {
-    ...status,
-    service: {
-      ...status.service,
-      command: nextCommand,
-    },
-  };
-}
 
 function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
   if (!cli) {
@@ -86,8 +62,10 @@ function formatConnectionLine(
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
-    const sanitized = sanitizeDaemonStatusForJson(status);
-    defaultRuntime.writeJson(sanitized);
+    defaultRuntime.writeJson({
+      ...status,
+      service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
+    });
     return;
   }
 

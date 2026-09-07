@@ -47,6 +47,7 @@ export {
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   sanitizeAndNormalizeEmbedding,
   sanitizeEmbeddingCacheHeaders,
   throwIfBatchCompletionError,

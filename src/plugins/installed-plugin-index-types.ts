@@ -160,6 +160,34 @@ export type InstalledPluginIndex = {
   diagnostics: readonly PluginDiagnostic[];
 };
 
+export type InstalledPluginIndexScopeLookup = {
+  addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addShorthandModelOwners: (target: Set<string>, modelIds: readonly string[]) => void;
+  canResolveDirectProviderIds: (
+    providerIds: readonly string[],
+    scopePluginIds: ReadonlySet<string>,
+  ) => boolean;
+  hasChannelContributionOwners: (ids: readonly string[]) => boolean;
+  hasAgentHarnessOwners: (ids: readonly string[]) => boolean;
+  hasCompleteConfigPathActivationMetadata: () => boolean;
+  hasDirectChannelOwners: (ids: readonly string[]) => boolean;
+  hasInstalledPluginIds: (ids: Iterable<string>) => boolean;
+  hasProviderContributionOwners: (ids: readonly string[]) => boolean;
+  hasShorthandModelOwners: (modelIds: readonly string[]) => boolean;
+  normalizePluginId: (pluginId: string) => string;
+};
+
+/** In-memory projections owned by one immutable installed-index cache generation. */
+export type InstalledPluginIndexFacts = {
+  fingerprint?: string;
+  scopeLookup?: InstalledPluginIndexScopeLookup;
+  installRecords?: Record<string, PluginInstallRecord>;
+};
+
 export type LoadInstalledPluginIndexParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;

@@ -86,7 +86,7 @@ export function registerTelemetryCli(program: Command): void {
 
   telemetry
     .command("show")
-    .description("Show exactly what the daily update request sends")
+    .description("Preview the daily update request from this CLI process")
     .option("--json", "Print the request and payload as JSON")
     .action(async (options: { json?: boolean }) =>
       runCommandWithRuntime(defaultRuntime, () => showTelemetry(options)),

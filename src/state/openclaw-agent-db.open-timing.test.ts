@@ -111,6 +111,7 @@ describe("agent database open timings", () => {
       pid: process.pid,
       threadId,
       isMainThread,
+      admissionMode: "sync",
       thresholdMs: 1_000,
       phaseDurationsMs: {
         open: 60,
@@ -145,6 +146,7 @@ describe("agent database open timings", () => {
       pid: process.pid,
       threadId,
       isMainThread,
+      admissionMode: "sync",
       thresholdMs: 1_000,
       phaseDurationsMs: {
         open: 60,
@@ -205,6 +207,7 @@ describe("agent database open timings", () => {
         pid: process.pid,
         threadId,
         isMainThread,
+        admissionMode: "async",
         thresholdMs: 1_000,
         phaseDurationsMs: {
           open: 60,

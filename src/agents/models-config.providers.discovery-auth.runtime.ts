@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -34,11 +35,13 @@ export async function prepareProviderDiscoveryAuth(
   {
     agentDir,
     authStore,
+    env,
     resolveProviderApiKey,
     resolveProviderAuth,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     resolveProviderApiKey: ProviderApiKeyResolver;
     resolveProviderAuth: ProviderAuthResolver;
   },
@@ -55,12 +58,17 @@ export async function prepareProviderDiscoveryAuth(
           : undefined,
       config?.secrets?.defaults,
     );
-    if (!ref || ref.source === "env") {
+    if (!ref) {
+      continue;
+    }
+    // Cold catalog readers can use env material without a Gateway auth snapshot.
+    const envValue = ref.source === "env" ? normalizeOptionalString(env[ref.id.trim()]) : undefined;
+    if (envValue) {
+      profiles.set(profileId, () => envValue);
       continue;
     }
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
-      // OAuth/env/plain profiles retain their existing discovery semantics.
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
         store: authStore,

@@ -558,6 +558,226 @@ const writeCases: WriteCase[] = [
     },
   },
   {
+    name: "adds a root-owned agent beside an unchanged keyed entry include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+  },
+  {
+    name: "preserves multiple keyed entry includes while adding one root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          ops: { workspace: "/w/ops" },
+        },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          ops: { $include: "./ops.json5" },
+        },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          ops: { workspace: "/w/ops" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: {
+      keyedAgentEntryIncludePaths: [
+        ["agents", "entries", "tony"],
+        ["agents", "entries", "ops"],
+      ],
+    },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          ops: { $include: "./ops.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+  },
+  {
+    name: "removes a root-owned agent beside an unchanged keyed entry include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    options: {
+      allowedAgentRosterRemovals: ["worker"],
+      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+    },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+  },
+  {
+    name: "rejects array-shaped entries containing an include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: [{ $include: "./tony.json5" }],
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "rejects an agents.entries include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { $include: "./agents.json5" },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "rejects changing a keyed entry include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony-next" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
+    error: "Config write would flatten $include-owned config at agents.entries.tony",
+  },
+  {
+    name: "rejects deleting a keyed entry include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: { worker: { workspace: "/w/worker" } },
+      },
+    },
+    options: {
+      allowedAgentRosterRemovals: ["tony"],
+      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+    },
+    error: "Config write would flatten $include-owned config at agents.entries.tony",
+  },
+  {
     name: "allows removing root-authored sibling keys beside an include",
     current: { gateway: { mode: "local", legacyKey: true } },
     authored: { gateway: { $include: "./config/gateway.json", legacyKey: true } },

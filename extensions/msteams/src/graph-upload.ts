@@ -8,6 +8,7 @@
  * - Getting chat members for per-user sharing
  */
 
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
@@ -93,7 +94,7 @@ async function uploadToSharePoint(params: {
           Authorization: `Bearer ${token}`,
           "Content-Type": params.contentType ?? "application/octet-stream",
         },
-        body: new Uint8Array(params.buffer),
+        body: new Blob([bufferToBlobPart(params.buffer)]),
         signal,
       });
 

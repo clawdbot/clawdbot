@@ -2,6 +2,7 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -18,10 +19,13 @@ import {
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
+import {
+  applyCompletionsAnthropicCacheControl,
+  resolveCompletionsCacheControl,
+} from "./openai-completions-cache-control.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import {
@@ -296,18 +300,23 @@ export function buildOpenAICompletionsParams(
 ) {
   const compat = getCompat(model);
   const compatDetection = detectOpenAICompletionsCompat(model);
-  const completionsContext = context.systemPrompt
-    ? {
-        ...context,
-        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-      }
-    : context;
-  let messages = convertMessages(model as never, completionsContext, compat as never);
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const { endpointClass } = compatDetection.capabilities;
+  const cacheControl = resolveCompletionsCacheControl(
+    compat,
+    cacheRetention,
+    endpointClass === "openrouter" ||
+      (endpointClass === "default" && model.provider === "openrouter"),
+  );
+  const cacheOptOutIndexes = new Set<number>();
+  let messages = convertMessages(model as never, context, compat as never, {
+    cacheOptOutIndexes,
+    preserveSystemPromptCacheBoundary: cacheControl !== undefined && !compat.requiresStringContent,
+  });
   applyCompletionsReplay(messages as unknown[], context, model, compat);
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
@@ -315,6 +324,7 @@ export function buildOpenAICompletionsParams(
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
     stream: true,
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
   if (compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
@@ -324,14 +334,6 @@ export function buildOpenAICompletionsParams(
   }
   if (compat.supportsPromptCacheKey && promptCacheKey) {
     params.prompt_cache_key = promptCacheKey;
-    // When the caller explicitly opted into long retention, forward the
-    // canonical prompt_cache_retention value alongside the cache key so
-    // OpenAI-compatible completions backends (oMLX, llama.cpp, official
-    // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
-    // the key reaches the wire but the retention preference is silently dropped.
-    if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
-      params.prompt_cache_retention = "24h";
-    }
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
@@ -497,6 +499,19 @@ export function buildOpenAICompletionsParams(
     !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
+  }
+  if (compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      endpointClass !== "modelstudio-native" &&
+        !(
+          endpointClass === "default" &&
+          ["modelstudio", "dashscope", "qwen"].includes(model.provider)
+        ),
+      !compat.requiresStringContent,
+    );
   }
   return params;
 }

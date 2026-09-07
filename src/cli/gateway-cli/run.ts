@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { triageAfterFailure } from "../../commands/triage-failure.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -20,6 +21,7 @@ import {
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
 import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
+import { SessionStoreMigrationRequiredError } from "../../config/sessions/migration-required.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -34,10 +36,13 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   completeGatewayBootLifecycle,
@@ -1053,6 +1058,46 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let tryRecoverChannelAutostartSuppression: (() => boolean) | undefined;
   let activeBootId: string | undefined;
+  let bootRecorded = false;
+  let triageAttempted = false;
+  const triageStartupFailure = async (error: unknown, signal?: AbortSignal) => {
+    if (
+      triageAttempted ||
+      !bootRecorded ||
+      signal?.aborted ||
+      isAbortError(error) ||
+      isGatewayLockError(error) ||
+      isInvalidConfigError(error) ||
+      isTailscaleRouteOwnershipConflictError(error) ||
+      collectNestedErrorCandidates(error).some(
+        (candidate) =>
+          candidate instanceof SessionStoreMigrationRequiredError ||
+          candidate instanceof GatewayStartupCleanupError,
+      ) ||
+      resolveGatewayStartupMaintenanceReason(error)
+    ) {
+      return;
+    }
+    // Unconfirmed startup cleanup retains its generation; never overlap it with a fixer.
+    // Supervised retries reuse the persisted breaker transition to avoid agent storms.
+    if (
+      (supervisor || process.env.OPENCLAW_SERVICE_MARKER) &&
+      !crashLoopDecision?.shouldWriteStabilityBundle
+    ) {
+      return;
+    }
+    triageAttempted = true;
+    await triageAfterFailure(
+      defaultRuntime,
+      {
+        kind: "gateway-startup",
+        phase: "startup",
+        error: formatErrorMessage(error),
+        gateway: "verify-running",
+      },
+      signal,
+    );
+  };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
@@ -1067,6 +1112,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     // Shared-state schema failures make this write fail open, so no lifecycle
     // row exists for Doctor to reconcile after it repairs the schema.
     activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
+    bootRecorded = activeBootId !== undefined;
     channelAutostartSuppression = undefined;
     tryRecoverChannelAutostartSuppression = undefined;
     if (crashLoopDecision.recovered) {
@@ -1119,6 +1165,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
+      onRestartStartupFailure: triageStartupFailure,
       start: async ({
         processStartedAt,
         startupStartedAt,
@@ -1196,6 +1243,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.error(
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
+    await triageStartupFailure(err);
     defaultRuntime.exit(resolveGatewayStartupFailureExitCode(err));
   }
 }

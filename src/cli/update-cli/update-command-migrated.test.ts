@@ -51,7 +51,7 @@ it.each([
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
 ])(
-  "classifies activation after a first serving turn (agent=$agentId, changed=$changed)",
+  "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
     const stateDir = await fs.realpath(dirs.make("update-first-serving-turn-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -199,6 +199,7 @@ it.each([false, true])(
 
     const result = await continueMigratedUpdateInFreshProcess(
       {
+        mutationStarted: true,
         result: {
           status: "error",
           reason: "doctor-failed",
@@ -252,6 +253,12 @@ it.each([false, true])(
       },
       progress.pendingSteps,
     );
+    expect(result.automaticTriage).toMatchObject({
+      kind: "update",
+      phase: "state-migrated-no-rollback",
+      installationRoot: root,
+      gateway: "preserve",
+    });
     expect(result.exitCode).not.toBe(0);
     expect(result.result).toMatchObject({
       runId: created.runId,

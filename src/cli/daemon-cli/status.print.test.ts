@@ -105,7 +105,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
     warnText: (text: string) => text,
     errorText: (text: string) => text,
   }),
-  filterDaemonEnv: () => ({}),
   resolveRuntimeStatusColor: () => "",
   safeDaemonEnv: () => [],
 }));
@@ -180,6 +179,10 @@ describe("printDaemonStatus", () => {
       expect(payload).toHaveProperty("service.command.reloadPending", true);
       expect(JSON.stringify(payload)).not.toContain("gateway-token");
     }
+    expect(command.definitionPaths).toEqual(["/etc/systemd/user/private-definition.conf"]);
+    expect(command.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("effective-gateway-token");
+    expect(command.managedDefinition).toBeDefined();
+    expect(command.managedOverrides).toBeDefined();
   });
 
   it("prints user-manager pending reload guidance after the service file", () => {

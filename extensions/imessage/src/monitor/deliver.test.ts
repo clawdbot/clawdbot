@@ -325,7 +325,7 @@ describe("deliverIMessageReply", () => {
       content: "first\nsecond",
       receipt: { platformMessageIds: ["accepted-first", "accepted-second"] },
     });
-    expect(delivered?.receipt).not.toHaveProperty("replyToId");
+    expect(delivered).not.toHaveProperty("receipt.replyToId");
   });
 
   it("preserves earlier media receipts when a later native caption fails", async () => {

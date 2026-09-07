@@ -37,7 +37,10 @@ import {
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
-import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
+import {
+  createNodeWorkspaceRetainCoordinator,
+  type NodeWorkerBundleRetention,
+} from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./worker-environments/placement-dispatch-startup.js";
@@ -69,6 +72,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
+  nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   persistAbandonedPartial?: (request: {
     sessionId: string;
     sessionKey: string;
@@ -119,6 +123,7 @@ export function createGatewayWorkerPlacementRuntime(
     loadWorkerPlacementSessionRuntimeModule,
   );
   const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
+    bundleRetention: params.nodeWorkerBundleRetention,
     gatewayNamespace: params.gatewayNamespace,
     placements: params.placements,
     environments: params.environments,
@@ -594,7 +599,7 @@ export function createGatewayWorkerPlacementRuntime(
         }
         if (!stopped) {
           stopped = true;
-          // Cancel only enrollment: admitted recovery may still finish attaching before service stop.
+          // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
           params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;
@@ -633,35 +638,30 @@ export function createGatewayWorkerPlacementRuntime(
     try {
       // Track startup reconciliation in the placement slot so a concurrent
       // close prelude drains it before uninstalling guards and stopping environments.
-      const startupRecovery = recoverGatewayWorkerPlacementWorkspaces({
-        placements: params.placements,
-        resolveWorkspace,
-      });
-      placementReconcile.current = startupRecovery;
-      try {
-        await startupRecovery;
-      } finally {
-        if (placementReconcile.current === startupRecovery) {
-          placementReconcile.current = undefined;
+      for (const reconcile of [
+        () =>
+          recoverGatewayWorkerPlacementWorkspaces({
+            placements: params.placements,
+            resolveWorkspace,
+          }),
+        () =>
+          publishPlacementChanges(async () => {
+            await rawDispatchService.reconcile("startup");
+            await reconcilePublications();
+          }),
+      ]) {
+        const current = reconcile();
+        placementReconcile.current = current;
+        try {
+          await current;
+        } finally {
+          if (placementReconcile.current === current) {
+            placementReconcile.current = undefined;
+          }
         }
-      }
-      if (hooks.isClosePreludeStarted()) {
-        return await stopBeforeReady();
-      }
-      const startupReconcile = publishPlacementChanges(async () => {
-        await rawDispatchService.reconcile("startup");
-        await reconcilePublications();
-      });
-      placementReconcile.current = startupReconcile;
-      try {
-        await startupReconcile;
-      } finally {
-        if (placementReconcile.current === startupReconcile) {
-          placementReconcile.current = undefined;
+        if (hooks.isClosePreludeStarted()) {
+          return await stopBeforeReady();
         }
-      }
-      if (hooks.isClosePreludeStarted()) {
-        return await stopBeforeReady();
       }
       void nodeWorkspaceRetention.start();
       if (hooks.isClosePreludeStarted()) {

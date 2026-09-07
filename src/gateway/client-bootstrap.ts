@@ -184,6 +184,7 @@ export async function resolveGatewayClientBootstrap(params: {
   localPortOverride?: number;
   configPath?: string;
   explicitTlsFingerprint?: string;
+  serviceTargetUrl?: string;
   skipImplicitAuth?: boolean;
   allowStoredOriginAuth?: (scope: string) => boolean;
   overrideAuthErrorHint?: string;
@@ -194,6 +195,7 @@ export async function resolveGatewayClientBootstrap(params: {
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    serviceTargetUrl?: string;
   }) => GatewayConnectionDetails;
 }): Promise<{
   url: string;
@@ -228,6 +230,7 @@ export async function resolveGatewayClientBootstrap(params: {
     ...(params.localPortOverride !== undefined
       ? { localPortOverride: params.localPortOverride }
       : {}),
+    ...(params.serviceTargetUrl ? { serviceTargetUrl: params.serviceTargetUrl } : {}),
   });
   const detectedUrlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   const urlOverrideSource = urlOverride.source ?? detectedUrlOverrideSource;

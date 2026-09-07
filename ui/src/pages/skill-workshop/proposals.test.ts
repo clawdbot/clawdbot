@@ -20,6 +20,15 @@ import {
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
+vi.mock("../../lib/skill-workshop/diff-worker.ts", async () => {
+  const { computeSkillWorkshopDiff } = await import("../../lib/skill-workshop/diff.ts");
+  return {
+    compareSkillWorkshopInstructions: vi.fn(async (previous: string, current: string) =>
+      computeSkillWorkshopDiff(previous, current),
+    ),
+  };
+});
+
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
 const DRAFT_HASH = "a".repeat(64);
 const REVISION_HASH = "b".repeat(64);
@@ -279,7 +288,10 @@ describe("Skill Workshop proposal RPCs", () => {
       skillWorkshopInstalledSkills: [installed],
     });
     request.mockReturnValueOnce(previous.promise);
-    const loading = selectSkillWorkshopInstalledSkill(state, context, installed.name);
+    const onProgress = vi.fn();
+    const loading = selectSkillWorkshopInstalledSkill(state, context, installed.name, {
+      onProgress,
+    });
     if (source === "agent") {
       snapshot.assistantAgentId = "writer";
       state.skillWorkshopAgentId = "writer";
@@ -289,6 +301,8 @@ describe("Skill Workshop proposal RPCs", () => {
     previous.resolve({ ...installed, content: "Stale source content" });
     await loading;
 
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(state.skillWorkshopInstalledSkills[0]?.read).not.toHaveProperty("content");
     expect(state.skillWorkshopInstalledSkills[0]?.read).not.toMatchObject({
       status: "ready",
       content: "Stale source content",

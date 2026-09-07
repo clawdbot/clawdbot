@@ -4939,6 +4939,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ];
 
   const requesterSettleCases = [
+    ...[
+      {
+        name: "automatic delivery",
+        evidence: { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } },
+      },
+      {
+        name: "final message tool",
+        evidence: {
+          messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
+        },
+      },
+    ].map(({ name, evidence }) => ({
+      name: `preserves ${name} final evidence alongside settled continuation`,
+      routes: [externalRequesterSettleRoute],
+      recordsVisibleFinal: true,
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          requesterContinuationSettled: true,
+          ...evidence,
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    })),
+    {
+      name: "acknowledges a core-settled next wave without recording a visible final",
+      routes: requesterSettleRoutes,
+      response: {
+        result: { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    ...[
+      { yielded: true, settled: undefined, error: undefined, aborted: undefined },
+      { yielded: false, settled: true, error: undefined, aborted: undefined },
+      { yielded: true, settled: true, error: { kind: "incomplete_turn" }, aborted: undefined },
+      { yielded: true, settled: true, error: undefined, aborted: true },
+    ].map(({ yielded, settled, error, aborted }) => ({
+      name: `rejects unproven or failed continuation (${yielded}/${settled}/${Boolean(error)}/${aborted})`,
+      routes: requesterSettleRoutes,
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded, error, aborted },
+          acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+          requesterContinuationSettled: settled,
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    })),
     ...["accepted", "in_flight"].map((status) => ({
       name: `does not record ${status} handoff as a visible final`,
       routes: requesterSettleRoutes,

@@ -239,6 +239,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     reconcileChatRunLifecycle(state, {
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
+      errorMessage: payload.errorMessage?.trim()
+        ? resolveGatewayErrorText(payload, null)
+        : undefined,
       runId: terminalRunId,
       sessionKey: state.sessionKey,
       sessionKeys,

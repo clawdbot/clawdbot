@@ -306,8 +306,11 @@ The structured warning also includes `pid`, Node's `threadId`, and `isMainThread
 for the opener emitting it. Inspect each `openclaw logs --json` event's original
 `raw` record; ordinary console text omits structured metadata.
 An opener on the main thread may have awaited an integrity Worker, so these
-fields do not identify the thread performing every phase. Correlate the process
-ID with the log timestamp and current process; PIDs can be reused after exit.
+fields do not identify the thread performing every phase. `admissionMode` records
+the actual `sync` or `async` open driver. Async admission offloads its initial
+integrity check; resumed validation and repair can still run on the opener.
+Correlate the process ID with the log timestamp and current process; PIDs can be
+reused after exit.
 
 ### Slow reply preparation
 
@@ -323,6 +326,11 @@ flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Co
 logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
+
+Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
+`pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing
+a log file. These identify the summary emitter, not where every timed operation
+ran. Elapsed stage time can include asynchronous waits and is not CPU time.
 
 Use the first `turn_accepted`, `model_call_started`, `tool_execution_started`, and
 `assistant_output_started` milestones to separate startup from later activity.

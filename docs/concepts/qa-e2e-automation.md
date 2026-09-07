@@ -1419,6 +1419,10 @@ producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 
+`qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
+own Markdown table cells, collapsing whitespace for display. The JSON summary
+preserves the annotation values, including internal line breaks.
+
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,
 Multipass, Testbox, or release lane for the behavior under test. For

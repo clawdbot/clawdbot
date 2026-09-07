@@ -67,6 +67,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../process/supervisor/service-child-relay",
     distWorkerPath: "process/supervisor/service-child-relay.js",
   },
+  terminalPty: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/terminal-pty-worker",
+    distWorkerPath: "process/terminal-pty-worker.js",
+  },
   serviceChildGroupAnchor: {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-group-anchor",

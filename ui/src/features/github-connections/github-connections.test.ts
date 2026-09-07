@@ -38,6 +38,8 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     selfUser: profileId ? { id: profileId } : null,
   } as ApplicationGatewaySnapshot;
   const context = {
+    basePath: "/ui",
+    navigate: vi.fn(),
     gateway: {
       snapshot,
       subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
@@ -91,14 +93,24 @@ it("uses explicit unbound admin context for System without probing personal stat
     selected: { scope: "system", configured: true, identity: system },
     effective: { ...system, source: "agent-override", account: { login: "agent-account" } },
   }));
-  const { element } = mount(["operator.admin"], null, request);
+  const { element, context } = mount(["operator.admin"], null, request);
   await waitForFast(() => expect(element.textContent).toContain("@system-account"));
   expect(request.mock.calls).toEqual([
     ["tools.github.status", { agentId: "main", selectedScope: "system" }],
   ]);
   expect(element.textContent).toContain("Personal sign-in required");
   expect(element.textContent).not.toContain("Connect My GitHub");
-  expect(element.textContent).not.toContain("@agent-account");
+  const shared = element.querySelector('[data-github-connection="system"]');
+  const agent = element.querySelector('[data-github-connection="agent"]');
+  expect(shared?.textContent).toContain("@system-account");
+  expect(shared?.textContent).not.toContain("@agent-account");
+  expect(agent?.textContent).toContain("@agent-account");
+  expect(agent?.textContent).toContain("Agent override");
+  expect(agent?.textContent).toContain("Verified");
+  agent?.querySelector("button")?.click();
+  expect(context.navigate).toHaveBeenCalledWith("agents", {
+    pathname: "/ui/settings/agents/main/tools",
+  });
 });
 
 it("shows an identified status failure once while opening personal setup", async () => {

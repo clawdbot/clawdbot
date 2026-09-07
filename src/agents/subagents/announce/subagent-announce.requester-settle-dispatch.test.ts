@@ -52,7 +52,8 @@ vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);
 vi.mock("../spawn/subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStore: (sessionKey: string) =>
+    sessionKey.split(":subagent:").length - 1,
 }));
 vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -134,6 +135,59 @@ describe("requester settle dispatch deadline", () => {
     setSubagentAnnounceDeliveryDepsForTest();
     vi.useRealTimers();
   });
+
+  it.each([false, true])(
+    "wakes a nested yielded requester once (child completed before yield=%s)",
+    async (afterRequesterYield) => {
+      const requesterSessionKey = "agent:main:subagent:middle";
+      const child = settledChild();
+      child.requesterSessionKey = requesterSessionKey;
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [child.runId],
+        requesterYieldBatch: true,
+        afterRequesterYield: afterRequesterYield ? true : undefined,
+        rearmGeneration: 1,
+      };
+      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      deliver.mockResolvedValue({ delivered: true, path: "direct" });
+      const completeBatch = vi.fn((batch: readonly SubagentRunRecord[]) => {
+        for (const entry of batch) {
+          entry.requesterSettleWake = undefined;
+        }
+      });
+      const params = {
+        requesterSessionKey,
+        settledEntry: child,
+        transitionBatch: (
+          batch: readonly SubagentRunRecord[],
+          state: RequesterSettleWakeBatchState,
+        ) => {
+          for (const entry of batch) {
+            entry.requesterSettleWake = state;
+          }
+        },
+        completeBatch,
+      };
+
+      await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(true);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetRequesterSessionKey: requesterSessionKey,
+          requesterIsSubagent: true,
+          requireVisibleReply: true,
+          sourceTool: "subagent_settle",
+          triggerMessage: expect.stringContaining("child result"),
+          directIdempotencyKey: `announce:requester-settle:main:${requesterSessionKey}:${child.runId}:yield-1`,
+        }),
+      );
+      expect(completeBatch).toHaveBeenCalledWith([child], 1, { delivered: true, path: "direct" });
+      await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects a replaced anchor after requester wake runtime loading", async () => {
     const retired = settledChild();

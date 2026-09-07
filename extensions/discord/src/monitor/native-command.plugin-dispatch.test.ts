@@ -919,125 +919,78 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("ignores non-Discord generic command owners when authorizing guild plugin commands", async () => {
-    const cfg = {
-      commands: {
-        ownerAllowFrom: ["telegram:123456789"],
-      },
-      channels: {
-        discord: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "345678901234567890": {
-              channels: {
-                "234567890123456789": {
-                  enabled: true,
-                  requireMention: false,
+  for (const { name, ownerAllowFrom } of [
+    {
+      name: "ignores non-Discord generic command owners when authorizing guild plugin commands",
+      ownerAllowFrom: "telegram:123456789",
+    },
+    {
+      name: "keeps non-matching Discord command owners from restricting guild plugin commands",
+      ownerAllowFrom: "discord:123456789012345678",
+    },
+  ]) {
+    it(name, async () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: [ownerAllowFrom],
+        },
+        channels: {
+          discord: {
+            groupPolicy: "allowlist",
+            guilds: {
+              "345678901234567890": {
+                channels: {
+                  "234567890123456789": {
+                    enabled: true,
+                    requireMention: false,
+                  },
                 },
               },
             },
           },
         },
-      },
-    } as OpenClawConfig;
-    const commandSpec: NativeCommandSpec = {
-      name: "pair",
-      description: "Pair",
-      acceptsArgs: true,
-    };
-    const interaction = createInteraction({
-      channelType: ChannelType.GuildText,
-      channelId: "234567890123456789",
-      guildId: "345678901234567890",
-      guildName: "Test Guild",
-    });
-    interaction.user.id = "999999999999999999";
-    interaction.options.getString.mockReturnValue("now");
-
-    expect(
-      registerPluginCommand("demo-plugin", {
+      } as OpenClawConfig;
+      const commandSpec: NativeCommandSpec = {
         name: "pair",
-        description: "Pair device",
+        description: "Pair",
         acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
-      text: "open:now",
+      };
+      const interaction = createInteraction({
+        channelType: ChannelType.GuildText,
+        channelId: "234567890123456789",
+        guildId: "345678901234567890",
+        guildName: "Test Guild",
+      });
+      interaction.user.id = "999999999999999999";
+      interaction.options.getString.mockReturnValue("now");
+
+      expect(
+        registerPluginCommand("demo-plugin", {
+          name: "pair",
+          description: "Pair device",
+          acceptsArgs: true,
+          requireAuth: false,
+          handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
+        }),
+      ).toEqual({ ok: true });
+      const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
+        text: "open:now",
+      });
+      const command = await createPluginCommand({ cfg, name: commandSpec.name });
+
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(
+        interaction as unknown,
+      );
+
+      expectPluginCommandExecution({
+        mock: executeSpy,
+        commandName: "pair",
+        expected: { args: "now" },
+      });
+      expectFollowUpFields(interaction, { content: "open:now" });
+      expect(interaction.reply).not.toHaveBeenCalled();
     });
-    const command = await createPluginCommand({ cfg, name: commandSpec.name });
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expectPluginCommandExecution({
-      mock: executeSpy,
-      commandName: "pair",
-      expected: { args: "now" },
-    });
-    expectFollowUpFields(interaction, { content: "open:now" });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
-  it("keeps non-matching Discord command owners from restricting guild plugin commands", async () => {
-    const cfg = {
-      commands: {
-        ownerAllowFrom: ["discord:123456789012345678"],
-      },
-      channels: {
-        discord: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "345678901234567890": {
-              channels: {
-                "234567890123456789": {
-                  enabled: true,
-                  requireMention: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const commandSpec: NativeCommandSpec = {
-      name: "pair",
-      description: "Pair",
-      acceptsArgs: true,
-    };
-    const interaction = createInteraction({
-      channelType: ChannelType.GuildText,
-      channelId: "234567890123456789",
-      guildId: "345678901234567890",
-      guildName: "Test Guild",
-    });
-    interaction.user.id = "999999999999999999";
-    interaction.options.getString.mockReturnValue("now");
-
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
-      text: "open:now",
-    });
-    const command = await createPluginCommand({ cfg, name: commandSpec.name });
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expectPluginCommandExecution({
-      mock: executeSpy,
-      commandName: "pair",
-      expected: { args: "now" },
-    });
-    expectFollowUpFields(interaction, { content: "open:now" });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
+  }
 
   it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
     const cfg = {
