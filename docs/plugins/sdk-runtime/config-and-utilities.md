@@ -67,9 +67,9 @@ stronger approval requirement. Provider adapters retain their own strict input
 validation and native sandbox/approval projection.
 
 These typed object members replace the retired `minSecurity` and `maxAsk`
-exports from `infra-runtime`. The retired `resolveExecModeFromPolicy` and
-`resolveExecPolicyForMode` projections can also migrate to
-`execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
+exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
+`resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
+to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
 Native command probes should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
