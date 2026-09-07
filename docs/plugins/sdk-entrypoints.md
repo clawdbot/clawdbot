@@ -672,18 +672,23 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## MCP subprocess runtime
 
-**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening the connection. Call `await mcpStdioRuntime.load()` to obtain the shared client factory, transport, startup deadline, and disposal helpers. The object loads those implementations lazily.
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
 
 ```ts
 const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
-const { createMcpStdioClient, OpenClawStdioClientTransport, connectMcpClient, disposeMcpClient } =
-  await mcpStdioRuntime.load();
+const { createMcpStdioClient } = await mcpStdioRuntime.load();
 ```
 
-Use this seam when a plugin owns an MCP proxy subprocess. `createMcpStdioClient()` creates a client backed by the MCP SDK's request correlation and deadlines. Its `connect(transport)` attaches the transport; the caller then performs initialization with `request(method, params, timeoutMs)` and sends notifications with `notification(method, params)`. Requests return an object result. `close()` closes the connection, and `isTimeout(error)` identifies an MCP request-timeout error. Initialization policy stays with the plugin; the SDK's experimental task and server-handler APIs are not exposed. Client and message types can be inferred from the returned factory and transport members.
+Use `createMcpStdioClient(params)` for a caller-owned MCP proxy subprocess fronting a stateful driver. OpenClaw owns the subprocess and its descendants, newline framing and JSON-RPC validation, initialization, request admission, deadlines, and shutdown. The client starts connecting when the factory returns. Keep this runtime out of plugin registration and paths that do not open MCP connections.
 
-`OpenClawStdioClientTransport` owns the launched subprocess and its descendants. It accepts `command`, optional `args`, `cwd`, `env`, `prepareDataDir`, and `stderr`. By default it merges the MCP SDK's default environment with `env` and uses the SDK's bounded JSON-RPC decoder. `exactEnv: true` uses only the supplied environment. A custom decoder implements `append`, `readMessage`, and `clear`; it must enforce byte bounds before buffering and validate each returned JSON-RPC message.
+Supply `command`, optional `args`, and an exact `env`; the child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
 
-`onexit` receives the root process's `{ code, signal }`. It is separate from cleanup confirmation: `onclose` retires the connection, while `close()` joins owned-process cleanup. `retire()` closes input and retires RPC admission immediately; `terminate()` additionally sends TERM. Each operation retains cleanup ownership, and its returned promise still joins cleanup. `forceClose()` requests KILL. These methods own only the spawned process tree, never a separately started service reached through its socket.
+The caller supplies `errors.unavailable(message, cause?)` and `errors.protocol(message, cause?)`, each returning an `Error`. The first classifies process, lifecycle, admission, deadline, and cancellation failures. The second classifies malformed frames, non-timeout JSON-RPC errors, and handshake contract violations. Plugin-specific tool-result normalization stays with the caller.
 
-`connectMcpClient({ client, transport, timeoutMs, signal? })` applies one startup deadline around the client's connection operation. Keep transport startup and initialization inside that operation. The client's `connect` callback receives the composed abort signal in its request options; observe it to retire caller admission immediately while cleanup finishes. Always dispose the owned session with `disposeMcpClient({ client, transport, transportType: "stdio", detachStderr? })`; its result is `"closed"` or `"uncertain"`. Report uncertain cleanup instead of treating it as confirmed shutdown. Keep this runtime out of plugin registration and paths that do not open MCP connections.
+The returned client exposes three methods:
+
+- `isAvailable()` synchronously reports whether initialization completed and the connection remains usable.
+- `request(method, params, { timeoutMs, signal? })` waits for startup and returns the object result. An already-aborted signal or a full pending-request limit rejects only that call. After admission, cancellation or timeout retires the entire connection and rejects pending requests with the retained fatal error. The client suppresses SDK cancellation notifications because it terminates the process instead. A non-timeout JSON-RPC error response rejects only its matching request through `errors.protocol`.
+- `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
+
+Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained; create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.
