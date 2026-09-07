@@ -922,7 +922,12 @@ export function createChannelIngressQueue<
         if (candidateIds) {
           select = select.where("event_id", "in", candidateIds);
         }
-        if (effectiveBlocked.size > 0 && !claimOptions?.deriveLaneKey) {
+        if (
+          effectiveBlocked.size > 0 &&
+          // Stored keys are authoritative unless a reconcile callback can remap
+          // them; reconcilable rows must stay visible to the JS-level pass.
+          !claimOptions?.reconcileStoredLaneKey
+        ) {
           select = select.where((eb) =>
             eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...effectiveBlocked])]),
           );
@@ -940,6 +945,7 @@ export function createChannelIngressQueue<
         while (!selected) {
           const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
           let tombstonedCorruptRow = false;
+          let anyRowValid = false;
           for (const row of rows) {
             const rec = baseRecord<TPayload, TMetadata>(row);
             if (rec === null) {
@@ -959,6 +965,7 @@ export function createChannelIngressQueue<
               }
               continue;
             }
+            anyRowValid = true;
             const laneKey = resolveClaimLaneKey(rec);
             if (!laneKey || !effectiveBlocked.has(laneKey)) {
               selected = { row, record: rec };
@@ -967,9 +974,38 @@ export function createChannelIngressQueue<
           }
           if (
             selected ||
-            !tombstonedCorruptRow ||
-            corruptReconciliations >= MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM
+            rows.length === 0 ||
+            (tombstonedCorruptRow &&
+              corruptReconciliations >= MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM)
           ) {
+            break;
+          }
+          // All scanned rows were lane-blocked or corrupt. Advance the keyset
+          // cursor past the last row so the next query starts beyond the prefix.
+          if (!tombstonedCorruptRow && anyRowValid && rows.length > 0) {
+            const lastRow = rows[rows.length - 1];
+            if (!lastRow) {
+              break;
+            }
+            orderedSelect = (
+              claimOptions?.orderBy === "id"
+                ? select.orderBy("event_id", "asc").where("event_id", ">", lastRow.event_id)
+                : select
+                    .orderBy("received_at", "asc")
+                    .orderBy("event_id", "asc")
+                    .where((eb) =>
+                      eb.or([
+                        eb("received_at", ">", lastRow.received_at),
+                        eb.and([
+                          eb("received_at", "=", lastRow.received_at),
+                          eb("event_id", ">", lastRow.event_id),
+                        ]),
+                      ]),
+                    )
+            ).limit(normalizeScanLimit(claimOptions?.scanLimit));
+            continue;
+          }
+          if (!tombstonedCorruptRow) {
             break;
           }
         }

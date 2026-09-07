@@ -409,6 +409,64 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it.each([
+    {
+      name: "claims past a full window of stored blocked-lane rows (SQL filter)",
+      // Rows have a stored lane_key; the first scan-window rows are all blocked.
+      // The SQL filter must exclude them so the free lane beyond the window is reachable.
+      laneKeyByRow: (row: number) => (row < 100 ? "blocked" : "free"),
+      blockedLaneKeys: ["blocked"],
+      scanLimit: 100,
+      expectedId: "row-100",
+    },
+    {
+      name: "claims past a full window of derived blocked-lane rows (keyset cursor)",
+      // Rows lack stored lane_key; deriveLaneKey assigns it. The first 100 rows
+      // all derive to "blocked" — the keyset cursor must advance past the window.
+      laneKeyByRow: undefined,
+      blockedLaneKeys: ["blocked"],
+      scanLimit: 100,
+      expectedId: "row-100",
+    },
+  ] as const)("$name", async ({ laneKeyByRow, blockedLaneKeys, scanLimit, expectedId }) => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      // Enqueue 100 blocked-lane rows, then 1 free-lane row.
+      for (let idx = 0; idx < 100; idx += 1) {
+        await queue.enqueue(
+          `row-${idx}`,
+          { lane: "blocked" },
+          { receivedAt: idx, laneKey: laneKeyByRow?.(idx) },
+        );
+      }
+      await queue.enqueue(
+        expectedId,
+        { lane: "free" },
+        { receivedAt: 100, laneKey: laneKeyByRow?.(100) },
+      );
+
+      // Production drains always pass deriveLaneKey alongside stored lane_keys.
+      // The SQL filter must not be skipped when deriveLaneKey is present.
+      const deriveLaneKey = (record: { payload: { lane: string } }) => record.payload.lane;
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys,
+        scanLimit,
+        deriveLaneKey,
+      });
+
+      expect(claimed?.id).toBe(expectedId);
+    });
+  });
+
   it("requires claim tokens before mutating claimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
