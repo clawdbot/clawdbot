@@ -40,6 +40,34 @@ describe("extractPdfContent", () => {
     });
   });
 
+  it("preserves extractor completeness metadata", async () => {
+    const metadata = {
+      pages: {
+        processed: [1, 2],
+        total: 3,
+        selection: "automatic" as const,
+        truncated: true,
+      },
+      textTruncated: true,
+      imagesTruncated: false,
+    };
+    extractDocumentContentMock.mockResolvedValue({
+      text: "partial pdf",
+      images: [],
+      metadata,
+      extractor: "pdf",
+    });
+
+    await expect(
+      extractPdfContent({
+        buffer: Buffer.from("%PDF-1.4"),
+        maxPages: 2,
+        maxPixels: 100,
+        minTextChars: 10,
+      }),
+    ).resolves.toEqual({ text: "partial pdf", images: [], metadata });
+  });
+
   it("passes PDF passwords through to document extractors", async () => {
     extractDocumentContentMock.mockResolvedValue({
       text: "encrypted pdf",

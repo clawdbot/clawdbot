@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
+import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -19,6 +20,7 @@ import {
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { wrapExternalContent } from "../../security/external-content.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
@@ -81,7 +83,7 @@ const PdfToolSchema = Type.Object({
   ),
   pages: Type.Optional(
     Type.String({
-      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
+      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all, up to configured limit.',
     }),
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
@@ -106,6 +108,7 @@ const CODEX_PDF_INSTRUCTIONS =
 function buildPdfExtractionContext(
   prompt: string,
   extractions: PdfExtractedContent[],
+  explicitSelectionLimit?: number,
   model?: { api?: string },
 ): Context {
   const content: Array<
@@ -114,9 +117,16 @@ function buildPdfExtractionContext(
 
   // Add extracted text and images
   for (const [i, extraction] of extractions.entries()) {
-    if (extraction.text.trim()) {
+    const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
+    if (extraction.text.trim() || notice) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
-      content.push({ type: "text", text: label + extraction.text });
+      const text = extraction.text.trim()
+        ? wrapExternalContent(extraction.text, { source: "unknown", includeWarning: false })
+        : undefined;
+      content.push({
+        type: "text",
+        text: label + [notice, text].filter(Boolean).join("\n"),
+      });
     }
     for (const img of extraction.images) {
       content.push({ type: "image", data: img.data, mimeType: img.mimeType });
@@ -133,6 +143,19 @@ function buildPdfExtractionContext(
     ...(systemPrompt ? { systemPrompt } : {}),
     messages: [{ role: "user", content, timestamp: Date.now() }],
   };
+}
+
+function collectPdfTruncationNotices(
+  extractions: PdfExtractedContent[],
+  explicitSelectionLimit?: number,
+): string[] {
+  return extractions.flatMap((extraction, index) => {
+    const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
+    if (!notice) {
+      return [];
+    }
+    return extractions.length > 1 ? `PDF ${index + 1}: ${notice}` : notice;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +176,7 @@ async function runPdfPrompt(params: {
   pdfBuffers: Array<{ buffer: Buffer; filename: string }>;
   password?: string;
   pageNumbers?: number[];
+  explicitSelectionLimit?: number;
   getExtractions: () => Promise<PdfExtractedContent[]>;
   signal?: AbortSignal;
 }): Promise<{
@@ -211,13 +235,6 @@ async function runPdfPrompt(params: {
       committedPdfModelConfig,
     );
     let nativePdfs: Array<{ base64: string; filename: string }> | undefined;
-    let extractionCache: PdfExtractedContent[] | null = null;
-    const getExtractions = async (): Promise<PdfExtractedContent[]> => {
-      if (!extractionCache) {
-        extractionCache = await params.getExtractions();
-      }
-      return extractionCache;
-    };
 
     const result = await runWithImageModelFallback({
       cfg: effectiveCfg,
@@ -313,7 +330,7 @@ async function runPdfPrompt(params: {
           }),
         );
 
-        const extractions = await getExtractions();
+        const extractions = await params.getExtractions();
         const completeExtraction = async (context: Context) => {
           // A run cancelled mid-dispatch must not buy another provider call.
           params.signal?.throwIfAborted();
@@ -336,16 +353,26 @@ async function runPdfPrompt(params: {
             );
           }
           const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
-            text: e.text,
+            ...e,
             images: [],
           }));
-          const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
+          const context = buildPdfExtractionContext(
+            params.prompt,
+            textOnlyExtractions,
+            params.explicitSelectionLimit,
+            model,
+          );
           const message = await completeExtraction(context);
           const text = coercePdfAssistantText({ message, provider, model: modelId });
           return { text, provider, model: modelId, native: false };
         }
 
-        const context = buildPdfExtractionContext(params.prompt, extractions, model);
+        const context = buildPdfExtractionContext(
+          params.prompt,
+          extractions,
+          params.explicitSelectionLimit,
+          model,
+        );
         const message = await completeExtraction(context);
         const text = coercePdfAssistantText({ message, provider, model: modelId });
         return { text, provider, model: modelId, native: false };
@@ -425,7 +452,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
+    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects up to the configured page limit from a range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
@@ -466,7 +493,8 @@ export function createPdfTool(options?: {
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
-      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      const pageSelection = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      const pageNumbers = pageSelection?.pages;
       const password = typeof record.password === "string" ? record.password : undefined;
 
       const pdfModelConfig =
@@ -580,7 +608,7 @@ export function createPdfTool(options?: {
         });
       }
 
-      const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+      const extractLoadedPdfs = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
           // Extraction is sequential and can be CPU-heavy. Do not start the next
@@ -599,6 +627,10 @@ export function createPdfTool(options?: {
         }
         return extractedAll;
       };
+      // Native providers remain extraction-free; fallback candidates share one extraction
+      // so provider retries cannot repeat CPU work or observe different document prefixes.
+      let extractionPromise: Promise<PdfExtractedContent[]> | undefined;
+      const getExtractions = () => (extractionPromise ??= extractLoadedPdfs());
 
       // Do not issue a paid PDF-model call for an already-aborted run.
       signal?.throwIfAborted();
@@ -617,6 +649,7 @@ export function createPdfTool(options?: {
         pdfBuffers: loadedPdfs,
         ...(password ? { password } : {}),
         pageNumbers,
+        ...(pageSelection?.truncated ? { explicitSelectionLimit: pageSelection.pages.length } : {}),
         getExtractions,
       });
 
@@ -635,7 +668,14 @@ export function createPdfTool(options?: {
             ),
           };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      const truncationNotices = result.native
+        ? []
+        : collectPdfTruncationNotices(
+            await getExtractions(),
+            pageSelection?.truncated ? pageSelection.pages.length : undefined,
+          );
+      const text = [...truncationNotices, result.text].join("\n");
+      return buildTextToolResult({ ...result, text }, { native: result.native, ...pdfDetails });
     },
   };
 }

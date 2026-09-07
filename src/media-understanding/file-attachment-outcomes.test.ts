@@ -7,6 +7,27 @@ import {
 const image = { type: "image" as const, data: "page", mimeType: "image/png" };
 
 describe("renderFileAttachmentOutcome", () => {
+  it("renders trusted partial-document metadata outside untrusted content", () => {
+    const rendered = renderFileAttachmentOutcome({
+      kind: "extracted",
+      text: "visible prefix",
+      images: [],
+      metadata: {
+        pages: {
+          total: 21,
+          processed: [1, 2, 3],
+          selection: "automatic",
+          truncated: true,
+        },
+        textTruncated: true,
+        imagesTruncated: false,
+      },
+    });
+
+    expect(rendered).toMatch(/^\[Partial document: 3 of 21 pages processed; text truncated\.\]\n/);
+    expect(rendered).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+  });
+
   it.each<{ outcome: FileAttachmentOutcome; expected: string | null }>([
     {
       outcome: { kind: "extracted", text: "hello", images: [image] },

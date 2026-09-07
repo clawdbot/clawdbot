@@ -46,7 +46,9 @@ export function providerSupportsNativePdf(provider: string): boolean {
   return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
-/** Parses a page range string into sorted, unique, 1-based page numbers within `maxPages`. */
+export type PdfPageSelection = { pages: number[]; truncated: boolean };
+
+/** Parses a page range into at most `maxPages` sorted, unique, 1-based page numbers. */
 function readPageNumber(value: string, errorLabel: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
@@ -55,8 +57,24 @@ function readPageNumber(value: string, errorLabel: string): number {
   return parsed;
 }
 
-export function parsePageRange(range: string, maxPages: number): number[] {
+export function parsePageRange(range: string, maxPages: number): PdfPageSelection {
   const pages = new Set<number>();
+  let truncated = false;
+  const addPage = (page: number): boolean => {
+    if (pages.has(page)) {
+      return true;
+    }
+    if (pages.size >= maxPages) {
+      truncated = true;
+      const largest = Math.max(...pages);
+      if (page >= largest) {
+        return false;
+      }
+      pages.delete(largest);
+    }
+    pages.add(page);
+    return true;
+  };
   const parts = range.split(",").map((p) => p.trim());
   for (const part of parts) {
     if (!part) {
@@ -69,24 +87,24 @@ export function parsePageRange(range: string, maxPages: number): number[] {
       if (end < start) {
         throw new Error(`Invalid page range: "${part}"`);
       }
-      for (let i = start; i <= Math.min(end, maxPages); i++) {
-        pages.add(i);
+      for (let i = start; i <= end; i++) {
+        if (!addPage(i)) {
+          break;
+        }
       }
     } else {
       if (!/^\d+$/.test(part)) {
         throw new Error(`Invalid page number: "${part}"`);
       }
       const num = readPageNumber(part, "Invalid page number");
-      if (num <= maxPages) {
-        pages.add(num);
-      }
+      addPage(num);
     }
   }
   const parsedPages = Array.from(pages).toSorted((a, b) => a - b);
   if (parsedPages.length === 0) {
     throw new Error(`No PDF pages matched requested range "${range}"`);
   }
-  return parsedPages;
+  return { pages: parsedPages, truncated };
 }
 
 /** Converts a provider assistant message into PDF text or throws a model-labelled failure. */

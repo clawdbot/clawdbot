@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
+import type { DocumentExtractionMetadata } from "../plugins/document-extractor-types.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -25,6 +26,7 @@ type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
+  metadata?: DocumentExtractionMetadata;
 };
 
 /** PDF extraction limits applied before model-visible input_file content is produced. */
@@ -444,14 +446,29 @@ export async function extractFileContentFromBuffer(params: {
         },
       }),
     });
-    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
+    const text = truncateUtf16Safe(extracted.text, limits.maxChars);
+    const metadata: DocumentExtractionMetadata = {
+      ...extracted.metadata,
+      textTruncated:
+        extracted.metadata?.textTruncated === true || extracted.text.length > limits.maxChars,
+      imagesTruncated: extracted.metadata?.imagesTruncated === true,
+    };
     return {
       filename,
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
+      metadata,
     };
   }
 
-  const text = decodeTextContent(buffer, charset, limits.maxChars);
-  return { filename, text };
+  // Look past the output cap by one full UTF-16 code point to detect truncation.
+  const decodedText = decodeTextContent(buffer, charset, limits.maxChars + 2);
+  const text = truncateUtf16Safe(decodedText, limits.maxChars);
+  return {
+    filename,
+    text,
+    ...(decodedText.length > limits.maxChars
+      ? { metadata: { textTruncated: true, imagesTruncated: false } }
+      : {}),
+  };
 }

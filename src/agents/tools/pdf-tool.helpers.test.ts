@@ -32,28 +32,58 @@ const pdfMetadataSnapshot = createPluginMetadataSnapshotFixture({
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
 describe("parsePageRange", () => {
+  it("treats maxPages as a page-count limit, not a maximum page number", () => {
+    expect(parsePageRange("21", 20)).toEqual({ pages: [21], truncated: false });
+    expect(parsePageRange("18-50", 20)).toEqual({
+      pages: Array.from({ length: 20 }, (_, index) => index + 18),
+      truncated: true,
+    });
+  });
+
   it("parses a single page number", () => {
-    expect(parsePageRange("3", 20)).toEqual([3]);
+    expect(parsePageRange("3", 20)).toEqual({ pages: [3], truncated: false });
   });
 
   it("parses a page range", () => {
-    expect(parsePageRange("1-5", 20)).toEqual([1, 2, 3, 4, 5]);
+    expect(parsePageRange("1-5", 20)).toEqual({
+      pages: [1, 2, 3, 4, 5],
+      truncated: false,
+    });
   });
 
   it("parses comma-separated pages and ranges", () => {
-    expect(parsePageRange("1,3,5-7", 20)).toEqual([1, 3, 5, 6, 7]);
+    expect(parsePageRange("1,3,5-7", 20)).toEqual({
+      pages: [1, 3, 5, 6, 7],
+      truncated: false,
+    });
   });
 
   it("clamps to maxPages", () => {
-    expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it("throws when no requested pages are within maxPages", () => {
-    expect(() => parsePageRange("999", 20)).toThrow('No PDF pages matched requested range "999"');
+    expect(parsePageRange("1-100", 5)).toEqual({
+      pages: [1, 2, 3, 4, 5],
+      truncated: true,
+    });
   });
 
   it("deduplicates and sorts", () => {
-    expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
+    expect(parsePageRange("5,3,1,3,5", 20)).toEqual({
+      pages: [1, 3, 5],
+      truncated: false,
+    });
+  });
+
+  it("does not report truncation for duplicate pages at the limit", () => {
+    expect(parsePageRange("1-5,1-5", 5)).toEqual({
+      pages: [1, 2, 3, 4, 5],
+      truncated: false,
+    });
+  });
+
+  it("keeps the lowest sorted pages regardless of range order", () => {
+    expect(parsePageRange("100,101,1-3", 2)).toEqual({
+      pages: [1, 2],
+      truncated: true,
+    });
   });
 
   it("throws on invalid page number", () => {
@@ -89,7 +119,7 @@ describe("parsePageRange", () => {
   });
 
   it("handles empty parts gracefully", () => {
-    expect(parsePageRange("1,,3", 20)).toEqual([1, 3]);
+    expect(parsePageRange("1,,3", 20)).toEqual({ pages: [1, 3], truncated: false });
   });
 });
 
