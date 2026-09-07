@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -6,28 +8,43 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
-  isWorkboardCardStore,
-  type PersistedWorkboardCard,
-  type WorkboardCardStore,
-  type WorkboardKeyedStore,
-} from "./persistence-types.js";
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 
-const ARTIFACT_RETENTION_CLAIM_ID = "persisted-local-artifacts";
+export type WorktreeRetentionRuntime = Pick<
+  PluginRuntime["worktrees"],
+  "resolveRetentionTarget" | "setRetentionClaim"
+>;
 
-type WorktreeRetentionRuntime = Pick<PluginRuntime["worktrees"], "setRetentionClaim">;
-
-export type WorkboardArtifactRetentionStore = WorkboardKeyedStore & {
+export type WorkboardArtifactRetentionStore = {
   reconcileArtifactRetention(): Promise<void>;
 };
 
-function worktreeWorkspacePath(card: WorkboardCard | undefined): string | undefined {
-  const workspace = card?.metadata?.automation?.workspace;
-  return workspace?.kind === "worktree" && workspace.path ? workspace.path : undefined;
-}
+type RetentionGeneration = {
+  claim_id: string;
+  card_id: string;
+  worktree_id: string;
+  state: "prepared" | "active" | "release_pending";
+};
+
+export const WORKBOARD_ARTIFACT_RETENTION_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS workboard_artifact_retention (
+    claim_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    worktree_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'active', 'release_pending'))
+  ) STRICT;
+  CREATE UNIQUE INDEX IF NOT EXISTS workboard_artifact_retention_active_idx
+    ON workboard_artifact_retention(card_id) WHERE state = 'active';
+  CREATE INDEX IF NOT EXISTS workboard_artifact_retention_pending_idx
+    ON workboard_artifact_retention(state);
+`;
 
 async function retainedWorkspacePath(card: WorkboardCard | undefined): Promise<string | undefined> {
-  const workspacePath = worktreeWorkspacePath(card);
-  if (!card || card.metadata?.archivedAt || !workspacePath) {
+  const workspace = card?.metadata?.automation?.workspace;
+  if (!card || card.metadata?.archivedAt || workspace?.kind !== "worktree" || !workspace.path) {
     return undefined;
   }
   const artifactPaths = (card.metadata?.artifacts ?? []).flatMap((artifact) =>
@@ -36,239 +53,199 @@ async function retainedWorkspacePath(card: WorkboardCard | undefined): Promise<s
   if (artifactPaths.length === 0) {
     return undefined;
   }
-  const workspaceRoot = path.resolve(workspacePath);
+  const workspaceRoot = path.resolve(workspace.path);
   try {
     const canonicalWorkspaceRoot = await canonicalPathFromExistingAncestor(workspaceRoot);
     for (const artifact of artifactPaths) {
-      const artifactPath = path.resolve(workspaceRoot, artifact);
-      const canonicalArtifactPath = await canonicalPathFromExistingAncestor(artifactPath);
+      const canonicalArtifactPath = await canonicalPathFromExistingAncestor(
+        path.resolve(workspaceRoot, artifact),
+      );
       if (isPathInside(canonicalWorkspaceRoot, canonicalArtifactPath)) {
-        return workspacePath;
+        return workspace.path;
       }
     }
   } catch {
-    // A path-resolution failure must not turn persisted local state into an unprotected tree.
-    return workspacePath;
+    // Resolution failure must not turn a persisted local reference into an unprotected tree.
+    return workspace.path;
   }
   return undefined;
 }
 
-async function setArtifactRetentionClaim(params: {
-  worktrees: WorktreeRetentionRuntime;
-  card: WorkboardCard;
-  workspacePath: string;
-  active: boolean;
-  allowUnavailable?: boolean;
-}): Promise<void> {
-  const accepted = await params.worktrees.setRetentionClaim({
-    path: params.workspacePath,
-    ownerKind: "workboard",
-    ownerId: params.card.id,
-    claimId: ARTIFACT_RETENTION_CLAIM_ID,
-    active: params.active,
-  });
-  if (params.active && !accepted && !params.allowUnavailable) {
-    throw new Error(
-      `managed worktree is unavailable for artifact retention: ${params.workspacePath}`,
+/** Shares the card owner's database/commit boundary, never a second persistence transaction. */
+export class WorkboardArtifactRetention {
+  private readonly k;
+
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly worktrees: WorktreeRetentionRuntime,
+  ) {
+    this.k = getNodeSqliteKysely<{ workboard_artifact_retention: RetentionGeneration }>(db);
+  }
+
+  private current(cardId: string): RetentionGeneration | undefined {
+    return executeSqliteQuerySync(
+      this.db,
+      this.k
+        .selectFrom("workboard_artifact_retention")
+        .selectAll()
+        .where("card_id", "=", cardId)
+        .where("state", "=", "active"),
+    ).rows[0];
+  }
+
+  private cancel(claimId: string): void {
+    executeSqliteQuerySync(
+      this.db,
+      this.k
+        .updateTable("workboard_artifact_retention")
+        .set({ state: "release_pending" })
+        .where("claim_id", "=", claimId)
+        .where("state", "=", "prepared"),
     );
   }
-}
 
-export function withWorkboardArtifactRetention(
-  store: WorkboardKeyedStore,
-  worktrees: WorktreeRetentionRuntime,
-): WorkboardArtifactRetentionStore {
-  let reconciliation: Promise<void> | undefined;
-  const pendingReleases = new Map<string, { card: WorkboardCard; workspacePath: string }>();
-  const releaseClaim = async (card: WorkboardCard, workspacePath: string): Promise<void> => {
-    const key = `${card.id}\0${workspacePath}`;
-    try {
-      await setArtifactRetentionClaim({
-        worktrees,
-        card,
-        workspacePath,
+  cancelPrepared(): void {
+    // Cancellation and card publication compete in this same SQLite commit domain.
+    // A delayed writer must still find its exact prepared generation before publishing.
+    executeSqliteQuerySync(
+      this.db,
+      this.k
+        .updateTable("workboard_artifact_retention")
+        .set({ state: "release_pending" })
+        .where("state", "=", "prepared"),
+    );
+  }
+
+  async drainReleases(): Promise<void> {
+    const pending = executeSqliteQuerySync(
+      this.db,
+      this.k
+        .selectFrom("workboard_artifact_retention")
+        .selectAll()
+        .where("state", "=", "release_pending"),
+    ).rows;
+    for (const generation of pending) {
+      const released = await this.worktrees.setRetentionClaim({
+        worktreeId: generation.worktree_id,
+        ownerKind: "workboard",
+        ownerId: generation.card_id,
+        claimId: generation.claim_id,
         active: false,
       });
-      pendingReleases.delete(key);
-    } catch (error) {
-      pendingReleases.set(key, { card, workspacePath });
-      reconciliation = undefined;
-      throw error;
-    }
-  };
-  const reconcileArtifactRetention = () => {
-    reconciliation ??= (async () => {
-      for (const { card, workspacePath } of pendingReleases.values()) {
-        await releaseClaim(card, workspacePath);
+      if (!released) {
+        throw new Error("managed worktree rejected artifact retention release");
       }
-      for (const entry of await store.entries()) {
-        const card = entry.value?.version === 1 ? entry.value.card : undefined;
-        const workspacePath = worktreeWorkspacePath(card);
-        if (!card || !workspacePath) {
-          continue;
-        }
-        const active = Boolean(await retainedWorkspacePath(card));
-        if (active) {
-          await setArtifactRetentionClaim({
-            worktrees,
-            card,
-            workspacePath,
-            active: true,
-            // Pre-retention cards can outlive worktrees that old cleanup already removed.
-            allowUnavailable: true,
-          });
-        } else {
-          await releaseClaim(card, workspacePath);
-        }
-      }
-    })().catch((error: unknown) => {
-      reconciliation = undefined;
-      throw error;
-    });
-    return reconciliation;
-  };
-
-  type CardTransition = {
-    nextCard: WorkboardCard;
-    nextPath?: string;
-    previousCard?: WorkboardCard;
-    previousPath?: string;
-  };
-
-  const prepareCardTransition = async (
-    key: string,
-    value: PersistedWorkboardCard,
-  ): Promise<CardTransition> => {
-    await reconcileArtifactRetention();
-    const previous = await store.lookup(key);
-    const previousCard = previous?.version === 1 ? previous.card : undefined;
-    const nextPath = await retainedWorkspacePath(value.card);
-    const previousPath = await retainedWorkspacePath(previousCard);
-    if (nextPath) {
-      await setArtifactRetentionClaim({
-        worktrees,
-        card: value.card,
-        workspacePath: nextPath,
-        active: true,
-      });
-    }
-    return { nextCard: value.card, nextPath, previousCard, previousPath };
-  };
-
-  const settleCardTransition = async (
-    transition: CardTransition,
-    applied: boolean,
-  ): Promise<void> => {
-    if (!applied) {
-      if (transition.nextPath && transition.nextPath !== transition.previousPath) {
-        await releaseClaim(transition.nextCard, transition.nextPath).catch(() => undefined);
-      }
-      return;
-    }
-    if (
-      transition.previousCard &&
-      transition.previousPath &&
-      transition.previousPath !== transition.nextPath
-    ) {
-      await releaseClaim(transition.previousCard, transition.previousPath);
-    }
-  };
-
-  const updateWithRetention = async <T>(
-    key: string,
-    value: PersistedWorkboardCard,
-    update: () => Promise<T>,
-    wasApplied: (result: T) => boolean,
-  ): Promise<T> => {
-    const transition = await prepareCardTransition(key, value);
-    let result: T;
-    try {
-      result = await update();
-    } catch (error) {
-      await settleCardTransition(transition, false);
-      throw error;
-    }
-    await settleCardTransition(transition, wasApplied(result));
-    return result;
-  };
-
-  const deleteWithRetention = async (
-    key: string,
-    remove: () => Promise<boolean>,
-  ): Promise<boolean> => {
-    await reconcileArtifactRetention();
-    const previous = await store.lookup(key);
-    const previousCard = previous?.version === 1 ? previous.card : undefined;
-    const previousPath = await retainedWorkspacePath(previousCard);
-    const deleted = await remove();
-    if (deleted && previousCard && previousPath) {
-      await releaseClaim(previousCard, previousPath);
-    }
-    return deleted;
-  };
-
-  const decorated: WorkboardArtifactRetentionStore = {
-    reconcileArtifactRetention,
-    async register(key, value) {
-      await updateWithRetention(
-        key,
-        value,
-        async () => await store.register(key, value),
-        () => true,
+      // Acknowledge only after terminal release; replay after a crash is idempotent.
+      executeSqliteQuerySync(
+        this.db,
+        this.k
+          .deleteFrom("workboard_artifact_retention")
+          .where("claim_id", "=", generation.claim_id)
+          .where("state", "=", "release_pending"),
       );
-    },
-    async lookup(key) {
-      await reconcileArtifactRetention();
-      return await store.lookup(key);
-    },
-    async delete(key) {
-      return await deleteWithRetention(key, async () => await store.delete(key));
-    },
-    async entries() {
-      await reconcileArtifactRetention();
-      return await store.entries();
-    },
-  };
-
-  if (!isWorkboardCardStore(store)) {
-    return decorated;
+    }
   }
-  const cardStore: WorkboardCardStore = store;
-  return {
-    ...decorated,
-    async registerIfAbsent(key, value) {
-      return await updateWithRetention(
-        key,
-        value,
-        async () => await cardStore.registerIfAbsent(key, value),
-        (applied) => applied,
+
+  async mutate<T>(
+    cardId: string,
+    next: WorkboardCard | undefined,
+    commit: () => T,
+    applied: (result: T) => boolean,
+    allowUnavailable = false,
+  ): Promise<T> {
+    const workspacePath = await retainedWorkspacePath(next);
+    const worktreeId = workspacePath
+      ? await this.worktrees.resolveRetentionTarget({
+          path: workspacePath,
+          ownerKind: "workboard",
+          ownerId: cardId,
+        })
+      : undefined;
+    if (workspacePath && !worktreeId) {
+      if (!allowUnavailable) {
+        throw new Error(`managed worktree is unavailable for artifact retention: ${workspacePath}`);
+      }
+      // Startup cannot interpret temporary removal as removal of the persisted reference.
+      // Preserve an enrolled generation so restoring that identity retains its protection.
+      return runSqliteImmediateTransactionSync(this.db, commit);
+    }
+
+    const previous = this.current(cardId);
+    const reused = worktreeId && previous?.worktree_id === worktreeId ? previous : undefined;
+    const prepared: RetentionGeneration | undefined =
+      worktreeId && !reused
+        ? { claim_id: randomUUID(), card_id: cardId, worktree_id: worktreeId, state: "prepared" }
+        : undefined;
+    if (prepared) {
+      // Persist intent before the other store can acquire anything we must later release.
+      executeSqliteQuerySync(
+        this.db,
+        this.k.insertInto("workboard_artifact_retention").values(prepared),
       );
-    },
-    async registerIfUpdatedAt(key, value, expectedUpdatedAt) {
-      return await updateWithRetention(
-        key,
-        value,
-        async () => await cardStore.registerIfUpdatedAt(key, value, expectedUpdatedAt),
-        (applied) => applied,
-      );
-    },
-    async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
-      return await updateWithRetention(
-        key,
-        value,
-        async () =>
-          await cardStore.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now),
-        (result) => result === "updated",
-      );
-    },
-    async deleteIfUpdatedAt(key, expectedUpdatedAt) {
-      return await deleteWithRetention(
-        key,
-        async () => await cardStore.deleteIfUpdatedAt(key, expectedUpdatedAt),
-      );
-    },
-    async listBoardAggregates() {
-      return await cardStore.listBoardAggregates();
-    },
-  } as WorkboardArtifactRetentionStore & WorkboardCardStore; // SAFETY: isWorkboardCardStore proves every spread card-store method exists.
+    }
+    const generation = prepared ?? reused;
+    try {
+      if (generation) {
+        const acquired = await this.worktrees.setRetentionClaim({
+          worktreeId: generation.worktree_id,
+          ownerKind: "workboard",
+          ownerId: cardId,
+          claimId: generation.claim_id,
+          active: true,
+        });
+        if (!acquired) {
+          throw new Error(
+            "artifact retention preparation was cancelled or the worktree is unavailable; retry the mutation",
+          );
+        }
+      }
+      return runSqliteImmediateTransactionSync(this.db, () => {
+        if (generation) {
+          const current = executeSqliteQuerySync(
+            this.db,
+            this.k
+              .selectFrom("workboard_artifact_retention")
+              .select("state")
+              .where("claim_id", "=", generation.claim_id),
+          ).rows[0];
+          if (current?.state !== (prepared ? "prepared" : "active")) {
+            throw new Error("artifact retention preparation was cancelled; retry the mutation");
+          }
+        }
+        const result = commit();
+        if (applied(result)) {
+          let obsolete = this.k
+            .updateTable("workboard_artifact_retention")
+            .set({ state: "release_pending" })
+            .where("card_id", "=", cardId)
+            .where("state", "=", "active");
+          if (generation) {
+            obsolete = obsolete.where("claim_id", "!=", generation.claim_id);
+          }
+          executeSqliteQuerySync(this.db, obsolete);
+          if (prepared) {
+            executeSqliteQuerySync(
+              this.db,
+              this.k
+                .updateTable("workboard_artifact_retention")
+                .set({ state: "active" })
+                .where("claim_id", "=", prepared.claim_id),
+            );
+          }
+        } else if (prepared) {
+          this.cancel(prepared.claim_id);
+        }
+        return result;
+      });
+    } catch (error) {
+      if (prepared) {
+        this.cancel(prepared.claim_id);
+      }
+      throw error;
+    } finally {
+      // The durable obligation owns retry. A cleanup outage must not turn a committed
+      // card write into a reported write failure (and trigger incorrect compensation).
+      await this.drainReleases().catch(() => undefined);
+    }
+  }
 }

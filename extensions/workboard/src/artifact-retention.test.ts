@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,14 +7,17 @@ import { promisify } from "node:util";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { IDLE_GC_MS, ManagedWorktreeService } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withWorkboardArtifactRetention } from "./artifact-retention.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupWorkboardCardWorktree } from "./dispatcher-workspace.js";
 import { isWorkboardCardStore } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
 const execFileAsync = promisify(execFile);
+type RetentionWorktrees = Pick<
+  PluginRuntime["worktrees"],
+  "resolveRetentionTarget" | "setRetentionClaim"
+>;
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args]);
@@ -31,6 +35,11 @@ describe("Workboard artifact worktree retention", () => {
   beforeEach(async () => {
     // openclaw-temp-dir: allow extension tests cannot import the core-only tracker.
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "workboard-retention-"));
+    // Disk admission has separate capacity tests; these tiny fixtures exercise retention owners.
+    const disk = fsSync.statfsSync(root);
+    disk.bavail = 100_000_000;
+    disk.bfree = 100_000_000;
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(disk);
     repo = path.join(root, "repo");
     await fs.mkdir(repo);
     await git(repo, "init", "-b", "main");
@@ -48,18 +57,12 @@ describe("Workboard artifact worktree retention", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
-    sqlite = createWorkboardSqliteStores({ env });
-    const cards = withWorkboardArtifactRetention(sqlite.cards, retentionWorktrees());
-    expect(isWorkboardCardStore(cards)).toBe(true);
-    store = new WorkboardStore(cards, {
-      boards: sqlite.boards,
-      subscriptions: sqlite.subscriptions,
-      attachments: sqlite.attachments,
-      dataVersion: sqlite.dataVersion,
-    });
+    openRetentionStore();
+    expect(isWorkboardCardStore(sqlite.cards)).toBe(true);
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     sqlite.close();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -91,13 +94,16 @@ describe("Workboard artifact worktree retention", () => {
     return { card, worktree };
   }
 
-  function retentionWorktrees(
-    activeService = service,
-  ): Pick<PluginRuntime["worktrees"], "setRetentionClaim"> {
+  function retentionWorktrees(activeService = service): RetentionWorktrees {
     return {
+      resolveRetentionTarget: async (params) =>
+        activeService.resolveRetentionTargetByPath(params.path, {
+          ownerKind: params.ownerKind,
+          ownerId: params.ownerId,
+        }),
       setRetentionClaim: async (params) =>
-        activeService.setRetentionClaimByPath(
-          params.path,
+        activeService.setRetentionClaim(
+          params.worktreeId,
           { ownerKind: params.ownerKind, ownerId: params.ownerId },
           { claimId: params.claimId, active: params.active },
         ),
@@ -117,19 +123,70 @@ describe("Workboard artifact worktree retention", () => {
     };
   }
 
-  function restartWithRetentionStore() {
-    sqlite.close();
-    closeOpenClawStateDatabaseForTest();
-    service = new ManagedWorktreeService({ env, now: () => now });
-    sqlite = createWorkboardSqliteStores({ env });
-    const cards = withWorkboardArtifactRetention(sqlite.cards, retentionWorktrees());
-    store = new WorkboardStore(cards, {
+  function openRetentionStore(worktrees = retentionWorktrees()) {
+    sqlite = createWorkboardSqliteStores({ env, worktrees });
+    store = new WorkboardStore(sqlite.cards, {
       boards: sqlite.boards,
       subscriptions: sqlite.subscriptions,
       attachments: sqlite.attachments,
       dataVersion: sqlite.dataVersion,
     });
-    return cards;
+    return sqlite.cards;
+  }
+
+  function restartWithRetentionStore() {
+    sqlite.close();
+    closeOpenClawStateDatabaseForTest();
+    service = new ManagedWorktreeService({ env, now: () => now });
+    return openRetentionStore();
+  }
+
+  function replaceRetentionRuntime(worktrees: RetentionWorktrees) {
+    sqlite.close();
+    return openRetentionStore(worktrees);
+  }
+
+  async function writeArtifact(worktreePath: string) {
+    await fs.mkdir(path.join(worktreePath, "dist"), { recursive: true });
+    await fs.writeFile(path.join(worktreePath, "dist", "report.txt"), "report\n");
+  }
+
+  async function referenceWorktree(
+    cardId: string,
+    worktree: { path: string; branch: string },
+    activeStore = store,
+  ) {
+    const persisted = await activeStore.get(cardId);
+    return await activeStore.update(cardId, {
+      workspace: {
+        kind: "worktree",
+        path: worktree.path,
+        branch: worktree.branch,
+        sourcePath: repo,
+        sourceBranch: "main",
+      },
+      workspaceAccess: { unrestricted: true },
+      metadata: { ...persisted?.metadata, artifacts: [{ path: "dist/report.txt" }] },
+    });
+  }
+
+  async function createSecondWorktree(cardId: string, previousId: string, name: string) {
+    // create() reuses a live owner's checkout. An explicit remove followed by a
+    // later restore is the supported path to two identities for the same card.
+    await service.release(previousId);
+    await service.remove({ id: previousId, reason: "retention-test-operator-remove" });
+    const worktree = await service.create({
+      repoRoot: repo,
+      name,
+      ownerKind: "workboard",
+      ownerId: cardId,
+    });
+    expect(worktree.id).not.toBe(previousId);
+    const restored = await service.restore({ id: previousId });
+    await writeArtifact(restored.path);
+    await service.acquire(worktree.id);
+    await writeArtifact(worktree.path);
+    return worktree;
   }
 
   async function cleanupCardWorktree(cardId: string, activeService = service) {
@@ -145,34 +202,38 @@ describe("Workboard artifact worktree retention", () => {
   }
 
   async function createLegacyArtifactCard(name: string) {
-    const legacyStore = new WorkboardStore(sqlite.cards, {
-      boards: sqlite.boards,
-      subscriptions: sqlite.subscriptions,
-      attachments: sqlite.attachments,
-      dataVersion: sqlite.dataVersion,
-    });
-    const card = await legacyStore.create({ title: name, status: "done", runId: `run-${name}` });
-    const worktree = await service.create({
-      repoRoot: repo,
-      name,
-      ownerKind: "workboard",
-      ownerId: card.id,
-    });
-    await service.acquire(worktree.id);
-    await legacyStore.update(card.id, {
-      workspace: {
-        kind: "worktree",
-        path: worktree.path,
-        branch: worktree.branch,
-        sourcePath: repo,
-        sourceBranch: "main",
-      },
-      workspaceAccess: { unrestricted: true },
-    });
-    await fs.mkdir(path.join(worktree.path, "dist"));
-    await fs.writeFile(path.join(worktree.path, "dist", "report.txt"), "report\n");
-    await legacyStore.addArtifact(card.id, { path: "dist/report.txt" });
-    return { card, worktree };
+    const legacySqlite = createWorkboardSqliteStores({ env });
+    try {
+      const legacyStore = new WorkboardStore(legacySqlite.cards, {
+        boards: legacySqlite.boards,
+        subscriptions: legacySqlite.subscriptions,
+        attachments: legacySqlite.attachments,
+        dataVersion: legacySqlite.dataVersion,
+      });
+      const card = await legacyStore.create({ title: name, status: "done", runId: `run-${name}` });
+      const worktree = await service.create({
+        repoRoot: repo,
+        name,
+        ownerKind: "workboard",
+        ownerId: card.id,
+      });
+      await service.acquire(worktree.id);
+      await legacyStore.update(card.id, {
+        workspace: {
+          kind: "worktree",
+          path: worktree.path,
+          branch: worktree.branch,
+          sourcePath: repo,
+          sourceBranch: "main",
+        },
+        workspaceAccess: { unrestricted: true },
+      });
+      await writeArtifact(worktree.path);
+      await legacyStore.addArtifact(card.id, { path: "dist/report.txt" });
+      return { card, worktree };
+    } finally {
+      legacySqlite.close();
+    }
   }
 
   it("persists an aliased local artifact claim until the reference is externalized", async () => {
@@ -244,27 +305,50 @@ describe("Workboard artifact worktree retention", () => {
     });
   });
 
-  it("retries a transient retention release failure in the same process", async () => {
+  it("keeps a referenced worktree protected when restored after startup reconciliation", async () => {
+    const { card, worktree } = await createCardWorktree("restored-after-restart");
+    // Explicit removal snapshots non-ignored files; use one that restore actually recovers.
+    const artifact = path.join(worktree.path, "report.txt");
+    await fs.writeFile(artifact, "report");
+    await store.addArtifact(card.id, { path: "report.txt" });
+    await service.release(worktree.id);
+    await service.remove({ id: worktree.id, reason: "retention-test-operator-remove" });
+    await expect(fs.stat(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await restartWithRetentionStore().reconcileArtifactRetention();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { artifacts: [{ path: "report.txt" }] },
+    });
+    const restored = await service.restore({ id: worktree.id });
+    expect(restored.id).toBe(worktree.id);
+    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("report");
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([]);
+    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("report");
+
+    const persisted = await store.get(card.id);
+    await store.update(card.id, {
+      metadata: {
+        ...persisted?.metadata,
+        artifacts: [{ url: "https://example.invalid/report.txt" }],
+      },
+    });
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
+  });
+
+  it("reports a committed mutation while release remains durably retryable", async () => {
     const delegate = retentionWorktrees();
-    let failNextRelease = true;
-    const cards = withWorkboardArtifactRetention(sqlite.cards, {
+    let releaseUnavailable = true;
+    replaceRetentionRuntime({
+      ...delegate,
       async setRetentionClaim(params) {
-        if (!params.active && failNextRelease) {
-          failNextRelease = false;
+        if (!params.active && releaseUnavailable) {
           throw new Error("transient retention release failure");
         }
         return await delegate.setRetentionClaim(params);
       },
     });
-    store = new WorkboardStore(cards, {
-      boards: sqlite.boards,
-      subscriptions: sqlite.subscriptions,
-      attachments: sqlite.attachments,
-      dataVersion: sqlite.dataVersion,
-    });
     const { card, worktree } = await createCardWorktree("retry-release");
-    await fs.mkdir(path.join(worktree.path, "dist"));
-    await fs.writeFile(path.join(worktree.path, "dist", "report.txt"), "report\n");
+    await writeArtifact(worktree.path);
     await store.addArtifact(card.id, { path: "dist/report.txt" });
     const persisted = await store.get(card.id);
 
@@ -275,86 +359,71 @@ describe("Workboard artifact worktree retention", () => {
           artifacts: [{ url: "https://example.invalid/report.txt" }],
         },
       }),
-    ).rejects.toThrow("transient retention release failure");
+    ).resolves.toMatchObject({ id: card.id });
 
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      metadata: { artifacts: [{ url: "https://example.invalid/report.txt" }] },
+    await expect(sqlite.cards.lookup(card.id)).resolves.toMatchObject({
+      card: { metadata: { artifacts: [{ url: "https://example.invalid/report.txt" }] } },
     });
+    await service.release(worktree.id);
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([]);
+    await expect(sqlite.cards.reconcileArtifactRetention()).rejects.toThrow(
+      "transient retention release failure",
+    );
+    releaseUnavailable = false;
+    await sqlite.cards.reconcileArtifactRetention();
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
+  });
+
+  it("recovers a failed release after deleting the card and restarting", async () => {
+    const { card, worktree } = await createCardWorktree("deleted-release-restart");
+    await writeArtifact(worktree.path);
+    await store.addArtifact(card.id, { path: "dist/report.txt" });
+    const delegate = retentionWorktrees();
+    const cards = replaceRetentionRuntime({
+      ...delegate,
+      async setRetentionClaim(params) {
+        if (!params.active) {
+          throw new Error("transient retention release failure");
+        }
+        return await delegate.setRetentionClaim(params);
+      },
+    });
+    await expect(cards.delete(card.id)).resolves.toBe(true);
+    await expect(sqlite.cards.lookup(card.id)).resolves.toBeUndefined();
+
+    const restarted = restartWithRetentionStore();
+    await restarted.reconcileArtifactRetention();
     await service.release(worktree.id);
     expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
   });
 
-  it("keeps the new claim when releasing the previous worktree fails", async () => {
-    const previousPath = path.join(root, "previous-worktree");
-    const nextPath = path.join(root, "next-worktree");
-    for (const workspacePath of [previousPath, nextPath]) {
-      await fs.mkdir(path.join(workspacePath, "dist"), { recursive: true });
-      await fs.writeFile(path.join(workspacePath, "dist", "report.txt"), "report\n");
-    }
-    const activeClaims = new Set<string>();
-    let failPreviousRelease = true;
-    const cards = withWorkboardArtifactRetention(sqlite.cards, {
+  it("releases obsolete A after restart while the committed B stays protected", async () => {
+    const { card, worktree: previous } = await createCardWorktree("previous-artifact");
+    await writeArtifact(previous.path);
+    await store.addArtifact(card.id, { path: "dist/report.txt" });
+    const next = await createSecondWorktree(card.id, previous.id, "next-artifact");
+    const delegate = retentionWorktrees();
+    replaceRetentionRuntime({
+      ...delegate,
       async setRetentionClaim(params) {
-        if (!params.active && params.path === previousPath && failPreviousRelease) {
-          failPreviousRelease = false;
+        if (!params.active && params.worktreeId === previous.id) {
           throw new Error("transient previous retention release failure");
         }
-        if (params.active) {
-          activeClaims.add(params.path);
-        } else {
-          activeClaims.delete(params.path);
-        }
-        return true;
+        return await delegate.setRetentionClaim(params);
       },
     });
-    store = new WorkboardStore(cards, {
-      boards: sqlite.boards,
-      subscriptions: sqlite.subscriptions,
-      attachments: sqlite.attachments,
-      dataVersion: sqlite.dataVersion,
-    });
-    const card = await store.create({ title: "transition artifact", status: "done" });
-    await store.update(card.id, {
-      workspace: {
-        kind: "worktree",
-        path: previousPath,
-        branch: "previous",
-        sourcePath: repo,
-        sourceBranch: "main",
-      },
-      workspaceAccess: { unrestricted: true },
-      metadata: { artifacts: [{ path: "dist/report.txt" }] },
-    });
-    const persisted = await store.get(card.id);
 
-    await expect(
-      store.update(card.id, {
-        workspace: {
-          kind: "worktree",
-          path: nextPath,
-          branch: "next",
-          sourcePath: repo,
-          sourceBranch: "main",
-        },
-        metadata: {
-          ...persisted?.metadata,
-          artifacts: [{ path: "dist/report.txt" }],
-        },
-      }),
-    ).rejects.toThrow("transient previous retention release failure");
+    await expect(referenceWorktree(card.id, next)).resolves.toMatchObject({ id: card.id });
     await expect(sqlite.cards.lookup(card.id)).resolves.toMatchObject({
-      card: {
-        metadata: {
-          automation: { workspace: { path: nextPath } },
-          artifacts: [{ path: "dist/report.txt" }],
-        },
-      },
+      card: { metadata: { automation: { workspace: { path: next.path } } } },
     });
-    expect([...activeClaims].toSorted()).toEqual([nextPath, previousPath].toSorted());
+    await service.release(previous.id);
+    await service.release(next.id);
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([]);
 
-    await expect(store.get(card.id)).resolves.toMatchObject({ id: card.id });
-    expect([...activeClaims]).toEqual([nextPath]);
-
+    await restartWithRetentionStore().reconcileArtifactRetention();
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([previous.id]);
+    await expect(fs.stat(next.path)).resolves.toBeDefined();
     const transitioned = await store.get(card.id);
     await store.update(card.id, {
       metadata: {
@@ -362,7 +431,182 @@ describe("Workboard artifact worktree retention", () => {
         artifacts: [{ url: "https://example.invalid/report.txt" }],
       },
     });
-    expect([...activeClaims]).toEqual([]);
+    expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([next.id]);
+  });
+
+  it("does not let an old A release remove the later A generation", async () => {
+    const { card, worktree: previous } = await createCardWorktree("returning-artifact");
+    await writeArtifact(previous.path);
+    await store.addArtifact(card.id, { path: "dist/report.txt" });
+    const next = await createSecondWorktree(card.id, previous.id, "intermediate-artifact");
+    const delegate = retentionWorktrees();
+    const releaseStarted = Promise.withResolvers<void>();
+    const resumeRelease = Promise.withResolvers<void>();
+    let pauseFirstRelease = true;
+    replaceRetentionRuntime({
+      ...delegate,
+      async setRetentionClaim(params) {
+        if (!params.active && params.worktreeId === previous.id && pauseFirstRelease) {
+          pauseFirstRelease = false;
+          releaseStarted.resolve();
+          await resumeRelease.promise;
+        }
+        return await delegate.setRetentionClaim(params);
+      },
+    });
+    const movingToB = referenceWorktree(card.id, next);
+    const movingResult = movingToB.then(
+      () => ({ applied: true }),
+      () => ({ applied: false }),
+    );
+    await releaseStarted.promise;
+    const other = createWorkboardSqliteStores({ env, worktrees: retentionWorktrees() });
+    try {
+      const otherStore = new WorkboardStore(other.cards, { dataVersion: other.dataVersion });
+      await referenceWorktree(card.id, previous, otherStore);
+      resumeRelease.resolve();
+      await expect(movingResult).resolves.toEqual({ applied: true });
+      await other.cards.reconcileArtifactRetention();
+      await service.release(previous.id);
+      await service.release(next.id);
+      expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([next.id]);
+      await expect(fs.stat(previous.path)).resolves.toBeDefined();
+      await expect(other.cards.lookup(card.id)).resolves.toMatchObject({
+        card: { metadata: { automation: { workspace: { path: previous.path } } } },
+      });
+    } finally {
+      resumeRelease.resolve();
+      await movingResult;
+      other.close();
+    }
+  });
+
+  it.each(["before", "after"] as const)(
+    "fences a prepared write cancelled %s its delayed acquisition",
+    async (pauseAt) => {
+      const { card, worktree } = await createCardWorktree("cancelled-preparation");
+      await writeArtifact(worktree.path);
+      const original = await sqlite.cards.lookup(card.id);
+      if (!original) {
+        throw new Error("expected persisted card");
+      }
+      const delegate = retentionWorktrees();
+      const acquisitionStarted = Promise.withResolvers<void>();
+      const resumeAcquisition = Promise.withResolvers<void>();
+      replaceRetentionRuntime({
+        ...delegate,
+        async setRetentionClaim(params) {
+          if (!params.active) {
+            return await delegate.setRetentionClaim(params);
+          }
+          const accepted =
+            pauseAt === "after" ? await delegate.setRetentionClaim(params) : undefined;
+          acquisitionStarted.resolve();
+          await resumeAcquisition.promise;
+          return accepted ?? (await delegate.setRetentionClaim(params));
+        },
+      });
+      const writing = sqlite.cards.registerIfUpdatedAt(
+        card.id,
+        {
+          version: 1,
+          card: {
+            ...original.card,
+            updatedAt: original.card.updatedAt + 1,
+            metadata: { ...original.card.metadata, artifacts: [{ path: "dist/report.txt" }] },
+          },
+        },
+        original.card.updatedAt,
+      );
+      const writeResult = writing.then(
+        (applied) => ({ applied }),
+        () => ({ applied: false }),
+      );
+      await acquisitionStarted.promise;
+      const recovering = createWorkboardSqliteStores({ env, worktrees: retentionWorktrees() });
+      try {
+        await recovering.cards.reconcileArtifactRetention();
+        resumeAcquisition.resolve();
+        await expect(writeResult).resolves.toEqual({ applied: false });
+        expect((await recovering.cards.lookup(card.id))?.card.metadata?.artifacts).toBeUndefined();
+        await recovering.cards.reconcileArtifactRetention();
+        await service.release(worktree.id);
+        expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
+      } finally {
+        resumeAcquisition.resolve();
+        await writeResult;
+        recovering.close();
+      }
+    },
+  );
+
+  it("releases a newly acquired generation when another connection wins the card CAS", async () => {
+    const { card, worktree } = await createCardWorktree("conflicting-artifact");
+    await writeArtifact(worktree.path);
+    const original = await sqlite.cards.lookup(card.id);
+    if (!original) {
+      throw new Error("expected persisted card");
+    }
+    const delegate = retentionWorktrees();
+    const acquisitionFinished = Promise.withResolvers<void>();
+    const resumeCommit = Promise.withResolvers<void>();
+    replaceRetentionRuntime({
+      ...delegate,
+      async setRetentionClaim(params) {
+        const accepted = await delegate.setRetentionClaim(params);
+        if (params.active) {
+          acquisitionFinished.resolve();
+          await resumeCommit.promise;
+        }
+        return accepted;
+      },
+    });
+    const updating = sqlite.cards.registerIfUpdatedAt(
+      card.id,
+      {
+        version: 1,
+        card: {
+          ...original.card,
+          updatedAt: original.card.updatedAt + 1,
+          metadata: { ...original.card.metadata, artifacts: [{ path: "dist/report.txt" }] },
+        },
+      },
+      original.card.updatedAt,
+    );
+    const updateResult = updating.then(
+      (applied) => ({ applied }),
+      () => ({ applied: false }),
+    );
+    await acquisitionFinished.promise;
+    const competing = createWorkboardSqliteStores({ env });
+    try {
+      await expect(
+        competing.cards.registerIfUpdatedAt(
+          card.id,
+          {
+            version: 1,
+            card: {
+              ...original.card,
+              title: "concurrent winner",
+              updatedAt: original.card.updatedAt + 2,
+            },
+          },
+          original.card.updatedAt,
+        ),
+      ).resolves.toBe(true);
+      resumeCommit.resolve();
+      await expect(updateResult).resolves.toEqual({ applied: false });
+      await sqlite.cards.reconcileArtifactRetention();
+      await expect(competing.cards.lookup(card.id)).resolves.toMatchObject({
+        card: { title: "concurrent winner" },
+      });
+      await service.release(worktree.id);
+      expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
+    } finally {
+      resumeCommit.resolve();
+      await updateResult;
+      competing.close();
+    }
   });
 
   it("does not claim URL-only or outside-worktree artifacts", async () => {

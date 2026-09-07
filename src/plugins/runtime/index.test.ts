@@ -435,6 +435,7 @@ describe("plugin runtime command execution", () => {
           "hasSelfContainedCheckoutMetadata",
           "create",
           "release",
+          "resolveRetentionTarget",
           "setRetentionClaim",
           "removeIfLossless",
         ]);

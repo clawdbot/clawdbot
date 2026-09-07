@@ -11,10 +11,9 @@ import type {
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  type WorkboardArtifactRetentionStore,
-  withWorkboardArtifactRetention,
+import type {
+  WorkboardArtifactRetentionStore,
+  WorktreeRetentionRuntime,
 } from "./artifact-retention.js";
 import type {
   PersistedWorkboardAttachment,
@@ -209,10 +208,11 @@ export class WorkboardStore extends WorkboardNotificationStore {
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
       attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
       dataVersion?: () => number;
+      close?: () => void;
     } = {},
   ) {
     super(store, stores);
-    // SAFETY: retention decoration is optional and identified by its unique reconciliation method.
+    // SAFETY: internal injected stores may omit managed-worktree retention.
     const retentionStore = store as Partial<WorkboardArtifactRetentionStore>;
     if (typeof retentionStore.reconcileArtifactRetention === "function") {
       this.reconcileArtifactRetentionStore =
@@ -676,13 +676,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return buildWorkerContext(card, await this.list());
   }
 
-  static openSqlite(
-    options: { worktrees?: Pick<PluginRuntime["worktrees"], "setRetentionClaim"> } = {},
-  ) {
-    const stores = createWorkboardSqliteStores();
-    const cards = options.worktrees
-      ? withWorkboardArtifactRetention(stores.cards, options.worktrees)
-      : stores.cards;
-    return new WorkboardStore(cards, stores);
+  static openSqlite(options: { worktrees?: WorktreeRetentionRuntime } = {}) {
+    const stores = createWorkboardSqliteStores(options);
+    return new WorkboardStore(stores.cards, stores);
   }
 }

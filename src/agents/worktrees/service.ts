@@ -50,7 +50,6 @@ import {
   deleteRegistryWorktree,
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
-  findRegistryWorktreeByPath,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
@@ -1511,8 +1510,16 @@ export class ManagedWorktreeService {
     }
   }
 
-  setRetentionClaimByPath(
+  resolveRetentionTargetByPath(
     worktreePath: string,
+    owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
+  ): string | undefined {
+    const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+    return record?.ownerId && worktreeOwnerMatches(record, owner) ? record.id : undefined;
+  }
+
+  setRetentionClaim(
+    worktreeId: string,
     owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
     params: { claimId: string; active: boolean },
   ): boolean {
@@ -1520,16 +1527,14 @@ export class ManagedWorktreeService {
     if (!claimId) {
       throw new Error("worktree retention claim id is required");
     }
-    const record = params.active
-      ? findLiveRegistryWorktreeByPath(this.env, worktreePath)
-      : findRegistryWorktreeByPath(this.env, worktreePath);
-    if (!record || !worktreeOwnerMatches(record, owner) || !record.ownerId) {
+    if (!owner.ownerId) {
       return false;
     }
     return setWorktreeRetentionClaimRow(this.env, {
-      worktreeId: record.id,
+      worktreeId,
       claimId,
-      claimOwner: `${record.ownerKind}:${record.ownerId}`,
+      ownerKind: owner.ownerKind ?? "manual",
+      ownerId: owner.ownerId,
       active: params.active,
       now: this.now(),
     });

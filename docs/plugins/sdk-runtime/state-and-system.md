@@ -1,14 +1,15 @@
 ---
-summary: "Config snapshot, SQLite-backed plugin state, system utilities, events, and logging"
+summary: "Config snapshot, SQLite-backed plugin state, worktree retention, system utilities, events, and logging"
 read_when:
   - You need durable keyed or blob storage scoped to your plugin
+  - You need to retain managed worktrees for durable artifact references
   - You are buffering channel ingress across restarts
   - You need the config snapshot, system utilities, events, or a scoped logger
 title: "Plugin runtime state and system"
 sidebarTitle: "State and system"
 ---
 
-The runtime config snapshot, durable plugin-scoped storage, system utilities, event subscriptions, and logging. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Config and utilities](/plugins/sdk-runtime/config-and-utilities#config-loading-and-writes) covers the wider config read and write guidance.
+The runtime config snapshot, durable plugin-scoped storage, worktree retention, system utilities, event subscriptions, and logging. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Config and utilities](/plugins/sdk-runtime/config-and-utilities#config-loading-and-writes) covers the wider config read and write guidance.
 
 ## State, config, and system namespaces
 
@@ -136,6 +137,63 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     <Warning>
     `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
+
+  </Accordion>
+  <Accordion title="api.runtime.worktrees">
+    Manage Workboard-owned Git worktrees without importing core worktree internals.
+
+    Resolve the exact card-owned worktree before preparing a durable artifact reference:
+
+    ```typescript
+    const worktreeId = await api.runtime.worktrees.resolveRetentionTarget({
+      path: workspace.path,
+      ownerKind: "workboard",
+      ownerId: card.id,
+    });
+    if (!worktreeId) {
+      throw new Error("The card's managed worktree is unavailable");
+    }
+    ```
+
+    This read-only lookup returns the immutable registry ID, or `undefined` if the path
+    is not a live worktree owned by that card. Persist that ID and a fresh `claimId` in
+    the card owner's prepared generation before acquisition. Claim IDs must be nonempty.
+    The following `generation` values must come from that durable record; replaying the
+    same preparation uses the same ID, while retrying a cancelled mutation needs a new one:
+
+    ```typescript
+    const claim = {
+      worktreeId: generation.worktreeId,
+      ownerKind: "workboard" as const,
+      ownerId: card.id,
+      claimId: generation.claimId,
+    };
+    const retained = await api.runtime.worktrees.setRetentionClaim({
+      ...claim,
+      active: true,
+    });
+    if (!retained) {
+      throw new Error("Retention was cancelled or the worktree is unavailable");
+    }
+    ```
+
+    Acquire before publishing the reference. Commit the card, its active generation, and
+    any previous generation's cleanup obligation in one transaction in the card owner's
+    database. Only then release an obsolete generation with
+    `setRetentionClaim({ ...claim, active: false })`. Do not keep cleanup only in memory.
+
+    Claims are keyed by worktree ID and claim ID. Release is idempotent and terminal,
+    even if it arrives before acquisition: that generation can never become active again.
+    A later reference uses a new generation; an ordinary card edit can reuse its still-active
+    generation. Acquisition returns `false` for a released claim, removed worktree, or
+    owner mismatch, and throws if removal is in progress. Release of a permanently deleted
+    registry ID succeeds without recreating a row; an owner mismatch returns `false`.
+
+    Active claims survive Gateway restarts and protect automatic run-end, idle, count,
+    and size cleanup. Explicit operator removal still applies. Released records remain
+    through checkout removal and restore, and are pruned with their registry identity.
+    See [Workboard artifact retention](/reference/database-schemas#workboard-artifact-retention)
+    for recovery and downgrade boundaries.
 
   </Accordion>
 </AccordionGroup>

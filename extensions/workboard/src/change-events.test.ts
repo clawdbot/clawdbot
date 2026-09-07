@@ -6,6 +6,31 @@ import type { WorkboardStore } from "./store.js";
 afterEach(() => vi.useRealTimers());
 
 describe("createWorkboardChangeEventService", () => {
+  it("does not restart event producers after stop cancels pending startup", async () => {
+    vi.useFakeTimers();
+    const ready = Promise.withResolvers<void>();
+    const subscribeChanges = vi.fn(() => vi.fn());
+    const store = {
+      reconcileArtifactRetention: vi.fn(() => ready.promise),
+      subscribeChanges,
+      announceChangeEpoch: vi.fn(),
+      reconcileExternalChanges: vi.fn(),
+    } as unknown as WorkboardStore;
+    const service = createWorkboardChangeEventService(store);
+    const context = {
+      config: {},
+      stateDir: "/tmp/workboard-start-stop-test",
+      gatewayEvents: { emit: vi.fn(), onSessionsChanged: () => () => undefined },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } satisfies Parameters<typeof service.start>[0];
+    const starting = service.start(context);
+    service.stop();
+    ready.resolve();
+    await starting;
+    expect(subscribeChanges).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps repeated starts on one change subscription and reconciliation timer", async () => {
     vi.useFakeTimers();
     const listeners = new Set<(change: WorkboardChange) => void>();
@@ -126,5 +151,30 @@ describe("createWorkboardChangeEventService", () => {
     expect(reconcileExternalChanges).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledTimes(2);
     await service.stop?.(context);
+  });
+
+  it("retries deferred retention cleanup without gateway event subscribers", async () => {
+    vi.useFakeTimers();
+    const reconcileArtifactRetention = vi.fn().mockResolvedValue(undefined);
+    const store = {
+      reconcileExternalChanges: vi.fn(),
+      reconcileArtifactRetention,
+    } as unknown as WorkboardStore;
+    const service = createWorkboardChangeEventService(store);
+    const warn = vi.fn();
+    const context = {
+      config: {},
+      stateDir: "/tmp/workboard-retention-retry-test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    } satisfies Parameters<typeof service.start>[0];
+    await service.start(context);
+    reconcileArtifactRetention.mockRejectedValueOnce(new Error("release unavailable"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("release unavailable"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileArtifactRetention).toHaveBeenCalledTimes(3);
+    await service.stop?.(context);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileArtifactRetention).toHaveBeenCalledTimes(3);
   });
 });

@@ -203,8 +203,13 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerId: string;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
-    setRetentionClaim: (params: {
+    resolveRetentionTarget: (params: {
       path: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<string | undefined>;
+    setRetentionClaim: (params: {
+      worktreeId: string;
       ownerKind: "workboard";
       ownerId: string;
       claimId: string;
