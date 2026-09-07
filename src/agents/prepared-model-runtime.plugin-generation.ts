@@ -41,7 +41,8 @@ export function preparedPluginGenerationSupportsSelections(
     (plan.pluginIds ?? []).every(
       (id) =>
         registry.plugins.some(
-          (plugin) => plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
+          (plugin) =>
+            plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
         ) || registryContainsRuntimePluginIds(registry, [id]),
     )
   );
