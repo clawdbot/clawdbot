@@ -7,8 +7,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const output = [];
   const pending = new Map();
   const queued = new Map();
-  // Reuse the accepted bridge ceiling, not an unbounded queue or a new setting.
-  const maxQueued = ${MAX_CODE_MODE_PENDING_TOOL_CALLS};
+  // Only ordinary requests use this quota. Swarm retains its group/VM bounds
+  // while sharing the same ordered queue and in-flight slots.
+  const maxQueuedOrdinary = ${MAX_CODE_MODE_PENDING_TOOL_CALLS};
+  let queuedOrdinaryCount = 0;
   let admissionError;
   const maxPending = globalThis.__openclawMaxPendingToolCalls;
   delete globalThis.__openclawMaxPendingToolCalls;
@@ -53,8 +55,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   }
 
   function assertQueueCapacity(queue) {
-    if (!admissionError && (queue || pending.size >= maxPending) && queued.size >= maxQueued) {
-      admissionError = "code mode bridge queue limit exceeded (" + maxQueued + " queued; " + maxPending + " in-flight slots). Await smaller batches before creating more tool calls or timers.";
+    if (!admissionError && !queue && pending.size >= maxPending && queuedOrdinaryCount >= maxQueuedOrdinary) {
+      admissionError = "code mode bridge queue limit exceeded (" + maxQueuedOrdinary + " ordinary requests queued; " + maxPending + " in-flight slots). Await smaller batches before creating more tool calls or timers.";
     }
     // Sticky even if guest code catches the immediate error: the worker refuses
     // this entire synchronous frontier before dispatching any admitted prefix.
@@ -76,9 +78,20 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       hostRequest(methodName, argsJson, id);
       pending.set(id, callbacks);
     };
-    if (queue || pending.size >= maxPending) queued.set(id, { admit, callbacks });
-    else admit();
+    if (queue || pending.size >= maxPending) {
+      queued.set(id, { admit, callbacks, ordinary: !queue });
+      if (!queue) queuedOrdinaryCount++;
+    } else admit();
     return { id, promise };
+  }
+
+  // Admission and cancellation release capacity through the same owner.
+  function takeQueuedRequest(id) {
+    const entry = queued.get(id);
+    if (!entry) return;
+    queued.delete(id);
+    if (entry.ordinary) queuedOrdinaryCount--;
+    return entry;
   }
 
   // Refill after guest continuations run so dependent ordinary calls retain
@@ -86,9 +99,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Closures, copied inputs, and stable IDs live only in the bounded VM snapshot.
   function drainQueuedRequests() {
     while (queued.size > 0 && pending.size < maxPending) {
-      const [id, entry] = queued.entries().next().value;
-      queued.delete(id);
-      entry.admit();
+      const id = queued.keys().next().value;
+      takeQueuedRequest(id).admit();
     }
   }
 
@@ -116,9 +128,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const requestId = timers.get(Number(timerId));
     if (!requestId) return;
     timers.delete(Number(timerId));
-    const queuedEntry = queued.get(requestId);
+    const queuedEntry = takeQueuedRequest(requestId);
     if (queuedEntry) {
-      queued.delete(requestId);
       queuedEntry.callbacks.resolve(null);
       return;
     }

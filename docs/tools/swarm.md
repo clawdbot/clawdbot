@@ -223,10 +223,12 @@ launches, progress notes, and result waits queue automatically when those slots
 are full. Queued requests retain their original arguments across snapshot
 resumes; stopping the run discards requests that have not been admitted.
 `maxConcurrent` still limits running children, and group child limits still
-apply. Ordinary tool calls and timers share this guest queue, which holds at most
-128 waiting requests separately from the in-flight bridge cap. Exceeding the queue
-bound fails the synchronous frontier before any new calls from it are dispatched;
-await smaller batches instead. See [Code Mode](/tools/code-mode#nested-tool-execution)
+apply. Ordinary tool calls and timers share this guest queue but have their own
+128-request waiting quota, separate from the in-flight bridge cap. Swarm launches,
+notes, and result waits do not consume that quota and retain their existing group,
+VM memory, and snapshot limits. Exceeding the ordinary quota fails the synchronous
+frontier before any new calls from it are dispatched; await smaller ordinary
+batches instead. See [Code Mode](/tools/code-mode#nested-tool-execution)
 for queue, cancellation, and resource-limit semantics.
 
 ### Loop on a decision gate
