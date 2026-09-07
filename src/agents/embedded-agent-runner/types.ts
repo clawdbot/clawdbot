@@ -290,6 +290,11 @@ export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
   compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
+  /** Completed built-in summary requests, including rejected prefix attempts. */
+  summaryUsage?: Array<{
+    path: "foreground-prefix" | "serialized";
+    usage: NormalizedUsage;
+  }>;
   reason?: string;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {

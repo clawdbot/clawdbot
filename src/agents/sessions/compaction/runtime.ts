@@ -1,7 +1,7 @@
-import type { Usage } from "../../../llm/types.js";
 import { openClawAgentCoreRuntime } from "../../runtime/index.js";
+import type { SessionModelUsageSink } from "../session-model-usage.js";
 
-export type SessionModelUsageSink = (usage: Usage) => void;
+export type { SessionModelUsageSink } from "../session-model-usage.js";
 
 /** Adds a private usage sink without changing public summary result shapes. */
 export function createCompactionRuntime(usageSink?: SessionModelUsageSink) {

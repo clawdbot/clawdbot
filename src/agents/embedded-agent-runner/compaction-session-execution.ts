@@ -80,6 +80,7 @@ import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
+import type { EmbeddedAgentCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -170,17 +171,17 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const recordUsage = accountingRecorder?.recordUsage
-        ? (usage: UsageLike) => {
-            const normalized = normalizeUsage(usage);
-            if (normalized) {
-              accountingRecorder.recordUsage?.(normalized);
-            }
+      const summaryUsage: NonNullable<EmbeddedAgentCompactResult["summaryUsage"]> = [];
+      const recordUsage = (usage: UsageLike, path?: (typeof summaryUsage)[number]["path"]) => {
+        const normalized = normalizeUsage(usage);
+        if (normalized) {
+          accountingRecorder?.recordUsage?.(normalized);
+          if (path) {
+            summaryUsage.push({ path, usage: normalized });
           }
-        : undefined;
-      if (recordUsage) {
-        setSessionModelUsageSink(sessionManager, recordUsage);
-      }
+        }
+      };
+      setSessionModelUsageSink(sessionManager, recordUsage);
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
@@ -657,6 +658,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           return {
             ok: true,
             compacted: true,
+            ...(summaryUsage.length > 0 ? { summaryUsage } : {}),
             ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
               sessionTarget: resultSessionTarget,

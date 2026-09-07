@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Context, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import { generateSummary } from "./compaction.js";
+import { generateSummary, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 
 function createSummaryModel(reasoning = false): Model {
   return {
@@ -77,7 +77,11 @@ describe("generateSummary foreground prefix", () => {
       undefined,
       streamFn,
       undefined,
-      { kind: "custom", instructions: "Use ## Decisions and ## Exact identifiers." },
+      {
+        kind: "custom",
+        instructions: "Use ## Decisions and ## Exact identifiers.",
+        requiredHeadings: ["## Decisions", "## Exact identifiers"],
+      },
       foreground,
     );
   }
@@ -109,12 +113,21 @@ describe("generateSummary foreground prefix", () => {
       expect(request.systemPrompt).toBe(context.systemPrompt);
       expect(request.tools).toEqual(context.tools);
       expect(request.messages.slice(0, -1)).toEqual(context.messages);
+      expect(request.messages.at(-1)).toMatchObject({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: expect.stringMatching(/^You are a context summarization assistant\./u),
+          },
+        ],
+      });
       const instruction = JSON.stringify(request.messages.at(-1));
       expect(instruction).toContain("<previous-summary>");
       expect(instruction).toContain("Earlier receipt_90210 decision.");
       expect(instruction).toContain("Use ## Decisions and ## Exact identifiers.");
       expect(instruction).toContain("Preserve the canary decision.");
-      expect(instruction).toContain("You are a context summarization assistant.");
+      expect(instruction).toContain("ONLY output the structured summary.");
       expect(instruction).not.toContain("<conversation>");
     },
   );
@@ -154,7 +167,18 @@ describe("generateSummary foreground prefix", () => {
     );
   });
 
-  it.each(["throw", "error", "aborted", "tool-call", "tool-stop", "empty"])(
+  it.each([
+    "throw",
+    "error",
+    "aborted",
+    "tool-call",
+    "tool-stop",
+    "empty",
+    "conversational",
+    "preamble",
+    "wrong-first-heading",
+    "missing-heading",
+  ])(
     "falls back after %s without executing a tool or losing summary instructions",
     async (failure) => {
       const model = { ...createSummaryModel(), api: "anthropic-messages" };
@@ -166,6 +190,15 @@ describe("generateSummary foreground prefix", () => {
           throw new Error("provider rejected native request");
         }
         const response = createAssistant(failure === "empty" ? " " : summary, createUsage(1), 1);
+        const invalidSummaries: Record<string, string> = {
+          conversational: "Done. I have completed the work.",
+          preamble: `Sure, here is the summary:\n${summary}`,
+          "wrong-first-heading": `## Goal\n${summary}`,
+          "missing-heading": "## Decisions\nKeep the canary decision and receipt_90210.",
+        };
+        if (invalidSummaries[failure]) {
+          response.content = [{ type: "text", text: invalidSummaries[failure] }];
+        }
         if (failure === "error" || failure === "aborted") {
           response.stopReason = failure;
         }
@@ -185,6 +218,9 @@ describe("generateSummary foreground prefix", () => {
       expect(fallback).toContain("<previous-summary>");
       expect(fallback).toContain("Preserve the canary decision.");
       expect(expectDefined(streamFn.mock.calls[1], "fallback request")[1].tools).toBeUndefined();
+      expect(expectDefined(streamFn.mock.calls[1], "fallback request")[1].systemPrompt).toBe(
+        SUMMARIZATION_SYSTEM_PROMPT,
+      );
     },
   );
 

@@ -398,7 +398,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           options.signal,
           this.thinkingLevel,
           this.agent.streamFn,
-          createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
+          createCompactionRuntime((usage, path) =>
+            recordSessionModelUsage(this.sessionManager, usage, path),
+          ),
           foreground,
         );
       let result = await runCoreCompaction();

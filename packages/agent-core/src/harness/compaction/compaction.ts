@@ -594,6 +594,15 @@ export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assi
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
+const SUMMARY_HEADINGS = [
+  "## Goal",
+  "## Constraints & Preferences",
+  "## Progress",
+  "## Key Decisions",
+  "## Next Steps",
+  "## Critical Context",
+] as const;
+
 const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
 Use this EXACT format:
@@ -707,6 +716,7 @@ async function runSummarizationCompletion(params: {
   streamFn?: StreamFn;
   runtime?: AgentCoreCompletionRuntimeDeps;
   foreground?: CompactionForegroundContext;
+  requiredHeadings?: readonly string[];
   errorLabel: string;
 }): Promise<Result<string, CompactionError>> {
   const messages = convertToLlm(params.messages);
@@ -755,7 +765,10 @@ async function runSummarizationCompletion(params: {
       ? await consumeAgentCoreStream(params.streamFn(params.model, context, requestOptions))
       : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, requestOptions);
     // Usage belongs to the completed provider request even when its summary is invalid.
-    params.runtime?.internalUsageSink?.(response.usage);
+    params.runtime?.internalUsageSink?.(
+      response.usage,
+      rejectTools ? "foreground-prefix" : "serialized",
+    );
     if (response.stopReason === "aborted") {
       return err(
         new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
@@ -785,6 +798,25 @@ async function runSummarizationCompletion(params: {
         ),
       );
     }
+    if (rejectTools && params.requiredHeadings) {
+      const lines = summary
+        .trim()
+        .split(/\r?\n/u)
+        .map((line) => line.trim());
+      let cursor = 0;
+      const valid =
+        lines[0] === params.requiredHeadings[0] &&
+        params.requiredHeadings.every((heading) => {
+          const index = lines.indexOf(heading, cursor);
+          cursor = index + 1;
+          return index >= 0;
+        });
+      if (!valid) {
+        return err(
+          new InvalidSummaryOutputError(`${params.errorLabel} returned an invalid format`),
+        );
+      }
+    }
     return ok(summary);
   };
   const userMessage = (text: string): Context["messages"][number] => ({
@@ -795,6 +827,7 @@ async function runSummarizationCompletion(params: {
   const { foreground, model } = params;
   if (
     foreground &&
+    params.requiredHeadings?.length &&
     (model.api === "anthropic-messages" || model.api === "openai-responses") &&
     foreground.model.id === model.id &&
     foreground.model.provider === model.provider &&
@@ -818,7 +851,7 @@ async function runSummarizationCompletion(params: {
           ...foreground.context,
           messages: [
             ...foreground.context.messages,
-            userMessage(`${promptText}\n\n${SUMMARIZATION_SYSTEM_PROMPT}`),
+            userMessage(`${SUMMARIZATION_SYSTEM_PROMPT}\n\n${promptText}`),
           ],
         },
         true,
@@ -846,7 +879,12 @@ async function runSummarizationCompletion(params: {
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
-  | { kind: "custom"; instructions: string };
+  | {
+      kind: "custom";
+      instructions: string;
+      /** Ordered format contract required to admit native-prefix summary output. */
+      requiredHeadings?: readonly string[];
+    };
 
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
@@ -897,6 +935,12 @@ export async function generateSummary(
     streamFn,
     runtime,
     foreground,
+    requiredHeadings:
+      summaryPrompt?.kind === "custom"
+        ? summaryPrompt.requiredHeadings
+        : summaryPrompt?.kind === "turn-prefix"
+          ? ["## Original Request", "## Early Progress", "## Context for Suffix"]
+          : SUMMARY_HEADINGS,
     errorLabel:
       summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
   });

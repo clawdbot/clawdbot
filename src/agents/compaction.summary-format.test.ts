@@ -29,6 +29,8 @@ describe("compaction summary format propagation", () => {
     { mode: "chunks", api: "anthropic-messages", maxChunkTokens: 200, reuse: false },
     { mode: "native", api: "openai-responses", maxChunkTokens: 10_000, reuse: true },
     { mode: "projected", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: true },
+    { mode: "appended-history", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: false },
+    { mode: "changed-history", api: "anthropic-messages", maxChunkTokens: 10_000, reuse: false },
   ])(
     "preserves focus and identifiers for $api/$mode",
     async ({ mode, api, maxChunkTokens, reuse }) => {
@@ -50,6 +52,22 @@ describe("compaction summary format propagation", () => {
         tools: [],
       };
       const requests: Parameters<StreamFn>[1][] = [];
+      const snapshot = captureCompactionPrefix(
+        foregroundModel,
+        {
+          ...foreground,
+          messages:
+            mode === "appended-history"
+              ? foreground.messages.slice(0, -1)
+              : mode === "changed-history"
+                ? [
+                    { role: "user", content: "Earlier content", timestamp: 1 },
+                    ...foreground.messages.slice(1),
+                  ]
+                : foreground.messages,
+        },
+        boundaryOptions,
+      );
       const summary =
         "## Decisions\nKeep the canary decision.\n## Exact identifiers\nreceipt_90210";
       const streamFn: StreamFn = (_model, context) => {
@@ -69,10 +87,7 @@ describe("compaction summary format propagation", () => {
           mode === "different-model"
             ? { ...foregroundModel, id: "different-model" }
             : foregroundModel,
-        foregroundPrefix:
-          mode === "serialized"
-            ? undefined
-            : captureCompactionPrefix(foregroundModel, foreground, boundaryOptions),
+        foregroundPrefix: mode === "serialized" ? undefined : snapshot,
         apiKey: "test-key",
         signal: new AbortController().signal,
         reserveTokens: 1_000,
@@ -82,6 +97,7 @@ describe("compaction summary format propagation", () => {
         summaryPrompt: {
           kind: "custom",
           instructions: "Use ## Decisions and ## Exact identifiers.",
+          requiredHeadings: ["## Decisions", "## Exact identifiers"],
         },
         streamFn,
       });

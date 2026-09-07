@@ -1978,6 +1978,230 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
     });
 
+    it.each(["foreground-prefix", "serialized", "conversational-prefix"] as const)(
+      "records each summary request through embedded compaction for %s",
+      async (scenario) => {
+        const [
+          { createAgentSessionForEmbeddedRunner },
+          { guardSessionManager },
+          { resolveEmbeddedAgentStream },
+          { buildEmbeddedExtensionFactories },
+          { attachCompactionAccountingRecorder },
+          { captureCompactionPrefix },
+          { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates },
+          { normalizeMessagesForLlmBoundary },
+          { convertToLlm },
+        ] = await Promise.all([
+          import("../sessions/sdk.js"),
+          import("../session-tool-result-guard-wrapper.js"),
+          import("./stream-resolution.js"),
+          import("./extensions.js"),
+          import("./run/compaction-accounting-bridge.js"),
+          import("../compaction-prefix.js"),
+          import("./session-prompt-state.js"),
+          import("./run/attempt-llm-boundary.js"),
+          import("../sessions/messages.js"),
+        ]);
+        const model = {
+          ...testModel,
+          provider: "anthropic",
+          api: "anthropic-messages",
+          id: "summary-model",
+        };
+        resolveModelMock.mockReturnValue({
+          model,
+          error: null,
+          authStorage: { setRuntimeApiKey: vi.fn() },
+          modelRegistry: {},
+        });
+        const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
+        for (const content of [
+          "Review the deployment checklist.",
+          "Compare the remaining options.",
+        ]) {
+          sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+          sessionManager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
+        }
+        sessionManager.appendMessage({
+          role: "user",
+          content: "Keep the rollout notes. ".repeat(32),
+          timestamp: 3,
+        });
+        const boundaryOptions = {
+          timezone: "UTC",
+          includeTimestamp: true,
+          appendOnlyRuntimeContext: true,
+        };
+        const foreground = {
+          systemPrompt: "Foreground assistant: help review deployment decisions.",
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up deployment notes.",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+          messages: convertToLlm(
+            normalizeMessagesForLlmBoundary(
+              sessionManager.buildSessionContext().messages,
+              boundaryOptions,
+            ),
+          ),
+        };
+        const snapshot = expectDefined(
+          captureCompactionPrefix(model, foreground, boundaryOptions),
+          "foreground snapshot",
+        );
+        getEmbeddedSessionPromptState(TEST_SESSION_ID).compactionPrefix =
+          scenario === "serialized" ? undefined : snapshot;
+        // The foreground response arrives after capture; only the older leading
+        // history is summarized, so the extra assistant must not prevent reuse.
+        sessionManager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
+        const summary = [
+          "## Decisions",
+          "Review the deployment checklist before rollout.",
+          "## Open TODOs",
+          "Compare the remaining options.",
+          "## Constraints/Rules",
+          "None.",
+          "## Pending user asks",
+          "Compare the remaining options.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n");
+        const requests: Parameters<StreamFn>[1][] = [];
+        const stream = vi.fn<StreamFn>((activeModel, context) => {
+          requests.push(structuredClone(context));
+          const prefix = context.systemPrompt === foreground.systemPrompt;
+          const response = createAssistant(activeModel, [
+            {
+              type: "text",
+              text:
+                prefix && scenario === "conversational-prefix"
+                  ? `Sure, here is the summary.\n${summary}`
+                  : summary,
+            },
+          ]);
+          response.usage = {
+            ...response.usage,
+            input: 20,
+            output: 30,
+            cacheRead: prefix ? 100 : 0,
+            totalTokens: prefix ? 150 : 50,
+          };
+          return createAssistantResultStream(response);
+        });
+        const recordUsage = vi.fn();
+        const contextEngineRuntimeContext = {};
+        attachCompactionAccountingRecorder(contextEngineRuntimeContext, { recordUsage });
+        const extension = await loadExtensionFromFactory(
+          safeguard,
+          TEST_WORKSPACE_DIR,
+          createEventBus(),
+          createExtensionRuntime(),
+        );
+        vi.mocked(summaryBridge).mockImplementation(generateRealSummary);
+        vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+        limitHistoryTurnsMock.mockImplementation((messages) => messages);
+        resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+        vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+          streamFn: stream,
+          strategy: "session-custom",
+        });
+        vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(
+          ({ model: compactionModel }) => {
+            setSafeguardRuntime(sessionManager, {
+              model: compactionModel,
+              contextWindowTokens: 128_000,
+              recentTurnsPreserve: 0,
+              qualityGuardEnabled: true,
+              qualityGuardMaxRetries: 0,
+            });
+            return [];
+          },
+        );
+        vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async () =>
+          createTestSession({
+            model,
+            sessionManager,
+            settingsManager: SettingsManager.inMemory({
+              compaction: { enabled: false, reserveTokens: 1_024, keepRecentTokens: 32 },
+              retry: { enabled: false },
+            }),
+            resourceLoader: createResourceLoader(extension.handlers),
+          }),
+        );
+
+        try {
+          const result = await compactEmbeddedAgentSessionDirect(
+            wrappedCompactionArgs({
+              provider: model.provider,
+              model: model.id,
+              contextEngineRuntimeContext,
+              config: {
+                agents: {
+                  defaults: {
+                    compaction: {
+                      mode: "safeguard",
+                      recentTurnsPreserve: 0,
+                      qualityGuard: { enabled: true, maxRetries: 0 },
+                    },
+                  },
+                },
+              },
+            }),
+          );
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          expect(result.result?.summary).toContain(
+            "Review the deployment checklist before rollout.",
+          );
+          expect(result.result?.summary).toContain("Compare the remaining options.");
+          expect(result.result?.summary).not.toContain("Sure, here is");
+          const expectedPaths =
+            scenario === "conversational-prefix" ? ["foreground-prefix", "serialized"] : [scenario];
+          expect(requests).toHaveLength(expectedPaths.length);
+          expect(recordUsage).toHaveBeenCalledTimes(expectedPaths.length);
+          expect(result.summaryUsage).toEqual(
+            expectedPaths.map((path, index) => ({
+              path,
+              usage: recordUsage.mock.calls[index]?.[0],
+            })),
+          );
+          for (const [index, path] of expectedPaths.entries()) {
+            const request = expectDefined(requests[index], "summary request");
+            expect(recordUsage.mock.calls[index]?.[0]).toMatchObject({
+              input: 20,
+              output: 30,
+              cacheRead: path === "foreground-prefix" ? 100 : 0,
+            });
+            if (path === "foreground-prefix") {
+              expect(request.systemPrompt).toBe(foreground.systemPrompt);
+              expect(request.tools).toEqual(foreground.tools);
+              expect(request.messages.slice(0, -1)).toEqual(foreground.messages.slice(0, 4));
+              expect(request.messages.length - 1).toBeLessThan(snapshot.messageDigests.length);
+              expect(request.messages.at(-1)).toMatchObject({ role: "user" });
+              expect(JSON.stringify(request.messages.at(-1))).toContain(
+                "You are a context summarization assistant.",
+              );
+              expect(JSON.stringify(request.messages.at(-1))).toContain(
+                "ONLY output the structured summary",
+              );
+              expect(JSON.stringify(request.messages.at(-1))).toContain("## Decisions");
+            } else {
+              expect(request.systemPrompt).toContain("You are a context summarization assistant.");
+              expect(request.tools ?? []).toHaveLength(0);
+              expect(JSON.stringify(request.messages)).toContain("<conversation>");
+              expect(JSON.stringify(request.messages)).toContain(
+                "Review the deployment checklist.",
+              );
+            }
+          }
+        } finally {
+          clearEmbeddedSessionPromptStates([TEST_SESSION_ID]);
+        }
+      },
+    );
+
     it("returns a structured automatic retention skip without reporting compaction failure", async () => {
       const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
       const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
