@@ -4,7 +4,47 @@
  * overwrite a different account's local auth state.
  */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  loadBundledPluginPublicSurfaceModuleSyncCore,
+  MissingPublicSurfaceError,
+} from "../../plugin-sdk/facade-loader.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
+
+type GithubCopilotOAuthSurface = {
+  normalizeGithubCopilotOAuthScope: (raw: string | undefined) => string | undefined;
+};
+
+/** Returns whether OAuth credentials target the same provider-owned tenant. */
+export function isSafeToCopyOAuthRoutingScope(
+  existing: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
+  incoming: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
+): boolean {
+  if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  if (existing.provider !== "github-copilot") {
+    return true;
+  }
+  // Credential identity uses shipped policy even when plugin runtime is disabled.
+  // Never select a replacement policy from an environment-controlled plugin root.
+  let surface: GithubCopilotOAuthSurface;
+  try {
+    surface = loadBundledPluginPublicSurfaceModuleSyncCore<GithubCopilotOAuthSurface>({
+      dirName: "github-copilot",
+      artifactBasename: "api.js",
+      env: {},
+    });
+  } catch (error) {
+    if (error instanceof MissingPublicSurfaceError) {
+      return false;
+    }
+    throw error;
+  }
+  const { normalizeGithubCopilotOAuthScope } = surface;
+  const existingScope = normalizeGithubCopilotOAuthScope(existing.enterpriseUrl);
+  const incomingScope = normalizeGithubCopilotOAuthScope(incoming.enterpriseUrl);
+  return existingScope !== undefined && existingScope === incomingScope;
+}
 
 /** Normalize account-id style identity tokens for exact comparison. */
 export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
@@ -23,9 +63,21 @@ export function normalizeAuthEmailToken(value: string | undefined): string | und
  * - adopt: main-agent store -> sub-agent store
  */
 export function isSafeToCopyOAuthIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
+  existing: Pick<OAuthCredential, "accountId" | "email"> &
+    Partial<Pick<OAuthCredential, "provider" | "enterpriseUrl">>,
+  incoming: Pick<OAuthCredential, "accountId" | "email"> &
+    Partial<Pick<OAuthCredential, "provider" | "enterpriseUrl">>,
 ): boolean {
+  if (
+    existing.provider !== undefined &&
+    incoming.provider !== undefined &&
+    !isSafeToCopyOAuthRoutingScope(
+      { provider: existing.provider, enterpriseUrl: existing.enterpriseUrl },
+      { provider: incoming.provider, enterpriseUrl: incoming.enterpriseUrl },
+    )
+  ) {
+    return false;
+  }
   const aAcct = normalizeAuthIdentityToken(existing.accountId);
   const bAcct = normalizeAuthIdentityToken(incoming.accountId);
   const aEmail = normalizeAuthEmailToken(existing.email);

@@ -762,6 +762,8 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
+    // Observe real process readiness before advancing the command deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const runPromise = runCommand(
       process.execPath,
       [scriptPath, grandchildPidPath, grandchildReadyPath],
@@ -771,12 +773,21 @@ setInterval(() => {}, 1000);
         timeoutMs: 500,
       },
     );
+    let settled = false;
     const runErrorPromise = runPromise.then(
       () => {
-        throw new Error("expected timed command to reject");
+        settled = true;
       },
-      (error: unknown) => error,
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
     );
+    const finishCommand = () =>
+      waitFor(async () => {
+        await vi.runOnlyPendingTimersAsync();
+        return settled;
+      });
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
@@ -785,16 +796,24 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
+      await vi.advanceTimersByTimeAsync(500);
+      await finishCommand();
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 500ms");
+      expect(runError).toMatchObject({ message: expect.stringContaining("timed out after 500ms") });
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
-      await runPromise.catch(() => {});
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
+      try {
+        // Readiness or assertion failures must still drain the real process group.
+        await finishCommand();
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
       }
-      rmSync(root, { recursive: true, force: true });
     }
   });
 

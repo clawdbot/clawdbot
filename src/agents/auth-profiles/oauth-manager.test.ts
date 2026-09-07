@@ -23,6 +23,7 @@ import {
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "./oauth-shared.js";
+import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   ensureAuthProfileStore,
@@ -111,6 +112,65 @@ describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
           accountId: "acct-main",
         }),
       ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["different enterprise tenant", "acme.ghe.com", "other.ghe.com", false],
+    ["public versus enterprise tenant", undefined, "acme.ghe.com", false],
+    ["public URL spellings", undefined, "https://github.com/", true],
+    ["same enterprise tenant URL spelling", "HTTPS://ACME.GHE.COM/", "acme.ghe.com", true],
+  ])(
+    "applies provider routing scope before identity-less adoption: %s",
+    (_name, existingDomain, incomingDomain, expected) => {
+      expect(
+        isSafeToAdoptMainStoreOAuthIdentity(
+          createCredential({ provider: "github-copilot", enterpriseUrl: existingDomain }),
+          createCredential({
+            provider: "github-copilot",
+            enterpriseUrl: incomingDomain,
+            accountId: "acct-main",
+          }),
+        ),
+      ).toBe(expected);
+    },
+  );
+});
+
+describe("shouldUseMainOwnerForLocalOAuthCredential", () => {
+  it("does not transfer ownership across GitHub Copilot tenants", () => {
+    expect(
+      shouldUseMainOwnerForLocalOAuthCredential({
+        local: createCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "acme.ghe.com",
+          expires: Date.now(),
+        }),
+        main: createCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "other.ghe.com",
+          expires: Date.now() + 60_000,
+          accountId: "acct-main",
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps ownership transfer for the same tenant when main is fresher", () => {
+    expect(
+      shouldUseMainOwnerForLocalOAuthCredential({
+        local: createCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "acme.ghe.com",
+          expires: Date.now(),
+        }),
+        main: createCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "https://acme.ghe.com/",
+          expires: Date.now() + 60_000,
+          accountId: "acct-main",
+        }),
+      }),
     ).toBe(true);
   });
 });

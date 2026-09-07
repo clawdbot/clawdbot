@@ -123,6 +123,94 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
   });
 
+  it("does not classify a cross-tenant GitHub Copilot profile as a removable shadow", async () => {
+    const profileId = "github-copilot:default";
+    const now = Date.now();
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    await writeRawAuthStore(
+      childAgentDir,
+      storeWith(
+        profileId,
+        oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "acme.ghe.com",
+          access: "child-access",
+          refresh: "child-refresh",
+          expires: now - 60_000,
+        }),
+      ),
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "other.ghe.com",
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-main",
+        }),
+      ),
+    );
+
+    const hits = await scanStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+
+    expect(hits).toHaveLength(0);
+    await expect(
+      repairStaleOAuthProfileShadows({ cfg: {} satisfies OpenClawConfig, now }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
+  });
+
+  it("still classifies a same-tenant fresher main profile as a removable shadow", async () => {
+    const profileId = "github-copilot:default";
+    const now = Date.now();
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    await writeRawAuthStore(
+      childAgentDir,
+      storeWith(
+        profileId,
+        oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "acme.ghe.com",
+          access: "child-access",
+          refresh: "child-refresh",
+          expires: now - 60_000,
+        }),
+      ),
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "https://acme.ghe.com/",
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-main",
+        }),
+      ),
+    );
+
+    const hits = await scanStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+
+    expect(hits).toHaveLength(1);
+    const repair = await repairStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+    expect(repair.changes).toHaveLength(1);
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeUndefined();
+  });
+
   it("scans sqlite-only child auth stores after JSON migration", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();

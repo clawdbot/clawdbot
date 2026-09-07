@@ -4,8 +4,10 @@
  * credentials cannot poison another auth store.
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as facadeLoader from "../../plugin-sdk/facade-loader.js";
 import {
+  isSafeToCopyOAuthRoutingScope,
   isSafeToCopyOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
@@ -56,6 +58,60 @@ describe("normalizeAuthEmailToken", () => {
 // ---------------------------------------------------------------------------
 
 describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adopt)", () => {
+  it("preserves Copilot credentials when the shipped policy artifact is missing", () => {
+    const load = vi
+      .spyOn(facadeLoader, "loadBundledPluginPublicSurfaceModuleSyncCore")
+      .mockImplementation(() => {
+        throw new facadeLoader.MissingPublicSurfaceError("Missing Copilot policy artifact");
+      });
+    try {
+      expect(
+        isSafeToCopyOAuthRoutingScope(
+          { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
+          { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
+        ),
+      ).toBe(false);
+      expect(isSafeToCopyOAuthRoutingScope({ provider: "openai" }, { provider: "openai" })).toBe(
+        true,
+      );
+    } finally {
+      load.mockRestore();
+    }
+  });
+
+  it.each([
+    ["public defaults", undefined, undefined, true],
+    ["public explicit URL", undefined, "https://github.com/", true],
+    ["same enterprise host", "HTTPS://ACME.GHE.COM/", "acme.ghe.com", true],
+    ["different enterprise hosts", "acme.ghe.com", "other.ghe.com", false],
+    ["public and enterprise", undefined, "acme.ghe.com", false],
+    [
+      "same host with URL transport details",
+      "http://fixture-user@acme.ghe.com:443/path?q=1",
+      "acme.ghe.com",
+      true,
+    ],
+    ["unsupported host", "attacker.example", "attacker.example", false],
+    ["malformed URL", "https://[broken", "https://[broken", false],
+    ["trailing dot is unsupported by provider", "acme.ghe.com.", "acme.ghe.com", false],
+  ])("keeps GitHub Copilot routing scope isolated: %s", (_name, existing, incoming, expected) => {
+    expect(
+      isSafeToCopyOAuthRoutingScope(
+        { provider: "github-copilot", enterpriseUrl: existing },
+        { provider: "github-copilot", enterpriseUrl: incoming },
+      ),
+    ).toBe(expected);
+  });
+
+  it("rejects identity-less cross-tenant credentials even when identity adoption is otherwise allowed", () => {
+    expect(
+      isSafeToCopyOAuthIdentity(
+        { provider: "github-copilot", enterpriseUrl: "acme.ghe.com" },
+        { provider: "github-copilot", enterpriseUrl: "other.ghe.com", accountId: "acct-main" },
+      ),
+    ).toBe(false);
+  });
+
   describe("positive matches", () => {
     it("accepts matching accountIds", () => {
       expect(isSafeToCopyOAuthIdentity({ accountId: "x" }, { accountId: "x" })).toBe(true);

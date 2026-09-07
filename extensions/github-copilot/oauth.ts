@@ -8,33 +8,21 @@ import type {
 import {
   isSupportedGithubCopilotDomain,
   normalizeGithubCopilotDomain,
+  normalizeGithubCopilotOAuthScope,
   PUBLIC_GITHUB_COPILOT_DOMAIN,
 } from "./domain.js";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const LEGACY_OAUTH_KEY_PREFIX = "openclaw-github-copilot-oauth:v1:";
 
-function parseLegacyEnterpriseInput(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const parsed = trimmed.includes("://") ? new URL(trimmed) : new URL(`https://${trimmed}`);
-    return parsed.hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 function requireSupportedEnterpriseDomain(raw: string): string {
-  const domain = parseLegacyEnterpriseInput(raw);
-  if (!domain || !isSupportedGithubCopilotDomain(domain)) {
+  const domain = raw.trim() ? normalizeGithubCopilotOAuthScope(raw) : undefined;
+  if (!domain) {
     throw new Error(
       `Unsupported GitHub Enterprise domain "${raw.trim()}". Use github.com or a *.ghe.com data-residency tenant.`,
     );
   }
-  return normalizeGithubCopilotDomain(domain);
+  return domain;
 }
 
 export async function loginGithubCopilotOAuth(

@@ -26,6 +26,22 @@ export function normalizeGithubCopilotDomain(raw: string | undefined | null): st
     : PUBLIC_GITHUB_COPILOT_DOMAIN;
 }
 
+/** Normalize legacy OAuth URL/domain spellings without accepting unsupported tenants. */
+export function normalizeGithubCopilotOAuthScope(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return PUBLIC_GITHUB_COPILOT_DOMAIN;
+  }
+  try {
+    const hostname = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).hostname;
+    return isSupportedGithubCopilotDomain(hostname) && hostname
+      ? normalizeGithubCopilotDomain(hostname)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
   const params = config?.models?.providers?.["github-copilot"]?.params;
   const value = params && typeof params === "object" ? params.githubDomain : undefined;
