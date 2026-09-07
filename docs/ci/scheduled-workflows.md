@@ -250,7 +250,7 @@ and `legacy-operator-state`, with no provider secrets. Its separate
 non-canceling schedule group coalesces pending runs and cannot cancel manual
 validation. See [Package Acceptance suite profiles](/ci/release-validation#suite-profiles)
 for runtime baseline resolution, per-baseline grouping, the 78–90
-runner-minute weekly planning allowance, and the unfenced-updater limitation.
+runner-minute weekly planning allowance, and the successful-upgrade requirements.
 [Runner registration budgets](/ci/capacity#runner-registration-budget) account
 for the weekly burst separately from PR and main admission.
 

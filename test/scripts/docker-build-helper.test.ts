@@ -4251,7 +4251,6 @@ COMMAND_TIMEOUT=900s
 ROOT_MANAGED_VPS=0
 UPDATE_RESTART_MODE=auto-auth
 SCENARIO=base
-expected_update_outcome=success
 update_repair_required=1
 baseline_spec=openclaw@2026.4.15
 candidate_version=2026.8.1

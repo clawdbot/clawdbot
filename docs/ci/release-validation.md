@@ -257,15 +257,12 @@ there is no new manual-dispatch input.
 
 Expanded published-upgrade survivor and update-migration selections are split by baseline into groups of at most three scenarios, with at most 32 targeted Docker jobs active per matrix. Grouping shares the execution planner's baseline-compatibility policy, so every supported scenario runs exactly once without creating empty shards for old baselines. Each scenario owns a fresh container and the unchanged npm resource limit; package and image identities remain shared across the matrix. `Update Migration` runs weekly on Sunday at 03:17 UTC and on manual dispatch. It defaults to `supported-lines` with both `plugin-deps-cleanup` and `legacy-operator-state`, keeps the existing cleanup coverage, and forwards no provider secrets. The weekly run keeps cleanup on the candidate-relative predecessor and exercises native operator state on each supported baseline. A planning allowance of 12 minutes per scenario plus 30 minutes for shared package/image preparation and controls gives about 78 runner-minutes weekly with three distinct baselines, or 90 with four; actual timing artifacts determine the observed cost.
 
-Pass `baselines=all-since-2026.4.23` for exhaustive historical cleanup; `last-stable-4`, `release-history`, and exact historical versions remain explicit manual selections. Local aggregate runs can pass the resolved exact specs through `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. Existing scenarios retain their baked `openclaw config set` recipes and summary records. The new operator-state scenario instead uses the baseline's own agent, exec-approvals, cron, and plugin CLIs, then verifies preserved state and a mock-provider turn after upgrade. Gateway probes include `/healthz`, `/readyz`, and RPC status. See [Testing updates and plugins](/help/testing-updates-plugins) for the unfenced `2026.9.2` updater's typed-refusal expectation when a state migration is pending.
+Pass `baselines=all-since-2026.4.23` for exhaustive historical cleanup; `last-stable-4`, `release-history`, and exact historical versions remain explicit manual selections. Local aggregate runs can pass the resolved exact specs through `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. Existing scenarios retain their baked `openclaw config set` recipes and summary records. The new operator-state scenario instead uses the baseline's own agent, exec-approvals, cron, and plugin CLIs, then verifies preserved state and a mock-provider turn after upgrade. Gateway probes include `/healthz`, `/readyz`, and RPC status. See [Testing updates and plugins](/help/testing-updates-plugins) for the preserved-state and successful-upgrade requirements.
 
-The temporary typed-refusal pass applies only to the CLI-authored
-`legacy-operator-state` scenario, which proves the baseline can start before the
-update. Existing synthetic `base` and reported-issue fixtures retain their
-success expectations and run once on the candidate-relative predecessor.
-Explicit manual cross-products can still expose their conflict with the
-`2026.9.2` updater's refusal. The lane does not run an extra Doctor or omit those
-fixtures to turn that gap into a pass.
+All supported baseline rows require successful updates. Existing synthetic
+`base` and reported-issue fixtures retain their success assertions and run once
+on the candidate-relative predecessor. The lane does not run an extra Doctor or
+omit those fixtures to turn a failed schema upgrade into a pass.
 
 The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.6-luna`, so the install and gateway proof uses the lower-cost GPT-5.6 test tier.
 

@@ -182,21 +182,26 @@ conceal an incomplete migration. The default local `manual` mode passes
 `--no-restart` and starts the candidate for probes, so it does not prove an
 updater-owned restart. Both modes require a clean `doctor --lint --json` report.
 
-In `legacy-operator-state`, the `2026.9.2` updater line is a temporary exception
-when the packed candidate needs a database migration. That line introduced the update ledger without the
-transaction fence added in [#138839](https://github.com/openclaw/openclaw/pull/138839).
-Its expected outcome is a typed `update-schema-bump-unfenced` refusal, a
-nonzero update exit, byte-for-byte restoration of the previous package,
-unchanged database schema versions, and a startable baseline Gateway. A generic
-failure, a migrated database, or an unusable Gateway fails the lane. Earlier
-updaters and `2026.9.3` or later expect success. This exception does not permit
-the test to install the candidate directly after a refusal.
+Schema snapshots record both published `userVersion` and applied `contentVersion`
+in `schema-before.json` and `schema-after.json`. The lane compares applied content
+with the candidate package's schema constants. Since #141109, shared-state
+publication can lag completed migrations by the legacy updater's five-minute
+terminal grace period; requiring the published number immediately would reject a
+healthy upgrade. Agent schemas still use their published version. The observer
+opens databases read-only and never triggers migrations or publication. See
+[Schema bumps and older updaters](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+Every supported baseline, including `2026.9.2`, must complete the update and
+migrate its databases to the candidate schemas. A typed
+`update-schema-bump-unfenced` refusal, a rollback, an unmigrated database, or an
+unusable Gateway fails the lane. Required plugin capability consent can use the
+existing explicit recovery step only after the automatic-migration assertions
+pass; it never permits a failed schema repair.
 
 Other scenarios keep their existing success assertions. Their deliberately
 injected legacy files can prevent the baseline from starting before an update;
-a refusal leaves those fixtures untouched and remains a failure in aggregate
-runs. The CLI-authored scenario proves the clean-refusal recovery contract
-without repairing or skipping those older migration specimens.
+the updater must migrate those fixtures before the candidate probes. The lane
+does not pre-repair or skip those older migration specimens.
 
 `auth-profile-v2026-7-2-beta-5` is explicitly selectable outside those aggregate
 aliases. It imports the historical JSON credential fixture, verifies credentials

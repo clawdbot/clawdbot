@@ -232,16 +232,6 @@ function schemaFixture(
   if (agentVersion !== null) {
     writeSchema(agentDatabase, agentVersion);
   }
-  const packageRoot = join(root, "baseline");
-  mkdirSync(packageRoot);
-  writeFileSync(
-    join(packageRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version: baselineVersion }),
-  );
-  writeFileSync(join(packageRoot, "openclaw.mjs"), "// baseline launcher\n");
-  const dependencyFile = join(packageRoot, "node_modules", "fixture-dependency", "index.js");
-  mkdirSync(dirname(dependencyFile), { recursive: true });
-  writeFileSync(dependencyFile, "// baseline dependency\n");
   const candidateDir = join(root, "package");
   mkdirSync(candidateDir);
   // Main can retain the released version while its schema contract advances.
@@ -257,70 +247,35 @@ function schemaFixture(
   const tarball = join(root, "candidate.tgz");
   execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
   const snapshotFile = join(root, "snapshot.json");
-  const updateFile = join(root, "update.json");
-  const errorFile = join(root, "update.err");
-  const observationRoot = join(root, "observation");
-  const diagnosticsDir = join(observationRoot, "diagnostics");
-  mkdirSync(diagnosticsDir, { recursive: true });
-  const observationFile = join(diagnosticsDir, "process-123-exited.json");
-  writeFileSync(
-    observationFile,
-    JSON.stringify({
-      role: "doctor",
-      packageVersion: candidateVersion,
-      event: "exited",
-      exitCode: 1,
-    }),
-  );
-  const update = {
-    status: "error",
-    before: { version: baselineVersion },
-    steps: [
-      {
-        name: "openclaw doctor",
-        exitCode: 1,
-        stdoutTail: "",
-        stderrTail:
-          "[openclaw] DoctorUpdateSchemaRefusalError: Doctor refused update-time schema repair",
-      },
-    ],
-  };
-  writeFileSync(errorFile, "");
+  const afterFile = join(root, "schema-after.json");
   const run = (...args: string[]) =>
     spawnSync(process.execPath, [schemaCommand, ...args], {
       encoding: "utf8",
       timeout: 10_000,
     });
-  const prepared = run("prepare", baselineVersion, tarball, stateDir, snapshotFile, packageRoot);
+  const prepared = run("prepare", baselineVersion, tarball, stateDir, snapshotFile);
   expect(prepared.status, prepared.stderr).toBe(0);
   function checkSchemaOutcome(
-    exitCode = 1,
-    installedVersion = baselineVersion,
+    exitCode = 0,
+    installedVersion = candidateVersion,
     acceptedOutcome = "success",
   ) {
-    writeFileSync(updateFile, JSON.stringify(update));
     return run(
       "assert",
       snapshotFile,
       String(exitCode),
       installedVersion,
-      updateFile,
-      errorFile,
-      observationRoot,
-      packageRoot,
       acceptedOutcome,
+      afterFile,
     );
   }
   return {
     prepared,
     check: checkSchemaOutcome,
-    update,
-    observationFile,
     stateDatabase,
     agentDatabase,
-    packageRoot,
-    dependencyFile,
     snapshotFile,
+    afterFile,
     candidateVersion,
   };
 }
@@ -332,10 +287,12 @@ describe("published survivor schema outcome", () => {
     [0, "recoverable", true],
     [1, "recoverable", true],
     [2, "recoverable", false],
+    [0, "schema-refusal", false],
+    [1, "schema-refusal", false],
   ] as const)(
     "checks migrated schemas after exit %i classified as %s",
     (code, outcome, accepted) => {
-      const lane = schemaFixture("2026.9.1");
+      const lane = schemaFixture();
       writeSchema(lane.stateDatabase, 16);
       const result = lane.check(code, lane.candidateVersion, outcome);
       expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
@@ -343,132 +300,176 @@ describe("published survivor schema outcome", () => {
   );
 
   it.each([
-    ["2026.9.2", 15, 19, "schema-refusal"],
-    ["2026.9.2-rebuild.1", 15, 19, "schema-refusal"],
-    ["2026.9.2", 16, 18, "schema-refusal"],
-    ["2026.9.2", 16, 19, "success"],
-    ["2026.9.1", 15, 18, "success"],
-    ["2026.6.34", 0, 0, "success"],
-    ["2026.9.3-beta.1", 15, 18, "success"],
-    ["2026.9.3", 15, 18, "success"],
-  ] as const)("requires %s with schemas %i/%i to report %s", (baseline, state, agent, expected) => {
-    const lane = schemaFixture(baseline, state, agent);
-    expect(lane.prepared.stdout.trim()).toBe(expected);
-    if (expected === "success") {
-      expect(lane.check().status).toBe(1);
+    ["2026.9.2", 15, 19],
+    ["2026.9.2-rebuild.1", 15, 19],
+    ["2026.9.2", 16, 18],
+    ["2026.9.2", 16, 19],
+    ["2026.9.1", 15, 18],
+    ["2026.6.34", 0, 0],
+    ["2026.9.3-beta.1", 15, 18],
+    ["2026.9.3", 15, 18],
+  ] as const)(
+    "requires %s to upgrade successfully from schemas %i/%i",
+    (baseline, state, agent) => {
+      const lane = schemaFixture(baseline, state, agent);
+      expect(lane.prepared.stdout.trim()).toBe("success");
+      expect(lane.check(1).status).toBe(1);
       writeSchema(lane.stateDatabase, 16);
       writeSchema(lane.agentDatabase, 19);
-      const result = lane.check(0, lane.candidateVersion);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("success");
-    } else {
       const result = lane.check();
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("schema-refusal");
-    }
-  });
+      expect(result.stdout.trim()).toBe("success");
+    },
+  );
 
-  it("observes refusal without changing the baseline package or database bytes", () => {
+  it("observes migrated schemas without changing database bytes", () => {
     const lane = schemaFixture();
-    const files = [lane.stateDatabase, lane.agentDatabase, join(lane.packageRoot, "openclaw.mjs")];
+    writeSchema(lane.stateDatabase, 16);
+    const files = [lane.stateDatabase, lane.agentDatabase];
     const before = files.map((file) => readFileSync(file));
     const result = lane.check();
     expect(result.status, result.stderr).toBe(0);
     expect(files.map((file) => readFileSync(file))).toEqual(before);
   });
 
+  it.each([
+    [15, "16", true],
+    [16, "15", true],
+    [15, "15", false],
+    [16, "17", false],
+    [15, '"16"', false],
+    [15, "-1", false],
+    [15, "broken", false],
+  ] as const)(
+    "observes published schema %i with content marker %s without changing it",
+    (published, marker, accepted) => {
+      const lane = schemaFixture();
+      writeSchema(lane.stateDatabase, published);
+      const database = new DatabaseSync(lane.stateDatabase);
+      try {
+        database.exec(
+          "CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL)",
+        );
+        database
+          .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
+          .run("state.schema.contentVersion", marker);
+      } finally {
+        database.close();
+      }
+      const before = readFileSync(lane.stateDatabase);
+      const result = lane.check();
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      expect(readFileSync(lane.stateDatabase)).toEqual(before);
+      if (accepted) {
+        expect(JSON.parse(readFileSync(lane.afterFile, "utf8")).databases).toContainEqual({
+          kind: "state",
+          relative: "state/openclaw.sqlite",
+          userVersion: published,
+          contentVersion: 16,
+        });
+      }
+    },
+  );
+
   it("expects success for a JSON-era baseline without creating SQLite state while observing it", () => {
     const lane = schemaFixture("2026.6.34", null, null);
     expect(lane.prepared.stdout.trim()).toBe("success");
     expect(JSON.parse(readFileSync(lane.snapshotFile, "utf8")).databases).toEqual([
-      { kind: "state", relative: "state/openclaw.sqlite", userVersion: null },
+      { kind: "state", relative: "state/openclaw.sqlite", userVersion: null, contentVersion: null },
     ]);
     expect(existsSync(lane.stateDatabase)).toBe(false);
     expect(existsSync(lane.agentDatabase)).toBe(false);
     writeSchema(lane.stateDatabase, 16);
     writeSchema(lane.agentDatabase, 19);
-    const result = lane.check(0, lane.candidateVersion);
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("accepts the structured refusal emitted by JSON Doctor", () => {
-    const lane = schemaFixture();
-    lane.update.steps[0]!.stderrTail = "";
-    lane.update.steps[0]!.stdoutTail = JSON.stringify({
-      ok: false,
-      error: { code: "update-schema-bump-unfenced" },
-    });
     const result = lane.check();
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it("rejects a successful update that deleted a baseline agent database", () => {
-    const lane = schemaFixture("2026.9.1");
-    writeSchema(lane.stateDatabase, 16);
-    rmSync(lane.agentDatabase);
-    const result = lane.check(0, lane.candidateVersion);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("baseline database missing after update");
-  });
-
   it.each([
     [
-      "state migrated",
-      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.stateDatabase, 16),
-      "baseline databases",
+      "state migration missing",
+      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.stateDatabase, 15),
+      "candidate schema",
     ],
     [
-      "agent migrated",
+      "agent migration missing",
+      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.agentDatabase, 18),
+      "candidate schema",
+    ],
+    [
+      "state schema too new",
+      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.stateDatabase, 17),
+      "candidate schema",
+    ],
+    [
+      "agent schema too new",
       (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.agentDatabase, 20),
-      "baseline databases",
+      "candidate schema",
     ],
     [
-      "database lost",
+      "state database lost",
+      (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.stateDatabase),
+      "candidate schema",
+    ],
+    [
+      "agent database lost",
       (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.agentDatabase),
-      "baseline databases",
+      "baseline database missing after update",
     ],
-    [
-      "candidate bytes retained at the baseline version",
-      (lane: ReturnType<typeof schemaFixture>) =>
-        writeFileSync(join(lane.packageRoot, "openclaw.mjs"), "// candidate launcher\n"),
-      "package bytes",
-    ],
-    [
-      "changed installed dependency bytes",
-      (lane: ReturnType<typeof schemaFixture>) =>
-        writeFileSync(lane.dependencyFile, "// candidate dependency\n"),
-      "package bytes",
-    ],
-    [
-      "generic Doctor failure",
-      (lane: ReturnType<typeof schemaFixture>) => {
-        lane.update.steps[0]!.stderrTail = "Doctor failed; run doctor --fix";
-      },
-      "typed schema refusal",
-    ],
-    [
-      "Doctor did not fail",
-      (lane: ReturnType<typeof schemaFixture>) => {
-        lane.update.steps[0]!.exitCode = 0;
-      },
-      "failed Doctor step",
-    ],
-    [
-      "candidate Doctor did not exit",
-      (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.observationFile),
-      "observed refusal exit",
-    ],
-  ] as const)("rejects %s", (_name, change, diagnostic) => {
-    const lane = schemaFixture();
+  ] as const)("rejects %s after a reported successful update", (_name, change, diagnostic) => {
+    const lane = schemaFixture("2026.9.2", 15, 18);
+    writeSchema(lane.stateDatabase, 16);
+    writeSchema(lane.agentDatabase, 19);
     change(lane);
     const result = lane.check();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it("rejects a successful exit or another installed version instead of refusal", () => {
-    const lane = schemaFixture();
-    expect(lane.check(0).stderr).toContain("status 1");
-    expect(lane.check(1, "2026.9.3").stderr).toContain("previous package version");
+  it("rejects a rollback that leaves the baseline package version installed", () => {
+    const lane = schemaFixture("2026.9.1");
+    writeSchema(lane.stateDatabase, 16);
+    const result = lane.check(0, "2026.9.1");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("candidate package is not installed");
+  });
+
+  it.each([
+    ["assert-successful-update-json", "update did not report ok"],
+    ["assert-recoverable-update-json", "doctor-failed"],
+  ])("rejects typed schema refusal through %s", (assertion, diagnostic) => {
+    const file = join(tempDirs.make("survivor-refused-update-"), "update.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        status: "error",
+        mode: "npm",
+        reason: "doctor-failed",
+        before: { version: "2026.9.2" },
+        after: { version: "2026.9.2" },
+        steps: [
+          { name: "global update", exitCode: 0 },
+          { name: "global install swap", exitCode: 0 },
+          {
+            name: "openclaw doctor",
+            exitCode: 1,
+            stdoutTail: JSON.stringify({
+              ok: false,
+              error: { code: "update-schema-bump-unfenced" },
+            }),
+          },
+        ],
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [command, assertion, file, "2026.9.2", "", "2026.9.2"],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
   });
 });

@@ -123,7 +123,6 @@ initial_update_observation_root=""
 last_update_observation_root=""
 idempotence_seconds=""
 run_completed="0"
-expected_update_outcome="success"
 update_outcome=""
 update_exit_code=""
 
@@ -947,16 +946,15 @@ prepare_schema_expectation() {
     echo "legacy-operator-state requires one packed candidate tarball" >&2
     return 1
   fi
-  expected_update_outcome="$(node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs \
+  node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs \
     prepare "$baseline_version" "$CANDIDATE_SPEC" "$OPENCLAW_STATE_DIR" \
-    "$ARTIFACT_ROOT/schema-before.json" "$(package_root)")"
-  echo "Expected update outcome: $expected_update_outcome"
+    "$ARTIFACT_ROOT/schema-before.json"
 }
 
 assert_schema_outcome() {
   node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs assert \
-    "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" \
-    "$UPDATE_JSON" "$UPDATE_ERR" "$initial_update_observation_root" "$(package_root)"
+    "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" "$update_outcome" \
+    "$ARTIFACT_ROOT/schema-after.json"
 }
 
 assert_legacy_operator_update_noop() {
@@ -1301,7 +1299,7 @@ update_candidate() {
   local previous_service_pid="" previous_systemctl_lines=0 verify_restart=0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && {
     [ "$after_repair" = "1" ] ||
-    { [ "$SCENARIO" = "legacy-operator-state" ] && [ "$expected_update_outcome" = "success" ]; }
+    [ "$SCENARIO" = "legacy-operator-state" ]
   }; then
     verify_restart=1
     previous_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
@@ -1328,10 +1326,6 @@ update_candidate() {
     "OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=$observation_root"
     "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   )
-  if [ "$expected_update_outcome" = "schema-refusal" ]; then
-    # Preserve the typed Doctor error in the released updater's stderr tail.
-    update_env+=(OPENCLAW_DEBUG=1)
-  fi
   local update_status=0
   if [ "$SCENARIO" = "recovery-cleanup" ]; then
     # Keep sampler output outside the old updater's JSON and join its process group.
@@ -1347,17 +1341,13 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
-  if [ "$expected_update_outcome" = "schema-refusal" ]; then
-    assert_schema_outcome || return "$?"
-    update_outcome="schema-refusal"
-    return 0
-  fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
+    update_outcome="recoverable"
   elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-successful-update-json "$update_json" "$candidate_version" "$observation_root"; then
-    :
+    update_outcome="success"
   else
     echo "openclaw update failed before the recoverable post-core boundary" >&2
     local validate_status=0
@@ -1796,21 +1786,11 @@ fi
 run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase prepare-schema-expectation prepare_schema_expectation
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$expected_update_outcome" = "success" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
   fi
 fi
 phase update-candidate update_candidate_for_install_mode
-if [ "$update_outcome" = "schema-refusal" ]; then
-  phase assert-restored-baseline assert_baseline_state
-  phase restored-gateway-start start_gateway
-  phase restored-gateway-probes check_gateway_probes
-  phase restored-gateway-status check_gateway_status
-  phase assert-restored-schemas assert_schema_outcome
-  run_completed="1"
-  echo "Upgrade survivor Docker E2E passed: typed schema refusal; previous package restored; schemas unchanged; baseline Gateway healthy."
-  exit 0
-fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase assert-candidate-schemas assert_schema_outcome
 fi
