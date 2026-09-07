@@ -508,7 +508,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const templatesCopyIndex = dockerfile.indexOf(
-      "COPY --from=runtime-assets --chown=node:node /app/docs ./docs",
+      "COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
