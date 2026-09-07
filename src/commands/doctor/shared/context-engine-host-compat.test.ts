@@ -6,6 +6,8 @@ import {
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
+import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
@@ -31,6 +33,10 @@ vi.mock("../../../agents/harness/registry.js", () => ({
 
 vi.mock("../../../context-engine/init.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
+}));
+
+vi.mock("../../../plugins/loader.js", () => ({
+  loadPluginRegistryHandle: vi.fn(),
 }));
 
 let engineCounter = 0;
@@ -93,6 +99,37 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
+  it.each([true, false])(
+    "reports offline inspection availability without activating or repairing an engine (discovered=%s)",
+    async (discovered) => {
+      const id = uniqueEngineId();
+      const factory = vi.fn(() => {
+        throw new Error("Doctor must not initialize an engine to inspect its metadata");
+      });
+      const registry = createEmptyPluginRegistry();
+      if (discovered) {
+        registry.contextEngines.set(id, {
+          factory,
+          owner: `plugin:${id}`,
+          lifecycle: "readOnlyDiscovery",
+        });
+      }
+      vi.mocked(loadPluginRegistryHandle).mockReturnValue(registry);
+      const cfg = configWithEngine(id);
+      const params = { cfg, doctorFixCommand: "openclaw doctor --fix" };
+      const warnings = await collectContextEngineHostCompatibilityWarnings(params);
+      expect(warnings.join("\n")).toContain(
+        discovered
+          ? "registered for read-only discovery; offline host compatibility inspection is unavailable"
+          : "because it is not registered",
+      );
+      const repair = await maybeRepairContextEngineHostCompatibility(params);
+      expect(repair).toEqual({ config: cfg, changes: [], warnings });
+      expect(repair.config).toBe(cfg);
+      expect(factory).not.toHaveBeenCalled();
+    },
+  );
+
   it("distinguishes read-only discovery registrations from runtime entries", () => {
     const id = uniqueEngineId();
     const factory = () => {
