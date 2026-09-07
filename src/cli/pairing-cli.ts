@@ -63,8 +63,8 @@ async function notifyApproved(
 
 function resolveAccountId(raw: unknown): string | undefined {
   const accountId = normalizeStringifiedOptionalString(raw);
-  // Only omission selects the default account; an explicit blank must not widen
-  // list/approve to unscoped pairing state or the default allowlist.
+  // Omission intentionally leaves pairing unscoped; an explicit blank must not
+  // silently remove the account restriction.
   if (raw !== undefined && !accountId) {
     throw new Error("--account must not be blank");
   }
