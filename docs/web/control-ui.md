@@ -58,6 +58,8 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 - [Security model](/web/control-ui/security-model) — content security policy, media route auth, and approval links.
 - [Build and develop](/web/control-ui/development) — build the UI and run the dev server against a Gateway.
 
+Running the Gateway in Docker? See [Using the Control UI browser](/install/docker#using-the-control-ui-browser) for the browser-equipped image and setup requirements.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/web/control-ui#chat-behavior` still resolves. Each entry points at the page that now holds the content.
