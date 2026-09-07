@@ -48,6 +48,13 @@ export type SandboxDockerSettings = {
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
   /**
+   * Absolute host roots this agent may bind beyond its own workspace and agent dirs.
+   * Lets a shared directory be mounted without the all-or-nothing
+   * dangerouslyAllowExternalBindSources override; the blocked-path and reserved-target
+   * checks still apply to every bind. Filesystem roots are rejected.
+   */
+  allowedBindSources?: string[];
+  /**
    * Dangerous override: allow bind mounts that target reserved container paths
    * like /workspace or /agent.
    */

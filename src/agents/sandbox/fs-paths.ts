@@ -160,6 +160,32 @@ export function resolveWritableSandboxBindHostRoots(
   return roots;
 }
 
+/**
+ * First writable bind whose canonical source is not inside the writable root. With no writable
+ * root (workspace access ro/none) every writable bind widens the host-writable surface.
+ */
+export function findWritableSandboxBindSourceOutsideRoot(
+  binds: readonly string[] | undefined,
+  writableRoot: string | undefined,
+): string | undefined {
+  const canonicalRoot = writableRoot
+    ? resolveSandboxHostPathViaExistingAncestor(path.resolve(writableRoot))
+    : undefined;
+  for (const bind of parseSandboxBindMounts(binds)) {
+    if (!bind.writable) {
+      continue;
+    }
+    if (!canonicalRoot) {
+      return bind.hostRoot;
+    }
+    const canonicalSource = resolveSandboxHostPathViaExistingAncestor(bind.hostRoot);
+    if (canonicalSource !== canonicalRoot && !isPathInside(canonicalRoot, canonicalSource)) {
+      return bind.hostRoot;
+    }
+  }
+  return undefined;
+}
+
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
   for (const parsed of parseSandboxBindMounts(binds)) {
     if (parsed.hostRoot !== parsed.containerRoot) {

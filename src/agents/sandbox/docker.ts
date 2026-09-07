@@ -20,6 +20,10 @@ import {
 } from "./container-engine.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import {
+  isSandboxHostFilesystemRoot,
+  resolveSandboxHostPathViaExistingAncestor,
+} from "./host-paths.js";
+import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
   resolvePodmanSandboxConfigHash,
@@ -318,6 +322,34 @@ function formatUlimitValue(
   return `${name}=${soft}:${hard}`;
 }
 
+/**
+ * Widens the bind source allowlist with configured shared roots. An absent caller allowlist
+ * means the gate is off, so it must stay off: adding roots there would silently start gating.
+ */
+function resolveAllowedBindSourceRoots(
+  cfg: Pick<SandboxDockerConfig, "allowedBindSources">,
+  bindSourceRoots: string[] | undefined,
+): string[] | undefined {
+  if (!bindSourceRoots) {
+    return undefined;
+  }
+  const configured = cfg.allowedBindSources ?? [];
+  for (const root of configured) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(root);
+    const directRoot = isSandboxHostFilesystemRoot(root);
+    if (directRoot || isSandboxHostFilesystemRoot(canonicalRoot)) {
+      const reason = directRoot
+        ? "names a filesystem root"
+        : `resolves to filesystem root "${canonicalRoot}"`;
+      throw new Error(
+        `Sandbox security: allowedBindSources entry "${root}" ${reason}. ` +
+          "Filesystem roots cannot be allowlisted; choose a narrower shared directory.",
+      );
+    }
+  }
+  return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
+}
+
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -334,7 +366,7 @@ export function buildSandboxCreateArgs(params: {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
     ...params.cfg,
-    allowedSourceRoots: params.bindSourceRoots,
+    allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
     allowSourcesOutsideAllowedRoots:
       params.allowSourcesOutsideAllowedRoots ??
       params.cfg.dangerouslyAllowExternalBindSources === true,

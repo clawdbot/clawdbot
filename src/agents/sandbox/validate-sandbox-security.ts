@@ -13,6 +13,7 @@ import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
   getSandboxHostPathPolicyKey,
+  isSandboxHostFilesystemRoot,
   isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
@@ -113,7 +114,7 @@ function normalizeHostPath(raw: string): string {
  * String-only blocked-path check (no filesystem I/O).
  * Blocks:
  * - binds that target blocked paths (equal or under)
- * - binds that cover the system root (mounting "/" is never safe)
+ * - binds that cover a filesystem root ("/" or a Windows drive root; mounting one is never safe)
  * - non-absolute source paths (relative / volume names) because they are hard to validate safely
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
@@ -140,8 +141,8 @@ function getBlockedReasonForSourcePath(
   sourceNormalized: string,
   blockedHostPaths: string[],
 ): BlockedBindReason | null {
-  if (sourceNormalized === "/") {
-    return { kind: "covers", blockedPath: "/" };
+  if (isSandboxHostFilesystemRoot(sourceNormalized)) {
+    return { kind: "covers", blockedPath: sourceNormalized };
   }
   for (const blocked of blockedHostPaths) {
     if (isPathInsidePolicyPath(blocked, sourceNormalized)) {
@@ -297,7 +298,8 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   if (params.reason.kind === "outside_allowed_roots") {
     return new Error(
       `Sandbox security: bind mount "${params.bind}" source "${params.reason.sourcePath}" is outside allowed roots ` +
-        `(${params.reason.allowedRoots.join(", ")}). Use a dangerous override only when you fully trust this runtime.`,
+        `(${params.reason.allowedRoots.join(", ")}). Add the source's directory to ` +
+        "agents.*.sandbox.docker.allowedBindSources, or use a dangerous override only when you fully trust this runtime.",
     );
   }
   if (params.reason.kind === "reserved_target") {

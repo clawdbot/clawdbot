@@ -223,8 +223,9 @@ repository root exactly matches the target agent workspace. A worktree request
 is narrowed to that directory and persisted as a directory workspace, so the
 host does not materialize the checkout or execute repository setup code. The
 target worker must use a writable, non-shared Docker sandbox for that exact
-workspace, without elevated execution, persisted host/node exec overrides, or
-unclassified plugin and MCP tools. Workboard enumerates its registered tools
+workspace, with no writable binds outside that workspace, without elevated
+execution, persisted host/node exec overrides, or unclassified plugin and MCP
+tools. Workboard enumerates its registered tools
 instead of trusting a `workboard_*` prefix, and dispatch refuses a hot Docker
 container whose live mount/config hash is stale. Dispatch reports the
 incompatible target policy instead of starting a less-confined worker.
