@@ -40,7 +40,11 @@ import {
 } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
-import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import {
+  cronAnnounceFormatting,
+  resolveCronDeliveryPlan,
+  sendCronAnnouncePayloadStrict,
+} from "../cron/delivery.js";
 import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
@@ -339,6 +343,7 @@ async function finalizeCronCompletionAnnouncement(params: {
             sessionKey: resolveCronDeliverySessionKey(params.job),
           },
           payload: { text },
+          formatting: cronAnnounceFormatting(params.job.payload.kind),
           abortSignal,
           onDeliveryAttempt: (reachedRecipient) => {
             deliveryMayHaveReachedRecipient ||= reachedRecipient;

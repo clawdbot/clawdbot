@@ -8,6 +8,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
@@ -16,7 +17,7 @@ import {
   type DeliveryTargetResolution,
 } from "./isolated-agent/delivery-target.js";
 import { resolveCronNotificationSessionKey } from "./session-target.js";
-import type { CronMessageChannel } from "./types.js";
+import type { CronMessageChannel, CronPayload } from "./types.js";
 
 export { resolveCronDeliveryPlan };
 
@@ -89,6 +90,18 @@ async function resolveCronAnnounceDelivery(params: {
   };
 }
 
+/**
+ * Command output is text the operator wrote for the channel it targets, not
+ * markdown for the outbound pass to convert: on Slack the pass turned the
+ * `*subject*` of every command announce into italic. An agent turn is the
+ * model's markdown and keeps the pass.
+ */
+export function cronAnnounceFormatting(
+  payloadKind: CronPayload["kind"],
+): OutboundDeliveryFormattingOptions | undefined {
+  return payloadKind === "command" ? { preRendered: "slack-mrkdwn" } : undefined;
+}
+
 /** Sends a cron announce payload and throws if target resolution or delivery fails. */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
@@ -97,6 +110,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   jobId: string;
   target: CronAnnounceTarget;
   payload: ReplyPayload;
+  formatting?: OutboundDeliveryFormattingOptions;
   abortSignal: AbortSignal;
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<CronAnnounceDeliveryOutcome> {
@@ -118,6 +132,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     accountId: delivery.resolvedTarget.accountId,
     threadId: delivery.resolvedTarget.threadId,
     payloads: [params.payload],
+    formatting: params.formatting,
     session: delivery.session,
     identity: delivery.identity,
     bestEffort: false,

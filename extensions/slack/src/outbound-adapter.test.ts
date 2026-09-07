@@ -97,6 +97,38 @@ describe("slackOutbound", () => {
     );
   });
 
+  it("sends pre-rendered mrkdwn verbatim and escapes only Slack's reserved characters", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-mrkdwn" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "*job* failed · <https://example.com/run/1|run>\nin <module> a & b",
+      accountId: "default",
+      formatting: { preRendered: "slack-mrkdwn" },
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "*job* failed · <https://example.com/run/1|run>\nin &lt;module&gt; a &amp; b",
+      expect.objectContaining({ textIsSlackMrkdwn: true }),
+    );
+  });
+
+  it("leaves the markdown pass in charge without the pre-rendered hint", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-markdown" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "in <module>",
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock.mock.calls[0]?.[1]).toBe("in <module>");
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("textIsSlackMrkdwn");
+  });
+
   it("renders channelData Slack blocks on payload sends", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
 
