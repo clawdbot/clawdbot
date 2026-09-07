@@ -1,21 +1,18 @@
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { copyFileHandle, hashFileDescriptorSync } from "./file-descriptor.js";
 
 let directory: string;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bytes = Buffer.concat([Buffer.alloc(1024 * 1024, 0x61), Buffer.from("tail")]);
 const expectedHash = createHash("sha256").update(bytes).digest("hex");
 
-beforeEach(async () => {
-  directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-descriptor-"));
-});
-
-afterEach(async () => {
-  await fs.rm(directory, { recursive: true, force: true });
+beforeEach(() => {
+  directory = tempDirs.make("openclaw-file-descriptor-");
 });
 
 describe("pinned file descriptors", () => {
