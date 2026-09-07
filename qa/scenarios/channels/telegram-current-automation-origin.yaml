@@ -1,0 +1,129 @@
+title: Telegram current automation preserves its origin
+
+scenario:
+  id: telegram-current-automation-origin
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - automation.agent-cron-tool-reminders
+      - telegram.conversation-routing-and-delivery
+    secondary:
+      - automation.manual-cron-runs
+      - channels.automatic-final-reply
+  gatewayConfigPatch:
+    session:
+      groupScope: main
+  objective: Verify a model-created current automation with only the Telegram channel selected captures and delivers to its originating conversation.
+  successCriteria:
+    - A Telegram Test Server group turn creates a current-session automation with channel-only delivery input.
+    - The persisted job captures the originating Telegram recipient and account.
+    - A forced run delivers the continuation marker back to the same Telegram conversation.
+    - The job is removed after the proof.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/channels/telegram.md
+  codeRefs:
+    - src/agents/tools/cron-tool.ts
+    - src/cron/isolated-agent/delivery-target.ts
+    - src/cron/isolated-agent/delivery-dispatch.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Creates and removes a current-session automation in an isolated Gateway using a leased Telegram Test Server bot.
+    summary: Create a channel-only current automation from Telegram, force it, and require the visible result in the originating chat.
+
+flow:
+  steps:
+    - name: captures and delivers the current Telegram automation origin
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 180000]
+        - resetTransport: true
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({})"
+        - set: conversationId
+          value:
+            expr: delivery.replyTo
+        - set: jobName
+          value:
+            expr: "'telegram-current-origin-' + randomUUID()"
+        - set: marker
+          value:
+            expr: "'TELEGRAM-CURRENT-ORIGIN-' + randomUUID().slice(0, 8).toUpperCase()"
+        - set: at
+          value:
+            expr: "new Date(Date.now() + 3600000).toISOString()"
+        - set: outboundStartIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: job
+          value: null
+        - try:
+            actions:
+              - sendInbound:
+                  conversation:
+                    id: { ref: conversationId }
+                    kind: group
+                    title: Telegram current automation origin
+                  senderId: qa-current-origin-operator
+                  senderName: QA Current Origin Operator
+                  text:
+                    expr: |-
+                      '@openclaw Create one automation named ' + jobName + '. Use schedule {kind:"at",at:"' + at + '"}, sessionTarget:"current", payload {kind:"agentTurn",message:"Reply with only ' + marker + '",toolsAllow:[]}, and delivery {mode:"announce",channel:"telegram"}. Do not specify delivery.to, accountId, or threadId. After the add succeeds, reply with only CURRENT-AUTOMATION-SCHEDULED.'
+              - call: waitForCondition
+                saveAs: job
+                args:
+                  - lambda:
+                      async: true
+                      params: []
+                      expr: "env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 }).then((page) => page.jobs.find((candidate) => candidate.name === jobName))"
+                  - expr: liveTurnTimeoutMs(env, 180000)
+                  - 100
+              - assert:
+                  expr: "job.sessionTarget === 'current' && job.delivery?.channel === 'telegram' && job.delivery?.to === conversationId && job.delivery?.accountId === transport.accountId"
+                  message:
+                    expr: "'current automation did not capture its Telegram origin: ' + JSON.stringify({ sessionTarget: job.sessionTarget, delivery: job.delivery, expected: { to: conversationId, accountId: transport.accountId } })"
+              - set: runStartedAt
+                value:
+                  expr: Date.now()
+              - call: env.gateway.call
+                args:
+                  - cron.run
+                  - id: { ref: job.id }
+                    mode: force
+                  - timeoutMs: 30000
+              - call: waitForCronRunCompletion
+                args:
+                  - callGateway:
+                      expr: "env.gateway.call.bind(env.gateway)"
+                    jobId: { ref: job.id }
+                    afterTs: { ref: runStartedAt }
+                    timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 180000)
+              - call: waitForOutboundMessage
+                saveAs: continuation
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.trim() === marker"
+                  - expr: liveTurnTimeoutMs(env, 180000)
+              - assert:
+                  expr: "!state.getSnapshot().messages.slice(outboundStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.text.includes(marker) && candidate.conversation.id !== conversationId)"
+                  message: current automation continuation escaped its originating Telegram conversation
+            finally:
+              - if:
+                  expr: Boolean(job?.id)
+                  then:
+                    - call: env.gateway.call
+                      args:
+                        - cron.remove
+                        - id: { ref: job.id }
+                        - timeoutMs: 30000
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', transport: 'Telegram Test Server TDLib userbot', jobId: job.id, persistedDelivery: job.delivery, continuation: { id: continuation.id, conversationId: continuation.conversation.id, text: continuation.text }, cleanup: 'removed' })"

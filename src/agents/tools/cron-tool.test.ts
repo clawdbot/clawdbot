@@ -2444,6 +2444,82 @@ describe("cron tool", () => {
     });
   });
 
+  it.each([
+    { channel: "discord", to: "channel:900", threadId: "900" },
+    { channel: "telegram", to: "-100123", threadId: "42" },
+    { channel: "matrix", to: "!Room:example.org", threadId: "$Root:example.org" },
+  ])(
+    "captures the $channel origin when current delivery only selects its channel",
+    async (origin) => {
+      const currentDeliveryContext = { ...origin, accountId: "work" };
+      expect(
+        await executeAddAndReadDelivery({
+          callId: "call-channel-only-origin",
+          agentSessionKey: "agent:main:main",
+          currentDeliveryContext,
+          delivery: { mode: "announce", channel: origin.channel },
+        }),
+      ).toEqual({ mode: "announce", ...currentDeliveryContext });
+    },
+  );
+
+  it.each([
+    { channel: "telegram" },
+    { channel: "last" },
+    { channel: "discord", accountId: "other" },
+    { channel: "discord", to: "channel:700" },
+  ])("preserves explicitly different delivery scope %j", async (scope) => {
+    const delivery = { mode: "announce", ...scope };
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-different-delivery-scope",
+        agentSessionKey: "agent:main:main",
+        currentDeliveryContext: {
+          channel: "discord",
+          to: "channel:900",
+          accountId: "work",
+          threadId: "900",
+        },
+        delivery,
+      }),
+    ).toEqual(delivery);
+  });
+
+  it("captures a stored current origin with matching channel and account while preserving an explicit thread", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: { channel: "telegram", to: "-100123", accountId: "work", threadId: "42" },
+      threadId: undefined,
+    });
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-stored-channel-only-origin",
+        agentSessionKey: "agent:main:main",
+        delivery: { mode: "announce", channel: "telegram", accountId: "work", threadId: "43" },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+      accountId: "work",
+      threadId: "43",
+    });
+  });
+
+  it("keeps channel-only isolated delivery dynamic", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      currentDeliveryContext: { channel: "discord", to: "channel:900", threadId: "900" },
+    });
+    await tool.execute("call-isolated-channel-only", {
+      action: "add",
+      job: buildReminderAgentTurnJob({
+        sessionTarget: "isolated",
+        delivery: { mode: "announce", channel: "discord" },
+      }),
+    });
+    expect(readGatewayCall().params?.delivery).toEqual({ mode: "announce", channel: "discord" });
+  });
+
   it("keeps explicit delivery account and thread while filling target from context", async () => {
     expect(
       await executeAddAndReadDelivery({
