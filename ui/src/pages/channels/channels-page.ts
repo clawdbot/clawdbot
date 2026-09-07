@@ -8,7 +8,6 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
@@ -25,7 +24,12 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
+import {
+  importNostrProfile,
+  parseValidationErrors,
+  putNostrProfile,
+  resolveNostrMutationCandidates,
+} from "./nostr-profile-ops.ts";
 import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels, resolveChannelOrder } from "./view.ts";
@@ -43,7 +47,7 @@ type NostrOperation = {
   channels: ApplicationContext["channels"];
   formAccountId: string | null;
   accountId: string;
-  headers: Record<string, string>;
+  authCandidates: readonly string[];
 };
 
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
@@ -304,15 +308,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private buildGatewayHttpHeaders(gateway: ApplicationContext["gateway"]): Record<string, string> {
-    const authorization = resolveControlUiAuthHeader({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    });
-    return authorization ? { Authorization: authorization } : {};
-  }
-
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
@@ -346,7 +341,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      headers: this.buildGatewayHttpHeaders(gateway),
+      authCandidates: resolveNostrMutationCandidates(gateway.snapshot.hello, gateway.connection),
     };
   }
 
@@ -416,7 +411,8 @@ class ChannelsPage extends OpenClawLightDomElement {
     try {
       const { data, response } = await putNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
         values: form.values,
       });
       const currentForm = this.currentNostrForm(operation);
@@ -491,7 +487,8 @@ class ChannelsPage extends OpenClawLightDomElement {
     try {
       const { data, response } = await importNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
       });
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
