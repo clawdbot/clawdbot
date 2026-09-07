@@ -209,6 +209,7 @@ merge_framework_machos() {
   }
 
   while IFS= read -r -d '' file; do
+    # Drain the output so grep does not give file SIGPIPE under pipefail.
     if /usr/bin/file "$file" | /usr/bin/grep "Mach-O" >/dev/null; then
       local rel="${file#"$primary"/}"
       local primary_archs
