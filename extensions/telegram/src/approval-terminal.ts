@@ -1,8 +1,10 @@
 // Telegram plugin module renders terminal operator approval receipts.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type {
-  ExpiredApprovalView,
-  ResolvedApprovalView,
+import {
+  buildSystemAgentApprovalResolvedText,
+  formatApprovalDecisionLabel,
+  type ExpiredApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -10,14 +12,8 @@ const TELEGRAM_APPROVAL_DETAIL_MAX_CHARS = 2_800;
 const TELEGRAM_APPROVAL_ID_MAX_CHARS = 512;
 const TELEGRAM_APPROVAL_TERMINAL_MAX_CHARS = 4_000;
 
-function formatApprovalDecision(decision: string | undefined): string {
-  if (decision === "allow-always") {
-    return "Allowed always";
-  }
-  if (decision === "allow-once") {
-    return "Allowed once";
-  }
-  return decision === "deny" ? "Denied" : "Resolved";
+function formatApprovalDecision(decision: ResolvedApprovalView["decision"] | undefined): string {
+  return decision ? formatApprovalDecisionLabel(decision) : "Resolved";
 }
 
 function formatCanonicalResult(approval: ApprovalResolveResult["approval"]): string {
@@ -153,15 +149,10 @@ function appendViewSubject(
 /** Render a canonical native resolved event while retaining safe request context. */
 export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalView): string {
   if (view.approvalKind === "system-agent") {
-    return view.terminalStatus === "cancelled"
-      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
-      : view.decision === "deny"
-        ? "❌ OpenClaw change denied. No change was made."
-        : view.applicationStatus === "applied"
-          ? `✅ OpenClaw change approved and applied: ${truncateDetail(view.operationSummary)}`
-          : view.applicationStatus === "not-applied"
-            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
-            : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
+    return buildSystemAgentApprovalResolvedText({
+      ...view,
+      operationSummary: truncateDetail(view.operationSummary),
+    });
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [

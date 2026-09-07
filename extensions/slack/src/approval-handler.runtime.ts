@@ -1,16 +1,17 @@
 // Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  PluginApprovalExpiredView,
-  PluginApprovalPendingView,
-  PluginApprovalResolvedView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  formatChannelApprovalResolvedLabel,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type PluginApprovalExpiredView,
+  type PluginApprovalPendingView,
+  type PluginApprovalResolvedView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -155,16 +156,6 @@ function buildSlackMetadataContextBlocks(metadata: readonly SlackMetadataItem[])
     : [];
 }
 
-function resolveSlackApprovalDecisionLabel(
-  decision: "allow-once" | "allow-always" | "deny",
-): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
-}
-
 function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataItem[] {
   return [{ label: "Approval ID", value: view.approvalId }, ...view.metadata];
 }
@@ -207,14 +198,7 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
           ? "An OpenClaw change needs your approval."
           : "A command needs your approval.";
   } else if (phase === "resolved") {
-    const decisionLabel =
-      isSystemAgent && view.terminalStatus === "cancelled"
-        ? "Cancelled"
-        : isSystemAgent && view.applicationStatus === "applied"
-          ? "Applied"
-          : isSystemAgent && view.applicationStatus === "not-applied"
-            ? "Not applied"
-            : resolveSlackApprovalDecisionLabel(view.decision);
+    const decisionLabel = formatChannelApprovalResolvedLabel(view);
     heading = `*${approvalName} approval: ${decisionLabel}*`;
     const resolvedBy = formatSlackApprover(view.resolvedBy);
     description = resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.";

@@ -1,10 +1,12 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type {
-  ApprovalMetadataView,
-  ChannelApprovalKind,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  formatApprovalDecisionLabel,
+  formatChannelApprovalResolvedLabel,
+  type ApprovalMetadataView,
+  type ChannelApprovalKind,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -85,14 +87,6 @@ function buildAdaptiveCard(
   };
 }
 
-function formatApprovalDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
-}
-
 export function buildMSTeamsPendingApprovalCard(params: {
   view: PendingApprovalView;
   nowMs: number;
@@ -140,14 +134,7 @@ export function buildMSTeamsResolvedApprovalCard(
         ? "OpenClaw Change"
         : "Exec";
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : formatApprovalDecision(view.decision);
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   return buildAdaptiveCard([
     ...buildCardHeading(
       `${kindLabel} Approval: ${decisionLabel}`,
@@ -190,7 +177,7 @@ export function buildMSTeamsCanonicalApprovalTerminalCard(
         : "System Agent";
   const outcome =
     approval.status === "allowed"
-      ? formatApprovalDecision(approval.decision)
+      ? formatApprovalDecisionLabel(approval.decision)
       : approval.status === "denied"
         ? "Denied"
         : approval.status === "expired"

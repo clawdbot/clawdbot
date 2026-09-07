@@ -1,11 +1,12 @@
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ChannelApprovalKind,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  formatChannelApprovalResolvedLabel,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -99,14 +100,6 @@ function buildMetadataText(metadata: readonly { label: string; value: string }[]
       (item) => `<b>${escapeGoogleChatText(item.label)}:</b> ${escapeGoogleChatText(item.value)}`,
     )
     .join("<br>");
-}
-
-function formatDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
 }
 
 function buildMainTextWidget(text: string) {
@@ -275,14 +268,7 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
 
 function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : formatDecision(view.decision);
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
