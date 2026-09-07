@@ -1,5 +1,6 @@
 /** Tests inbound auto-reply handling across channel message contexts. */
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
@@ -407,6 +408,113 @@ describe("createInboundDebouncer", () => {
     const completion = Promise.resolve().then(dispatch);
     return { admission: completion, completion };
   };
+  const shippedLegacyFlush = <T>(
+    onFlush: (items: T[]) => PromiseLike<void>,
+  ): InboundDebounceCreateParams<T>["onFlush"] =>
+    onFlush as unknown as InboundDebounceCreateParams<T>["onFlush"];
+
+  it("accepts shipped plugins whose flush callback returns a promise", async () => {
+    const flushed: string[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: shippedLegacyFlush(async (items) => {
+        flushed.push(items[0]?.id ?? "");
+      }),
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+
+    expect(flushed).toEqual(["first"]);
+  });
+
+  it("normalizes shipped flush callbacks that return structural thenables", async () => {
+    const flushed = vi.fn();
+    const completion = Promise.resolve().then(flushed);
+    const thenable = runInNewContext("Promise.resolve(completion)", {
+      completion,
+    }) as PromiseLike<void>;
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: shippedLegacyFlush(() => thenable),
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+
+    expect(flushed).toHaveBeenCalledOnce();
+  });
+
+  it("reports a rejected shipped flush callback once without leaking a rejection", async () => {
+    const failure = new Error("legacy flush failed");
+    const onError = vi.fn();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: shippedLegacyFlush(async () => {
+        throw failure;
+      }),
+      onError,
+    });
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+      await debouncer.drain();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, [{ key: "a", id: "first" }]);
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("drains shipped flush promises while preserving same-key ordering", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst!: () => void;
+    const firstCompletion = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: shippedLegacyFlush(async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "first") {
+          await firstCompletion;
+        }
+        finished.push(id);
+      }),
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "first" });
+    const second = debouncer.enqueue({ key: "a", id: "second" });
+    let drained = false;
+    const drain = debouncer.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+
+    expect(started).toEqual(["first"]);
+    expect(drained).toBe(false);
+
+    releaseFirst();
+    await Promise.all([first, second, drain]);
+
+    expect(started).toEqual(["first", "second"]);
+    expect(finished).toEqual(["first", "second"]);
+    expect(drained).toBe(true);
+  });
 
   it("debounces and combines items", async () => {
     vi.useFakeTimers();

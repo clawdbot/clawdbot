@@ -172,7 +172,17 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
     try {
-      flush = params.onFlush(items, createInboundDebounceFlush);
+      const result = params.onFlush(items, createInboundDebounceFlush) as
+        | InboundDebounceFlush
+        | PromiseLike<void>;
+      // v2026.7.2-beta.5 plugins return a Promise; retain their shipped callback
+      // contract until plugins predating split flush admission are unsupported.
+      if ("then" in result) {
+        const completion = Promise.resolve(result);
+        flush = { admission: completion, completion };
+      } else {
+        flush = result;
+      }
     } catch (err) {
       reportFlushError(err, items);
       return;
