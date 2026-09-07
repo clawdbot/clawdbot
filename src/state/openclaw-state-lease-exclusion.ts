@@ -41,6 +41,7 @@ async function perform<T>(
   owners: readonly CaptureOwner[],
   databasePath: string,
   operation: (assertCurrent: () => void) => Promise<T>,
+  bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
 ): Promise<T> {
   const errors: unknown[] = [];
   const participants = owners.map<{
@@ -99,8 +100,51 @@ async function perform<T>(
     );
     timer.unref();
     assertCurrent();
-    result = await held.runWithSourceReads(() => operation(assertCurrent));
+    const captured = await held.runWithSourceReads(() => operation(assertCurrent));
+    result = captured;
     assertCurrent();
+    if (bindCaptured) {
+      if (!sameSqliteFileGeneration(generation, readStableSqliteFileGeneration(databasePath))) {
+        throw new Error("state lease source generation changed before binding");
+      }
+      const bindingErrors: unknown[] = [];
+      try {
+        await held.bindCaptured(assertCurrent, () => {
+          const completion = bindCaptured(captured, assertCurrent);
+          if (completion === undefined) {
+            assertCurrent();
+            for (const participant of participants) {
+              if (participant.owner.params.readExpiry(databasePath) !== participant.expiresAt) {
+                throw new Error("state lease changed during checkpoint binding");
+              }
+            }
+          }
+          return completion;
+        });
+      } catch (error) {
+        bindingErrors.push(error);
+      }
+      try {
+        const afterBinding = readStableSqliteFileGeneration(databasePath);
+        // Canonical binding may update contents, never replace the source inode.
+        const before = generation.database;
+        const after = afterBinding.database;
+        if (
+          before.dev !== after.dev ||
+          before.ino !== after.ino ||
+          before.birthtimeNs !== after.birthtimeNs
+        ) {
+          throw new Error("state lease source identity changed during checkpoint binding");
+        }
+        generation = afterBinding;
+      } catch (error) {
+        bindingErrors.push(error);
+      }
+      if (bindingErrors.length > 0) {
+        fail(bindingErrors);
+      }
+      assertCurrent();
+    }
   } catch (error) {
     errors.push(error);
   }
@@ -197,7 +241,10 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
       owner.assertion();
       return true;
     },
-    run<T>(operation: (assertCurrent: () => void) => Promise<T>): Promise<T> {
+    run<T>(
+      operation: (assertCurrent: () => void) => Promise<T>,
+      bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
+    ): Promise<T> {
       const databasePath = owner.databasePath;
       if (!databasePath) {
         throw new Error("state lease has not entered its owner scope");
@@ -220,7 +267,7 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
       for (const candidate of participants) {
         candidate.busy = true;
       }
-      const task = perform(participants, databasePath, operation).finally(() => {
+      const task = perform(participants, databasePath, operation, bindCaptured).finally(() => {
         for (const candidate of participants) {
           candidate.busy = false;
         }

@@ -24,6 +24,7 @@ type SourceReadScope = {
   pin: () => { release: () => void };
 };
 const sourceReadScopes = new AsyncLocalStorage<ReadonlyMap<string, SourceReadScope>>();
+const canonicalWriteScopes = new AsyncLocalStorage<ReadonlyMap<string, SourceReadScope>>();
 
 type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle" | "state-handles";
 type CoordinatorOptions = {
@@ -145,7 +146,13 @@ export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
     runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
     uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
   });
-  if (heldCoordinators.has(handlesPath)) {
+  const writeScope = canonicalWriteScopes.getStore()?.get(handlesPath);
+  if (writeScope) {
+    if (!writeScope.active) {
+      throw new SqliteCoordinatorError("SQLite binding write scope is no longer current");
+    }
+    writeScope.assertCurrent();
+  } else if (heldCoordinators.has(handlesPath)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }
   return acquireLifecycleCoordinator("state-lifecycle", params);
@@ -182,6 +189,14 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
       runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
       uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
     });
+  const writeScope = canonicalWriteScopes.getStore()?.get(pathname);
+  if (writeScope) {
+    if (!writeScope.active) {
+      throw new SqliteCoordinatorError("SQLite binding write scope is no longer current");
+    }
+    writeScope.assertCurrent();
+    return writeScope.pin();
+  }
   const sourceScope = sourceReadScopes.getStore()?.get(pathname);
   if (sourceScope?.active) {
     sourceScope.assertCurrent();
@@ -225,6 +240,31 @@ export function acquireStateDatabaseHandleExclusion(params: CoordinatorOptions) 
     release() {
       released = true;
       coordinator.release();
+    },
+    // Synchronous admission only. Inherited async contexts cannot continue
+    // canonical writes after this callback returns, even after fence release.
+    runWithCanonicalWrites<T>(this: void, assertAuthority: () => void, operation: () => T): T {
+      const retained = pin();
+      const scope: SourceReadScope = {
+        active: true,
+        assertCurrent: () => {
+          assertCurrent();
+          assertAuthority();
+        },
+        pin,
+      };
+      const scopes = new Map(canonicalWriteScopes.getStore());
+      scopes.set(coordinator.path, scope);
+      try {
+        // Preserve even an invalid asynchronous result for the owning cache
+        // boundary to drain after this synchronous admission has been revoked.
+        return runWithSqliteCoordinator(retained, "SQLite binding write scope", () => {
+          scope.assertCurrent();
+          return { result: canonicalWriteScopes.run(scopes, operation) };
+        }).result;
+      } finally {
+        scope.active = false;
+      }
     },
     async runWithSourceReads<T>(
       this: void,

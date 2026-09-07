@@ -4,7 +4,10 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
-import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  runWithSqliteCoordinator,
+} from "../infra/sqlite-coordinator.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
@@ -337,6 +340,58 @@ export function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
   return {
     assertCurrent: handles.assertCurrent,
     runWithSourceReads: handles.runWithSourceReads,
+    async bindCaptured(assertCurrent: () => void, operation: () => undefined): Promise<void> {
+      const errors: unknown[] = [];
+      let result: unknown;
+      try {
+        result = handles.runWithCanonicalWrites(assertCurrent, operation);
+      } catch (error) {
+        errors.push(error);
+      }
+      // Revoke issued raw SQLite capabilities before yielding to an invalid
+      // async binder. Keep the physical fence until that promise has settled.
+      const database = cachedDatabases.get(databasePath);
+      if (database) {
+        try {
+          // Cleanup retains physical custody even if mutation authority expired.
+          // No user callback or lifecycle notification runs in this scope.
+          handles.runWithCanonicalWrites(handles.assertCurrent, () => {
+            errors.push(...closeOpenClawStateDatabaseHandle(database));
+            if (!database.db.isOpen) {
+              cachedDatabases.delete(databasePath);
+            }
+          });
+          if (!database.db.isOpen) {
+            notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: databasePath });
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (result !== undefined) {
+        errors.push(new Error("checkpoint binding must complete synchronously with undefined"));
+        try {
+          await Promise.resolve(result);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        assertCurrent();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "checkpoint binding or writer closure failed",
+          errors[0],
+        );
+      }
+    },
     release: () => {
       try {
         handles.release();

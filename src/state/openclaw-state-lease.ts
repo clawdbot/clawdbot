@@ -47,6 +47,7 @@ export type OpenClawStateLeaseContext = {
   withDatabaseFileExclusion?<T>(
     this: void,
     operation: (assertCurrent: () => void) => Promise<T>,
+    bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
   ): Promise<T>;
   /** Renew or verify independent renewal before another blocking phase. */
   renew?(): void;
@@ -621,7 +622,8 @@ export async function withOpenClawStateLease<T>(
       assertOperationOwned();
       result = await fileExclusion.runWithOwnerScope(() =>
         run({
-          withDatabaseFileExclusion: (operation) => fileExclusion.run(operation),
+          withDatabaseFileExclusion: (operation, bindCaptured) =>
+            fileExclusion.run(operation, bindCaptured),
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,
