@@ -364,6 +364,53 @@ suite.define(() => {
     }
   });
 
+  it("retries pending pairing and enters the app after approval without clicks", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const pairingError = {
+      code: "NOT_PAIRED",
+      message: "pairing required (requestId: req-pending)",
+      details: {
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
+      },
+    };
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.deferNext("connect");
+      await gateway.rejectDeferred("connect", pairingError);
+      const failure = page.locator('.login-gate__failure[data-kind="pairing-required"]');
+      await failure.waitFor();
+      await gateway.waitForRequest("connect", { after: 1 });
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "pairing-wait.png"),
+        fullPage: true,
+      });
+      expect(await failure.textContent()).toContain(
+        "Waiting for approval… this page connects on its own once the request is approved.",
+      );
+      expect(
+        await failure.getByRole("button", { name: "Check now", exact: true }).isEnabled(),
+      ).toBe(true);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+
+      await gateway.deferNext("connect");
+      await gateway.rejectDeferred("connect", pairingError);
+      await gateway.waitForRequest("connect", { after: 2 });
+      expect(await failure.isVisible()).toBe(true);
+      await gateway.resolveDeferred("connect");
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("copies an exact recovery command from the application gateway snapshot", async () => {
     const context = await suite.browser.newContext({
       permissions: ["clipboard-read", "clipboard-write"],
