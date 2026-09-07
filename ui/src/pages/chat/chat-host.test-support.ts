@@ -93,7 +93,6 @@ export function createImmediateCommandHost(
     chatStream: null,
     chatModelCatalog: [],
     hello: null,
-    refreshSessionsAfterChat: new Map(),
     ...overrides,
   } satisfies Partial<ChatHost>;
   return host as ChatHost;
@@ -218,7 +217,6 @@ export function makeChatHost(
     chatModelsLoading: false,
     chatModelCatalog: [],
     chatModelCatalogError: null,
-    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
