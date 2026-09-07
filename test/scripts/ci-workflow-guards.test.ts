@@ -2464,24 +2464,31 @@ NODE
   });
 
   it.each([
-    ["macos-swift", false],
-    ["ios-build", false],
-    ["ios-build", true],
+    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["ios-build", true, "workflow_dispatch", false, ["tests"]],
+    ["ios-build", false, "pull_request", false, ["smoke"]],
+    ["ios-build", false, "push", false, ["smoke"]],
+    ["ios-build", false, "workflow_dispatch", true, ["smoke"]],
+    ["ios-build", true, "workflow_dispatch", true, ["smoke"]],
   ] as const)(
-    "runs %s compilation independently of its native tests (historical=%s)",
-    (jobName, historical) => {
+    "runs %s native phases (historical=%s, event=%s, release_gate=%s)",
+    (jobName, historical, eventName, releaseGate, phases) => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs[jobName];
       const context = {
-        eventName: "workflow_dispatch" as const,
+        eventName,
+        releaseGate,
         repository: "openclaw/openclaw",
         runAttempt: 1,
+        env: { HISTORICAL_TARGET: String(historical) },
+        fileHashes: { "apps/shared/OpenClawWatchRTC/Cargo.toml": "present" },
         preflightOutputs: {
           compatibility_target: String(historical),
           run_openclawkit_tests: "true",
+          release_scope: "full",
         },
       };
-      const phases = historical ? (["tests"] as const) : (["release", "tests"] as const);
       const matrixPhases = job.strategy.matrix.phase;
       expect(
         Array.isArray(matrixPhases)
@@ -2495,6 +2502,7 @@ NODE
       const workloads =
         jobName === "macos-swift"
           ? {
+              smoke: [],
               release: [
                 "Native state schema version contract",
                 "Swift lint",
@@ -2508,8 +2516,10 @@ NODE
               ],
             }
           : {
+              smoke: ["Swift lint", "Build iOS app"],
               release: ["Build iOS app (Release)"],
               tests: [
+                "Test Watch RTC engine",
                 "Swift lint",
                 "Build iOS app",
                 "Run focused iOS lifecycle simulator tests",
@@ -2519,7 +2529,10 @@ NODE
       const names = [];
       for (const phase of phases) {
         const phaseContext = { ...context, matrix: { phase } };
-        const expected = historical ? ["Swift lint", "Build iOS app"] : workloads[phase];
+        const expected =
+          historical && phase === "tests"
+            ? ["Test Watch RTC engine", "Swift lint", "Build iOS app"]
+            : workloads[phase];
         names.push(evaluateWorkflowExpression(job.name, phaseContext));
         const selected = job.steps
           .filter((step: WorkflowStep) =>
@@ -2533,6 +2546,22 @@ NODE
           )
           .map((step: WorkflowStep) => step.name);
         expect(selected, phase).toEqual(expected);
+        if (jobName === "ios-build") {
+          for (const name of [
+            "Select Xcode 26",
+            "Setup Node environment",
+            "Install Watch Rust toolchain",
+            "Install iOS Swift tooling",
+          ]) {
+            const setup = expectDefined(
+              job.steps.find((step: WorkflowStep) => step.name === name),
+              name,
+            );
+            expect(
+              !setup.if || evaluateWorkflowExpression(`\${{ ${setup.if} }}`, phaseContext),
+            ).toBe(true);
+          }
+        }
       }
       // The release collector keys retained/rerun evidence by the displayed job name.
       expect(new Set(names).size).toBe(phases.length);
@@ -2541,7 +2570,7 @@ NODE
         (step: WorkflowStep) => step.name === "Verify selected CI lanes",
       );
       expect(gateStep.env.JOB_RESULTS).toContain(`${jobName}=\${{ needs.${jobName}.result }}`);
-      for (const conclusion of ["failure", "cancelled"]) {
+      for (const conclusion of ["failure", "cancelled", "skipped"]) {
         expect(
           runCiGateFixture(`preflight=success|true\n${jobName}=${conclusion}|true`).status,
         ).toBe(1);
@@ -9465,7 +9494,7 @@ server.listen(0, "127.0.0.1", () => {
       const engine = workflow.jobs["ios-build"].steps.find(
         (step: WorkflowStep) => step.name === "Test Watch RTC engine",
       );
-      for (const phase of ["tests", "release"]) {
+      for (const phase of ["smoke", "tests", "release"]) {
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
           eventName: "workflow_dispatch",
           repository: "openclaw/openclaw",
@@ -11378,6 +11407,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       label: "Mac artifact proof",
       changedPath: "test/scripts/mac-elevation-artifact.test.ts",
       selectedJobs: ["macos-node", "macos-swift"],
+    },
+    {
+      label: "iOS app pull request",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      selectedJobs: ["ios-build"],
+    },
+    {
+      label: "iOS app main push",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      eventName: "push",
+      selectedJobs: ["ios-build"],
+    },
+    {
+      label: "iOS app exact-head release gate",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      selectedJobs: ["checks-windows", "ios-build", "android"],
     },
     {
       label: "shared native",
@@ -14568,7 +14615,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: {
         "pnpm-store-warmup": false,
         "checks-node-compat": false,
-        "ios-screenshot-shard": true,
+        "ios-build": true,
+        "ios-screenshot-shard": false,
       },
     },
     {
@@ -14592,6 +14640,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: {
         "pnpm-store-warmup": false,
         "checks-node-compat": false,
+        "ios-build": true,
         "ios-screenshot-shard": false,
       },
     },
@@ -14717,14 +14766,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: { "ios-screenshot-shard": true },
     },
     {
-      label: "release gate respects screenshot scope",
+      label: "release gate without screenshot scope",
       context: { releaseGate: true, preflightOutputs: { run_ios_screenshots: "false" } },
       expected: { "ios-screenshot-shard": false },
     },
     {
-      label: "release gate selects screenshots",
+      label: "release gate keeps smoke without screenshots",
       context: { releaseGate: true },
-      expected: { "ios-screenshot-shard": true },
+      expected: { "ios-build": true, "ios-screenshot-shard": false },
     },
     {
       label: "npm-beta excludes manual screenshots",
@@ -14774,6 +14823,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (expected["ios-build"]) {
+      for (const terminal of ["failure", "cancelled", "skipped"]) {
+        const missingSmoke = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "ios-build": terminal }),
+        );
+        expect(missingSmoke.status, missingSmoke.stdout).toBe(1);
+      }
+    }
     if (context.preflightOutputs?.changed_core_test_paths_json) {
       for (const terminal of ["failure", "skipped"]) {
         const missingOwner = runCiGateFixture(
