@@ -192,6 +192,6 @@ file-system scan or writing a pre-OOM snapshot.
 
 - [Health checks](/gateway/health)
 - [Gateway CLI](/cli/gateway#gateway-diagnostics-export)
-- [Gateway protocol](/gateway/protocol#rpc-method-families)
+- [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector

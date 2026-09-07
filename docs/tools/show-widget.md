@@ -294,4 +294,4 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 - [Control UI hosted embeds](/web/control-ui/chat#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
 - [macOS widget panel](/platforms/mac/canvas)
-- [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
+- [Gateway protocol client capabilities](/gateway/protocol/handshake#client-capabilities)

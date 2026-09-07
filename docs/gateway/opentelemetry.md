@@ -764,7 +764,7 @@ can be temporarily `null` while its cache refreshes. `usage-cost` provides
 aggregate estimates. Omit `agentScope` or `--all-agents` to scope the report
 to the default agent. For continuously updated clients,
 [subscribe to session changes instead of polling usage reports](/gateway/clients#subscribe-instead-of-polling-usage).
-See the [Gateway RPC method reference](/gateway/protocol#rpc-method-families)
+See the [Gateway RPC method reference](/gateway/protocol/rpc-methods#rpc-method-families)
 for usage methods and request options.
 
 **Message flow**

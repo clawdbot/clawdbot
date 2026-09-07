@@ -2118,5 +2118,37 @@
   {
     "source": "Build and develop",
     "target": "构建与开发"
+  },
+  {
+    "source": "Transport and framing",
+    "target": "传输与分帧"
+  },
+  {
+    "source": "Handshake and roles",
+    "target": "握手与角色"
+  },
+  {
+    "source": "Presence and events",
+    "target": "在线状态与事件"
+  },
+  {
+    "source": "RPC methods",
+    "target": "RPC 方法"
+  },
+  {
+    "source": "Ledger RPCs",
+    "target": "账本 RPC"
+  },
+  {
+    "source": "Operator methods",
+    "target": "操作员方法"
+  },
+  {
+    "source": "Versioning",
+    "target": "版本管理"
+  },
+  {
+    "source": "Auth and device identity",
+    "target": "身份验证与设备身份"
   }
 ]
