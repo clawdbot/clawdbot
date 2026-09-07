@@ -33,11 +33,7 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
-import {
-  confirmAndStartUpdate,
-  createUpdateProgressWatcher,
-  type UpdateProgress,
-} from "../../app/update-confirmation.ts";
+import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -111,6 +107,7 @@ type ConfigPageSetting =
   | "chatFollowUpMode"
   | "catalogOpenTarget"
   | "composerHoldToRecord"
+  | "composerVoiceInputMode"
   | "openLinksInControlUiBrowser";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
@@ -433,10 +430,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
-    )
-    .watch(
-      () => this.context?.nativeDeviceSettings ?? undefined,
-      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
     )
     .watch(
       () => this.context?.nativeNotifications ?? undefined,
@@ -818,7 +811,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.agentSelection.state.selectedId === agentId &&
       // Agent selection can cycle A -> B -> A while the first A load is still pending.
       this.sessionObserverModelsRequest?.promise === promise;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
       .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
@@ -1052,8 +1045,23 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   // The update dialog outlives this page and the connection, so it reads live
   // snapshots rather than the values captured during a render.
-  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) =>
-    createUpdateProgressWatcher(this.context)(listener);
+  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const banner = this.context.overlays.snapshot.updateStatusBanner;
+      listener({
+        busy: this.isUpdateBusy(),
+        connected: this.context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = this.context.overlays.subscribe(emit);
+    const stopGateway = this.context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
 
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
@@ -1076,7 +1084,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
-        nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
           this.context.config.current.serverVersion ??
@@ -1089,8 +1096,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
-        run: overlaySnapshot.updateRun,
-        connected: gatewaySnapshot.phase === "connected",
+        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
@@ -1106,8 +1112,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           void confirmAndStartUpdate({
             startGatewayUpdate: () => void this.context.overlays.runUpdate(),
             watchUpdateProgress: this.watchUpdateProgress,
-            onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
-            onAcknowledge: () => this.context.overlays.acknowledgeUpdateRun(),
             updateAvailable: overlaySnapshot.updateAvailable,
             updateSchedule: overlaySnapshot.updateSchedule,
             // This row has no native-decline listener, so a handoff the Mac app
@@ -1323,6 +1327,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       },
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
       setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
+      composerVoiceInputMode: this.settings.composerVoiceInputMode,
+      setComposerVoiceInputMode: (mode) => this.setSetting("composerVoiceInputMode", mode),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {

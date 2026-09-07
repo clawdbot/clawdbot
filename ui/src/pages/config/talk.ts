@@ -3,7 +3,6 @@
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
 import { html, nothing, type TemplateResult } from "lit";
-import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderSettingsRow,
@@ -15,11 +14,10 @@ import {
 import { t } from "../../i18n/index.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
-  renderDeviceTalk,
-  renderVoiceWakeEditor,
-  type VoiceWakeEditorState,
-} from "./talk-device.ts";
-import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
+  isTalkGptLiveModel,
+  type TalkRealtimeSelection,
+  type TalkTranscriptionSelection,
+} from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
 export type TalkRealtimeProviderOption = {
@@ -34,6 +32,25 @@ export type TalkRealtimeProviderOption = {
   transports: readonly string[];
   defaultModel: string | null;
 };
+
+export type TalkTranscriptionProviderOption = {
+  id: string;
+  label: string;
+  configured: boolean;
+  aliases: readonly string[];
+  models: readonly string[];
+  defaultModel: string | null;
+};
+
+export type TalkTranscriptionCatalogState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | {
+      kind: "ready";
+      ready: boolean;
+      activeProvider: string | null;
+      providers: readonly TalkTranscriptionProviderOption[];
+    };
 
 /**
  * Catalog as the page knows it. `loading`/`unavailable` keep an unread catalog
@@ -50,14 +67,16 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
-  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  transcription?: TalkTranscriptionCatalogState;
+  transcriptionSelection?: TalkTranscriptionSelection;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
+  onTranscriptionProviderChange?: (providerId: string | null) => void;
+  onTranscriptionModelChange?: (model: string | null) => void;
   /** Embedded schema editor for the full `talk` section. */
   editor: TemplateResult;
 };
@@ -281,12 +300,144 @@ function renderGptLiveRow(props: TalkViewProps) {
   });
 }
 
+function transcriptionCatalog(props: TalkViewProps): TalkTranscriptionCatalogState {
+  return props.transcription ?? { kind: "unavailable" };
+}
+
+function selectedTranscriptionProvider(
+  catalog: TalkTranscriptionCatalogState,
+  selection: TalkTranscriptionSelection,
+): TalkTranscriptionProviderOption | undefined {
+  if (catalog.kind !== "ready") {
+    return undefined;
+  }
+  const providerId = selection.provider ?? catalog.activeProvider;
+  return catalog.providers.find(
+    (provider) => provider.id === providerId || provider.aliases.includes(providerId ?? ""),
+  );
+}
+
+function effectiveTranscriptionModel(
+  selection: TalkTranscriptionSelection,
+  provider: TalkTranscriptionProviderOption | undefined,
+): string | null {
+  let model = selection.model;
+  const candidates = [selection.provider, provider?.id, ...(provider?.aliases ?? [])];
+  for (const candidate of candidates) {
+    if (candidate && candidate in selection.providerEntries) {
+      model ??= selection.providerEntries[candidate]?.model ?? null;
+    }
+  }
+  return model;
+}
+
+function renderTranscriptionStatusRow(props: TalkViewProps) {
+  const catalog = transcriptionCatalog(props);
+  if (catalog.kind === "loading") {
+    return renderSettingsRow({
+      title: t("talkPage.transcription.statusTitle"),
+      control: renderSettingsStatus({ kind: "muted", label: t("common.loading") }),
+    });
+  }
+  if (catalog.kind === "unavailable") {
+    return renderSettingsRow({
+      title: t("talkPage.transcription.statusTitle"),
+      description: t("talkPage.transcription.unavailableHint"),
+      control: renderSettingsStatus({
+        kind: "muted",
+        label: t("talkPage.transcription.unavailable"),
+      }),
+    });
+  }
+  return renderSettingsRow({
+    title: t("talkPage.transcription.statusTitle"),
+    description: catalog.activeProvider
+      ? t("talkPage.transcription.activeProvider", { provider: catalog.activeProvider })
+      : t("talkPage.transcription.noProvider"),
+    control: catalog.ready
+      ? renderSettingsStatus({ kind: "ok", label: t("talkPage.transcription.ready") })
+      : renderSettingsStatus({ kind: "warn", label: t("talkPage.transcription.notReady") }),
+  });
+}
+
+function renderTranscriptionProviderRow(props: TalkViewProps) {
+  const catalog = transcriptionCatalog(props);
+  const selection = props.transcriptionSelection;
+  if (!selection || catalog.kind !== "ready" || catalog.providers.length === 0) {
+    return renderSettingsRow({
+      title: t("talkPage.transcription.providerTitle"),
+      description: t("talkPage.transcription.providerDescription"),
+      control: renderSettingsValue(selection?.provider ?? t("talkPage.provider.auto"), {
+        mono: true,
+      }),
+    });
+  }
+  const selected = selectedTranscriptionProvider(catalog, selection);
+  const unknownConfigured = selection.provider && !selected ? selection.provider : null;
+  return renderSettingsRow({
+    title: t("talkPage.transcription.providerTitle"),
+    description: t("talkPage.transcription.providerDescription"),
+    stacked: true,
+    control: renderSettingsSegmented({
+      value: selected?.id ?? unknownConfigured ?? TALK_PICKER_UNSET,
+      options: [
+        ...catalog.providers.map((provider) => ({ value: provider.id, label: provider.label })),
+        ...(unknownConfigured ? [{ value: unknownConfigured, label: unknownConfigured }] : []),
+        { value: TALK_PICKER_UNSET, label: t("talkPage.provider.auto") },
+      ],
+      disabled: props.configBusy,
+      ariaLabel: t("talkPage.transcription.providerTitle"),
+      onChange: (value) => props.onTranscriptionProviderChange?.(value || null),
+    }),
+  });
+}
+
+function renderTranscriptionModelRow(props: TalkViewProps) {
+  const selection = props.transcriptionSelection;
+  if (!selection) {
+    return nothing;
+  }
+  const provider = selectedTranscriptionProvider(transcriptionCatalog(props), selection);
+  const model = effectiveTranscriptionModel(selection, provider);
+  if (!provider) {
+    return renderSettingsRow({
+      title: t("talkPage.transcription.modelTitle"),
+      description: t("talkPage.transcription.modelDescription"),
+      control: renderSettingsValue(model ?? t("talkPage.model.default"), { mono: true }),
+    });
+  }
+  const known = provider.models.length
+    ? provider.models
+    : provider.defaultModel
+      ? [provider.defaultModel]
+      : [];
+  const options = [
+    {
+      value: TALK_PICKER_UNSET,
+      label: provider.defaultModel
+        ? t("talkPage.model.defaultNamed", { model: provider.defaultModel })
+        : t("talkPage.model.default"),
+    },
+    ...known.map((value) => ({ value, label: value })),
+    ...(model && !known.includes(model) ? [{ value: model, label: model }] : []),
+  ];
+  return renderSettingsRow({
+    title: t("talkPage.transcription.modelTitle"),
+    description: t("talkPage.transcription.modelDescription"),
+    control: renderModelPicker({
+      label: t("talkPage.transcription.modelTitle"),
+      value: model ?? TALK_PICKER_UNSET,
+      options: options.map(({ value, label }) => ({ value, label, provider: provider.id })),
+      disabled: props.configBusy,
+      onChange: (value) => props.onTranscriptionModelChange?.(value || null),
+    }),
+  });
+}
+
 export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
-        ${renderDeviceTalk(props.nativeDeviceSettings)}
-        ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),
@@ -295,6 +446,16 @@ export function renderTalk(props: TalkViewProps) {
           html`
             ${renderStatusRow(props)} ${renderProviderRow(props)} ${renderModelRow(props)}
             ${renderVoiceRow(props)} ${renderGptLiveRow(props)}
+          `,
+        )}
+        ${renderSettingsSection(
+          {
+            title: t("talkPage.transcription.sectionTitle"),
+            description: t("talkPage.transcription.sectionDescription"),
+          },
+          html`
+            ${renderTranscriptionStatusRow(props)} ${renderTranscriptionProviderRow(props)}
+            ${renderTranscriptionModelRow(props)}
           `,
         )}
       </div>

@@ -6,7 +6,7 @@ export function renderSettingsSelectRow<T extends string>(params: {
   title: string;
   value: T;
   /** Stable e2e hook; only the Appearance preference rows carry one. */
-  setting?: "send-shortcut" | "follow-up-mode" | "catalog-open-target";
+  setting?: "send-shortcut" | "follow-up-mode" | "catalog-open-target" | "voice-input-mode";
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (value: string) => void;
   description?: unknown;
@@ -21,6 +21,7 @@ export function renderSettingsSelectRow<T extends string>(params: {
         ?data-settings-send-shortcut=${params.setting === "send-shortcut"}
         ?data-settings-follow-up-mode=${params.setting === "follow-up-mode"}
         ?data-settings-catalog-open-target=${params.setting === "catalog-open-target"}
+        ?data-settings-voice-input-mode=${params.setting === "voice-input-mode"}
         aria-label=${params.title}
         ?disabled=${params.disabled ?? false}
         .value=${params.value}

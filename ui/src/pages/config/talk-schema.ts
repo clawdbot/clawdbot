@@ -10,6 +10,15 @@ type TalkProviderEntryValues = {
   speakerVoice: string | null;
 };
 
+export type TalkTranscriptionSelection = {
+  /** Raw configured `talk.transcription.provider`, possibly an alias. */
+  provider: string | null;
+  /** Top-level `talk.transcription.model` override only. */
+  model: string | null;
+  /** Per-provider model fallbacks keyed by the raw config map key. */
+  providerEntries: Record<string, { model: string | null }>;
+};
+
 export type TalkRealtimeSelection = {
   /** Raw configured `talk.realtime.provider`, possibly an alias. */
   provider: string | null;
@@ -55,6 +64,26 @@ export function resolveTalkRealtimeSelection(
       readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
     transport: readTrimmedString(realtime?.transport),
     consultRouting: readTrimmedString(realtime?.consultRouting)?.toLowerCase() ?? null,
+    providerEntries,
+  };
+}
+
+export function resolveTalkTranscriptionSelection(
+  configObject: Record<string, unknown>,
+): TalkTranscriptionSelection {
+  const transcription = readRecord(readRecord(configObject.talk)?.transcription);
+  const providerConfigs = readRecord(transcription?.providers) ?? {};
+  const providerEntries: Record<string, { model: string | null }> = {};
+  for (const [key, value] of Object.entries(providerConfigs)) {
+    const entry = readRecord(value);
+    if (!entry) {
+      continue;
+    }
+    providerEntries[key] = { model: readTrimmedString(entry.model) };
+  }
+  return {
+    provider: readTrimmedString(transcription?.provider),
+    model: readTrimmedString(transcription?.model),
     providerEntries,
   };
 }

@@ -193,6 +193,8 @@ export type ConfigProps = {
   onCameraSelect?: (deviceId: string) => void;
   composerHoldToRecord?: boolean;
   setComposerHoldToRecord?: (enabled: boolean) => void;
+  composerVoiceInputMode?: "gesture" | "dictation";
+  setComposerVoiceInputMode?: (mode: "gesture" | "dictation") => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;

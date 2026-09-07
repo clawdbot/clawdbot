@@ -6,6 +6,7 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
+import { normalizeComposerVoiceInputMode } from "../../app/voice-input-settings.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
@@ -201,6 +202,11 @@ export function renderChatPreferencesSection(
     (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
+  const voiceInputMode = normalizeComposerVoiceInputMode(props.composerVoiceInputMode);
+  const voiceInputModeDefaultDescription = renderSettingsDefaultDescription(
+    t("chat.composer.voiceInputModeGesture"),
+    voiceInputMode !== UI_APPEARANCE_DEFAULTS.composerVoiceInputMode,
+  );
   const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
     t("common.disabled"),
     props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
@@ -287,6 +293,23 @@ export function renderChatPreferencesSection(
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${
+          props.setComposerVoiceInputMode
+            ? renderSettingsSelectRow({
+                title: t("chat.composer.voiceInputMode"),
+                value: voiceInputMode,
+                setting: "voice-input-mode",
+                description: html`${t("chat.composer.voiceInputModeDescription")}<br />
+                  ${voiceInputModeDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+                options: [
+                  { value: "gesture", label: t("chat.composer.voiceInputModeGesture") },
+                  { value: "dictation", label: t("chat.composer.voiceInputModeDictation") },
+                ],
+                onChange: (value) =>
+                  props.setComposerVoiceInputMode?.(normalizeComposerVoiceInputMode(value)),
+              })
+            : nothing
+        }
         ${
           props.setComposerHoldToRecord
             ? renderSettingsToggleRow({
