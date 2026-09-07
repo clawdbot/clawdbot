@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../../infra/node-sqlite.js";
 import { inspectCheckpointFile } from "../../infra/update-checkpoint-files.js";
+import { validateUpdateCheckpointPreviousRuntimeDatabase } from "../../infra/update-checkpoint-runtime.js";
 import { buildCheckpointReaderRuntime } from "../../infra/update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../../infra/update-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -16,11 +19,20 @@ import {
   recordUpdateRecoveryObservation,
   recordUpdateRecoveryFailure,
   loadUpdateRecovery,
+  type UpdateRecoveryRecord,
 } from "../../infra/update-run-recovery.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../../state/openclaw-state-db-cache.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  assertOpenClawStateDatabaseForMaintenance,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { UpdateCommandRecovery } from "./update-command-recovery.js";
+import {
+  replayUpdateCommandRecovery,
+  type UpdateCommandRecovery,
+} from "./update-command-recovery.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,7 +42,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function fixture(sealed = true) {
+async function fixture(sealed: boolean | "fresh" = true) {
   const root = fs.realpathSync(dirs.make("rollback-replay-consumer-"));
   const env = { HOME: root, OPENCLAW_STATE_DIR: root };
   const options = { env };
@@ -128,11 +140,11 @@ async function fixture(sealed = true) {
       throw new Error("runtime owner not established");
     },
   });
-  const prepared = await adapter.prepare();
-  if (prepared.status !== "ready") {
+  const prepared = sealed === "fresh" ? undefined : await adapter.prepare();
+  if (prepared && prepared.status !== "ready") {
     throw new Error("fixture preparation refused");
   }
-  if (sealed) {
+  if (sealed === true && prepared?.status === "ready") {
     await adapter.seal(prepared.planRef);
   }
   record = adapter.record;
@@ -174,26 +186,29 @@ async function fixture(sealed = true) {
   let intervals = 0;
   const installPhysicalInterval = (runtimeFailure = "canonical lease rebinding unavailable") => {
     recovery.checkpointReplay = {
-      async withPublication(operation) {
+      access: {
+        artifactRoot: access.artifactRoot,
+        validateStagedDatabase: () => undefined,
+        assertMatchingRuntime: () => {
+          throw new Error("runtime not established");
+        },
+        prepareCanonicalWrite: async () => {
+          throw new Error(runtimeFailure);
+        },
+        closeCanonicalDatabase: async () => {
+          closeOpenClawStateDatabaseForTest();
+        },
+      },
+      async withDatabaseFilePublication(operation) {
         intervals++;
         const physical = acquireOpenClawStateDatabaseFileExclusion(file);
         try {
-          return await physical.runWithSourceReads(() =>
-            operation({
-              artifactRoot: access.artifactRoot,
-              fence: { assertCurrent: physical.assertCurrent },
-              validateStagedDatabase: () => undefined,
-              assertMatchingRuntime: () => {
-                throw new Error("runtime not established");
-              },
-              prepareCanonicalWrite: async () => {
-                throw new Error(runtimeFailure);
-              },
-              closeCanonicalDatabase: async () => {
-                closeOpenClawStateDatabaseForTest();
-              },
-            }),
-          );
+          return await physical.runWithSourceReads(async () => {
+            const response = await operation(physical.assertCurrent, async () => {
+              throw new Error("no live canonical writer in physical-refusal fixture");
+            });
+            return response.result;
+          });
         } finally {
           physical.release();
         }
@@ -211,8 +226,15 @@ async function fixture(sealed = true) {
     invoke,
     rollback,
     complete,
-    prepared,
+    get prepared() {
+      if (!prepared || prepared.status !== "ready") {
+        throw new Error("fixture has no prepared plan");
+      }
+      return prepared;
+    },
     installPhysicalInterval,
+    runtime,
+    access,
     intervals: () => intervals,
     revoke: () => {
       held = false;
@@ -286,7 +308,10 @@ describe("durable failure checkpoint replay consumer", () => {
     f.installPhysicalInterval();
     fs.writeFileSync(f.configPath, "operator-newer");
     const before = fs.readFileSync(f.file);
-    expect(await f.invoke()).toMatchObject({ checkpointReplay: "conflict", rolledBack: false });
+    expect(await f.invoke()).toMatchObject({
+      pendingRecoveryReason: "Checkpoint replay remains conflict.",
+      rolledBack: false,
+    });
     expect(fs.readFileSync(f.file)).toEqual(before);
     expect(fs.readFileSync(f.configPath, "utf8")).toBe("operator-newer");
     expect(f.rollback).not.toHaveBeenCalled();
@@ -418,4 +443,139 @@ describe("durable failure checkpoint replay consumer", () => {
     expect(fs.readFileSync(f.file)).toEqual(before);
     expect(f.rollback).not.toHaveBeenCalled();
   });
+});
+
+describe("live nested-lease rollback consumer", () => {
+  it.each(["verified", "runtime-refused", "operator-conflict", "post-shared-conflict"] as const)(
+    "uses actual publication and rebind without terminal settlement: %s",
+    async (outcome) => {
+      const f = await fixture("fresh");
+      let ready: UpdateRecoveryRecord["from"] | undefined;
+      let records = 0;
+      let closedWrites = 0;
+      const observed = f.recovery.onRecord;
+      f.recovery.onRecord = (record) => {
+        records++;
+        observed(record);
+      };
+      let leasesAfterFailure: unknown;
+      const leaseOperation = withPluginLifecycleLease({ env: f.options.env }, async (plugin) => {
+        await withAgentDatabaseMaintenanceLease({ env: f.options.env }, async (maintenance) => {
+          const publish = maintenance.withDatabaseFilePublication;
+          if (!publish) {
+            throw new Error("publication absent");
+          }
+          const assertCurrent = () => {
+            plugin.assertOwned();
+            maintenance.assertOwned();
+          };
+          f.recovery.fence = { assertCurrent };
+          f.recovery.checkpointReplay = {
+            withDatabaseFilePublication: publish,
+            access: {
+              artifactRoot: f.access.artifactRoot,
+              validateStagedDatabase(db) {
+                assertOpenClawStateDatabaseForMaintenance(db, { pathname: f.file });
+                return undefined;
+              },
+              assertMatchingRuntime(runtime) {
+                assertCurrent();
+                if (!ready || !isDeepStrictEqual(runtime, ready)) {
+                  throw new Error("previous reader not verified");
+                }
+                return undefined;
+              },
+              async prepareCanonicalWrite(record) {
+                assertCurrent();
+                if (outcome === "runtime-refused") {
+                  throw new Error("runtime refused");
+                }
+                const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(f.file), {
+                  readOnly: true,
+                });
+                try {
+                  const result = await validateUpdateCheckpointPreviousRuntimeDatabase({
+                    database: db,
+                    runtime: record.from,
+                    assertCurrent: () => {
+                      assertCurrent();
+                      return undefined;
+                    },
+                  });
+                  if (result.status !== "verified") {
+                    throw new Error(result.reason);
+                  }
+                  ready = record.from;
+                } finally {
+                  db.close();
+                }
+              },
+              async closeCanonicalDatabase() {
+                closeOpenClawStateDatabaseForTest();
+                closedWrites++;
+                if (outcome === "post-shared-conflict" && closedWrites === 2) {
+                  // Interference after shared claim+observation: shared publication
+                  // alone could pass the lease verifier, but replay is unfinished.
+                  fs.writeFileSync(f.configPath, "operator-newer");
+                }
+              },
+            },
+          };
+          if (outcome === "operator-conflict") {
+            fs.writeFileSync(f.configPath, "operator-newer");
+          }
+          if (outcome === "verified") {
+            const result = await replayUpdateCommandRecovery(f.opts);
+            expect(result.status).toBe("verified");
+            expect(result.record.restore).toMatchObject({ resourceCursor: 1, phase: "observed" });
+            expect(records).toBeGreaterThan(0);
+            maintenance.assertOwned();
+            plugin.assertOwned();
+            maintenance.renew?.();
+            plugin.renew?.();
+            expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
+            expect(f.record.effects.at(-1)?.state).toBe("intent");
+            expect(f.record.terminal).toBeUndefined();
+            expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+            expect(fs.readFileSync(f.configPath, "utf8")).toBe("original");
+          } else {
+            await expect(replayUpdateCommandRecovery(f.opts)).rejects.toThrow();
+            expect(() => maintenance.assertOwned()).toThrow();
+            expect(() => plugin.assertOwned()).toThrow();
+            const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(f.file), {
+              readOnly: true,
+            });
+            try {
+              leasesAfterFailure = db
+                .prepare("SELECT * FROM state_leases ORDER BY scope,lease_key")
+                .all();
+            } finally {
+              db.close();
+            }
+            expect(leasesAfterFailure).toHaveLength(2);
+          }
+          expect(f.rollback).not.toHaveBeenCalled();
+          expect(f.complete).not.toHaveBeenCalled();
+        });
+      });
+      if (outcome === "verified") {
+        await leaseOperation;
+      } else {
+        await expect(leaseOperation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      }
+      closeOpenClawStateDatabaseForTest();
+      if (outcome !== "verified") {
+        const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(f.file), {
+          readOnly: true,
+        });
+        try {
+          expect(db.prepare("SELECT * FROM state_leases ORDER BY scope,lease_key").all()).toEqual(
+            leasesAfterFailure,
+          );
+        } finally {
+          db.close();
+        }
+      }
+    },
+  );
 });

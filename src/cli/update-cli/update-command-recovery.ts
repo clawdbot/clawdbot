@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { reopenPackageUpdateTransaction } from "../../infra/package-update-recovery.js";
+import { createUpdateRecoveryCheckpointAdapter } from "../../infra/update-run-recovery-checkpoint.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import { createUpdateRecoveryCheckpointReplay } from "../../infra/update-run-recovery-replay.js";
 import { commitUpdateRecoveryTerminal } from "../../infra/update-run-recovery-terminal.js";
@@ -12,6 +13,7 @@ import {
 } from "../../infra/update-run-recovery.js";
 import type { UpdateServingReceipt } from "../../infra/update-serving-verification-receipt.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import type { OpenClawStateLeaseContext } from "../../state/openclaw-state-lease.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 /** Live executor context only. Never serialize it into worker options or a descriptor. */
@@ -24,14 +26,14 @@ export type UpdateCommandRecovery = Parameters<typeof createUpdateRecoveryPackag
    * Runtime callbacks and the interval fence are supplied only while held.
    */
   checkpointReplay?: {
-    withPublication<T>(
-      operation: (
-        access: Omit<
-          Parameters<typeof createUpdateRecoveryCheckpointReplay>[0],
-          "expected" | "database"
-        >,
-      ) => Promise<T>,
-    ): Promise<T>;
+    withDatabaseFilePublication: NonNullable<
+      OpenClawStateLeaseContext["withDatabaseFilePublication"]
+    >;
+    /** Runtime/resource owners remain responsible for these live assertions. */
+    access: Omit<
+      Parameters<typeof createUpdateRecoveryCheckpointReplay>[0],
+      "expected" | "database" | "fence" | "bindPublishedRecord"
+    >;
   };
 };
 
@@ -93,7 +95,10 @@ export function persistUpdateCommandServingReceipt(
 }
 
 /**
- * Failure-path consumer of the sealed-plan driver. The admitted environment,
+ * Failure-path consumer of the checkpoint adapter and sealed-plan driver.
+ * Fresh preparation, sealing, publication and progress share one live window.
+ * Existing preparing records remain pending for explicit owner reconciliation.
+ * The admitted environment,
  * never supplied database options, selects the canonical DB. Inspection occurs
  * in the driver before any writable reopen/claim, including absent canonical DB.
  * This does not settle the generic restore effect, package roles, or serving proof.
@@ -122,49 +127,111 @@ export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
       "Live publication and lease rebinding are unavailable.",
     );
   }
-  if (!expected.restore?.planSha256 || expected.restore.phase === "preparing") {
+  if (
+    expected.restore &&
+    (!expected.restore.planSha256 || expected.restore.phase === "preparing")
+  ) {
     return { status: "preparing" as const, record: expected };
   }
   let entered = false;
   let completed:
     | Awaited<ReturnType<ReturnType<typeof createUpdateRecoveryCheckpointReplay>["replay"]>>
     | undefined;
-  const result = await publication.withPublication(async (access) => {
-    if (entered) {
-      throw new UpdateCommandRecoveryPendingError("Publication may enter replay only once.");
-    }
-    entered = true;
-    const fence = {
-      assertCurrent() {
+  const result = await publication.withDatabaseFilePublication(
+    async (assertCurrent, bindPublishedRecord) => {
+      const access = publication.access;
+      if (entered) {
+        throw new UpdateCommandRecoveryPendingError("Publication may enter replay only once.");
+      }
+      entered = true;
+      const fence = {
+        assertCurrent() {
+          if (recovery.fence.assertCurrent() !== undefined || assertCurrent() !== undefined) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Replay authority must complete synchronously.",
+            );
+          }
+        },
+      };
+      fence.assertCurrent();
+      const params = {
+        ...access,
+        expected,
+        database: { env: run.env },
+        fence,
+        bindPublishedRecord,
+      };
+      let replayRecord = expected;
+      if (!expected.restore) {
+        // First-time preparation must share the window with seal, physical
+        // publication and every progress write: later renewal changes frozen rows.
+        const intent = expected.effects.at(-1);
         if (
-          recovery.fence.assertCurrent() !== undefined ||
-          access.fence.assertCurrent() !== undefined
+          intent?.kind !== "checkpoint-restore" ||
+          intent.state !== "intent" ||
+          intent.runtime !== "previous" ||
+          intent.resourceId !== expected.checkpoint?.ref.checkpointId ||
+          expected.nativeManager?.effects.at(-1)?.state === "intent" ||
+          (expected.nativeManager &&
+            !(expected.nativeManager.effects.at(-1)?.after ?? expected.nativeManager.original)
+              .stopped)
         ) {
           throw new UpdateCommandRecoveryPendingError(
-            "Replay authority must complete synchronously.",
+            "Reconcile restore intent before preparation.",
           );
         }
-      },
-    };
-    fence.assertCurrent();
-    const driver = createUpdateRecoveryCheckpointReplay({
-      ...access,
-      expected,
-      database: { env: run.env },
-      fence,
-    });
-    try {
-      completed = await driver.replay();
-      fence.assertCurrent();
-      return completed;
-    } finally {
-      // This is returned durable evidence, not authority. Even when the wrapper
-      // later loses its lease, never leave the executor pointing at an old claim.
-      if (!isDeepStrictEqual(driver.record, expected)) {
-        recovery.onRecord(driver.record);
+        const adapter = createUpdateRecoveryCheckpointAdapter(params);
+        try {
+          const prepared = await adapter.prepare();
+          if (prepared.status !== "ready") {
+            throw new UpdateCommandRecoveryPendingError("Checkpoint preparation is unavailable.");
+          }
+          replayRecord = await adapter.seal(prepared.planRef);
+        } finally {
+          if (!isDeepStrictEqual(adapter.record, expected)) {
+            recovery.onRecord(adapter.record);
+          }
+        }
       }
-    }
-  });
+      const driver = createUpdateRecoveryCheckpointReplay({ ...params, expected: replayRecord });
+      try {
+        completed = await driver.replay();
+        fence.assertCurrent();
+        if (completed.status !== "verified") {
+          // A shared resource may already be published. Returning normally would
+          // renew the lease rows and invalidate the bindings still needed by replay.
+          throw new UpdateCommandRecoveryPendingError(
+            `Checkpoint replay remains ${completed.status}.`,
+          );
+        }
+        const record = completed.record;
+        const progress = record.restore;
+        if (!record.checkpoint || !progress?.planSha256) {
+          throw new UpdateCommandRecoveryPendingError("Verified replay has no immutable plan.");
+        }
+        return {
+          result: completed,
+          publication: {
+            artifactRoot: access.artifactRoot,
+            binding: record.checkpoint.binding,
+            planRef: {
+              restoreId: progress.restoreId,
+              checkpointId: progress.checkpointId,
+              planPath: progress.planPath,
+              planSha256: progress.planSha256,
+            },
+            recoveryRecord: record,
+          },
+        };
+      } finally {
+        // This is returned durable evidence, not authority. Even when the wrapper
+        // later loses its lease, never leave the executor pointing at an old claim.
+        if (!isDeepStrictEqual(driver.record, expected)) {
+          recovery.onRecord(driver.record);
+        }
+      }
+    },
+  );
   // An inner verified result is unusable unless the actual outer owner settled.
   // A wrapper that skipped the operation cannot manufacture restoration success.
   if (!completed || result !== completed) {
