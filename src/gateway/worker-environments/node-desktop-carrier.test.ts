@@ -163,6 +163,63 @@ describe("worker node desktop carrier", () => {
     expect(streamed.streams[0]?.destroyed).toBe(true);
   });
 
+  it("aborts pending observe when requester disconnects before mint", async () => {
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const controller = new AbortController();
+    const requester = {
+      signal: controller.signal,
+      isCurrent: () => !controller.signal.aborted,
+    };
+    const record = support.seedReadyNodeDesktop("worker-node-desktop-requester-abort");
+    const proof = nodeProof(record.nodeDeviceId!);
+    const transport = pendingTransport({ proof, isProofCurrent: () => true });
+    const streamed = fakeBroker();
+    const carrier = createWorkerNodeDesktopCarrier({
+      store: support.testState.store,
+      desktopRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+    });
+    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+
+    const observing = carrier.observe({ record, control: false, requester });
+    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+    const invokeSignal = transport.invoke.mock.calls[0]?.[0].signal;
+    expect(invokeSignal?.aborted).toBe(false);
+    controller.abort();
+    await support.waitForFast(() => expect(invokeSignal?.aborted).toBe(true));
+
+    await expect(observing).rejects.toThrow(
+      /requester is no longer current|ticket cancelled|invoke aborted|operation aborted|owner stopped/i,
+    );
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("refuses mint when requester is invalidated during delayed attachment", async () => {
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const client = { invalidated: false };
+    const requester = {
+      signal: new AbortController().signal,
+      isCurrent: () => !client.invalidated,
+    };
+    const record = support.seedReadyNodeDesktop("worker-node-desktop-requester-invalidate");
+    const proof = nodeProof(record.nodeDeviceId!);
+    const transport = pendingTransport({ proof, isProofCurrent: () => true });
+    const streamed = fakeBroker();
+    const carrier = createWorkerNodeDesktopCarrier({
+      store: support.testState.store,
+      desktopRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+    });
+    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+
+    const observing = carrier.observe({ record, control: false, requester });
+    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+    client.invalidated = true;
+    const stream = streamed.attachNext();
+
+    await expect(observing).rejects.toThrow(/requester is no longer current/i);
+    expect(mint).not.toHaveBeenCalled();
+    expect(stream.destroyed).toBe(true);
+  });
+
   it.each([
     ["lease", (record: WorkerEnvironmentRecord) => ({ ...record, leaseId: "lease:replacement" })],
     [

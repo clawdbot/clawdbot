@@ -183,4 +183,52 @@ describe("node desktop runtime policy", () => {
     expect(await observed).toBe(false);
     expect(stream.destroyed).toBe(true);
   });
+
+  it("aborts attach/invoke when the Gateway requester disconnects before mint", async () => {
+    const fixture = createFixture("attachment");
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const controller = new AbortController();
+    const requester = {
+      signal: controller.signal,
+      isCurrent: () => !controller.signal.aborted,
+    };
+    const observed = fixture.service.observe({
+      nodeId: "node",
+      control: false,
+      credentials: { password: "synthetic-password" },
+      requester,
+    });
+    await fixture.reached;
+    expect(fixture.forwarded).toEqual([NODE_DESKTOP_STREAM_COMMAND]);
+    controller.abort();
+
+    await expect(observed).rejects.toThrow(
+      /requester is no longer current|cancelled|aborted|closed/i,
+    );
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("refuses mint when requester is invalidated during delayed attachment", async () => {
+    const fixture = createFixture("attachment");
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const client = { invalidated: false };
+    const requester = {
+      signal: new AbortController().signal,
+      isCurrent: () => !client.invalidated,
+    };
+    const observed = fixture.service.observe({
+      nodeId: "node",
+      control: false,
+      credentials: { password: "synthetic-password" },
+      requester,
+    });
+    await fixture.reached;
+    client.invalidated = true;
+    const stream = new PassThrough();
+    fixture.attached.resolve({ stream, auth: "vnc-password" });
+
+    await expect(observed).rejects.toThrow(/requester is no longer current|superseded/i);
+    expect(mint).not.toHaveBeenCalled();
+    expect(stream.destroyed).toBe(true);
+  });
 });
