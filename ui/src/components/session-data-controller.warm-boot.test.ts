@@ -80,7 +80,18 @@ describe("sidebar warm roster publication", () => {
       const sessions = createSessionCapability(
         gateway.gateway,
         { state: { selectedId: "main" }, subscribe: () => () => undefined },
-        { rosterCache: { read: () => cachedRoster.promise, write: () => undefined } },
+        {
+          bootRecord: {
+            version: 1,
+            scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
+            savedAt: Date.now(),
+            profileId: null,
+            agents: TWO_AGENTS,
+            groups: [],
+            sectionOrder: [],
+          },
+          rosterCache: { read: () => cachedRoster.promise, write: () => undefined },
+        },
       );
       const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
       let statusFilter: "active" | "archived" = "active";

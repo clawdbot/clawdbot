@@ -37,8 +37,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
     store = createStore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.gateway.stop();
+    await vi.dynamicImportSettled();
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
