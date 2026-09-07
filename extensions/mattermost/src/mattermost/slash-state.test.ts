@@ -1,5 +1,7 @@
 // Mattermost tests cover slash state plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -82,15 +84,25 @@ function createRequest(body: string): IncomingMessage {
   return req;
 }
 
+function createStalledRequest(remoteAddress: string): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = "POST";
+  req.headers = { "content-type": "application/x-www-form-urlencoded" };
+  Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
+  return req;
+}
+
 function createResponse(): { res: ServerResponse; getBody: () => string } {
   let body = "";
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
     setHeader() {},
-    end(chunk?: string | Buffer) {
+    removeHeader() {},
+    end(chunk?: string | Buffer, callback?: () => void) {
       body = chunk ? String(chunk) : "";
+      callback?.();
     },
-  } as unknown as ServerResponse;
+  }) as unknown as ServerResponse;
   return { res, getBody: () => body };
 }
 
@@ -213,6 +225,40 @@ describe("slash-state request routing", () => {
         });
       },
     );
+  });
+
+  it("bounds concurrent pre-authentication body reads across the slash route", async () => {
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["token-1"],
+      registeredCommands: [createRegisteredCommand()],
+      api: slashApi,
+    });
+    const route = createSlashRoute();
+    const requests = Array.from({ length: 12 }, (_, index) =>
+      createStalledRequest(`203.0.113.${index + 1}`),
+    );
+    const responses = requests.map(() => createResponse());
+    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
+
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(responses.filter(({ res }) => res.statusCode === 200)).toHaveLength(8);
+      expect(responses.filter(({ res }) => res.statusCode === 429)).toHaveLength(4);
+    } finally {
+      for (const req of requests) {
+        req.complete = true;
+        req.push(null);
+      }
+      await Promise.all(runs);
+    }
+
+    const followUp = createResponse();
+    await route.handler(createRequest(""), followUp.res);
+    expect(followUp.res.statusCode).toBe(400);
   });
 
   it("routes a token owned by one account", async () => {

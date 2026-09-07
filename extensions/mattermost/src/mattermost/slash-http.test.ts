@@ -197,6 +197,7 @@ async function validateMattermostSlashCommandToken(params: {
   registeredCommand: MattermostRegisteredCommand;
   payload: MattermostSlashCommandPayload;
   log?: (message: string) => void;
+  onRequestAuthenticated?: () => void;
 }): Promise<boolean> {
   clientMocks.createMattermostClient.mockReturnValue(params.client);
   const handler = createSlashCommandHttpHandler({
@@ -213,7 +214,7 @@ async function validateMattermostSlashCommandToken(params: {
   });
   const response = createResponse();
   try {
-    await handler(req, response.res);
+    await handler(req, response.res, undefined, params.onRequestAuthenticated);
   } catch (error) {
     if (error instanceof Error && error.message === "Mattermost runtime not initialized") {
       return true;
@@ -230,6 +231,7 @@ async function expectTokenValidation(params: {
   accountId?: string;
   payload?: MattermostSlashCommandPayload;
   log?: (message: string) => void;
+  onRequestAuthenticated?: () => void;
 }): Promise<void> {
   await expect(
     validateMattermostSlashCommandToken({
@@ -238,6 +240,7 @@ async function expectTokenValidation(params: {
       registeredCommand: params.registeredCommand,
       payload: params.payload ?? createSlashPayload({ token: params.registeredCommand.token }),
       log: params.log,
+      onRequestAuthenticated: params.onRequestAuthenticated,
     }),
   ).resolves.toBe(params.expected);
 }
@@ -397,10 +400,17 @@ describe("slash-http", () => {
     const client = createCommandLookupClient({
       command: createCurrentCommand({ token: "new-token" }),
     });
+    const onRequestAuthenticated = vi.fn();
 
-    await expectTokenValidation({ client, registeredCommand, expected: false });
+    await expectTokenValidation({
+      client,
+      registeredCommand,
+      expected: false,
+      onRequestAuthenticated,
+    });
 
     expect(registeredCommand.token).toBe("old-token");
+    expect(onRequestAuthenticated).not.toHaveBeenCalled();
   });
 
   it("accepts the startup token while the current Mattermost command still matches", async () => {
@@ -408,8 +418,15 @@ describe("slash-http", () => {
     const client = createCommandLookupClient({
       command: createCurrentCommand(),
     });
+    const onRequestAuthenticated = vi.fn();
 
-    await expectTokenValidation({ client, registeredCommand, expected: true });
+    await expectTokenValidation({
+      client,
+      registeredCommand,
+      expected: true,
+      onRequestAuthenticated,
+    });
+    expect(onRequestAuthenticated).toHaveBeenCalledOnce();
   });
 
   it("rate-limits sequential current-command lookups without caching successes", async () => {

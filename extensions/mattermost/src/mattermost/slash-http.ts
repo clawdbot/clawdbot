@@ -583,6 +583,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     req: IncomingMessage,
     res: ServerResponse,
     bufferedBody?: string,
+    onRequestAuthenticated?: () => void,
   ): Promise<void> => {
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -655,6 +656,10 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       });
       return;
     }
+
+    // The route-level pre-authentication slot only protects body parsing and
+    // token validation; release it before user authorization or command work.
+    onRequestAuthenticated?.();
 
     // Extract command info
     const trigger = normalizeSlashCommandTrigger(payload.command);
