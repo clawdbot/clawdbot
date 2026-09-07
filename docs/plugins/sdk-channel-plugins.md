@@ -636,6 +636,38 @@ do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 
+- Use `settleApprovalReaction` from
+  `openclaw/plugin-sdk/approval-reaction-runtime` for explicitly authorized
+  reaction decisions. It checks the supplied approvers and actor authorization,
+  loads the Gateway resolver lazily, and calls `clearTarget` for every terminal
+  result (including a losing click) or approval-not-found error. Keep transport
+  identity, route checks, cleanup, and result logging in the plugin. Other errors
+  propagate with the binding intact; the channel must hand them to its durable
+  ingress or poller for replay. `readApprovalReactionTargetRecord` validates the
+  shared persisted fields; transport-specific route and author fields still need
+  their own validation.
+- Use `formatChannelApprovalResolvedLabel` and
+  `buildSystemAgentApprovalResolvedText` from
+  `openclaw/plugin-sdk/approval-runtime` for terminal presentation.
+  Rich labels preserve application-status precedence; prose preserves denial
+  precedence, because a denied system change can also report `not-applied`.
+  Both prioritize cancellation. Pass a decision formatter for transport-specific
+  label spelling, and prepare any bounded operation summary before building prose.
+  Use `formatApprovalDecisionLabel` for a recorded decision without implying
+  application completion.
+- Approval account lookup helpers `resolveApprovalRequestAccountId` and
+  `resolveApprovalRequestChannelAccountId` use `approval-native-runtime`. Their
+  duplicate `approval-runtime` exports and its unused
+  `matchesApprovalRequestSessionFilter` export have been retired. The core
+  implementations are unchanged.
+- Use `createNativeApprovalControlRegistry` from
+  `openclaw/plugin-sdk/approval-runtime` for process-local native card
+  tokens. Each instance owns a 1,024-binding FIFO registry and holds its claim
+  through Gateway resolution and the terminal card update. Missing approvals
+  retire their tokens; other failures release the claim for retry. Plugins
+  validate native event scope and authorize the actor before calling `settle`,
+  retain their lookup-expiry policy through `releaseClaimOnLookupExpiry`, and
+  use `onComplete` for transport-owned cleanup such as manual-prompt suppression.
 - Use `createNativeApprovalChannelRouteGates` from
   `openclaw/plugin-sdk/approval-native-runtime` when a channel supports both
   session-origin native delivery and explicit approval forwarding targets. The
@@ -645,6 +677,8 @@ Other approval helpers:
   lookup, transport-enabled check, target normalization, and turn-source
   target resolution. Do not use it to create core-owned channel policy
   defaults; pass the channel's documented default mode explicitly.
+  The unused `createChannelApprovalForwardingEvaluator` export has been retired;
+  this route-gate helper remains the supported routing path.
 - `createNativeApprovalMessagingTargetResolvers` centralizes channel matching
   and `{ to, accountId, threadId }` normalization for messaging transports
   whose native approval target is a channel-owned normalized destination.

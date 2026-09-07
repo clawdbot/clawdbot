@@ -257,7 +257,8 @@ describe("scripts/pr wrappers", () => {
     expect(common).toContain('gh pr view "$pr" --json "$fields"');
     expect(worktree).toContain('metadata=$(read_pr_view_json "$pr"');
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
-    expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
+    expect(push).toContain('gh_plain api graphql --input "$payload_file"');
+    expect(push).not.toContain("gh_plain api graphql --input -");
     expect(merge).toContain('gh_plain pr merge "$pr"');
     expect(merge).toContain('"repos/$repo_nwo/issues/$pr/comments"');
     expect(merge).toContain("--jq '.html_url // empty'");
