@@ -2,6 +2,7 @@
   "core",
   "provider-setup",
   "sandbox",
+  "sandbox-bind-spec",
   "routing",
   "runtime",
   "health",

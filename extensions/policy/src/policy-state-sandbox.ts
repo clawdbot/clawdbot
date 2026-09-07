@@ -1,4 +1,5 @@
 // Policy plugin sandbox posture evidence.
+import { splitSandboxBindSpec } from "openclaw/plugin-sdk/sandbox-bind-spec";
 import {
   asNonArrayRecord,
   isRecord,
@@ -136,7 +137,12 @@ function pushSandboxBindPosture(
   const { inheritedBinds, localBinds } = bindParams;
   for (const [index, bind] of [...inheritedBinds, ...localBinds].entries()) {
     const inherited = index < inheritedBinds.length;
-    const parsed = splitPolicyBindSpec(bind);
+    const parsed = splitSandboxBindSpec(bind, { allowWindowsContainerPath: true });
+    const bindMode = parsed?.options
+      .split(",")
+      .some((option) => option.trim().toLowerCase() === "ro")
+      ? "ro"
+      : "rw";
     entries.push({
       id: `${params.id}-${bindParams.surface}-bind-${index}`,
       kind: "containerMount",
@@ -147,7 +153,7 @@ function pushSandboxBindPosture(
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       bind,
       bindHost: parsed?.host,
-      bindMode: parsed?.mode ?? "rw",
+      bindMode,
       bindSurface: bindParams.surface,
       explicit: true,
     });
@@ -290,44 +296,4 @@ function pushSandboxPostureValue(
     ...(entry.networkSurface === undefined ? {} : { networkSurface: entry.networkSurface }),
     explicit: entry.explicit,
   });
-}
-
-function splitPolicyBindSpec(
-  value: string,
-): { readonly host: string; readonly mode: string } | undefined {
-  const separator = policyBindSeparatorIndex(value);
-  if (separator < 0) {
-    return undefined;
-  }
-  const host = value.slice(0, separator);
-  const rest = value.slice(separator + 1);
-  const optionsStart = policyBindOptionsSeparatorIndex(rest);
-  const options = optionsStart < 0 ? "" : rest.slice(optionsStart + 1);
-  const mode = options
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .includes("ro")
-    ? "ro"
-    : "rw";
-  return { host, mode };
-}
-
-function policyBindSeparatorIndex(value: string): number {
-  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
-  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
-    if (value[index] === ":") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function policyBindOptionsSeparatorIndex(value: string): number {
-  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
-  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
-    if (value[index] === ":") {
-      return index;
-    }
-  }
-  return -1;
 }
