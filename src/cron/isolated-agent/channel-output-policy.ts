@@ -36,7 +36,9 @@ export async function resolveCurrentChannelTarget(params: {
     return undefined;
   }
   const channelId = normalizeOptionalLowercaseString(params.channel);
-  if (!channelId) {
+  // Only a thread needs channel-specific conversion; an unthreaded route is
+  // already its target, so no channel plugin is loaded for it.
+  if (!channelId || params.threadId == null) {
     return params.to;
   }
   const { getChannelPlugin } = await channelPluginRuntimeLoader.load();
