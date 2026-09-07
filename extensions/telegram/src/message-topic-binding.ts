@@ -89,13 +89,15 @@ export function resolveTelegramConversationReadChatId(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   context?: TelegramMessageMutationContext;
+  actionLabel?: string;
 }): string {
+  const actionLabel = params.actionLabel ?? "emoji-list";
   const currentTarget =
     params.context?.toolContext?.currentChannelId ??
     params.context?.toolContext?.currentMessagingTarget;
   const requestedTarget = params.chatId ?? currentTarget;
   if (requestedTarget == null || !String(requestedTarget).trim()) {
-    throw new Error("Telegram emoji-list requires a chatId or current Telegram conversation.");
+    throw new Error(`Telegram ${actionLabel} requires a chatId or current Telegram conversation.`);
   }
   const target = parseTelegramTarget(String(requestedTarget));
   if (params.context?.conversationReadOrigin === "direct-operator") {
