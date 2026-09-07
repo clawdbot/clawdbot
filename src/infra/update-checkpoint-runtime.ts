@@ -14,7 +14,7 @@ import type { UpdateCheckpointBinding } from "./update-checkpoint.js";
 type PreviousRuntime = UpdateCheckpointBinding["fromRuntime"];
 
 /**
- * Execute the retained release's actual shared-state reader, not this process's
+ * Execute the retained release's actual state/agent reader, not this process's
  * schema comparator. This is an AFTER-COMMIT, BEFORE-PUBLICATION operation.
  * An idle caller-owned handle proves we are not approving a stale on-disk image
  * while that handle has uncommitted carry-forward writes. It is never reopened
@@ -23,11 +23,13 @@ type PreviousRuntime = UpdateCheckpointBinding["fromRuntime"];
  *
  * The runtime/package owner must keep the retained install and Node immutable
  * under assertCurrent; entry/package checks do not replace package custody.
- * There is no equivalent explicit agent-path command in older releases. Do not
- * use this shared-state verdict as an agent database or serving-health verdict.
+ * Older releases without the requested explicit reader are unavailable. A
+ * database compatibility verdict is not a serving-health verdict.
  */
 export async function validateUpdateCheckpointPreviousRuntimeDatabase(params: {
   database: DatabaseSync;
+  /** Exact owner from the immutable checkpoint, not a replacement-file lookup. */
+  agentId?: string;
   runtime: PreviousRuntime;
   assertCurrent: () => undefined;
   timeoutMs?: number;
@@ -90,6 +92,7 @@ export async function validateUpdateCheckpointPreviousRuntimeDatabase(params: {
     ) {
       throw new Error("Previous runtime metadata mismatch");
     }
+    const schemaVersion = params.agentId === undefined ? schemas.state : schemas.agent;
     const files = [databasePath, packagePath, entry, nodePath];
     assertSqliteFamilyClosed(databasePath);
     const before = await Promise.all(files.map(inspectCheckpointFile));
@@ -106,7 +109,15 @@ export async function validateUpdateCheckpointPreviousRuntimeDatabase(params: {
     // No inherited NODE_OPTIONS, credentials, profile, config or live state.
     // Run the retained dist entry directly, avoiding package lifecycle repair.
     const result = await runUtf8CommandWithTimeout(
-      [nodePath, entry, "database", "preflight", databasePath, "--json"],
+      [
+        nodePath,
+        entry,
+        "database",
+        params.agentId === undefined ? "preflight" : "preflight-agent",
+        databasePath,
+        ...(params.agentId === undefined ? [] : ["--agent-id", params.agentId]),
+        "--json",
+      ],
       {
         cwd: privateRoot,
         baseEnv: {},
@@ -143,7 +154,12 @@ export async function validateUpdateCheckpointPreviousRuntimeDatabase(params: {
       typeof verdict !== "object" ||
       verdict === null ||
       !("schema" in verdict) ||
-      verdict.schema !== "openclaw.state-schema-preflight.v1" ||
+      verdict.schema !==
+        (params.agentId === undefined
+          ? "openclaw.state-schema-preflight.v1"
+          : "openclaw.agent-schema-preflight.v1") ||
+      (params.agentId !== undefined &&
+        (!("agentId" in verdict) || verdict.agentId !== params.agentId)) ||
       !("databasePath" in verdict) ||
       verdict.databasePath !== databasePath ||
       !("status" in verdict) ||
@@ -151,9 +167,9 @@ export async function validateUpdateCheckpointPreviousRuntimeDatabase(params: {
       !("requiresWrite" in verdict) ||
       verdict.requiresWrite !== false ||
       !("foundVersion" in verdict) ||
-      verdict.foundVersion !== schemas.state ||
+      verdict.foundVersion !== schemaVersion ||
       !("targetVersion" in verdict) ||
-      verdict.targetVersion !== schemas.state ||
+      verdict.targetVersion !== schemaVersion ||
       !("issues" in verdict) ||
       !Array.isArray(verdict.issues) ||
       verdict.issues.length !== 0

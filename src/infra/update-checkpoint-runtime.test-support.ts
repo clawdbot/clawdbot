@@ -2,6 +2,8 @@ import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 
@@ -14,6 +16,7 @@ export async function buildCheckpointReaderRuntime(
   root: string,
   newer = false,
   pauseReader = false,
+  options: { agentReader?: boolean } = {},
 ) {
   const version = newer ? "2.0.0" : "1.0.0";
   const schemaVersion = OPENCLAW_STATE_SCHEMA_VERSION + (newer ? 1 : 0);
@@ -23,6 +26,13 @@ export async function buildCheckpointReaderRuntime(
         "value_json TEXT NOT NULL,\n  next_runtime_only TEXT,",
       )
     : OPENCLAW_STATE_SCHEMA_SQL;
+  const agentSchemaVersion = OPENCLAW_AGENT_SCHEMA_VERSION + (newer ? 1 : 0);
+  const agentSchema = newer
+    ? OPENCLAW_AGENT_SCHEMA_SQL.replace(
+        "description TEXT NOT NULL,",
+        "description TEXT NOT NULL, next_runtime_only TEXT,",
+      )
+    : OPENCLAW_AGENT_SCHEMA_SQL;
   const sourceRoot = process.cwd();
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.symlink(
@@ -36,12 +46,20 @@ export async function buildCheckpointReaderRuntime(
       name: "openclaw",
       type: "module",
       version,
-      openclaw: { schemaVersions: { state: schemaVersion, agent: 19 } },
+      openclaw: { schemaVersions: { state: schemaVersion, agent: agentSchemaVersion } },
     }),
   );
   await build({
     stdin: {
-      contents: `
+      contents: options.agentReader
+        ? `
+        import { Command } from "commander";
+        import { registerDatabaseCommand } from "./src/cli/program/register.database.ts";
+        const program = new Command();
+        registerDatabaseCommand(program);
+        await program.parseAsync(process.argv);
+      `
+        : `
         import { preflightOpenClawStateDatabasePath } from "./src/state/openclaw-database-preflight.ts";
         const [command, operation, file, json] = process.argv.slice(2);
         if (command !== "database" || operation !== "preflight" || json !== "--json") process.exit(2);
@@ -90,10 +108,21 @@ export async function buildCheckpointReaderRuntime(
             contents: `export const OPENCLAW_${args.path.includes("state-schema") ? "STATE" : "AGENT"}_SCHEMA_SQL = ${JSON.stringify(
               args.path.includes("state-schema")
                 ? schema
-                : await fs.readFile(args.path.replace(/\.ts$/, ".sql"), "utf8"),
+                : options.agentReader
+                  ? agentSchema
+                  : await fs.readFile(args.path.replace(/\.ts$/, ".sql"), "utf8"),
             )};`,
             loader: "ts",
           }));
+          if (newer && options.agentReader) {
+            bundler.onLoad({ filter: /openclaw-agent-db-contract\.ts$/ }, async (args) => ({
+              contents: (await fs.readFile(args.path, "utf8")).replace(
+                `OPENCLAW_AGENT_SCHEMA_VERSION = ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
+                `OPENCLAW_AGENT_SCHEMA_VERSION = ${agentSchemaVersion}`,
+              ),
+              loader: "ts",
+            }));
+          }
           if (newer) {
             bundler.onLoad({ filter: /openclaw-state-db-contract\.ts$/ }, async (args) => ({
               contents: (await fs.readFile(args.path, "utf8")).replace(
@@ -107,7 +136,13 @@ export async function buildCheckpointReaderRuntime(
       },
     ],
   });
-  return { runtime: { root, nodePath: process.execPath, version }, schema, schemaVersion };
+  return {
+    runtime: { root, nodePath: process.execPath, version },
+    schema,
+    schemaVersion,
+    agentSchema,
+    agentSchemaVersion,
+  };
 }
 
 /** A child-side barrier after the real reader; no production injection point. */

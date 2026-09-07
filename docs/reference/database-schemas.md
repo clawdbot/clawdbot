@@ -466,6 +466,28 @@ JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
 
 Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
 
+### Preflight an explicit agent copy
+
+Runtimes that provide the agent reader also support:
+
+```bash
+openclaw database preflight-agent <copied-agent.sqlite> --agent-id main --json
+```
+
+Use the exact canonical agent ID and a canonical regular-file path. This command
+validates integrity, both schema version markers, schema shape, and agent ownership
+through that release's maintenance reader, without creating, registering, migrating,
+or repairing any store. The supplied file must be consolidated with no WAL, SHM,
+or journal siblings. JSON uses `openclaw.agent-schema-preflight.v1`; only `exact`
+is compatibility proof. Other outcomes exit nonzero and require no writes.
+
+Shared-state preflight cannot validate agent databases. Older retained payloads
+without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
+does not make those payloads compatible. Checkpoint publication invokes the actual
+retained reader after staging commits and before replacement, with current exclusion
+and file identities revalidated after the child exits. Runtime/package identity and
+serving health are separate checks from database compatibility.
+
 ## Agent schema history
 
 | Version | Change                                                                                                                                                                                                                                                 | First release                                   |

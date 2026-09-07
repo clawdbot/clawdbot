@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { z } from "zod";
+import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import {
@@ -24,6 +25,7 @@ import {
   reopenUpdateCheckpoint,
   type UpdateCheckpointAccess,
   type UpdateCheckpointReadAccess,
+  type UpdateCheckpointRef,
 } from "./update-checkpoint.js";
 import {
   validateUpdateRecoveryPublicationDatabaseAtPath,
@@ -219,7 +221,7 @@ async function inspectResource(params: ResourceReadParams) {
     userVersion: resource.userVersion,
     observed: state.observed,
   };
-  return { resource, observation, ...state };
+  return { resource, observation, checkpointRef: reopened.plan.checkpointRef, ...state };
 }
 
 /** No claim acquisition, migration, SQLite runtime open, or history write. */
@@ -229,13 +231,45 @@ export async function inspectUpdateCheckpointRestoreResource(
   return (await inspectResource(params)).observation;
 }
 
+/** Ownership comes from the hash-bound original, never from the derived file being checked. */
+async function checkpointDatabaseReader(
+  checkpointRef: UpdateCheckpointRef,
+  sourcePath: string,
+  access: UpdateCheckpointReadAccess,
+): Promise<{ agentId?: string } | null> {
+  const checkpoint = await reopenUpdateCheckpoint(checkpointRef, access);
+  const captured = checkpoint.manifest.resources.find((entry) => entry.sourcePath === sourcePath);
+  if (!captured?.artifact) {
+    return null;
+  }
+  const database = openNodeSqliteDatabase(
+    resolveImmutableSqliteFileUri(
+      path.join(path.dirname(checkpointRef.manifestPath), captured.artifact),
+    ),
+    { readOnly: true },
+  );
+  try {
+    const owner = readExistingAgentSchemaMeta(database);
+    if (owner?.role === "agent" && owner.agentId) {
+      return { agentId: owner.agentId };
+    }
+    return owner?.role === "global" && owner.agentId === null ? {} : null;
+  } catch {
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
 /** Reconcile one exact resource. Recovery owns intent/CAS and its durable cursor. */
 export async function restoreUpdateCheckpointResource(
   params: ResourceReadParams & Pick<UpdateCheckpointAccess, "assertQuiescent">,
 ): Promise<UpdateCheckpointRestoreResult> {
   // Reconciliation is read-only and does not require mutation authority. Keep
   // its evidence separate from the executor's current exclusion check below.
-  let { resource, observation, current, staged, displaced } = await inspectResource(params);
+  const initial = await inspectResource(params);
+  const { checkpointRef } = initial;
+  let { resource, observation, current, staged, displaced } = initial;
   if (observation.observed === "conflict") {
     return { ...observation, status: "conflict" };
   }
@@ -268,7 +302,11 @@ export async function restoreUpdateCheckpointResource(
     }
   }
   const replacement = path.join(resource.stageDirectory, "replacement");
-  if (resource.recovery) {
+  if (resource.sqlite && resource.after) {
+    const reader = await checkpointDatabaseReader(checkpointRef, resource.sourcePath, params);
+    if (!reader) {
+      return { ...observation, status: "unavailable", reason: "previous-runtime-unavailable" };
+    }
     // A previous process may have committed intent and then failed runtime
     // validation. Never treat that durable intent alone as publication proof.
     const file = observation.observed === "after" ? resource.sourcePath : replacement;
@@ -279,6 +317,7 @@ export async function restoreUpdateCheckpointResource(
     try {
       validation = await validateUpdateCheckpointPreviousRuntimeDatabase({
         database,
+        ...reader,
         runtime: params.binding.fromRuntime,
         assertCurrent,
       });

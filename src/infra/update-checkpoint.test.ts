@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
@@ -14,6 +15,7 @@ import {
   restoreUpdateCheckpointResource,
   verifyUpdateCheckpointRestore,
 } from "./update-checkpoint-restore.js";
+import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import {
   captureUpdateCheckpoint,
   reopenUpdateCheckpoint,
@@ -541,70 +543,93 @@ describe("update checkpoint artifacts and publication", () => {
     }
   });
 
-  it("publishes a canonical agent database retaining online transcript and external-content FTS identities", async () => {
-    const f = await fixture(),
-      file = path.join(f.stateDir, "state", "agent.sqlite");
-    const mutate = (sql: string) => {
-      const db = new DatabaseSync(file);
+  it.each([true, false])(
+    "validates canonical agent publication with a supported retained reader (%s), preserving online FTS",
+    async (supported) => {
+      const f = await fixture(),
+        file = path.join(f.stateDir, "state", "agent.sqlite");
+      const mutate = (sql: string) => {
+        const db = new DatabaseSync(file);
+        try {
+          db.exec(sql);
+        } finally {
+          db.close();
+        }
+      };
+      const reader = await buildCheckpointReaderRuntime(
+        f.access.binding.fromRuntime.root,
+        false,
+        false,
+        { agentReader: supported },
+      );
+      f.access.binding.fromRuntime = reader.runtime;
+      mutate(
+        OPENCLAW_AGENT_SCHEMA_SQL +
+          `PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}; INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES('primary','agent',${OPENCLAW_AGENT_SCHEMA_VERSION},'main',1,1);`,
+      );
+      f.resources.push({ sourcePath: file, kind: "sqlite", restore: "replace" });
+      const checkpointRef = await f.capture();
+      mutate(
+        `PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
+      );
+      const afterUpdateRef = await f.capture();
+      mutate(
+        "INSERT INTO session_transcript_fts(rowid, text, session_id, message_id, role, timestamp) VALUES(42, 'verification zebra', 'session', 'turn', 'assistant', 1); INSERT INTO standing_intents(intent_key, id, description, trigger_keywords, status, expires_at, max_fires, created_at) VALUES(99, 'online', 'new work', 'zebra', 'armed', 100, 1, 1)",
+      );
+      const prepared = await prepareUpdateCheckpointRestore({
+        ...f.access,
+        checkpointRef,
+        afterUpdateRef,
+        prepareSharedDatabase() {
+          throw new Error("not shared");
+        },
+      });
+      expect(prepared.status).toBe("ready");
+      if (prepared.status !== "ready") {
+        return;
+      }
+      const original = await inspectCheckpointFile(file);
+      const result = await restoreUpdateCheckpointResource({
+        ...f.access,
+        planRef: prepared.planRef,
+        resourceCursor: 1,
+      });
+      if (!supported) {
+        expect(result).toMatchObject({
+          status: "unavailable",
+          reason: "previous-runtime-unavailable",
+        });
+        expect(await inspectCheckpointFile(file)).toEqual(original);
+        return;
+      }
+      expect(result.status).toBe("applied");
+      const db = new DatabaseSync(file, { readOnly: true });
       try {
-        db.exec(sql);
+        expect(db.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+        expect(
+          db
+            .prepare(
+              "SELECT rowid, message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'zebra'",
+            )
+            .all(),
+        ).toEqual([{ rowid: 42, message_id: "turn" }]);
+        expect(
+          db
+            .prepare(
+              "SELECT rowid FROM standing_intents_fts WHERE standing_intents_fts MATCH 'zebra'",
+            )
+            .all(),
+        ).toEqual([{ rowid: 99 }]);
+        expect(db.prepare("SELECT id FROM standing_intents WHERE intent_key=99").get()).toEqual({
+          id: "online",
+        });
       } finally {
         db.close();
       }
-    };
-    mutate(OPENCLAW_AGENT_SCHEMA_SQL + "PRAGMA user_version=1;");
-    f.resources.push({ sourcePath: file, kind: "sqlite", restore: "replace" });
-    const checkpointRef = await f.capture();
-    mutate("PRAGMA user_version=2");
-    const afterUpdateRef = await f.capture();
-    mutate(
-      "INSERT INTO session_transcript_fts(rowid, text, session_id, message_id, role, timestamp) VALUES(42, 'verification zebra', 'session', 'turn', 'assistant', 1); INSERT INTO standing_intents(intent_key, id, description, trigger_keywords, status, expires_at, max_fires, created_at) VALUES(99, 'online', 'new work', 'zebra', 'armed', 100, 1, 1)",
-    );
-    const prepared = await prepareUpdateCheckpointRestore({
-      ...f.access,
-      checkpointRef,
-      afterUpdateRef,
-      prepareSharedDatabase() {
-        throw new Error("not shared");
-      },
-    });
-    expect(prepared.status).toBe("ready");
-    if (prepared.status !== "ready") {
-      return;
-    }
-    expect(
-      (
-        await restoreUpdateCheckpointResource({
-          ...f.access,
-          planRef: prepared.planRef,
-          resourceCursor: 1,
-        })
-      ).status,
-    ).toBe("applied");
-    const db = new DatabaseSync(file, { readOnly: true });
-    try {
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(
-        db
-          .prepare(
-            "SELECT rowid, message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'zebra'",
-          )
-          .all(),
-      ).toEqual([{ rowid: 42, message_id: "turn" }]);
-      expect(
-        db
-          .prepare(
-            "SELECT rowid FROM standing_intents_fts WHERE standing_intents_fts MATCH 'zebra'",
-          )
-          .all(),
-      ).toEqual([{ rowid: 99 }]);
-      expect(db.prepare("SELECT id FROM standing_intents WHERE intent_key=99").get()).toEqual({
-        id: "online",
-      });
-    } finally {
-      db.close();
-    }
-  });
+    },
+  );
 
   it.each(["PRAGMA user_version=999", "CREATE TABLE unapproved_schema(id INTEGER)"])(
     "rejects a recovery callback changing the prior schema: %s",
@@ -807,13 +832,20 @@ describe("update checkpoint artifacts and publication", () => {
       if (prepared.status !== "ready") {
         return;
       }
-      // Simulate a fresh recovery invocation using only the immutable plan ref.
-      await restoreUpdateCheckpointResource({
-        ...f.access,
-        planRef: structuredClone(prepared.planRef),
-        resourceCursor: 0,
-      });
-      const db = new DatabaseSync(file, { readOnly: true });
+      // This deliberately generic fixture proves carry-forward, not runtime
+      // compatibility. Unknown SQLite ownership must not reach publication.
+      const original = await inspectCheckpointFile(file);
+      expect(
+        await restoreUpdateCheckpointResource({
+          ...f.access,
+          planRef: structuredClone(prepared.planRef),
+          resourceCursor: 0,
+        }),
+      ).toMatchObject({ status: "unavailable", reason: "previous-runtime-unavailable" });
+      expect(await inspectCheckpointFile(file)).toEqual(original);
+      const plan = await reopenUpdateCheckpointRestorePlan(prepared.planRef, f.access);
+      const staged = path.join(plan.plan.resources[0]!.stageDirectory, "replacement");
+      const db = new DatabaseSync(staged, { readOnly: true });
       try {
         expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
         expect(
