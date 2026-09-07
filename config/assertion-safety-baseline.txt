@@ -2801,7 +2801,7 @@ src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-history-budget.ts	6
 src/gateway/server-methods/chat-history-handler.ts	2
-src/gateway/server-methods/chat-message-get-handler.ts	3
+src/gateway/server-methods/chat-message-get-handler.ts	2
 src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
@@ -2809,7 +2809,7 @@ src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
-src/gateway/server-methods/chat.ts	2
+src/gateway/server-methods/chat.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/cron.ts	17
