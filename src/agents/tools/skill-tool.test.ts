@@ -158,6 +158,7 @@ describe("skill_save", () => {
     expect(createSkill).toHaveBeenCalledWith(
       {
         name: "my-flow",
+        slug: "my-flow",
         description: "summarize the daily report",
         content: "# do the thing",
         source: "workspace",
@@ -183,7 +184,7 @@ describe("skill_save", () => {
     expect(updateSkill).toHaveBeenCalledWith(
       7,
       expect.objectContaining({
-        name: "flow",
+        slug: "flow",
         description: "new desc",
         is_enable: 1,
         source: "workspace",
@@ -201,7 +202,8 @@ describe("skill_save", () => {
     await saveTool().execute?.("id", { name: "flow", description: "new desc" });
 
     const [, patch] = updateSkill.mock.calls[0] ?? [];
-    expect(patch).toMatchObject({ name: "flow", description: "new desc", is_enable: 1 });
+    expect(patch).toMatchObject({ slug: "flow", description: "new desc", is_enable: 1 });
+    expect(patch).not.toHaveProperty("name");
     expect(patch).not.toHaveProperty("content");
     expect(patch).not.toHaveProperty("category");
   });
@@ -237,7 +239,13 @@ describe("skill_save", () => {
 describe("skill_get", () => {
   it("returns the stored body so an edit round-trips through the catalog", async () => {
     getSkillByName.mockResolvedValue(
-      row({ id: 9, name: "flow", description: "d", content: "# stored body" }),
+      row({
+        id: 9,
+        slug: "flow",
+        name: "中文显示名称",
+        description: "d",
+        content: "# stored body",
+      }),
     );
     const result = await createSkillGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", {
       name: "flow",
@@ -247,6 +255,7 @@ describe("skill_get", () => {
       found: true,
       id: 9,
       name: "flow",
+      title: "中文显示名称",
       content: "# stored body",
     });
     expect(getSkillByName).toHaveBeenCalledWith("flow", 1749);

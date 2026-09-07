@@ -46,7 +46,7 @@ describe("SkillLookup", () => {
     mockExecute.mockResolvedValueOnce([[{ id: 99 }], undefined]);
     await expect(lookup.isPublishedPublicSkill("new-skill")).resolves.toBe(true);
     expect(mockExecute).toHaveBeenCalledWith(
-      "SELECT id FROM skills WHERE user_id = ? AND name = ? AND category = 'builtin' AND is_enable = 1 LIMIT 1",
+      "SELECT id FROM skills WHERE user_id = ? AND COALESCE(slug, name) = ? AND category = 'builtin' AND is_enable = 1 LIMIT 1",
       [126, "new-skill"],
     );
     mockExecute.mockResolvedValueOnce([[], undefined]);

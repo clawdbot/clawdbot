@@ -12,6 +12,7 @@ import {
   updateSkill,
 } from "../../infra/skills-mysql.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import { bumpSkillsSnapshotVersion } from "../skills/refresh-state.js";
 import {
   type AnyAgentTool,
@@ -171,7 +172,7 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
           await updateSkill(
             existing.id,
             {
-              name,
+              slug: name,
               // Omitted fields keep their stored value: only pass through what
               // the caller actually supplied.
               ...(description ? { description } : {}),
@@ -186,7 +187,14 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
           id = existing.id;
         } else {
           const created = await createSkill(
-            { name, description, content, source: SKILL_SOURCE, category },
+            {
+              name: parseFrontmatterBlock(content ?? "").title ?? name,
+              slug: name,
+              description,
+              content,
+              source: SKILL_SOURCE,
+              category,
+            },
             userId,
           );
           action = "created";
@@ -258,7 +266,8 @@ export function createSkillGetTool(opts?: SkillToolOptions): AnyAgentTool {
         ok: true,
         found: true,
         id: row.id,
-        name: row.name,
+        name: row.slug ?? row.name,
+        title: row.name,
         description: row.description ?? "",
         category: row.category ?? undefined,
         enabled: row.is_enable === 1,
@@ -298,7 +307,8 @@ export function createSkillListTool(opts?: SkillToolOptions): AnyAgentTool {
         total,
         skills: skills.map((row) => ({
           id: row.id,
-          name: row.name,
+          name: row.slug ?? row.name,
+          title: row.name,
           description: row.description ?? "",
           enabled: row.is_enable === 1,
           source: row.source,

@@ -127,6 +127,8 @@ describe("mergeVisibleSkillRows", () => {
   it("isolates public files from a user's same-named workspace directory", async () => {
     const source = await fs.readFile(new URL("./skills-mysql.ts", import.meta.url), "utf8");
     expect(source).toMatch(/path\.join\(workspaceDir, "\.openclaw-public-skills"\)/u);
-    expect(source).toMatch(/await fs\.cp\(path\.join\(bundledSkillsDir, row\.name\), baseDir/u);
+    expect(source).toMatch(
+      /await fs\.cp\(path\.join\(bundledSkillsDir, rowSlug\(row\)\), baseDir/u,
+    );
   });
 });

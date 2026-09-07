@@ -13,12 +13,16 @@ import type {
   SkillExposure,
 } from "../agents/skills/types.js";
 import { loadConfig } from "../config/config.js";
+import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { resolveStorageSkillSlug, withStorageSkillIdentity } from "./skill-storage-identity.js";
 import { getSkillsDbCachedUserId, setSkillsDbCache } from "./skills-db-cache.js";
 
 export interface SkillRow {
   id: number;
   user_id: number | null;
   name: string;
+  /** Absent only in legacy in-memory adapters; database reads always project slug. */
+  slug?: string;
   description: string | null;
   content: string | null;
   source: string;
@@ -39,12 +43,13 @@ export const PUBLIC_SKILL_NAMES = [
   "infringement-judgment",
 ] as const;
 
+const rowSlug = (row: SkillRow): string => row.slug ?? row.name;
 const publicSkillNames = new Set<string>(PUBLIC_SKILL_NAMES);
 const isPublicSkillRow = (row: SkillRow): boolean =>
   row.user_id === PUBLIC_SKILL_OWNER_ID &&
-  (publicSkillNames.has(row.name) || row.category === "builtin");
+  (publicSkillNames.has(rowSlug(row)) || row.category === "builtin");
 const SKILL_SELECT_COLUMNS =
-  "id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at";
+  "id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at";
 
 /**
  * Merge rows defensively even if a caller supplies a broader result set.
@@ -55,15 +60,17 @@ export function mergeVisibleSkillRows(rows: SkillRow[], userId: number): SkillRo
   const merged = new Map<string, SkillRow>();
   for (const row of rows) {
     if (row.is_enable === 1 && row.user_id === userId) {
-      merged.set(row.name, row);
+      merged.set(rowSlug(row), row);
     }
   }
   for (const row of rows) {
     if (row.is_enable === 1 && isPublicSkillRow(row)) {
-      merged.set(row.name, row);
+      merged.set(rowSlug(row), row);
     }
   }
-  return [...merged.values()].toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return [...merged.values()].toSorted((a, b) =>
+    rowSlug(a) < rowSlug(b) ? -1 : rowSlug(a) > rowSlug(b) ? 1 : 0,
+  );
 }
 
 interface MySqlConfig {
@@ -182,10 +189,16 @@ async function ensurePublicSkillRows(p: mysql.Pool): Promise<void> {
     const content = await fs.readFile(path.join(bundledSkillsDir, skillName, "SKILL.md"), "utf8");
     await p.execute(
       `INSERT INTO skills
-         (user_id, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'workspace', 'public', 1, '', NULL, NOW(), NOW())
+         (user_id, slug, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'workspace', 'public', 1, '', NULL, NOW(), NOW())
        ON DUPLICATE KEY UPDATE id = id`,
-      [PUBLIC_SKILL_OWNER_ID, skillName, extractBundledSkillDescription(content), content],
+      [
+        PUBLIC_SKILL_OWNER_ID,
+        skillName,
+        parseFrontmatterBlock(content).title ?? skillName,
+        extractBundledSkillDescription(content),
+        content,
+      ],
     );
   }
   publicSkillsSeeded = true;
@@ -198,7 +211,7 @@ async function fetchVisibleSkillRows(p: mysql.Pool, userId: number): Promise<Ski
     `SELECT ${SKILL_SELECT_COLUMNS}
        FROM skills
       WHERE is_enable = 1
-        AND (user_id = ? OR (user_id = ? AND (category = 'builtin' OR name IN (${placeholders}))))
+        AND (user_id = ? OR (user_id = ? AND (category = 'builtin' OR COALESCE(slug, name) IN (${placeholders}))))
       ORDER BY name ASC`,
     [userId, PUBLIC_SKILL_OWNER_ID, ...PUBLIC_SKILL_NAMES],
   );
@@ -223,7 +236,7 @@ function rowToSkillEntry(
   row: SkillRow,
   realPaths?: { filePath: string; baseDir: string },
 ): SkillEntry {
-  const name = row.name ?? "";
+  const name = rowSlug(row);
   const description = row.description ?? "";
   // Materialized skills point at real workspace files so `read`/`exec` work;
   // non-materialized callers (listings/CRUD) get the virtual `memory://` path.
@@ -307,7 +320,7 @@ export async function listSkills(
   // DOUBLE. These values are bounded integers, so inlining them is safe while
   // keeping the user id parameterized.
   const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    `SELECT id, user_id, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at FROM skills WHERE user_id = ? ORDER BY name ASC LIMIT ${limit} OFFSET ${offset}`,
+    `SELECT id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at FROM skills WHERE user_id = ? ORDER BY name ASC LIMIT ${limit} OFFSET ${offset}`,
     [userId],
   );
 
@@ -317,7 +330,7 @@ export async function listSkills(
 export async function getSkillById(id: number, userId: number): Promise<SkillRow | null> {
   const p = getPool();
   const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE id = ? AND user_id = ?",
+    "SELECT id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE id = ? AND user_id = ?",
     [id, userId],
   );
   return (rows[0] as SkillRow) ?? null;
@@ -331,7 +344,7 @@ export async function getSkillById(id: number, userId: number): Promise<SkillRow
 export async function getSkillByName(name: string, userId: number): Promise<SkillRow | null> {
   const p = getPool();
   const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE name = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 1",
+    "SELECT id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE COALESCE(slug, name) = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 1",
     [name, userId],
   );
   return (rows[0] as SkillRow) ?? null;
@@ -340,6 +353,7 @@ export async function getSkillByName(name: string, userId: number): Promise<Skil
 export async function createSkill(
   data: {
     name: string;
+    slug?: string;
     description?: string;
     content?: string;
     source?: string;
@@ -349,17 +363,20 @@ export async function createSkill(
 ): Promise<SkillRow> {
   const p = getPool();
   const now = new Date();
+  const slug = resolveStorageSkillSlug(data.name, data.content ?? "", data.slug);
+  const content = withStorageSkillIdentity(data.content ?? "", slug, data.name);
   // `references` is NOT NULL with no default, so it must be supplied or the
   // INSERT fails under strict mode with "Field 'references' doesn't have a
   // default value". `source` must be a valid enum member (see skill-tool's
   // SKILL_SOURCE); default to 'workspace' rather than the invalid 'manual'.
   const [result] = await p.execute<mysql.ResultSetHeader>(
-    "INSERT INTO skills (user_id, name, description, content, source, category, is_enable, `references`, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, '', ?, ?)",
+    "INSERT INTO skills (user_id, slug, name, description, content, source, category, is_enable, `references`, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)",
     [
       userId,
+      slug,
       data.name,
       data.description ?? null,
-      data.content ?? null,
+      content,
       data.source ?? "workspace",
       data.category ?? null,
       now,
@@ -377,6 +394,7 @@ export async function updateSkill(
   id: number,
   data: Partial<{
     name: string;
+    slug: string;
     description: string;
     content: string;
     source: string;
@@ -386,6 +404,33 @@ export async function updateSkill(
   userId: number,
 ): Promise<SkillRow | null> {
   const p = getPool();
+  const existing = await getSkillById(id, userId);
+  if (!existing) {
+    return null;
+  }
+  const slug = rowSlug(existing);
+  if (data.slug !== undefined && data.slug !== slug) {
+    throw new Error("Skill slug is fixed after creation");
+  }
+  if (isPublicSkillRow(existing)) {
+    if (data.category !== undefined && data.category !== existing.category) {
+      throw new Error("Built-in skill category cannot be changed through the generic update API");
+    }
+    if (data.content !== undefined && parseFrontmatterBlock(data.content).name !== slug) {
+      throw new Error("Built-in skill frontmatter name must match its fixed identifier");
+    }
+  }
+  if (data.name !== undefined || data.content !== undefined) {
+    const name =
+      data.name ??
+      (data.content ? parseFrontmatterBlock(data.content).title : undefined) ??
+      existing.name;
+    data = {
+      ...data,
+      name,
+      content: withStorageSkillIdentity(data.content ?? existing.content ?? "", slug, name),
+    };
+  }
   const sets: string[] = [];
   const values: (string | number | null | Date)[] = [];
 
@@ -421,8 +466,21 @@ export async function updateSkill(
   sets.push("updated_at = ?");
   values.push(new Date());
 
-  const queryValues: (string | number | boolean | null | Date)[] = [...values, id, userId];
-  await p.execute(`UPDATE skills SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`, queryValues);
+  const queryValues: (string | number | boolean | null | Date)[] = [
+    ...values,
+    id,
+    userId,
+    slug,
+    existing.category,
+  ];
+  // Do not overwrite identity changes made by another writer after validation.
+  const [result] = await p.execute<mysql.ResultSetHeader>(
+    `UPDATE skills SET ${sets.join(", ")} WHERE id = ? AND user_id = ? AND COALESCE(slug, name) = ? AND category <=> ?`,
+    queryValues,
+  );
+  if (result.affectedRows === 0) {
+    throw new Error("Skill changed during update; reload before saving");
+  }
 
   return getSkillById(id, userId);
 }
@@ -601,21 +659,25 @@ async function doMaterializeSkills(
   const bundledSkillsDir = resolveBundledSkillsDir();
   const entries: SkillEntry[] = [];
   for (const row of skillRows) {
-    const safeName = sanitizeSkillSegment(row.name);
+    const safeName = sanitizeSkillSegment(rowSlug(row));
     if (!safeName) {
       continue;
     }
     const isPublicSkill = isPublicSkillRow(row);
     const baseDir = path.join(isPublicSkill ? publicSkillsRoot : skillsRoot, safeName);
-    if (bundledSkillsDir && isPublicSkill && publicSkillNames.has(row.name)) {
-      await fs.cp(path.join(bundledSkillsDir, row.name), baseDir, {
+    if (bundledSkillsDir && isPublicSkill && publicSkillNames.has(rowSlug(row))) {
+      await fs.cp(path.join(bundledSkillsDir, rowSlug(row)), baseDir, {
         recursive: true,
         force: true,
       });
     }
     await fs.mkdir(baseDir, { recursive: true });
     const skillMdPath = path.join(baseDir, "SKILL.md");
-    await fs.writeFile(skillMdPath, row.content ?? "", "utf8");
+    await fs.writeFile(
+      skillMdPath,
+      withStorageSkillIdentity(row.content ?? "", rowSlug(row), row.name),
+      "utf8",
+    );
 
     for (const script of scriptsBySkill.get(row.id) ?? []) {
       const safeScript = sanitizeSkillSegment(script.script_name);

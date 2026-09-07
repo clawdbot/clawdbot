@@ -20,7 +20,8 @@ it("materializes new public skills without a bundled folder and preserves prompt
   let rows: SkillRow[] = ["z-public", "a-public"].map((name, index) => ({
     id: index + 1,
     user_id: 126,
-    name,
+    slug: name,
+    name: `中文${index}`,
     description: name,
     content: `---\nname: ${name}\ndescription: ${name}\n---\nOriginal instructions\n`,
     source: "workspace",
@@ -44,10 +45,10 @@ it("materializes new public skills without a bundled folder and preserves prompt
   for (const row of rows) {
     expect(
       await fs.readFile(
-        path.join(workspace, ".openclaw-public-skills", row.name, "SKILL.md"),
+        path.join(workspace, ".openclaw-public-skills", row.slug!, "SKILL.md"),
         "utf8",
       ),
-    ).toBe(row.content);
+    ).toContain(`name: ${row.slug}\n`);
   }
   // Expire the per-turn cache without sleeping; the database returns a new order.
   rows = rows.toReversed();
