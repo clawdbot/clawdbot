@@ -5,7 +5,6 @@ set -Eeuo pipefail
 exec 3>&1
 
 source scripts/lib/openclaw-e2e-instance.sh
-source scripts/e2e/lib/external-package-transition.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 
@@ -1270,9 +1269,6 @@ resolve_candidate_version() {
 
 resolve_candidate_install_mode() {
   candidate_install_mode="updater"
-  if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
-    candidate_install_mode="external-package-manager-and-fresh-doctor"
-  fi
   if [ "$SCENARIO" = "mobile-pairing-reconnect" ] &&
     [ "$baseline_version" = "2026.7.1" ] &&
     [ "$candidate_version" = "2026.8.1" ] &&
@@ -1478,19 +1474,6 @@ update_candidate_for_install_mode() {
       ;;
     historical-package-replacement)
       replace_historical_mobile_pairing_candidate
-      ;;
-    external-package-manager-and-fresh-doctor)
-      local stopped_pid="${gateway_pid:-}"
-      if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
-        stopped_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
-      fi
-      stop_gateway || return "$?"
-      prepare_candidate_tarball || return "$?"
-      OPENCLAW_CURRENT_PACKAGE_TGZ="$candidate_tarball" \
-        openclaw_e2e_external_package_transition \
-        "$baseline_version" "$candidate_version" "$ARTIFACT_ROOT/external-transition" "$stopped_pid" || return "$?"
-      installed_version="$(read_installed_version)" || return "$?"
-      cp "$ARTIFACT_ROOT/external-transition/transition.json" "$UPDATE_JSON"
       ;;
     *)
       echo "unknown candidate install mode: $candidate_install_mode" >&2
@@ -1715,6 +1698,10 @@ assert_survival() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
   installed_version="$(read_installed_version)"
+  if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
+    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+      >"$ARTIFACT_ROOT/schema-after-update.json" || return "$?"
+  fi
   local expected_version="${restart_fixture_version:-$candidate_version}"
   if [ "$installed_version" != "$expected_version" ]; then
     echo "selected package version mismatch: expected $expected_version, got $installed_version" >&2
@@ -1920,8 +1907,6 @@ fi
 if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
   phase assert-historical-package-replacement-prestart \
     assert_historical_package_replacement_prestart
-elif [ "$candidate_install_mode" = "external-package-manager-and-fresh-doctor" ]; then
-  phase assert-external-migration assert_survival
 else
   # A standalone Doctor pass would conceal missing migrations in the updater.
   phase assert-automatic-migration assert_survival

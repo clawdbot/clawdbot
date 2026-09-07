@@ -100,8 +100,6 @@ dump_debug_logs() {
     "$LOG_DIR/baseline-setup-turn.json" \
     "$LOG_DIR/baseline-gateway.log" \
     "$LOG_DIR/transition/backup.err" \
-    "$LOG_DIR/transition/self-update.json" \
-    "$LOG_DIR/transition/self-update.err" \
     "$LOG_DIR/transition/doctor.log"
 }
 openclaw_e2e_enable_failure_diagnostics
@@ -187,7 +185,7 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLU
 record_baseline_setup plugin
 
 # Serve the old installation and create a real retained conversation before its
-# owner stops it. No old updater or Gateway may survive into schema migration.
+# owner stops it for the explicit external package-manager transition.
 entry="$baseline_entry"
 if [ "$baseline_version" = "2026.9.2" ]; then
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai "$MOCK_PORT"
@@ -262,4 +260,4 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs post-clickclack-inbound
 node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-reply "$CLICKCLACK_STATE" "$SUCCESS_MARKER" 45
 
 cat "$LOG_DIR/transition/transition.json"
-echo "Release upgrade user journey passed: external package-manager installation and fresh Doctor; direct self-update is not a passing contract."
+echo "Release upgrade user journey passed: external package-manager installation and fresh Doctor."

@@ -11,28 +11,32 @@ if (command === "schema") {
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const version = Number(database.prepare("PRAGMA user_version").get().user_version);
+    const publishedVersion = Number(database.prepare("PRAGMA user_version").get().user_version);
+    const hasMetadata = database
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'config_machine_state'")
+      .get();
+    const row = hasMetadata
+      ? database
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+          )
+          .get()
+      : undefined;
+    const appliedVersion = row ? JSON.parse(row.value_json) : publishedVersion;
+    assert(
+      Number.isSafeInteger(appliedVersion) && appliedVersion >= 0,
+      "invalid schema content version",
+    );
+    const contentVersion = Math.max(publishedVersion, appliedVersion);
     assert.equal(
-      version,
+      contentVersion,
       Number(args[0]),
       "shared schema changed outside its supported transition",
     );
-    result = { version };
+    result = { publishedVersion, contentVersion };
   } finally {
     database.close();
   }
-} else if (command === "refusal") {
-  assert.equal(Number(args[0]), 1, "old updater must fail with its ordinary failure exit");
-  const stdout = fs.readFileSync(args[1], "utf8");
-  const stderr = fs.readFileSync(args[2], "utf8");
-  const update = JSON.parse(stdout);
-  assert.equal(update.status, "error");
-  assert.equal(update.reason, "openclaw doctor");
-  assert.match(
-    stdout + stderr,
-    /Updater-owned Doctor cannot migrate shared state from schema 15 to 16 while the older updater owns completion\./,
-  );
-  result = { status: "safely-refused", method: "in-process-self-update", exitCode: 1 };
 } else if (command === "session-key") {
   const listing = JSON.parse(fs.readFileSync(args[0], "utf8"));
   const matches = listing.sessions.filter((session) => session.sessionId === args[1]);
@@ -55,7 +59,7 @@ if (command === "schema") {
   result = { persistedUserAndAssistant: true };
 } else if (command === "receipt") {
   const [baselineVersion, candidateVersion, evidenceDir] = args;
-  const guarded =
+  const historicalStateSchema =
     ["2026.8.2", "2026.9.2"].includes(baselineVersion) && candidateVersion === "2026.9.3";
   const read = (name) => JSON.parse(fs.readFileSync(path.join(evidenceDir, name), "utf8"));
   result = {
@@ -63,11 +67,10 @@ if (command === "schema") {
     baselineVersion,
     candidateVersion,
     selfUpdatePassed: false,
-    ...(guarded
+    selfUpdate: { status: "not-run", method: "in-process-self-update" },
+    ...(historicalStateSchema
       ? {
-          selfUpdate: read("self-update-refusal.json"),
           schemaBefore: read("schema-before.json"),
-          schemaAfterRefusal: read("schema-after-refusal.json"),
           schemaAfterDoctor: read("schema-after-doctor.json"),
         }
       : {}),

@@ -330,8 +330,6 @@ if (process.argv[2] === "run") fs.writeFileSync(process.env.DOCKER_ARGS_FILE, JS
 });
 
 const transitionHelper = path.resolve("scripts/e2e/lib/external-package-transition.mjs");
-const refusal =
-  "Updater-owned Doctor cannot migrate shared state from schema 15 to 16 while the older updater owns completion.";
 
 function makeTransitionEvidenceFixture() {
   const root = tempDirs.make("openclaw-external-transition-");
@@ -349,7 +347,7 @@ function makeTransitionEvidenceFixture() {
 }
 
 describe("external package transition evidence", () => {
-  it("refuses a changed shared schema before accepting the negative control", () => {
+  it("rejects a schema beyond the expected content version", () => {
     const { root, run } = makeTransitionEvidenceFixture();
     fs.mkdirSync(path.join(root, "state"));
     const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
@@ -362,41 +360,47 @@ describe("external package transition evidence", () => {
     expect(changed.stderr).toContain("shared schema changed");
   });
 
-  it.each([
-    { exit: "0", reason: "openclaw doctor", detail: refusal },
-    { exit: "1", reason: "network-failed", detail: refusal },
-    { exit: "1", reason: "openclaw doctor", detail: "download timed out" },
-  ])(
-    "rejects unrelated or successful updates as refusal proof: $reason/$exit/$detail",
-    ({ exit, reason, detail }) => {
-      const { run, file } = makeTransitionEvidenceFixture();
-      const result = run(
-        "refusal",
-        exit,
-        file("stdout.json", { status: "error", reason, steps: [{ stderrTail: detail }] }),
-        file("stderr.txt", ""),
-      );
-      expect(result.status).toBe(1);
-    },
-  );
-
-  it("records the exact old-parent failure as negative self-update evidence", () => {
-    const { run, file } = makeTransitionEvidenceFixture();
-    const result = run(
-      "refusal",
-      "1",
-      file("stdout.json", {
-        status: "error",
-        reason: "openclaw doctor",
-        steps: [{ stderrTail: refusal }],
-      }),
-      file("stderr.txt", ""),
+  it("accepts applied content while schema publication is deferred", () => {
+    const { root, run } = makeTransitionEvidenceFixture();
+    fs.mkdirSync(path.join(root, "state"));
+    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    database.exec(
+      "PRAGMA user_version = 15; CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT)",
     );
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      status: "safely-refused",
-      method: "in-process-self-update",
-      exitCode: 1,
+    database
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
+      .run("state.schema.contentVersion", "16");
+    database.close();
+    const result = run("schema", "16");
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ publishedVersion: 15, contentVersion: 16 });
+  });
+
+  it.each(["17", '"16"', "-1", "null"])("rejects unexpected content metadata %s", (value) => {
+    const { root, run } = makeTransitionEvidenceFixture();
+    fs.mkdirSync(path.join(root, "state"));
+    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    database.exec(
+      "PRAGMA user_version = 15; CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT)",
+    );
+    database
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
+      .run("state.schema.contentVersion", value);
+    database.close();
+    expect(run("schema", "15").status).toBe(1);
+  });
+
+  it("records external installation without claiming an updater attempt", () => {
+    const { root, run, file } = makeTransitionEvidenceFixture();
+    file("schema-before.json", { publishedVersion: 15, contentVersion: 15 });
+    file("schema-after-doctor.json", { publishedVersion: 15, contentVersion: 16 });
+    const result = run("receipt", "2026.9.2", "2026.9.3", root);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      method: "external-package-manager-and-fresh-doctor",
+      selfUpdatePassed: false,
+      selfUpdate: { status: "not-run", method: "in-process-self-update" },
+      schemaAfterDoctor: { publishedVersion: 15, contentVersion: 16 },
     });
   });
 

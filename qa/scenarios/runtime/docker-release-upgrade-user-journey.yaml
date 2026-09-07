@@ -12,7 +12,7 @@ scenario:
   successCriteria:
     - A published baseline installs and is configured with mock provider and local plugin state.
     - The baseline Gateway stops through its test owner and a verified backup exists before candidate installation.
-    - The 2026.9.2 updater refuses the 2026.9.3 schema migration and leaves shared state at schema 15; this negative result is recorded separately from the supported transition.
+    - The receipt names external package-manager installation and records that no internal self-update was attempted.
     - The exact candidate package replaces the baseline through its package manager and fresh Doctor completes migration.
     - The candidate Gateway reads retained baseline and new candidate user and assistant messages from durable history.
     - The upgraded install still passes agent, plugin CLI, channel status, outbound message, Gateway, and inbound reply checks.

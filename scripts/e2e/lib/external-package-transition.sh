@@ -16,17 +16,9 @@ openclaw_e2e_external_package_transition() (
   openclaw backup create --verify --output "$backup_dir/before.tar.gz" --json \
     >"$evidence_dir/backup.json" 2>"$evidence_dir/backup.err" || return "$?"
 
-  local refusal_status=0
   if { [ "$baseline_version" = "2026.8.2" ] || [ "$baseline_version" = "2026.9.2" ]; } && [ "$candidate_version" = "2026.9.3" ]; then
     node scripts/e2e/lib/external-package-transition.mjs schema 15 \
       >"$evidence_dir/schema-before.json" || return "$?"
-    openclaw update --yes --no-restart --json --tag "file:$OPENCLAW_CURRENT_PACKAGE_TGZ" \
-      >"$evidence_dir/self-update.json" 2>"$evidence_dir/self-update.err" || refusal_status=$?
-    node scripts/e2e/lib/external-package-transition.mjs refusal \
-      "$refusal_status" "$evidence_dir/self-update.json" "$evidence_dir/self-update.err" \
-      >"$evidence_dir/self-update-refusal.json" || return "$?"
-    node scripts/e2e/lib/external-package-transition.mjs schema 15 \
-      >"$evidence_dir/schema-after-refusal.json" || return "$?"
   fi
 
   openclaw_e2e_install_package "$evidence_dir/install.log" "external candidate installation" || return "$?"
