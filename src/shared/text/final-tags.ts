@@ -132,7 +132,7 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
   return matches;
 }
 
-/** Removes valid `<final>` tags while preserving their enclosed visible answer text. */
+/** Removes final-answer markers outside Markdown code while preserving their enclosed answer. */
 export function stripFinalTags(text: string): string {
   const matches = findFinalTagMatches(text);
   if (matches.length === 0) {
