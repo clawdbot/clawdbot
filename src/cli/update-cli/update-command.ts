@@ -113,45 +113,41 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   recoveryState.triageTarget.root = prepared.discoveredRoot;
   const presentation = createUpdateProgress(!opts.json, run);
   try {
-    await withUpdateFailureTriage(
-      { ...opts, invocationCwd },
-      recoveryState.triageTarget,
-      async () => {
-        await withUpdateInProgressEnv(invocationCwd, async () => {
-          let failure: { error: unknown } | undefined;
+    await withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
+      withUpdateInProgressEnv(invocationCwd, async () => {
+        let failure: { error: unknown } | undefined;
+        try {
+          await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
+        } catch (error) {
+          failure = { error };
+        }
+        try {
+          await recoveryState.windowsTaskAutoStartRecovery?.restore();
+          await recoveryState.windowsTaskAutoStartRecovery?.complete();
+        } catch (restoreError) {
+          let error = restoreError;
           try {
-            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
-          } catch (error) {
-            failure = { error };
+            await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+          } catch (compensationError) {
+            error = new AggregateError(
+              [error, compensationError],
+              `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
+              { cause: error },
+            );
           }
-          try {
-            await recoveryState.windowsTaskAutoStartRecovery?.restore();
-            await recoveryState.windowsTaskAutoStartRecovery?.complete();
-          } catch (restoreError) {
-            let error = restoreError;
-            try {
-              await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
-            } catch (compensationError) {
-              error = new AggregateError(
-                [error, compensationError],
-                `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
-                { cause: error },
-              );
+          failure = mergeWindowsTaskRecoveryFailure(failure, error);
+        }
+        if (failure) {
+          if (!recoveryState.ledgerHandoffOwned) {
+            if (failure.error instanceof UpdateCommandFailure) {
+              completeUpdateCommandRun(failure.error.result, run);
+            } else {
+              failUpdateCommandRun(failure.error, run);
             }
-            failure = mergeWindowsTaskRecoveryFailure(failure, error);
           }
-          if (failure) {
-            if (!recoveryState.ledgerHandoffOwned) {
-              if (failure.error instanceof UpdateCommandFailure) {
-                completeUpdateCommandRun(failure.error.result, run);
-              } else {
-                failUpdateCommandRun(failure.error, run);
-              }
-            }
-            throw failure.error;
-          }
-        });
-      },
+          throw failure.error;
+        }
+      }),
     );
   } finally {
     presentation.dispose();

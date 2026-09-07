@@ -1031,28 +1031,24 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
-  it("returns noop for config.patch when config is unchanged", async () => {
-    const current = await rpcReq<{
-      config?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.get", {});
-    expect(current.ok).toBe(true);
+  it("returns noop for config.patch when authored config is unchanged", async () => {
+    const current = await getCurrentConfigObject();
 
-    // Patch with the same config — no actual changes
+    // Replaying runtime defaults would explicitly author them into the source config.
     const res = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireClient(), "config.patch", {
-      raw: JSON.stringify(current.payload?.config ?? {}),
-      baseHash: current.payload?.hash,
+      raw: JSON.stringify(current.config),
+      baseHash: current.hash,
     });
 
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.noop).toBe(true);
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    expect(after.payload?.hash).toBe(current.hash);
   });
 
   it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {
