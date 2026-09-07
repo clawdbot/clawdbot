@@ -54,8 +54,17 @@ const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
 
+// Rejections a smaller request can satisfy: oversized-payload/transport failures,
+// then the item-limit phrasings providers actually report, each of which must carry
+// an explicit number so a generic HTTP 400 stays terminal instead of burning a
+// doomed request per halved batch:
+//   - `Embeddings API input limit exceeded: max 10, got 33` (Volcengine/Ark)
+//   - `embeddings max input length is 16` (Qianfan)
+//   - `batch size is invalid, it should not be larger than 10` (DashScope)
+//   - `input array max 64` (Zhipu BigModel embedding-3, HTTP 400 code 1214; the
+//     limit wording is not adjacent to `embeddings`)
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b)/i;
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array\b[^\n]{0,16}?\b(?:max(?:imum)?|limit|exceed(?:s|ed)?)\b\D{0,8}\d)/i;
 
 export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
