@@ -2148,6 +2148,19 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      {
+                        "group": "Gateway protocol",
+                        "pages": [
+                          "gateway/protocol/transport",
+                          "gateway/protocol/handshake",
+                          "gateway/protocol/presence",
+                          "gateway/protocol/rpc-methods",
+                          "gateway/protocol/ledgers",
+                          "gateway/protocol/operator-methods",
+                          "gateway/protocol/versioning",
+                          "gateway/protocol/auth"
+                        ]
+                      },
                       "gateway/clients",
                       "gateway/embedding",
                       "gateway/openai-http-api",
