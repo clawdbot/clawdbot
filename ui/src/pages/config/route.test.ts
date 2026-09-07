@@ -14,7 +14,11 @@ import { pages } from "./route.ts";
 
 type RouteModule = { header: boolean; render: () => unknown };
 
-const removedGeneralPage = pages[0] as PageDefinition<RouteId, ApplicationContext, RouteModule>;
+const removedGeneralPage = pages.find((page) => page.id === "config") as PageDefinition<
+  RouteId,
+  ApplicationContext,
+  RouteModule
+>;
 const updatesPage = pages.find((page) => page.id === "updates") as PageDefinition<
   RouteId,
   ApplicationContext,

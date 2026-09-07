@@ -492,6 +492,7 @@ export function createSessionCapability(
     const connected = next.phase === "connected";
     const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
+    roster.observeGateway(next, connectionChanged);
     connectionClient = next.client;
     githubPublication.observeRows([]);
     if (connectionChanged) {

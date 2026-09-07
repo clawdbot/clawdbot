@@ -211,9 +211,6 @@ export function resolveSidebarConnectionStatus(props: {
   if (props.restartPending) {
     return "restarting";
   }
-  if (props.offline) {
-    return "offline";
-  }
   switch (props.suspensionPhase) {
     case "preparing":
     case "draining":
@@ -221,7 +218,7 @@ export function resolveSidebarConnectionStatus(props: {
     case "prepared":
       return "suspended";
     default:
-      return null;
+      return props.offline ? "offline" : null;
   }
 }
 
