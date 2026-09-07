@@ -582,7 +582,9 @@ export async function createBackupArchive(
       }
       const sqliteSourceKind = onlyConfig
         ? undefined
-        : classifyBackupSqliteSource(resolvedEntryPath, plan.inventory);
+        : classifyBackupSqliteSource(resolvedEntryPath, plan.inventory, {
+            isRegularFile: !isDirectory && isBackupTarFilterFile(entryStat),
+          });
       if (sqliteSourceKind === "excluded") {
         return false;
       }
