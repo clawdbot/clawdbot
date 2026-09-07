@@ -8,6 +8,10 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-h
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import {
+  readStableSqliteFileGeneration,
+  sameSqliteFileGeneration,
+} from "./sqlite-file-generation.js";
+import {
   checkpointContentMatches,
   inspectCheckpointFile,
   syncCheckpointTree,
@@ -229,6 +233,37 @@ export async function inspectUpdateCheckpointRestoreResource(
   params: ResourceReadParams,
 ): Promise<UpdateCheckpointRestoreObservation> {
   return (await inspectResource(params)).observation;
+}
+
+/** Facts required to rebind live lease owners; never a serialized capability. */
+export type UpdateCheckpointSharedPublication = UpdateCheckpointReadAccess & {
+  planRef: UpdateCheckpointRestorePlanRef;
+  recoveryRecord: UpdateRecoveryRecord;
+};
+
+/** Called by the physical lease owner, not replaced with a caller's assertion.
+ * Verify original logical bindings, exact live record and displaced commitment,
+ * all plan/file identities and closed families before canonical writable admission.
+ */
+export async function verifyUpdateCheckpointSharedPublication(
+  input: UpdateCheckpointSharedPublication,
+  databasePath: string,
+) {
+  const params = structuredClone(input);
+  const generation = readStableSqliteFileGeneration(databasePath);
+  const inspected = await inspectResource({ ...params, resourceCursor: 0 });
+  if (
+    !inspected.resource.recovery ||
+    inspected.resource.sourcePath !== databasePath ||
+    inspected.observation.observed !== "after"
+  ) {
+    throw new Error("Canonical shared database has no verified checkpoint publication");
+  }
+  const current = readStableSqliteFileGeneration(databasePath);
+  if (!sameSqliteFileGeneration(generation, current)) {
+    throw new Error("Canonical shared database changed during publication validation");
+  }
+  return current;
 }
 
 /** Ownership comes from the hash-bound original, never from the derived file being checked. */

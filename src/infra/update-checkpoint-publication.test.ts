@@ -283,7 +283,9 @@ describe("checkpoint publication with physical owners", () => {
             scope: "core:checkpoint-reader-race",
             key: "capture",
             database: { scope: "shared", options: f.options },
-            leaseMs: failure === "expiry" ? 1_000 : 60_000,
+            // Reach the real reader barrier even under concurrent compiler load.
+            // The test still waits for this exact persisted deadline to expire.
+            leaseMs: failure === "expiry" ? 10_000 : 60_000,
             waitMs: 0,
             heartbeat: "worker",
           },

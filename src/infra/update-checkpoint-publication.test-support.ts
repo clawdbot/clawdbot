@@ -8,7 +8,7 @@ import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-sta
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
 import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
-import { captureUpdateCheckpoint } from "./update-checkpoint.js";
+import { captureUpdateCheckpoint, type UpdateCheckpointRef } from "./update-checkpoint.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import { beginUpdateRecovery, recordUpdateRecoveryIntent } from "./update-run-recovery.js";
 
@@ -44,7 +44,11 @@ export async function withPublicationFiles<T>(
   }
 }
 
-export async function publicationFixture(root: string, pauseReader = false) {
+export async function publicationFixture(
+  root: string,
+  pauseReader = false,
+  checkpointAppVersion?: string,
+) {
   const stateDir = path.join(root, "live");
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: stateDir } };
   const built = await buildCheckpointReaderRuntime(
@@ -77,6 +81,65 @@ export async function publicationFixture(root: string, pauseReader = false) {
     artifactRoot: path.join(root, "artifacts"),
     binding: { runId: run.runId, stateDir, configPath, fromRuntime: built.runtime },
   };
+  const snapshot = async (
+    content: string,
+    capture: (
+      operation: (assertCurrent: () => void) => Promise<UpdateCheckpointRef>,
+    ) => Promise<UpdateCheckpointRef>,
+  ) => {
+    await fs.writeFile(configPath, content);
+    const state = await inspectCheckpointFile(configPath);
+    return capture((assertCurrent) =>
+      captureUpdateCheckpoint({
+        ...access,
+        assertQuiescent: assertCurrent,
+        exclusions: [],
+        expectedSources: [{ sourcePath: configPath, state }],
+        resources: [
+          { sourcePath: sharedPath, kind: "sqlite", restore: "replace" },
+          { sourcePath: agentPath, kind: "sqlite", restore: "replace" },
+          { sourcePath: configPath, kind: "config", restore: "replace" },
+        ],
+      }),
+    );
+  };
+
+  let historical:
+    | { checkpointRef: UpdateCheckpointRef; afterUpdateRef: UpdateCheckpointRef }
+    | undefined;
+  if (checkpointAppVersion) {
+    // Historical image predates live lease admission. Use real physical custody
+    // and capture APIs, never rewrite an immutable artifact or pending recovery.
+    closeOpenClawStateDatabaseForTest();
+    historical = await withPublicationFiles([sharedPath, agentPath], async (assertCurrent) => {
+      const db = new DatabaseSync(sharedPath);
+      let currentVersion: unknown;
+      try {
+        currentVersion = db
+          .prepare("SELECT app_version FROM schema_meta WHERE meta_key='primary'")
+          .get()?.app_version;
+        db.prepare("UPDATE schema_meta SET app_version=? WHERE meta_key='primary'").run(
+          checkpointAppVersion,
+        );
+      } finally {
+        db.close();
+      }
+      const checkpointRef = await snapshot("previous config", (read) => read(assertCurrent));
+      const current = new DatabaseSync(sharedPath);
+      try {
+        if (typeof currentVersion !== "string") {
+          throw new Error("missing runtime marker");
+        }
+        current
+          .prepare("UPDATE schema_meta SET app_version=? WHERE meta_key='primary'")
+          .run(currentVersion);
+      } finally {
+        current.close();
+      }
+      const afterUpdateRef = await snapshot("candidate config", (read) => read(assertCurrent));
+      return { checkpointRef, afterUpdateRef };
+    });
+  }
   // Create and capture under the REAL nested plugin/maintenance owners. Their
   // workers are joined by capture and renewed only after unchanged-generation validation.
   const setup = await withPluginLifecycleLease({ env: options.env }, async (plugin) =>
@@ -96,25 +159,10 @@ export async function publicationFixture(root: string, pauseReader = false) {
         fence,
         options,
       );
-      const snapshot = async (content: string) => {
-        await fs.writeFile(configPath, content);
-        const state = await inspectCheckpointFile(configPath);
-        return capture((assertCurrent) =>
-          captureUpdateCheckpoint({
-            ...access,
-            assertQuiescent: assertCurrent,
-            exclusions: [],
-            expectedSources: [{ sourcePath: configPath, state }],
-            resources: [
-              { sourcePath: sharedPath, kind: "sqlite", restore: "replace" },
-              { sourcePath: agentPath, kind: "sqlite", restore: "replace" },
-              { sourcePath: configPath, kind: "config", restore: "replace" },
-            ],
-          }),
-        );
-      };
-      const checkpointRef = await snapshot("previous config");
-      const afterUpdateRef = await snapshot("candidate config");
+      const checkpointRef =
+        historical?.checkpointRef ?? (await snapshot("previous config", capture));
+      const afterUpdateRef =
+        historical?.afterUpdateRef ?? (await snapshot("candidate config", capture));
       record = recordUpdateRecoveryIntent(
         record,
         {

@@ -7,12 +7,17 @@ import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { loggingState } from "../logging/state.js";
+import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
+import {
+  createOpenClawStateLeaseExclusion,
+  type OpenClawStatePublicationOperation,
+} from "./openclaw-state-lease-exclusion.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
@@ -48,6 +53,12 @@ export type OpenClawStateLeaseContext = {
     this: void,
     operation: (assertCurrent: () => void) => Promise<T>,
     bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
+  ): Promise<T>;
+  /** Distinct checkpoint publication window. All effects/reconciliation precede
+   * rebind/renewal; failure disables ordinary cleanup on unverified canonical data. */
+  withDatabaseFilePublication?<T>(
+    this: void,
+    operation: OpenClawStatePublicationOperation<T>,
   ): Promise<T>;
   /** Renew or verify independent renewal before another blocking phase. */
   renew?(): void;
@@ -421,6 +432,9 @@ export async function withOpenClawStateLease<T>(
     closed = true;
     workerHeartbeat?.close();
     startingHeartbeat?.close();
+    if (!fileExclusion.canRelease()) {
+      return;
+    }
     release({
       ...identity,
       database: validated.database,
@@ -582,6 +596,23 @@ export async function withOpenClawStateLease<T>(
       }
       return assertLeaseOwnedInDatabase(current.db, identity);
     },
+    readPublicationExpiry: (databasePath) => {
+      const expiresAt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => {
+          // A retained reader accepting the payload does not allow this executor
+          // to migrate it merely to renew a lease. Refuse incompatible reopen.
+          if (!isOpenClawStateSchemaFastPathEligible(db, databasePath)) {
+            throw invalidInput("published state database requires startup repair before rebind");
+          }
+          return assertLeaseOwnedInDatabase(db, identity);
+        },
+        { ...validated.database.options, path: databasePath },
+      );
+      if (expiresAt === undefined) {
+        throw invalidInput("published state database is absent");
+      }
+      return expiresAt;
+    },
     pause: async () => {
       clearInterval(heartbeat);
       clearTimeout(expiryTimer);
@@ -624,6 +655,7 @@ export async function withOpenClawStateLease<T>(
         run({
           withDatabaseFileExclusion: (operation, bindCaptured) =>
             fileExclusion.run(operation, bindCaptured),
+          withDatabaseFilePublication: (operation) => fileExclusion.runPublication(operation),
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,
@@ -670,10 +702,12 @@ export async function withOpenClawStateLease<T>(
       clearTimeout(expiryTimer);
     }
     await workerHeartbeat?.stop();
-    await releaseBestEffort({
-      ...identity,
-      database: validated.database,
-      operationLabel: validated.operationLabel,
-    });
+    if (fileExclusion.canRelease()) {
+      await releaseBestEffort({
+        ...identity,
+        database: validated.database,
+        operationLabel: validated.operationLabel,
+      });
+    }
   }
 }
