@@ -4,6 +4,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   applyConfiguredContextWindows,
   prepareContextWindowCaches,
@@ -18,8 +19,10 @@ import {
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
+  type ContextTokenResolution,
   type ContextTokenResolutionParams,
   type ModelsConfig,
+  resolveContextTokenResolutionFromCache,
   resolveContextTokensForModelFromCache,
 } from "./context-resolution.js";
 import {
@@ -298,6 +301,124 @@ export function resolveContextTokensForModel(
   prepareContextWindowCache(lookupOptions);
   return resolveContextTokensForModelFromCache(
     params,
+    (modelId) => lookupCachedContextTokens(modelId),
+    (modelId) => lookupCachedContextWindow(modelId),
+  );
+}
+
+type BundledStaticCatalogContext = {
+  contextWindow?: number;
+  contextTokens?: number;
+};
+
+type BundledStaticCatalogContextResolver = (lookup: {
+  provider: string;
+  modelId: string;
+}) => Promise<BundledStaticCatalogContext | undefined>;
+
+type BundledManifestCatalogModelResolver = (lookup: {
+  provider: string;
+  modelId: string;
+}) => BundledStaticCatalogContext | undefined;
+
+type BundledStaticCatalogResolverPair = {
+  manifestModelResolver: BundledManifestCatalogModelResolver;
+  providerContextResolver: BundledStaticCatalogContextResolver;
+};
+
+const bundledStaticCatalogResolverPairs = new WeakMap<object, BundledStaticCatalogResolverPair>();
+let ambientBundledStaticCatalogResolverPair: BundledStaticCatalogResolverPair | undefined;
+const staticCatalogContextModuleLoader = createLazyImportLoader(
+  () => import("./embedded-agent-runner/model.static-catalog.js"),
+);
+
+function toContextParams(context: BundledStaticCatalogContext | undefined) {
+  const modelContextWindow =
+    typeof context?.contextWindow === "number" && context.contextWindow > 0
+      ? context.contextWindow
+      : undefined;
+  const modelContextTokens =
+    typeof context?.contextTokens === "number" && context.contextTokens > 0
+      ? context.contextTokens
+      : undefined;
+  if (modelContextWindow === undefined && modelContextTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(modelContextWindow !== undefined ? { modelContextWindow } : {}),
+    ...(modelContextTokens !== undefined ? { modelContextTokens } : {}),
+  };
+}
+
+/**
+ * Resolves the offline bundled static catalog context for one provider/model
+ * pair. Read-only callers (no config authored row, no async catalog load)
+ * inject the returned `modelContextTokens`/`modelContextWindow` into
+ * `resolveContextTokensForModel` so bundled catalog models keep their real
+ * context windows instead of the generic default fallback.
+ *
+ * Mirrors the status summary seam: manifest `modelCatalog` rows resolve
+ * synchronously first; provider-owned static catalog hook rows load as the
+ * fallback. Best-effort by contract — any enrichment failure returns undefined
+ * so callers keep their existing config/default fallback behavior.
+ */
+export async function resolveBundledStaticCatalogContext(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "provider" | "model">,
+): Promise<
+  Pick<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow"> | undefined
+> {
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model) {
+    return undefined;
+  }
+  try {
+    const staticCatalogModule = await staticCatalogContextModuleLoader.load();
+    let pair: BundledStaticCatalogResolverPair;
+    if (params.cfg && typeof params.cfg === "object") {
+      pair = bundledStaticCatalogResolverPairs.get(params.cfg) ?? {
+        manifestModelResolver: staticCatalogModule.createBundledStaticCatalogModelResolver({
+          cfg: params.cfg,
+          // Runtime-discovery manifest rows still provide a cold-cache fallback.
+          includeRuntimeDiscovery: true,
+        }),
+        providerContextResolver:
+          staticCatalogModule.createBundledProviderStaticCatalogContextResolver({
+            cfg: params.cfg,
+          }),
+      };
+      bundledStaticCatalogResolverPairs.set(params.cfg, pair);
+    } else {
+      ambientBundledStaticCatalogResolverPair ??= {
+        manifestModelResolver: staticCatalogModule.createBundledStaticCatalogModelResolver({
+          includeRuntimeDiscovery: true,
+        }),
+        providerContextResolver:
+          staticCatalogModule.createBundledProviderStaticCatalogContextResolver({}),
+      };
+      pair = ambientBundledStaticCatalogResolverPair;
+    }
+    const context =
+      pair.manifestModelResolver({ provider, modelId: model }) ??
+      (await pair.providerContextResolver({ provider, modelId: model }));
+    return toContextParams(context) ?? undefined;
+  } catch {
+    // Enrichment must never break the caller's fallback chain.
+    return undefined;
+  }
+}
+
+export async function resolveContextTokenBudgetForModel(
+  params: Omit<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow">,
+): Promise<ContextTokenResolution | undefined> {
+  const staticCatalogContext = await resolveBundledStaticCatalogContext(params);
+  const lookupOptions = {
+    allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
+  };
+  prepareContextWindowCache(lookupOptions);
+  return resolveContextTokenResolutionFromCache(
+    { ...params, ...staticCatalogContext },
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );

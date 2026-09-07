@@ -110,7 +110,12 @@ vi.mock("../../agents/model-runtime-aliases.js", async () => {
 });
 
 vi.mock("../../agents/context.js", () => ({
+  resolveContextTokenBudgetForModel: async () => ({
+    contextTokens: 200_000,
+    source: "configured",
+  }),
   resolveContextTokensForModel: () => 200_000,
+  resolveBundledStaticCatalogContext: async () => undefined,
 }));
 
 vi.mock("../../infra/agent-events.js", async () => {

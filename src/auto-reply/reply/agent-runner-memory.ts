@@ -756,7 +756,7 @@ export async function runSessionCompactionIfNeeded(params: {
     storePath: compactionStorePath,
   };
 
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+  const contextWindowTokens = await resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
       provider: params.followupRun.run.provider,
@@ -776,7 +776,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const responsesServerCompactionThreshold = resolveResponsesServerCompactionThreshold({
+  const responsesServerCompactionThreshold = await resolveResponsesServerCompactionThreshold({
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
@@ -1293,7 +1293,7 @@ export async function runMemoryFlushIfNeeded(params: {
   let activeSessionEntry = entry ?? params.sessionEntry;
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+  const contextWindowTokens = await resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
       provider: params.followupRun.run.provider,

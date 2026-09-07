@@ -6,11 +6,25 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
-  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
+  resolveContextTokenBudgetForModel: vi.fn<
+    (params?: {
+      cfg?: unknown;
+      provider?: string;
+      model?: string;
+      allowAsyncLoad?: boolean;
+      allowUnscopedModelLookup?: boolean;
+    }) => Promise<
+      { contextTokens: number; source: "model" | "configured" | "fallback" } | undefined
+    >
+  >(async () => ({ contextTokens: 200_000, source: "configured" })),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
+  resolveContextTokenBudgetForModel: (params?: {
+    cfg?: unknown;
+    provider?: string;
+    model?: string;
+  }) => mocks.resolveContextTokenBudgetForModel(params),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -170,7 +184,10 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveContextTokensForModel.mockReturnValue(200_000);
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue({
+      contextTokens: 200_000,
+      source: "configured",
+    });
   });
 
   it("forwards typed runtime context provenance to session persistence", async () => {
@@ -224,21 +241,77 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("marks a successful current model lookup with versioned resolved provenance", async () => {
-    const params = createParams();
+  it("marks a model-owned resolution with versioned resolved provenance", async () => {
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue({
+      contextTokens: 120_000,
+      source: "model",
+    });
+    const runParams = createParams();
 
-    await accountFollowupTurn(params);
+    await accountFollowupTurn(runParams);
 
     expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        contextTokensUsed: 200_000,
+        contextTokensUsed: 120_000,
         contextTokensSource: "resolved-v1",
       }),
     );
   });
 
+  it("keeps a config-only resolution on the untrusted legacy tag", async () => {
+    const runParams = createParams();
+
+    await accountFollowupTurn(runParams);
+
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 200_000,
+        contextTokensSource: "resolved",
+      }),
+    );
+  });
+
+  it("preserves an exact persisted resolution when current model resolution is unavailable", async () => {
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue(undefined);
+    const params = createParams();
+    const session = params.turn.session as unknown as {
+      current: () => SessionEntry;
+      adopt: (entry: SessionEntry) => void;
+    };
+    session.adopt({
+      ...session.current(),
+      modelProvider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "resolved-v1",
+    });
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "openclaw",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 272_000,
+        contextTokensSource: "resolved-v1",
+      }),
+    );
+    expect(mocks.resolveContextTokenBudgetForModel).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnscopedModelLookup: false }),
+    );
+  });
+
   it("does not label a prior context fallback as a current resolution after a model switch", async () => {
-    mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue(undefined);
     const params = createParams();
     const session = params.turn.session as unknown as {
       current: () => SessionEntry;

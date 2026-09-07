@@ -1,8 +1,9 @@
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -263,27 +264,42 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
-  const resolvedContextTokens =
+  const agentHarnessId = runResult.meta?.agentMeta?.agentHarnessId;
+  const contextResolution =
     runtimeContextTokens === undefined
-      ? resolveContextTokensForModel({
+      ? await resolveContextTokenBudgetForModel({
           cfg,
           provider: sessionModel.provider,
           model: sessionModel.model,
           allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        })
+      : undefined;
+  const persistedContextBudget =
+    runtimeContextTokens === undefined && contextResolution === undefined
+      ? resolveProjectedSessionContextTokenBudget({
+          entry: activeSessionEntry,
+          provider: sessionModel.provider,
+          model: sessionModel.model,
+          agentHarnessId,
+          resolvedContextTokens: undefined,
         })
       : undefined;
   const contextTokensUsed =
     runtimeContextTokens ??
-    resolvedContextTokens ??
+    contextResolution?.contextTokens ??
+    persistedContextBudget?.contextTokens ??
     activeSessionEntry?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
     runResult.meta?.agentMeta?.contextTokensSource ??
     (runtimeContextTokens !== undefined
       ? "runtime"
-      : resolvedContextTokens !== undefined
-        ? "resolved-v1"
-        : undefined);
+      : contextResolution
+        ? contextResolution.source === "model"
+          ? "resolved-v1"
+          : "resolved"
+        : persistedContextBudget?.contextTokensSource);
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.
   const compactionCount = await accountAgentTurnCompaction({
@@ -317,7 +333,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
-    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
+    agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the

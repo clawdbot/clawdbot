@@ -12,12 +12,22 @@ import {
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resetContextWindowCacheForTest,
+  resolveContextTokenBudgetForModel,
   resolveContextTokensForModel,
 } from "./context.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   projectConfigOntoRuntimeSourceSnapshot: (config: unknown) => config,
+}));
+
+vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => {
+    throw new Error("manifest static catalog resolver exploded");
+  },
+  createBundledProviderStaticCatalogContextResolver: () => {
+    throw new Error("bundled static catalog hook exploded");
+  },
 }));
 
 function testModelContextWindow(id: string, contextWindow: number) {
@@ -279,6 +289,50 @@ describe("createSessionManagerRuntimeRegistry", () => {
     registry.set(123, { value: 1 });
     expect(registry.get(null)).toBeNull();
     expect(registry.get(123)).toBeNull();
+  });
+});
+
+describe("resolveContextTokenBudgetForModel", () => {
+  it("keeps the generic fallback when bundled catalog enrichment fails", async () => {
+    resetContextWindowCacheForTest();
+    try {
+      await expect(
+        resolveContextTokenBudgetForModel({
+          provider: "fixture-provider",
+          model: "fixture-model",
+          fallbackContextTokens: 200_000,
+          allowAsyncLoad: false,
+        }),
+      ).resolves.toEqual({ contextTokens: 200_000, source: "fallback" });
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
+  it("keeps an authored model window when bundled catalog enrichment fails", async () => {
+    resetContextWindowCacheForTest();
+    try {
+      await expect(
+        resolveContextTokenBudgetForModel({
+          cfg: {
+            models: {
+              providers: {
+                "fixture-provider": {
+                  baseUrl: "https://example.invalid",
+                  models: [testModelContextWindow("fixture-model", 272_000)],
+                },
+              },
+            },
+          },
+          provider: "fixture-provider",
+          model: "fixture-model",
+          fallbackContextTokens: 200_000,
+          allowAsyncLoad: false,
+        }),
+      ).resolves.toEqual({ contextTokens: 272_000, source: "configured" });
+    } finally {
+      resetContextWindowCacheForTest();
+    }
   });
 });
 

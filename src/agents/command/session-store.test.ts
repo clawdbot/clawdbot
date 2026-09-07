@@ -13,6 +13,12 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
+import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
+import {
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "../context-cache.js";
+import { resetContextWindowCacheForTest } from "../context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   consumeCliSessionForkInStore,
@@ -25,6 +31,11 @@ import { resolveSession } from "./session.js";
 
 const { listSessionEntriesCore, loadSessionEntry, patchSessionEntryCore, replaceSessionEntry } =
   sessionAccessor;
+
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getRuntimeConfig: () => ({}),
+}));
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -84,6 +95,7 @@ function loadPersistedSessionEntry(
 }
 
 afterEach(() => {
+  resetContextWindowCacheForTest();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -613,6 +625,240 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists the bundled static catalog budget when no runtime context tokens are reported", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      resetContextWindowCacheForTest();
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-bundled-catalog-context";
+      const sessionId = "test-bundled-catalog-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          agentHarnessId: "openclaw",
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "deepseek",
+            model: "deepseek-v4-flash",
+            agentHarnessId: "openclaw",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "deepseek",
+        defaultModel: "deepseek-v4-flash",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved-v1");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(1_000_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved-v1",
+      );
+      // The persisted resolution stays trusted by the canonical projection
+      // owner when a cold reader cannot resolve synchronously.
+      const persistedEntry = loadPersistedSessionEntry(storePath, sessionKey);
+      const { resolveProjectedSessionContextTokens } =
+        await import("../../config/sessions/context-token-provenance.js");
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: persistedEntry,
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          agentHarnessId: "openclaw",
+          resolvedContextTokens: undefined,
+          authoredContextTokens: undefined,
+        }),
+      ).toBe(1_000_000);
+    });
+  });
+
+  it("persists a warm discovered budget for cold projection without a bundled catalog row", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      resetContextWindowCacheForTest();
+      const provider = "fixture-discovery";
+      const model = "fixture-large-context";
+      const discoveredContextTokens = 654_321;
+      replaceDiscoveredContextTokenCache(
+        new Map([[providerContextTokenCacheKey(provider, model), discoveredContextTokens]]),
+      );
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-discovered-context";
+      const sessionId = "test-discovered-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          agentHarnessId: "openclaw",
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider,
+            model,
+            agentHarnessId: "openclaw",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: provider,
+        defaultModel: model,
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(discoveredContextTokens);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved-v1");
+      const persistedEntry = loadPersistedSessionEntry(storePath, sessionKey);
+      expect(persistedEntry?.contextTokens).toBe(discoveredContextTokens);
+      expect(persistedEntry?.contextTokensSource).toBe("resolved-v1");
+
+      resetContextWindowCacheForTest();
+      const { resolveProjectedSessionContextTokens } =
+        await import("../../config/sessions/context-token-provenance.js");
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: persistedEntry,
+          provider,
+          model,
+          agentHarnessId: "openclaw",
+          resolvedContextTokens: undefined,
+          authoredContextTokens: undefined,
+        }),
+      ).toBe(discoveredContextTokens);
+    });
+  });
+
+  it("does not trust a bare discovery cache entry owned by another provider", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const provider = "fixture-requested";
+      const discoveredProvider = "fixture-discovered";
+      const model = "fixture-shared-model";
+      const discoveredContextTokens = 654_321;
+      replaceDiscoveredContextTokenCache(
+        await prepareDiscoveredContextTokenCache({
+          modelCatalog: {
+            entries: [
+              {
+                id: model,
+                provider: discoveredProvider,
+                contextWindow: discoveredContextTokens,
+              },
+            ],
+          },
+        }),
+      );
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cross-provider-context";
+      const sessionId = "test-cross-provider-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          agentHarnessId: "openclaw",
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider,
+            model,
+            agentHarnessId: "openclaw",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: provider,
+        defaultModel: model,
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(200_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved",
+      );
+    });
+  });
+
+  it("keeps the generic default budget on the untrusted legacy tag when the model cannot be resolved", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      resetContextWindowCacheForTest();
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-unresolved-context";
+      const sessionId = "test-unresolved-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: { sessionId, updatedAt: 1 },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "custom-host",
+            model: "unknown-model",
+            agentHarnessId: "openclaw",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "custom-host",
+        defaultModel: "unknown-model",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(200_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved",
+      );
+    });
+  });
+
   it("caps configured context override by the resolved runtime model window", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -657,10 +903,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
-      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      // The authored clamp equals the bundled catalog's own contextTokens cap,
+      // so the value is still catalog-owned and persists as a trusted
+      // resolution.
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved-v1");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
-        "resolved",
+        "resolved-v1",
       );
     });
   });

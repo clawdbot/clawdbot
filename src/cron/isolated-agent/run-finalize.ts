@@ -19,10 +19,7 @@ import {
 import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
-import {
-  resolveProjectedSessionContextTokens,
-  resolveTrustedSessionContextTokens,
-} from "../../config/sessions/context-token-provenance.js";
+import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -120,45 +117,44 @@ export async function finalizeCronRun(params: {
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
-  const modelContextTokens = (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
-    cfg: prepared.cfgWithAgentDefaults,
-    provider: providerUsed,
-    model: modelUsed,
-    allowAsyncLoad: false,
-  });
+  const cronContextRuntime = await cronContextRuntimeLoader.load();
+  const contextResolution =
+    runtimeContextTokens === undefined
+      ? await cronContextRuntime.resolveContextTokenBudgetForModel({
+          cfg: prepared.cfgWithAgentDefaults,
+          provider: providerUsed,
+          model: modelUsed,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        })
+      : undefined;
   const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
   const authoredContextTokens = resolveAuthoredModelContextTokens({
     cfg: prepared.cfgWithAgentDefaults,
     provider: providerUsed,
     model: modelUsed,
   });
-  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
+  const projectedContextBudget = resolveProjectedSessionContextTokenBudget({
     entry: prepared.cronSession.sessionEntry,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
-  });
-  const projectedContextTokens = resolveProjectedSessionContextTokens({
-    entry: prepared.cronSession.sessionEntry,
-    provider: providerUsed,
-    model: modelUsed,
-    agentHarnessId,
-    resolvedContextTokens: modelContextTokens,
+    resolvedContextTokens: contextResolution?.contextTokens,
+    resolvedContextTokensSource:
+      contextResolution?.source === "model"
+        ? "resolved-v1"
+        : contextResolution
+          ? "resolved"
+          : undefined,
     authoredContextTokens,
   });
-  const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
-  // Preserve persisted provenance only when the projector selected that owner;
-  // a current/authored clamp stays resolved so removed caps cannot stick.
-  const projectedUsesPersistedContext =
-    retainedRuntimeContextTokens !== undefined &&
-    (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
-      (authoredContextTokens === undefined &&
-        projectedContextTokens === retainedRuntimeContextTokens));
+  const contextTokens =
+    runtimeContextTokens ?? projectedContextBudget?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
     runtimeContextTokens !== undefined
       ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : projectedUsesPersistedContext
-        ? prepared.cronSession.sessionEntry.contextTokensSource
+      : projectedContextBudget
+        ? projectedContextBudget.contextTokensSource
         : "resolved";
 
   if (!params.isAborted()) {

@@ -470,7 +470,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
 });
 
 describe("resolveMemoryFlushContextWindowTokens", () => {
-  it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
+  it("uses provider-specific configured limits when the same model id exists on multiple providers", async () => {
     const cfg = {
       models: {
         providers: {
@@ -480,14 +480,14 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
       },
     };
     expect(
-      resolveMemoryFlushContextWindowTokens({
+      await resolveMemoryFlushContextWindowTokens({
         cfg: cfg as never,
         provider: "provider-b",
         modelId: "shared-model",
       }),
     ).toBe(512_000);
     expect(
-      resolveMemoryFlushContextWindowTokens({
+      await resolveMemoryFlushContextWindowTokens({
         cfg: cfg as never,
         provider: "provider-a",
         modelId: "shared-model",

@@ -91,17 +91,26 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
-  const contextTokens =
-    runtimeContextTokens !== undefined
-      ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
-  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
+  let contextTokens = runtimeContextTokens;
+  let contextTokensSource: SessionEntry["contextTokensSource"] =
+    result.meta.agentMeta?.contextTokensSource;
+  if (contextTokens === undefined) {
+    const contextModule = await getContextModule();
+    const resolution = await contextModule.resolveContextTokenBudgetForModel({
+      cfg,
+      provider: providerUsed,
+      model: modelUsed,
+      allowAsyncLoad: false,
+      allowUnscopedModelLookup: false,
+    });
+    if (resolution) {
+      contextTokens = resolution.contextTokens;
+      contextTokensSource ??= resolution.source === "model" ? "resolved-v1" : "resolved";
+    } else {
+      contextTokens = DEFAULT_CONTEXT_TOKENS;
+    }
+  }
+  contextTokensSource ??= "resolved";
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
