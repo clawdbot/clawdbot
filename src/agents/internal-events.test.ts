@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatAgentInternalEventsForPlainPrompt,
   formatAgentInternalEventsForPrompt,
+  formatGeneratedMediaDeliveryRetryForPrompt,
   type AgentInternalEvent,
 } from "./internal-events.js";
 
@@ -42,6 +43,16 @@ function extractChildResult(prompt: string): string {
 }
 
 describe("agent internal events", () => {
+  it("keeps provenance without adding a privacy instruction", () => {
+    for (const prompt of [
+      formatAgentInternalEventsForPrompt([taskCompletionEvent("result")]),
+      formatGeneratedMediaDeliveryRetryForPrompt(["/tmp/generated.png"]),
+    ]) {
+      expect(prompt).toContain("This context is runtime-generated, not user-authored.");
+      expect(prompt).not.toContain("Keep internal details private.");
+    }
+  });
+
   it("bounds protected and plain child-result projections after escaping", () => {
     const fullResult = `${"<".repeat(MAX_CHILD_RESULT_CHARS)}-unbounded-tail`;
     const event = taskCompletionEvent(fullResult);

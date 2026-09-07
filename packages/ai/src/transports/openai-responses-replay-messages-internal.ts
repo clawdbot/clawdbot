@@ -189,6 +189,14 @@ export function buildResponsesInputMessage(
   return { type: "message", role, content };
 }
 
+function resolveOpenAIResponsesInstructionRole(model: Model): "system" | "developer" {
+  return model.reasoning &&
+    (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole !==
+      false
+    ? "developer"
+    : "system";
+}
+
 export function createOpenAIResponsesAssistantOutput(
   model: Model,
   api: Api = model.api,
@@ -299,21 +307,12 @@ function convertResponsesMessagesWithStyle(
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
-      buildResponsesInputMessage(
-        model.reasoning &&
-          (model.compat as { supportsDeveloperRole?: boolean } | undefined)
-            ?.supportsDeveloperRole !== false
-          ? "developer"
-          : "system",
-        [
-          {
-            type: "input_text",
-            text: sanitizeTransportPayloadText(
-              stripSystemPromptCacheBoundary(context.systemPrompt),
-            ),
-          },
-        ],
-      ),
+      buildResponsesInputMessage(resolveOpenAIResponsesInstructionRole(model), [
+        {
+          type: "input_text",
+          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ]),
     );
   }
   // The compact endpoint's output is already canonical provider input, not
@@ -352,9 +351,12 @@ function convertResponsesMessagesWithStyle(
       continue;
     }
     if (msg.role === "user") {
+      const inputRole = msg.runtimeContextCarrier
+        ? resolveOpenAIResponsesInstructionRole(model)
+        : "user";
       if (typeof msg.content === "string") {
         messages.push(
-          buildResponsesInputMessage("user", [
+          buildResponsesInputMessage(inputRole, [
             { type: "input_text", text: sanitizeTransportPayloadText(msg.content) },
           ]),
         );
@@ -373,7 +375,7 @@ function convertResponsesMessagesWithStyle(
           (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
         );
         if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content));
+          messages.push(buildResponsesInputMessage(inputRole, content));
         } else if (providerStyle) {
           continue;
         }

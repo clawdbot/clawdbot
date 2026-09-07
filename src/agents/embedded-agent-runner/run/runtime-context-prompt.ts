@@ -7,7 +7,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
@@ -255,7 +254,7 @@ function buildRuntimeContextMessageContent(params: {
     params.kind === "runtime-event"
       ? OPENCLAW_RUNTIME_EVENT_HEADER
       : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
-    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    "This context is runtime-generated, not user-authored.",
     "",
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     params.runtimeContext,
