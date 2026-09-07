@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fanInChannelIngressLifecycles } from "../../plugin-sdk/channel-ingress-runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
 import {
@@ -11,6 +12,13 @@ import {
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
 >[1];
+
+function withoutCancellation(
+  lifecycle: ChannelIngressDispatchLifecycle,
+): Omit<ChannelIngressDispatchLifecycle, "onCancelled"> {
+  const { onCancelled: _onCancelled, ...legacy } = lifecycle;
+  return legacy;
+}
 
 describe("channel ingress drain cancellation", () => {
   beforeEach(() => {
@@ -84,6 +92,43 @@ describe("channel ingress drain cancellation", () => {
         }),
       ]);
       terminal.dispose();
+    });
+  });
+
+  it("keeps mixed modern and legacy fan-in cancellation budget-free", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("modern", { text: "x" }, { laneKey: "modern" });
+      await queue.enqueue("legacy", { text: "x" }, { laneKey: "legacy" });
+      const lifecycles = new Map<string, ChannelIngressDispatchLifecycle>();
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0, baseMs: 0, maxMs: 0 },
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          lifecycles.set(event.id, lifecycle);
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await drain.waitForIdle();
+      const modern = expectDefined(lifecycles.get("modern"), "modern lifecycle");
+      const legacy = withoutCancellation(
+        expectDefined(lifecycles.get("legacy"), "legacy lifecycle"),
+      );
+      await fanInChannelIngressLifecycles([modern, legacy]).cancel();
+
+      const pending = await queue.listPending();
+      expect(pending).toHaveLength(2);
+      expect(pending).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "modern", attempts: 0 }),
+          expect.objectContaining({ id: "legacy", attempts: 0 }),
+        ]),
+      );
+      expect(await queue.listFailed?.()).toEqual([]);
+      drain.dispose();
     });
   });
 });

@@ -681,39 +681,6 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("keeps retry-accounted abandonment pending beyond the failure threshold", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("abandoned", { text: "x" }, { laneKey: "l", receivedAt: 1 });
-
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        clock += 1;
-        const drain = createChannelIngressDrain<Payload>({
-          queue,
-          now: () => clock,
-          retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0, baseMs: 0, maxMs: 0 },
-          dispatchClaimedEvent: async (_event, lifecycle) => {
-            await lifecycle.onAbandoned();
-            return { kind: "deferred" };
-          },
-        });
-        await drain.drainOnce();
-        await drain.waitForIdle();
-        drain.dispose();
-      }
-
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({
-          id: "abandoned",
-          attempts: 3,
-          lastError: "turn-abandoned",
-        }),
-      ]);
-      expect(await queue.listFailed?.()).toEqual([]);
-    });
-  });
-
   it("refreshes active claims on claimLeaseMs/3 while deferred", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1_000;

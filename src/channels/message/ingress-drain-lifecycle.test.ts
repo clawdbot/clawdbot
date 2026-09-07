@@ -32,9 +32,13 @@ describe("channel ingress drain lifecycle", () => {
       abortSignal: abort.signal,
     });
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
-    expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
+    expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(true);
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
+    bound.turnAdoptionLifecycle.onDeferred();
+    await bound.turnAdoptionLifecycle.onCancelled?.();
+    expect(calls).toEqual(["deferred", "cancelled"]);
+    calls.length = 0;
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "abandoned"]);
