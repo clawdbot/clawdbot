@@ -3922,12 +3922,6 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   gap: 3px;
 }
 
-/* Help destinations are real hyperlinks; keep them looking like menu rows. */
-.sidebar-identity-menu a.sidebar-customize-menu__item {
-  color: inherit;
-  text-decoration: none;
-}
-
 /* The help flyout must escape the menu box, so the root stays
    overflow-visible; the viewport bound moves to a flex column where only
    the switcher list shrinks and scrolls (the action rows always fit). */
