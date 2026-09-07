@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,
@@ -19,6 +21,8 @@ import {
 type MainSessionRecoveryStoreTarget = {
   sessionKey: string;
   storePath: string;
+  /** Durable SQLite partition owner; carried into deferred retry targets so exact reads stay on the owning partition. */
+  agentId?: string;
 };
 
 export type MainSessionRecoveryOwnerLease = MainSessionRecoveryOwnerClaim &
@@ -61,6 +65,8 @@ export async function commitMainSessionRecovery(params: {
   scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
+  agentId?: string;
+  afterWriteInTransaction?: (result: MainSessionRecoveryStoreResult) => void;
 }): Promise<MainSessionRecoveryStoreResult> {
   const reservationCleanup =
     params.command.kind === "cancel_reservation" || params.command.kind === "abandon_reservation"
@@ -82,6 +88,10 @@ export async function commitMainSessionRecovery(params: {
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.afterWriteInTransaction
+      ? { afterWriteInTransaction: params.afterWriteInTransaction }
+      : {}),
     update: (entries) => {
       // Recheck inside the synchronous commit: shutdown can begin while this
       // recovery owner is waiting to acquire the session-store transaction.
@@ -176,6 +186,83 @@ export async function commitMainSessionRecovery(params: {
   });
 }
 
+/**
+ * Builds the idempotent restore closure for a Gateway-admitted recovery that
+ * aborts before dispatch (or after an ambiguous dispatch settlement fails).
+ * The committed interruption clears the row's run id, so only this exact
+ * applied transition mints the terminal trajectory event; a deferred repair
+ * retry re-enters the closure and must not fabricate a duplicate.
+ *
+ * Callers resolve `trajectoryTarget` before durable recovery admission: a
+ * filesystem/registry failure while resolving must reject the run before the
+ * row is admitted, not after, otherwise the admitted row has no restore path.
+ */
+export function createRestoreAdmittedRecoveryInterrupted(params: {
+  agentId: string;
+  lifecycleGeneration: string;
+  logWarn: (message: string) => void;
+  runId: string;
+  sessionId: () => string;
+  sessionKey: string;
+  shouldContinue?: () => boolean;
+  storePath: string;
+  trajectoryTarget: ReturnType<typeof resolveSqliteTargetFromSessionStorePath>;
+}): () => Promise<MainSessionRecoveryPendingTarget | undefined> {
+  let restored = false;
+  return async () => {
+    if (restored || params.shouldContinue?.() === false) {
+      return undefined;
+    }
+    const recovery = await commitMainSessionRecovery({
+      command: {
+        kind: "mark_admitted_recovery_interrupted",
+        lifecycleGeneration: params.lifecycleGeneration,
+        now: Date.now(),
+        runId: params.runId,
+        sessionId: params.sessionId(),
+      },
+      requireWriteSuccess: true,
+      ...(params.shouldContinue ? { shouldContinue: params.shouldContinue } : {}),
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      agentId: params.agentId,
+      afterWriteInTransaction: (result) => {
+        if (
+          result.transition.kind !== "applied" ||
+          result.entry?.sessionId !== params.sessionId() ||
+          !result.sessionKey
+        ) {
+          return;
+        }
+        appendInterruptedSessionTrajectoryEndSync({
+          agentDatabaseAgentId: params.trajectoryTarget.agentId ?? params.agentId,
+          agentDatabasePath: params.trajectoryTarget.path,
+          runId: params.runId,
+          sessionKey: result.sessionKey,
+          sessionId: result.entry.sessionId,
+          storePath: params.storePath,
+        });
+      },
+    });
+    restored = true;
+    if (
+      recovery.transition.kind !== "applied" ||
+      recovery.entry?.sessionId !== params.sessionId() ||
+      !recovery.sessionKey
+    ) {
+      return undefined;
+    }
+    return {
+      sessionId: recovery.entry.sessionId,
+      sessionKey: recovery.sessionKey,
+      storePath: params.storePath,
+      // Deferred retries reopen this exact store without the admission
+      // context; the owner must travel with the target or the retry reads
+      // the store's default partition and leaves the ops-owned row pending.
+      agentId: params.agentId,
+    };
+  };
+}
+
 export async function refreshMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease,
   runId?: string,
@@ -188,6 +275,7 @@ export async function refreshMainSessionRecoveryOwner(
       : { kind: "validate_foreground", claim: lease },
     requireWriteSuccess: true,
     target: lease,
+    agentId: lease.agentId,
   });
   const accepted = runId
     ? result.transition.kind === "applied"
@@ -222,6 +310,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     command,
     requireWriteSuccess: true,
     target: params.target,
+    agentId: params.target.agentId,
   });
   if (claim.transition.kind === "rejected" && claim.transition.reason === "session_replaced") {
     claim = await commitMainSessionRecovery({
@@ -229,6 +318,7 @@ export async function claimMainSessionRecoveryOwner(params: {
       requireWriteSuccess: true,
       scanAliases: true,
       target: params.target,
+      agentId: params.target.agentId,
     });
   }
   if (claim.transition.kind === "foreground_claimed") {
@@ -237,7 +327,13 @@ export async function claimMainSessionRecoveryOwner(params: {
     }
     return {
       kind: "claimed",
-      lease: { ...claim.transition.claim, storePath: params.target.storePath },
+      lease: {
+        ...claim.transition.claim,
+        storePath: params.target.storePath,
+        // The lease is the only owner provenance the release retry sees;
+        // dropping it here reopens the durable row from the default partition.
+        ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+      },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
     } as const;
@@ -289,6 +385,7 @@ export async function inspectMainSessionRecoveryRequired(params: {
     expectedSessionId: params.expectedSessionId,
     requireWriteSuccess: true,
     target: params.target,
+    agentId: params.target.agentId,
   });
   if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
     result = await commitMainSessionRecovery({
@@ -297,6 +394,7 @@ export async function inspectMainSessionRecoveryRequired(params: {
       requireWriteSuccess: true,
       scanAliases: true,
       target: params.target,
+      agentId: params.target.agentId,
     });
   }
   if (result.transition.kind === "observed") {
@@ -325,6 +423,7 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
       command: { kind: "release_foreground", claim: lease },
       requireWriteSuccess: true,
       target: lease,
+      agentId: lease.agentId,
     }),
   );
   const { entry, sessionKey } = released;
@@ -337,7 +436,14 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   ) {
     return undefined;
   }
-  return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
+  return {
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: lease.storePath,
+    // The release retry may run after the claiming context is gone; only the
+    // lease-carried owner keeps the follow-up recovery on the durable partition.
+    ...(lease.agentId ? { agentId: lease.agentId } : {}),
+  };
 }
 
 export async function releaseMainSessionRecoveryOwner(

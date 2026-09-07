@@ -394,6 +394,9 @@ export async function persistAgentSessionPhase(params: {
               mainRestartRecoveryOwnerLease = {
                 ...recoveryTransition.claim,
                 storePath: params.storePath,
+                // The owner-release retry reopens the store without admission
+                // context; the lease must carry the durable partition owner.
+                agentId: params.sessionAgentId,
               };
               params.setMainRestartRecoveryOwnerLease(mainRestartRecoveryOwnerLease);
             }

@@ -11,10 +11,12 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "./run/deferred-lifecycle-owner.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -258,16 +260,15 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-1";
     const startedAt = Date.now() - 60_000;
 
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: startedAt,
-        startedAt,
-        runtimeMs: 12_345,
-        status: "running",
-      },
-    );
+    // SAFETY: test-only partial entry; upsertSessionEntryCore fills the remaining fields.
+    await upsertSessionEntryCore({ sessionKey, storePath }, {
+      sessionId,
+      updatedAt: startedAt,
+      startedAt,
+      runtimeMs: 12_345,
+      status: "running",
+      lifecycleRunId: "force-clear-run",
+    } as Partial<InternalSessionEntry>);
 
     setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
 
@@ -286,6 +287,16 @@ describe("force-clear terminal state persistence", () => {
     expect(entry?.abortedLastRun).toBe(true);
     expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
     expect(entry?.runtimeMs).toBe(12_345);
+    // A force-cleared run can never emit a normal lifecycle terminal event;
+    // the killed transition records the interrupted trajectory ending itself.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "force-clear-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("persists a force-cleared bare row under its fixed-store owner", async () => {
@@ -567,5 +578,54 @@ describe("force-clear terminal state persistence", () => {
     expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
     expect(isEmbeddedAgentRunHandleActive(newSessionId)).toBe(true);
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
+  });
+
+  it("does not append a duplicate trajectory event for an already-killed row", async () => {
+    const sessionKey = "agent:main:already-killed";
+    const sessionId = "session-already-killed";
+    const startedAt = Date.now() - 60_000;
+
+    // SAFETY: test-only partial entry; upsertSessionEntryCore fills the remaining fields.
+    await upsertSessionEntryCore({ sessionKey, storePath }, {
+      sessionId,
+      updatedAt: startedAt,
+      startedAt,
+      runtimeMs: 12_345,
+      status: "running",
+      lifecycleRunId: "force-clear-run",
+    } as Partial<InternalSessionEntry>);
+
+    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
+
+    const firstResult = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      forceClear: true,
+      reason: "stuck_recovery",
+      settleMs: 0,
+    });
+    expect(firstResult.forceCleared).toBe(true);
+
+    const afterFirst = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
+    expect(afterFirst).toHaveLength(1);
+
+    // A second force-clear against the now-killed row must not fabricate another
+    // terminal event just because updateSessionEntry returns the existing entry.
+    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
+    const secondResult = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      forceClear: true,
+      reason: "stuck_recovery",
+      settleMs: 0,
+    });
+    expect(secondResult.forceCleared).toBe(true);
+
+    const afterSecond = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
+    expect(afterSecond).toHaveLength(1);
+    expect(afterSecond[0]).toMatchObject({
+      type: "session.ended",
+      runId: "force-clear-run",
+    });
   });
 });

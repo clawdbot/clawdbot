@@ -12,11 +12,13 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
 import type { TrajectoryEvent } from "./types.js";
@@ -33,6 +35,7 @@ const TRAJECTORY_RUNTIME_DELETE_RUN_BATCH_SIZE = 100;
 
 export type SqliteTrajectoryRuntimeScope = {
   agentId?: string;
+  agentDatabasePath?: string;
   env?: NodeJS.ProcessEnv;
   maxGlobalRuntimeBytes?: number;
   maxRuntimeBytes?: number;
@@ -49,6 +52,27 @@ type SqliteTrajectoryRuntimeEventRow = {
   event: TrajectoryEvent;
   seq: number;
 };
+
+// In-transaction appenders (restart recovery, force-clear) pre-resolve the
+// physical trajectory database before BEGIN; re-resolving here would extend
+// the session write lock with target discovery.
+function resolveTrajectoryRuntimeDatabaseOptions(
+  scope: Pick<SqliteTrajectoryRuntimeScope, "agentDatabasePath" | "agentId" | "env" | "storePath">,
+): OpenClawAgentDatabaseOptions {
+  if (scope.agentDatabasePath) {
+    if (!scope.agentId) {
+      throw new Error(
+        "Trajectory store scope requires an explicit agent id when agentDatabasePath is provided.",
+      );
+    }
+    return {
+      agentId: normalizeAgentId(scope.agentId),
+      ...(scope.env ? { env: scope.env } : {}),
+      path: scope.agentDatabasePath,
+    };
+  }
+  return toDatabaseOptions(resolveSqliteReadScope(scope));
+}
 
 type TrajectoryRuntimeRun = {
   newestCreatedAt: number;
@@ -69,7 +93,7 @@ export function appendSqliteTrajectoryRuntimeEvents(
   if (events.length === 0) {
     return;
   }
-  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+  const options = resolveTrajectoryRuntimeDatabaseOptions(scope);
   const maxRuntimeBytes = Math.max(
     1,
     Math.floor(scope.maxRuntimeBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
@@ -140,43 +164,40 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const read = withOpenClawAgentDatabaseReadOnly(
-    (database) => {
-      const db = getTrajectoryKysely(database.db);
-      const tailEvents =
-        scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
-          ? Math.max(0, Math.floor(scope.tailEvents))
-          : undefined;
-      let query = db
-        .selectFrom("trajectory_runtime_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", scope.sessionId)
-        .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-      const afterSeq = scope.afterSeq;
-      if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-        query = query.where("seq", ">", Math.floor(afterSeq));
-      }
-      const normalizedMaxEvents =
-        scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
-          ? Math.max(0, Math.floor(scope.maxEvents))
-          : undefined;
-      const maxEvents =
-        tailEvents === undefined
-          ? normalizedMaxEvents
-          : normalizedMaxEvents === undefined
-            ? tailEvents
-            : Math.min(tailEvents, normalizedMaxEvents);
-      if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-        query = query.limit(Math.max(0, Math.floor(maxEvents)));
-      }
-      const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
-        event: JSON.parse(row.event_json) as TrajectoryEvent,
-        seq: row.seq,
-      }));
-      return tailEvents === undefined ? rows : rows.toReversed();
-    },
-    toDatabaseOptions(resolveSqliteReadScope(scope)),
-  );
+  const read = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getTrajectoryKysely(database.db);
+    const tailEvents =
+      scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
+        ? Math.max(0, Math.floor(scope.tailEvents))
+        : undefined;
+    let query = db
+      .selectFrom("trajectory_runtime_events")
+      .select(["seq", "event_json"])
+      .where("session_id", "=", scope.sessionId)
+      .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
+    const afterSeq = scope.afterSeq;
+    if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
+      query = query.where("seq", ">", Math.floor(afterSeq));
+    }
+    const normalizedMaxEvents =
+      scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
+        ? Math.max(0, Math.floor(scope.maxEvents))
+        : undefined;
+    const maxEvents =
+      tailEvents === undefined
+        ? normalizedMaxEvents
+        : normalizedMaxEvents === undefined
+          ? tailEvents
+          : Math.min(tailEvents, normalizedMaxEvents);
+    if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
+      query = query.limit(Math.max(0, Math.floor(maxEvents)));
+    }
+    const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+      event: JSON.parse(row.event_json) as TrajectoryEvent,
+      seq: row.seq,
+    }));
+    return tailEvents === undefined ? rows : rows.toReversed();
+  }, resolveTrajectoryRuntimeDatabaseOptions(scope));
   return read.found ? read.value : [];
 }
 

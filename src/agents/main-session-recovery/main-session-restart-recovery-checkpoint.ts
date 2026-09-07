@@ -48,10 +48,11 @@ export async function reconcileInterruptedCompletionReport(params: {
   source: "announce_runs" | "transcript";
   storePath: string;
   sessionKey: string;
+  agentId?: string;
 }): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
   let didReconcile = false;
   const current = await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { sessionKey: params.sessionKey, storePath: params.storePath, agentId: params.agentId },
     (entry) => {
       const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
       const stillMatchesSource =
@@ -302,7 +303,7 @@ type RecoveryCheckpointCompletion =
   | { outcome: "unsafe-transcript"; reason: string };
 
 export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
-  agentId: string;
+  agentId?: string;
   entry: SessionEntry;
   messages: readonly unknown[];
   pendingFinalDeliveryIntentId?: string;
