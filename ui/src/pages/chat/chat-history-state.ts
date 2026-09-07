@@ -12,6 +12,7 @@ import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import { peekChatRouteStartup } from "./route-startup.ts";
 
 type ChatHistoryLoadRequest = {
   sessionKey: string;
@@ -52,6 +53,7 @@ type ChatHistoryPaneRequests = {
 
 export type InitialChatSnapshotHydration = {
   sessionKey: string;
+  startedBeforeReady: boolean;
   promise: Promise<void>;
   readyAt?: number;
   wait?: Promise<boolean>;
@@ -100,7 +102,11 @@ export function waitForInitialChatSnapshot(state: ChatState): Promise<boolean> |
   if (!hydration) {
     return undefined;
   }
-  if (!areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)) {
+  if (
+    !hydration.startedBeforeReady ||
+    (state.client && peekChatRouteStartup(state.client, state.sessionKey)) ||
+    !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
+  ) {
     retireInitialChatSnapshot(state);
     return undefined;
   }

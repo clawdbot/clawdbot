@@ -121,6 +121,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const requests = chatHistoryRequests(state);
     const hydration: InitialChatSnapshotHydration = {
       sessionKey,
+      startedBeforeReady: this.context.gateway.snapshot.phase !== "connected",
       promise: store
         .read(cacheKey)
         .then((snapshot) => {

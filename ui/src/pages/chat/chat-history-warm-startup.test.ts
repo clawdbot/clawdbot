@@ -27,7 +27,7 @@ const stored: ChatSessionSnapshot = {
 const liveMessages = [nativeHistoryMessage(2, "Live conversation")];
 const panes: TestChatPane[] = [];
 
-function mountPane(withStore = true, key = sessionKey) {
+function mountPane(withStore = true, key = sessionKey, connectedAtMount = false) {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   const read = createDeferred<ChatSessionSnapshot | null>();
@@ -39,7 +39,7 @@ function mountPane(withStore = true, key = sessionKey) {
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
   vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
   pane.context = createInitializationContext();
-  pane.context.gateway.snapshot.phase = "connecting";
+  pane.context.gateway.snapshot.phase = connectedAtMount ? "connected" : "connecting";
   pane.sessionKey = key;
   pane.chatMessagesBySession = memory;
   if (withStore) {
@@ -192,6 +192,17 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).toHaveBeenCalledOnce();
     await loading;
+  });
+
+  it("does not defer startup for a stored read begun after connection readiness", async () => {
+    const h = mountPane(true, sessionKey, true);
+    h.connect();
+    const loading = h.start();
+    expect(h.request).toHaveBeenCalledOnce();
+    await loading;
+    h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual(liveMessages);
   });
 
   it("starts immediately if the connection budget expired before startup was requested", async () => {
