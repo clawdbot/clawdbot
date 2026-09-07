@@ -51,37 +51,58 @@ suite.define(() => {
       );
       await active.waitFor();
       const geometry = await active.evaluate((row) => {
-        const section = row.closest<HTMLElement>(".sidebar-sessions");
         const scroller = row.closest<HTMLElement>(".sidebar-shell__body");
-        if (!section || !scroller) {
+        if (!scroller) {
           throw new Error("sidebar session geometry owner not found");
         }
         const rowRect = row.getBoundingClientRect();
-        const sectionRect = section.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
-          inset: sectionRect.right - rowRect.right,
+          contentEdge:
+            scroller.getBoundingClientRect().right - (scroller.offsetWidth - scroller.clientWidth),
           maskImage: scrollerStyle.maskImage,
           maskPosition: scrollerStyle.maskPosition,
           maskSize: scrollerStyle.maskSize,
+          paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
+          rowRight: rowRect.right,
+          sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
           overflows: scroller.scrollHeight > scroller.clientHeight,
-          sectionPaddingEnd: Number.parseFloat(getComputedStyle(section).paddingRight),
+          scrollbarGutter: scrollerStyle.scrollbarGutter,
+          scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
         };
       });
 
       expect(geometry.overflows).toBe(true);
-      expect(geometry.inset, JSON.stringify(geometry)).toBeGreaterThanOrEqual(
-        geometry.sectionPaddingEnd,
-      );
       expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
       expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
       expect(geometry.maskSize.split(", ")).toContain("12px 100%");
 
-      const rtlMaskPosition = await active.evaluate((row) => {
+      const rtlGeometry = await active.evaluate((row) => {
         document.documentElement.dir = "rtl";
-        return getComputedStyle(row.closest<HTMLElement>(".sidebar-shell__body")!).maskPosition;
+        const scroller = row.closest<HTMLElement>(".sidebar-shell__body")!;
+        const scrollerStyle = getComputedStyle(scroller);
+        return {
+          contentEdge:
+            scroller.getBoundingClientRect().left + (scroller.offsetWidth - scroller.clientWidth),
+          maskPosition: scrollerStyle.maskPosition,
+          paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
+          rowLeft: row.getBoundingClientRect().left,
+          sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
+        };
       });
-      expect(rtlMaskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
+      expect(rtlGeometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
+      expect(rtlGeometry.paddingInlineEnd).toBe(rtlGeometry.sidebarPadX);
+      expect(
+        rtlGeometry.rowLeft - rtlGeometry.contentEdge,
+        JSON.stringify(rtlGeometry),
+      ).toBeCloseTo(rtlGeometry.sidebarPadX, 1);
+      expect(geometry.scrollbarGutter).toBe("stable");
+      expect(geometry.scrollbarWidth).toBeGreaterThan(0);
+      expect(geometry.paddingInlineEnd).toBe(geometry.sidebarPadX);
+      expect(geometry.contentEdge - geometry.rowRight, JSON.stringify(geometry)).toBeCloseTo(
+        geometry.sidebarPadX,
+        1,
+      );
 
       if (captureProof) {
         await page.screenshot({
