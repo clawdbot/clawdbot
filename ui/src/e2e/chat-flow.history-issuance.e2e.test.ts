@@ -72,7 +72,7 @@ suite.define(() => {
                     (pane) =>
                       getComputedStyle(pane).opacity !== "0" &&
                       pane.getAttribute("aria-hidden") === "false" &&
-                      Boolean(pane.textContent?.includes("Previous conversation.")),
+                      pane.textContent.includes("Previous conversation."),
                   );
                   if (getComputedStyle(skeleton).visibility === "visible") {
                     // Use the animation clock: the first sampled frame may arrive late on CI.
