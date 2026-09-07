@@ -432,6 +432,7 @@
 .chat-assistant-attachment-card {
   --chat-attachment-border: var(--border-strong);
   --chat-attachment-surface: var(--bg);
+  --chat-attachment-action-size: 30px;
 
   width: 100%;
   max-width: 100%;
@@ -611,13 +612,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--chat-attachment-action-size);
+  height: var(--chat-attachment-action-size);
   flex: none;
   gap: 5px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--text);
   background: transparent;
   font: inherit;
@@ -681,16 +682,17 @@
 
 .chat-assistant-attachment-card__action-skeleton {
   position: absolute;
-  inset-block: 0;
+  inset-block-start: 0;
   inset-inline-end: 0;
-  width: 64px;
-  border-radius: 50%;
+  width: var(--chat-attachment-action-size);
+  height: var(--chat-attachment-action-size);
+  border-radius: var(--radius-full);
 }
 
 .chat-assistant-attachment-card__actions--loading {
   position: relative;
   padding-inline: 38px 0;
-  height: 30px;
+  height: var(--chat-attachment-action-size);
   font-size: 12px;
   font-weight: 600;
 }

@@ -242,6 +242,7 @@ export function retryAssistantAttachmentAvailability(
   resource.abortController = undefined;
   resource.pending = undefined;
   resource.value = undefined;
+  resource.retainWhileIdle = false;
   resource.retryAttempted = false;
   scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
   if (allowImage) {
@@ -270,6 +271,7 @@ function createUnavailableAssistantAttachment(
 function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
   // Identical paths can have different project/protection policy in different sessions.
   const cacheKey = JSON.stringify([
+    options.connectionEpoch ?? 0,
     options.resourceBasePath ?? "",
     options.authToken?.trim() ?? "",
     options.sessionKey,
@@ -293,6 +295,7 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
+  resource.retainWhileIdle = availability.status === "available";
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 

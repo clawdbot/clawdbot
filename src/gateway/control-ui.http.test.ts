@@ -913,6 +913,7 @@ describe("handleControlUiHttpRequest", () => {
         "Content-Disposition",
         `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
       );
+      expect(res["setHeader"]).toHaveBeenCalledWith("Cache-Control", "no-cache");
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -942,6 +943,38 @@ describe("handleControlUiHttpRequest", () => {
       expect(payload.mediaTicket).toMatch(/^v1\./);
       expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
     } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("privately caches ticketed canonical inbound media until the ticket expires", async () => {
+    const now = 1_800_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const stateDir = resolveStateDir();
+    const id = `ui-media-ref-cache-${randomUUID()}.png`;
+    const source = `media://inbound/${id}`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+
+    try {
+      const meta = await runAssistantMediaRequest({
+        url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(source)}&token=test-token`,
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+      const payload = responseJson(meta.end) as { mediaTicket?: string };
+      const media = await runAssistantMediaRequest({
+        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+
+      expect(media.handled).toBe(true);
+      expect(media.res.statusCode).toBe(200);
+      expect(media.res["setHeader"]).toHaveBeenCalledWith("Cache-Control", "private, max-age=300");
+    } finally {
+      dateNowSpy.mockRestore();
       await fs.rm(filePath, { force: true });
     }
   });
@@ -1142,6 +1175,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(media.handled).toBe(true);
         expect(media.res.statusCode).toBe(200);
+        expect(media.res["setHeader"]).toHaveBeenCalledWith("Cache-Control", "no-cache");
 
         const shortenedTicket = payload.mediaTicket?.slice(0, -1) ?? "";
         const rejected = await runAssistantMediaRequest({

@@ -553,14 +553,12 @@ describe("canonical image presentation handoff", () => {
           { path: `media://inbound/${crypto.randomUUID()}.png`, contentType: "image/png" },
         ]);
       } else {
-        fixture.root().setConnected(false);
+        fixture.props.connectionEpoch = 2;
+        fixture.renderPane();
       }
       displayed.dispatchEvent(new Event("load"));
       displayed.dispatchEvent(new Event("error"));
       await flushDeferredRowPrune();
-      if (change === "disconnect") {
-        fixture.root().setConnected(true);
-      }
       expect(fixture.images()).toHaveLength(0);
     },
   );
