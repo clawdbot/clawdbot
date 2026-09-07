@@ -19,6 +19,7 @@ import {
 } from "../agents/tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
+import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -1355,7 +1356,7 @@ export function createHookRunner(
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,
   ): Promise<PluginHookMessageSendingResult | undefined> {
-    return runModifyingHook<"message_sending", PluginHookMessageSendingResult>(
+    const result = await runModifyingHook<"message_sending", PluginHookMessageSendingResult>(
       "message_sending",
       event,
       ctx,
@@ -1371,10 +1372,13 @@ export function createHookRunner(
             metadata: next.metadata ?? acc?.metadata,
           };
         },
-        shouldStop: (result) => result.cancel === true,
+        shouldStop: (decision) => decision.cancel === true,
         terminalLabel: "cancel=true",
       },
     );
+    const original = result?.cancel ? undefined : (result?.content ?? event.content);
+    const content = finalizeGroupThreadToolReply(original, event, ctx);
+    return content !== original ? { ...result, content } : result;
   }
 
   /**

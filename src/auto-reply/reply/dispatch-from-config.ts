@@ -1,5 +1,6 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
 import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
@@ -31,7 +32,8 @@ export async function dispatchReplyFromConfig(
 export async function dispatchLowLevelChannelReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+  // A group coordinator must retain this turn until execution, not just queue publication.
+  return await dispatchReplyFromConfigWithQueuePolicy(params, !getGroupThreadTurn());
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(

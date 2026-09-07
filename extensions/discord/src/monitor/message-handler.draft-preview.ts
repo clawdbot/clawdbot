@@ -31,6 +31,7 @@ export function createDiscordDraftPreviewController(params: {
   discordConfig: DiscordConfig;
   accountId: string;
   sourceRepliesAreToolOnly: boolean;
+  groupThread?: boolean;
   textLimit: number;
   deliveryRest: RequestClient;
   deliverChannelId: string;
@@ -44,10 +45,12 @@ export function createDiscordDraftPreviewController(params: {
   // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
   // can rewrite or cancel so the original payload cannot flash before durable delivery.
   const hookRunner = getGlobalHookRunner();
-  const allowProviderPreview = !(
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false)
-  );
+  const allowProviderPreview =
+    !params.groupThread &&
+    !(
+      (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+      (hookRunner?.hasHooks("message_sending") ?? false)
+    );
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const canStreamProgressDraftForToolOnlySource =
     params.sourceRepliesAreToolOnly && discordStreamMode === "progress";

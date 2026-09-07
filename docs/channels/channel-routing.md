@@ -86,7 +86,7 @@ does not create a route-only session entry just because a message was observed.
 
 ## Routing rules (how an agent is chosen)
 
-Routing picks **one agent** for each inbound message:
+Ordinary routing picks **one agent** for each inbound message:
 
 1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
 2. **Parent peer match** (thread inheritance).
@@ -106,21 +106,39 @@ The matched agent determines which workspace and session store are used.
 
 ## Broadcast groups (run multiple agents)
 
-Broadcast groups let you run **multiple agents** for the same peer **when OpenClaw would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
-
-Config:
+Agent group threads use the top-level `broadcast` config to run several agents
+for an admitted inbound message. A qualified `"<channel>:<peerId>"` key takes
+precedence over an unqualified WhatsApp peer key. Ordinary routing still
+provides the conversation route; the coordinator gives each participant its
+own agent session for that channel, account, peer, and thread.
 
 ```json5
 {
   broadcast: {
     strategy: "parallel",
+    "telegram:-100123": {
+      agents: ["reviewer", "writer"],
+      maxRounds: 2,
+      maxTurns: 4,
+    },
+    "slack:C0123": ["support", "reviewer"],
     "120363403215116621@g.us": ["alfred", "baerbel"],
-    "+15555550123": ["support", "logger"],
   },
 }
 ```
 
-See: [Broadcast Groups](/channels/broadcast-groups).
+Qualified entries default to explicit mention selection, one round, and one
+turn per configured agent. `maxTurns` bounds participant runs started across
+all rounds, not physical platform messages. Legacy WhatsApp arrays retain
+single-pass fan-out to all listed agents.
+
+Channel allowlists still apply. On Discord, Slack, and Telegram, an explicit
+mention of any qualified participant can satisfy the room’s mention gate.
+Configured ACP bindings remain exclusive and bypass group-thread fan-out.
+
+See [Broadcast groups](/channels/broadcast-groups) for selection, continuation
+eligibility, budgets, and participant labeling. Control UI does not yet offer a
+dedicated team-thread session.
 
 ## Config overview
 

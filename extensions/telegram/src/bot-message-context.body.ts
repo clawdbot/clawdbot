@@ -8,6 +8,8 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveGroupThreadMentionFacts,
+  type GroupThreadMentionFacts,
   resolveUnmentionedGroupInboundPolicy,
   type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
@@ -59,6 +61,7 @@ import {
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
@@ -82,6 +85,7 @@ type TelegramInboundBodyResult = {
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
   mentionFacts: TelegramMentionFacts;
+  groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
@@ -145,6 +149,7 @@ export async function resolveTelegramInboundBody(params: {
   senderId: string;
   senderUsername: string;
   sessionKey?: string;
+  acpBinding?: boolean;
   resolvedThreadId?: number;
   replyThreadId?: number;
   threadSpec: TelegramThreadSpec;
@@ -327,16 +332,26 @@ export async function resolveTelegramInboundBody(params: {
     ? hasBotMention(msg, botUsername) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
-  const computedWasMentioned = matchesMentionWithExplicit({
-    text: messageTextParts.text || richText || "",
-    mentionRegexes,
-    explicit: {
-      hasAnyMention,
-      isExplicitlyMentioned: explicitlyMentioned,
-      canResolveExplicit: Boolean(botUsername),
-    },
-    transcript: preflightTranscript,
+  const groupThread = resolveGroupThreadMentionFacts({
+    cfg,
+    channel: "telegram",
+    peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
+    text: [messageTextParts.text, richText, preflightTranscript].filter(Boolean).join("\n"),
+    sessionKey: params.sessionKey,
+    acpBinding: params.acpBinding,
   });
+  const computedWasMentioned =
+    Boolean(groupThread?.mentionedAgentIds.length) ||
+    matchesMentionWithExplicit({
+      text: messageTextParts.text || richText || "",
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botUsername),
+      },
+      transcript: preflightTranscript,
+    });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
 
   if (isGroup && commandGate.shouldBlockControlCommand) {
@@ -358,7 +373,8 @@ export async function resolveTelegramInboundBody(params: {
     "reply_to_bot",
     replyToBotMessage && !isReplyToServiceMessage,
   );
-  const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+  const canDetectMention =
+    Boolean(groupThread) || Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
@@ -450,6 +466,7 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
     effectiveWasMentioned,
     inboundEventKind,
+    groupThread,
     mentionFacts: resolveTelegramMentionFacts({
       canDetectMention,
       effectiveWasMentioned,

@@ -1,3 +1,4 @@
+import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
@@ -45,15 +46,18 @@ export function buildInboundReplyPayloadSendingBeforeDeliver(
   const finalized = finalizeInboundContext(ctx);
   const hookCtx = deriveInboundMessageHookContext(finalized);
   return markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
-    const runId = runState.runId;
+    const group = getGroupThreadDispatchContext();
+    const deliveryContext = group?.ctx ?? finalized;
+    const deliveryHookContext = group ? deriveInboundMessageHookContext(group.ctx) : hookCtx;
+    const runId = group ? group.runState.runId : runState.runId;
     const hookedPayload = await runReplyPayloadSendingHook({
       payload,
       kind: info.kind,
-      channel: finalized.Surface ?? finalized.Provider,
-      sessionKey: finalized.SessionKey,
+      channel: deliveryContext.Surface ?? deliveryContext.Provider,
+      sessionKey: deliveryContext.SessionKey,
       runId,
       usageState: consumeReplyUsageState(runId),
-      context: { ...toPluginMessageContext(hookCtx), runId },
+      context: { ...toPluginMessageContext(deliveryHookContext), runId },
     });
     if (!hookedPayload) {
       await onSuppressed?.(payload, info, "cancelled_by_reply_payload_sending_hook");
@@ -83,9 +87,13 @@ export function buildLegacyInboundMessageSendingBeforeDeliver(
       if (!payload.text) {
         return payload;
       }
+      const group = getGroupThreadDispatchContext();
       const result = await hookRunner.runMessageSending(
         { content: payload.text, to: replyTarget },
-        toPluginMessageContext(hookCtx),
+        {
+          ...toPluginMessageContext(hookCtx),
+          ...(group ? { sessionKey: group.ctx.SessionKey, runId: group.runState.runId } : {}),
+        },
       );
       if (result?.cancel) {
         return null;
@@ -153,6 +161,7 @@ export async function applyMessageSendingHook(params: {
     };
   }
   try {
+    const group = getGroupThreadDispatchContext();
     const sendingResult = await params.hookRunner!.runMessageSending(
       {
         to: params.to,
@@ -170,6 +179,7 @@ export async function applyMessageSendingHook(params: {
         accountId: params.accountId ?? undefined,
         conversationId: params.to,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(group ? { sessionKey: group.ctx.SessionKey, runId: group.runState.runId } : {}),
       },
     );
     if (sendingResult?.cancel) {

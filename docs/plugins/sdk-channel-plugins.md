@@ -32,7 +32,9 @@ shared `message` tool. Your plugin owns:
   targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
-generic `:thread:` bookkeeping, and dispatch.
+generic `:thread:` bookkeeping, and dispatch. For configured agent group
+threads, core also owns participant selection, follow-up rounds, and turn
+budgets. Keep those policies out of channel adapters.
 
 Core also owns model-picker product actions. A channel that renders a
 `ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
@@ -93,6 +95,20 @@ capabilities backed by `verifyChannelMessageLiveCapabilityAdapterProofs(...)`
 and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
 progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
 silently.
+
+### Agent group participant labels
+
+`ReplyDispatchRuntimeInfo.participant` optionally carries `{ agentId, name }`
+from core. Encode that identity at the transport boundary, without inferring it
+from reply text or counting responders. For a qualified entry with more than one configured
+participant, Discord, Slack, and Telegram prepend the participant name as a
+bold first line even when only one participant answers. WhatsApp presentation
+remains unchanged.
+
+Participant turns and physical deliveries are different units. A single turn
+can produce chunks, previews, and message-tool sends; adapters do not enforce
+the coordinator’s `maxTurns` budget. See
+[Agent group dispatch](/plugins/sdk-channel-inbound#agent-group-dispatch).
 
 ### Progress visibility acceptance
 
@@ -898,6 +914,26 @@ Good fit for the shared helper:
 - implicit mention allowlist
 - command bypass
 - final skip decision
+
+For a qualified group-thread entry, compute explicit participant mention facts
+once with `resolveGroupThreadMentionFacts({ cfg, channel, peerId, text, sessionKey, acpBinding })`
+from `openclaw/plugin-sdk/channel-inbound`, including direct conversations. Pass
+the resolved session key and whether a configured ACP binding owns the route.
+It returns `undefined` for an exclusive ACP route or when no qualified entry
+applies, otherwise the resolved group and `mentionedAgentIds`. If routing changes
+after preparation, use `isGroupThreadRouteExclusive({ sessionKey, acpBinding })`
+to discard participant facts for an ACP-owned destination and reevaluate admission
+using only the final route’s ordinary mention and command facts.
+Merge a non-empty participant match with the routed agent’s local mention facts before
+the ordinary gate, and carry the same selection facts into dispatch. A mention
+of a non-routed participant must not be dropped by a single-agent gate.
+Participant selection requires an `@`-style match; a bare name or emoji does not
+select an agent. Keep sender authorization and command policy unchanged.
+
+Set the optional `replyOptions.groupThreadReplyFormatter(text, participant)` to
+apply the adapter’s participant label to source-conversation message-tool replies.
+The participant contains `agentId` and `name`; reuse the same transport formatter
+used for ordinary replies with participant delivery metadata.
 
 Preferred flow:
 

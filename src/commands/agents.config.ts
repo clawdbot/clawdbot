@@ -258,7 +258,11 @@ export function pruneAgentConfig(
     ? Object.fromEntries(
         Object.entries(cfg.broadcast).map(([peerId, value]) => [
           peerId,
-          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+          Array.isArray(value)
+            ? value.filter((entry) => !targetsDeletedAgent(entry))
+            : value && typeof value === "object"
+              ? { ...value, agents: value.agents.filter((entry) => !targetsDeletedAgent(entry)) }
+              : value,
         ]),
       )
     : undefined;

@@ -1,6 +1,9 @@
 // Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  type ChannelInboundTurnPlan,
+  resolveGroupThreadConfig,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
@@ -392,8 +395,7 @@ export function createWebOnMessageHandler(params: {
 
     const hasBroadcastTargets =
       !configuredRoute.bindingResolution &&
-      Array.isArray(cfg.broadcast?.[peerId]) &&
-      cfg.broadcast[peerId].length > 0;
+      resolveGroupThreadConfig({ cfg, channel: "whatsapp", peerId }) !== undefined;
     if (hasBroadcastTargets && statusReactionController) {
       await clearPreDispatchReaction();
     }

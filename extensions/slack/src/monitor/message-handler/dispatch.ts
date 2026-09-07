@@ -19,7 +19,7 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -41,6 +41,11 @@ import { createSlackDispatchSetup, type SlackDispatchSetup } from "./dispatch-se
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+function formatSlackGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const setup = await createSlackDispatchSetup(prepared);
@@ -208,9 +213,16 @@ async function dispatchSlackMessageWithSetup(
     }
   };
   const deliverSlackPayload = async (
-    payload: ReplyPayload,
-    info: { kind: ReplyDispatchKind },
+    incomingPayload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
   ): Promise<{ visibleReplySent: false } | void> => {
+    let payload = incomingPayload;
+    if (info.participant && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
+      payload = {
+        ...payload,
+        text: formatSlackGroupThreadReply(payload.text ?? "", info.participant),
+      };
+    }
     if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);
@@ -484,6 +496,7 @@ async function dispatchSlackMessageWithSetup(
       history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.
         queuedDeliveryCorrelations: [{ begin: beginSessionRun }],
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),

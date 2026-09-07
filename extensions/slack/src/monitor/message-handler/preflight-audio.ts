@@ -25,8 +25,11 @@ const slackPreflightAudio = createChannelPreflightAudio({
   isAudio: isSlackAudioFile,
 });
 
-export function findCaptionlessSlackAudioFile(message: SlackMessageEvent): SlackFile | undefined {
-  if (message.text?.trim()) {
+export function findSlackPreflightAudioFile(
+  message: SlackMessageEvent,
+  options: { allowCaptioned?: boolean } = {},
+): SlackFile | undefined {
+  if (!options.allowCaptioned && message.text?.trim()) {
     return undefined;
   }
   return message.files?.slice(0, MAX_SLACK_MEDIA_FILES).find(isSlackAudioFile);

@@ -317,10 +317,12 @@ export const dispatchTelegramMessage = async (
   // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
   // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
   const hookRunner = getGlobalHookRunner();
-  const allowProviderPreview = !(
-    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
-    (hookRunner?.hasHooks("message_sending") ?? false)
-  );
+  const allowProviderPreview =
+    !dispatchContext.ctxPayload.GroupThread &&
+    !(
+      (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+      (hookRunner?.hasHooks("message_sending") ?? false)
+    );
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,

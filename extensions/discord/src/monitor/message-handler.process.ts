@@ -19,7 +19,7 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -38,6 +38,7 @@ import {
   createDiscordBeforePayloadDelivery,
   createDiscordMessageReplyRuntime,
   formatDiscordReasoningQuote,
+  formatDiscordGroupThreadReply,
 } from "./message-handler.process-reply-runtime.js";
 import { createDiscordMessageActiveThreadRoute } from "./message-handler.process-thread-route.js";
 import { completeDiscordSessionConflict } from "./message-handler.retry.js";
@@ -68,21 +69,12 @@ type DiscordMessageProcessObserver = {
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
-type DiscordProviderDeliveryInfo = {
-  kind: ReplyDispatchKind;
-  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+type DiscordProviderDeliveryInfo = ReplyDispatchRuntimeInfo & {
   onPlatformSendDispatch: () => Promise<void>;
   assertPlatformSendAuthorized: () => void;
 };
 
 export async function processDiscordMessage(
-  ctx: DiscordMessagePreflightContext,
-  observer?: DiscordMessageProcessObserver,
-) {
-  await processDiscordMessageInner(ctx, observer);
-}
-
-async function processDiscordMessageInner(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
@@ -267,7 +259,7 @@ async function processDiscordMessageInner(
   });
 
   const deliverDiscordPayload = async (
-    payload: ReplyPayload,
+    incomingPayload: ReplyPayload,
     info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
@@ -286,6 +278,13 @@ async function processDiscordMessageInner(
         }),
       );
       return { visibleReplySent: false };
+    }
+    let payload = incomingPayload;
+    if (info.participant && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
+      payload = {
+        ...payload,
+        text: formatDiscordGroupThreadReply(payload.text ?? "", info.participant),
+      };
     }
     const isFinal = info.kind === "final";
     if (payload.isReasoning) {
@@ -351,7 +350,7 @@ async function processDiscordMessageInner(
       draftPreview.markFinalReplyStarted();
     }
     const finalText =
-      isFinal && typeof payload.text === "string"
+      isFinal && !ctxPayload.GroupThread && typeof payload.text === "string"
         ? await resolveTranscriptBackedChannelFinalText({
             finalText: payload.text,
             resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
@@ -633,6 +632,7 @@ async function processDiscordMessageInner(
             limit: ctx.historyLimit,
           },
       replyOptions: {
+        groupThreadReplyFormatter: formatDiscordGroupThreadReply,
         ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
         abortSignal,
         skillFilter: ctx.channelConfig?.skills,

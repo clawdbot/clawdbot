@@ -685,12 +685,14 @@ export function createDeliveryState(
     // from draft.ts would recreate the draft<->delivery runtime import cycle.
     materializeAnswerLaneBeforeRotation: async () =>
       await materializeAnswerLaneBeforeRotation(getTurn()),
-    resolveCurrentTurnTranscriptFinal: createCurrentTurnTranscriptFinalResolver({
-      agentId: context.route.agentId,
-      dispatchStartedAt: config.dispatchStartedAt,
-      loadFreshSessionEntry: config.loadFreshSessionEntry,
-      sessionKey,
-    }),
+    resolveCurrentTurnTranscriptFinal: context.ctxPayload.GroupThread
+      ? async () => undefined
+      : createCurrentTurnTranscriptFinalResolver({
+          agentId: context.route.agentId,
+          dispatchStartedAt: config.dispatchStartedAt,
+          loadFreshSessionEntry: config.loadFreshSessionEntry,
+          sessionKey,
+        }),
     transcriptMirrorSequence: 0,
     transcriptMirrorTurnId: `${context.chatId}:${context.ctxPayload.MessageSid ?? context.msg.message_id ?? config.dispatchStartedAt}`,
     implicitQuoteReplyTargetId,

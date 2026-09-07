@@ -24,6 +24,11 @@ type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
 >;
 
+export function formatDiscordGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
+
 export function formatDiscordReasoningQuote(quoteText: string): string | undefined {
   const lines = quoteText
     .split("\n")
@@ -191,6 +196,7 @@ export function createDiscordMessageReplyRuntime(params: {
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
   const draftPreview = createDiscordDraftPreviewController({
+    groupThread: Boolean(ctxPayload.GroupThread),
     cfg,
     discordConfig,
     accountId,

@@ -36,6 +36,8 @@ export type ReplyFollowupAdmissionBarrierTimeoutPolicy = {
 export type ReplyDispatchRuntimeInfo = {
   kind: ReplyDispatchKind;
   assistantMessageIndex?: number;
+  /** Display identity for replies in a configured multi-agent group. */
+  participant?: { agentId: string; name: string };
   /** @internal Claim direct-send custody immediately before recipient-visible platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Synchronously fence custody after claiming it and before provider I/O. */

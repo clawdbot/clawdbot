@@ -40,6 +40,13 @@ import type {
   RunChannelTurnParams,
 } from "../channels/turn/types.js";
 
+export { runGroupThread, type GroupThreadTurn } from "../auto-reply/group-thread.js";
+export {
+  resolveGroupThreadMentionFacts,
+  isGroupThreadRouteExclusive,
+  resolveGroupThreadConfig,
+  type GroupThreadMentionFacts,
+} from "../auto-reply/group-thread-config.js";
 export {
   readAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,

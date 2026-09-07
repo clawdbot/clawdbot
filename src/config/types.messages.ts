@@ -50,15 +50,28 @@ export type InboundDebounceConfig = {
 
 export type BroadcastStrategy = "parallel" | "sequential";
 
+export type BroadcastGroupConfig = {
+  agents: string[];
+  /** Select explicitly mentioned participants; otherwise run all (default: true). */
+  mentionGating?: boolean;
+  /** Includes the initial round (default: 1, maximum: 4). */
+  maxRounds?: number;
+  /** Participant turns per inbound message (default: agents.length, maximum: 32). */
+  maxTurns?: number;
+};
+
+export type BroadcastEntry = string[] | BroadcastGroupConfig;
+
 export type BroadcastConfig = {
   /** Default processing strategy for broadcast peers. */
   strategy?: BroadcastStrategy;
   /**
-   * Map peer IDs to arrays of agent IDs that should ALL process messages.
+   * Map channel-qualified peer IDs to participant arrays or bounded group options.
+   * Unqualified WhatsApp peer arrays retain single-pass behavior.
    *
    * Note: the index signature includes `undefined` so `strategy?: ...` remains type-safe.
    */
-  [peerId: string]: string[] | BroadcastStrategy | undefined;
+  [peerId: string]: BroadcastEntry | BroadcastStrategy | undefined;
 };
 
 export type StatusReactionsConfig = {
