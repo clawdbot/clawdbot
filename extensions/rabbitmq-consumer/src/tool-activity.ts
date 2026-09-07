@@ -115,6 +115,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // 维权文书 / 任务
   letter_generate: "正在生成维权文书",
   letter_fetch: "正在查询维权文书",
+  complaint_taxonomy: "正在查询举报平台和分类",
   complaint_submit: "正在提交一键举报",
   complaint_task_status: "正在查询举报任务状态",
   infringe_profile_list: "正在查看投诉主体档案",
@@ -195,6 +196,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   letter_fetch: "report",
   complaint_submit: "report",
   complaint_task_status: "query",
+  complaint_taxonomy: "query",
   infringe_profile_list: "query",
   infringe_profile_save: "write",
   infringe_complaint_submit: "report",

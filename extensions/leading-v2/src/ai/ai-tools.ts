@@ -44,7 +44,6 @@ const LetterGenerateSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const COMPLAINT_PLATFORMS = "抖音/小红书/今日头条/百家号/B站/微博/知乎/快手";
 const AGENT_JUDGMENT_SOURCE = "AgentJudgment";
 const AGENT_JUDGMENT_MIN_LENGTH = 20;
 const AGENT_JUDGMENT_MAX_LENGTH = 6000;
@@ -128,7 +127,7 @@ const ComplaintSubmitSchema = Type.Object(
       Type.Array(Type.String(), {
         description:
           "待举报的侵权链接。省略则复用最近一次内容检测任务提交的原始链接。" +
-          `仅支持这些平台：${COMPLAINT_PLATFORMS}；其他平台链接会被后端过滤。`,
+          "先用 complaint_taxonomy 查询当前链接分类，不得根据固定平台名单过滤链接。",
       }),
     ),
     role: Type.Optional(
@@ -413,7 +412,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
         "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
-        `仅支持 ${COMPLAINT_PLATFORMS}，其他平台链接会被过滤。` +
+        "支持范围动态变化；查询 complaint_taxonomy 获取当前平台和逐链接分类，不得凭旧名单拒绝。" +
         "异步执行——提交成功后告知用户「举报任务已提交」，无需再调用任何工具。",
       parameters: ComplaintSubmitSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -480,9 +479,20 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
             } catch (error) {
               return failure(api, "complaint_submit", userId, error);
             }
-            const taxonomies = Array.isArray(taxonomyResponse.taxonomies)
-              ? taxonomyResponse.taxonomies
-              : [];
+            const taxonomyError = envelopeError(taxonomyResponse);
+            if (
+              taxonomyError ||
+              taxonomyResponse.code !== "success" ||
+              !Array.isArray(taxonomyResponse.taxonomies)
+            ) {
+              return jsonResult({
+                success: false,
+                error:
+                  taxonomyError ??
+                  "分类目录查询未成功，暂时无法判断支持范围；请重试，不要将查询失败解释为平台不支持。",
+              });
+            }
+            const taxonomies = taxonomyResponse.taxonomies;
             const catalogLinks = new Set(
               taxonomies
                 .map((item) =>
@@ -571,8 +581,6 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
  * + AutoComplaint，前置更重：需主体档案 profileId + 盖章投诉函 stampedComplaint。
  * ============================================================ */
 
-const INFRINGE_PLATFORMS = "今日头条/知乎/B站/抖音/微博/百度/百家号/小红书/快手";
-
 /** 与后端 InfringeComplaintController::INFRINGE_TYPES 对齐。 */
 const INFRINGE_TYPES = ["Reputation", "Goodwill", "Portrait", "Privacy", "Name", "Other"] as const;
 
@@ -617,7 +625,7 @@ const InfringeComplaintSubmitSchema = Type.Object(
       Type.Array(Type.String(), {
         description:
           "待投诉的侵权链接。省略则复用最近一次内容检测任务提交的原始链接。" +
-          `仅支持这些平台：${INFRINGE_PLATFORMS}；其他平台链接会被后端过滤。`,
+          "不要根据固定名单过滤链接；涉企投诉适用范围以本接口实际校验为准。",
       }),
     ),
     infringeType: Type.Optional(
@@ -739,7 +747,7 @@ export function createInfringeComplaintSubmitToolFactory(
         "两个前置：① 投诉主体档案 profileId（用 infringe_profile_list 获取；仅 1 个档案时自动选用）；② 盖章《投诉通知书》 stampedComplaint（OSS key 或 URL）。" +
         "聊天附件已提供 ossKey/ossUrl 时直接使用；只有 workspace 路径时先调用 file_share。缺任一前置会返回提示，请照提示引导用户补齐。" +
         "默认复用检测任务提交的原始链接；如需投诉其他链接可传 links。" +
-        `仅支持 ${INFRINGE_PLATFORMS}，其他平台链接会被过滤。` +
+        "平台适用范围以本接口实际校验为准，不得凭旧名单拒绝；complaint_taxonomy 的举报目录不等于涉企投诉的执行能力。" +
         "异步执行——提交成功后告知用户「投诉任务已提交」，无需再调用任何工具。",
       parameters: InfringeComplaintSubmitSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {

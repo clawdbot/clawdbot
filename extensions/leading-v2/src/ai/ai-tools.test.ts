@@ -702,3 +702,114 @@ describe("infringe_profile_save", () => {
     expect(res).toMatchObject({ success: false, error: "请填写主体名称" });
   });
 });
+
+describe("complaint taxonomy discovery", () => {
+  async function tool() {
+    const { createComplaintTaxonomyToolFactory } =
+      await import("../complaint/complaint-taxonomy-tool.js");
+    return createComplaintTaxonomyToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+  }
+
+  it("queries live platforms without submitting a task", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      platforms: [{ platform: "Netease", contentTypes: ["article"] }],
+      taxonomies: [],
+      unsupportedLinks: [],
+    });
+    const result = parse(await (await tool()).execute("platforms", {}));
+    expect(result.success).toBe(true);
+    expect(result.platforms).toEqual([{ platform: "Netease", contentTypes: ["article"] }]);
+    expect(mockGetJson).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/fetch-complaint-taxonomy",
+      {},
+      "sk_test1749",
+    );
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("passes every link to the backend instead of applying an old platform list", async () => {
+    const links = [
+      "https://www.163.com/dy/article/example.html",
+      "https://example.com/unsupported",
+    ];
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [{ link: links[0], platform: "Netease", taxonomyVersionId: 16 }],
+      unsupportedLinks: [links[1]],
+    });
+    const result = parse(await (await tool()).execute("links", { links }));
+    expect(result.success).toBe(true);
+    expect(result.unsupportedLinks).toEqual([links[1]]);
+    expect(mockGetJson).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/fetch-complaint-taxonomy",
+      { links },
+      "sk_test1749",
+    );
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { code: "success", taxonomies: [], unsupportedLinks: [] },
+    { code: "danger", message: "目录暂不可用" },
+    { login: true },
+  ])("does not confuse unavailable discovery with unsupported platforms", async (response) => {
+    mockGetJson.mockResolvedValue(response);
+    const result = parse(await (await tool()).execute("unavailable", {}));
+    expect(result.success).toBe(false);
+    expect(result).not.toHaveProperty("platforms");
+    expect(result).not.toHaveProperty("unsupportedLinks");
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid links before requesting the backend", async () => {
+    const result = parse(await (await tool()).execute("invalid", { links: [42] }));
+    expect(result.success).toBe(false);
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
+
+  it("removes stale platform claims from both submission schemas", () => {
+    for (const factory of [
+      createComplaintSubmitToolFactory,
+      createInfringeComplaintSubmitToolFactory,
+    ]) {
+      const submit = factory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+      const description = submit.description + JSON.stringify(submit.parameters);
+      expect(description).not.toContain("仅支持");
+      expect(description).not.toContain("其他平台链接会被");
+      expect(description).toContain("complaint_taxonomy");
+    }
+  });
+});
+
+describe("taxonomy query failure handling", () => {
+  it("does not turn an authentication failure during submission preflight into unsupported links", async () => {
+    mockGetJson.mockResolvedValue({ login: true });
+    const submit = createComplaintSubmitToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    const result = parse(
+      await submit.execute("failed-preflight", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Enterprise",
+        judgment: "根据用户提供的证据逐项研判，这些内容涉嫌侵权，用户已明确要求发起举报。",
+        links: ["https://www.163.com/dy/article/example.html"],
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result).not.toHaveProperty("unsupportedLinks");
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("keeps taxonomy discovery scoped to rabbitmq users", async () => {
+    const { createComplaintTaxonomyToolFactory } =
+      await import("../complaint/complaint-taxonomy-tool.js");
+    expect(
+      createComplaintTaxonomyToolFactory(fakeApi, resolver)({ agentId: "telegram-1749" }),
+    ).toBeNull();
+  });
+});

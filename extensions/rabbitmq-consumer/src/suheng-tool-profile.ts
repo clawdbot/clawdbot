@@ -1,4 +1,5 @@
 const BASE_EVIDENCE_TOOLS = [
+  "complaint_taxonomy",
   "feed_list",
   "feed_query",
   "full_text_search",

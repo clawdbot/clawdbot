@@ -5,6 +5,7 @@ describe("resolveSuhengToolsAllow", () => {
   it("keeps ordinary monitoring turns on a compact evidence toolset", () => {
     const tools = resolveSuhengToolsAllow("查询今天有哪些高风险舆情");
 
+    expect(tools).toContain("complaint_taxonomy");
     expect(tools).toEqual(tools.toSorted());
     expect(tools).toEqual(
       expect.arrayContaining(["feed_query", "full_text_search", "risk_judge", "web_search"]),

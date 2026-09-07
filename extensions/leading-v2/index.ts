@@ -15,6 +15,7 @@ import { resolveConfig } from "./src/client/http-client.js";
 import { ApiKeyResolver } from "./src/client/key-resolver.js";
 import { RecentTaskStore } from "./src/client/recent-tasks.js";
 import { createComplaintTaskStatusToolFactory } from "./src/complaint/complaint-status-tool.js";
+import { createComplaintTaxonomyToolFactory } from "./src/complaint/complaint-taxonomy-tool.js";
 import {
   createCrawlRefreshCreateToolFactory,
   createCrawlRefreshListToolFactory,
@@ -155,6 +156,9 @@ export default definePluginEntry({
     api.registerTool(createJobStopToolFactory(api, resolver), { name: "job_stop" });
     api.registerTool(createLetterGenerateToolFactory(api, resolver), { name: "letter_generate" });
     api.registerTool(createLetterFetchToolFactory(api, resolver), { name: "letter_fetch" });
+    api.registerTool(createComplaintTaxonomyToolFactory(api, resolver), {
+      name: "complaint_taxonomy",
+    });
     api.registerTool(createComplaintSubmitToolFactory(api, resolver), { name: "complaint_submit" });
     api.registerTool(createComplaintTaskStatusToolFactory(api, resolver), {
       name: "complaint_task_status",
