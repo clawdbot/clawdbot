@@ -9,6 +9,7 @@ import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.j
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
 const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 30_000;
+const SETUP_INFERENCE_DETECTION_SHUTDOWN_TIMEOUT_MS = 2_000;
 
 const log = createSubsystemLogger("system-agent/setup-inference-detection");
 
@@ -31,6 +32,7 @@ type DetectionWorkerMessage =
 type DetectionWorkerOptions = {
   agentId?: string;
   timeoutMs?: number;
+  shutdownTimeoutMs?: number;
   workerUrl?: URL;
   workerData?: WorkerOptions["workerData"];
   fallbackEnv?: NodeJS.ProcessEnv;
@@ -54,6 +56,35 @@ function trackWorkerShutdown(worker: Worker): void {
       workerShutdown = undefined;
     }
   });
+}
+
+async function waitForWorkerShutdown(timeoutMs: number): Promise<void> {
+  if (!workerShutdown) {
+    return;
+  }
+  const pending = workerShutdown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      pending,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        if (typeof timer === "object" && "unref" in timer) {
+          timer.unref();
+        }
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+  if (workerShutdown === pending) {
+    log.warn(
+      `Setup inference detection worker shutdown did not finish after ${timeoutMs}ms; abandoning worker.`,
+    );
+    workerShutdown = undefined;
+  }
 }
 
 function resolveDetectionWorkerUrl(currentModuleUrl = import.meta.url): URL {
@@ -219,10 +250,12 @@ export async function detectSetupInferenceIsolated(
     await inFlightDetection.promise.catch(() => undefined);
     return await detectSetupInferenceIsolated(options);
   }
-  // A native provider probe can delay Worker termination. Wait for exit before
-  // retrying so repeat UI requests neither stack threads nor reuse stale results.
+  // A native provider probe can delay Worker termination. Wait briefly, then
+  // abandon a stuck terminate so onboard / Control UI retries can start a new worker.
   if (workerShutdown) {
-    await workerShutdown;
+    await waitForWorkerShutdown(
+      options.shutdownTimeoutMs ?? SETUP_INFERENCE_DETECTION_SHUTDOWN_TIMEOUT_MS,
+    );
     return await detectSetupInferenceIsolated(options);
   }
   const current = runDetectionWorker(options);
