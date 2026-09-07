@@ -134,6 +134,11 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+:root[data-theme-mode="light"] .settings-segmented--accent > .settings-segmented__btn--active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
 .settings-segmented--primary > .settings-segmented__btn--active {
   background: var(--primary);
   color: var(--primary-foreground);
