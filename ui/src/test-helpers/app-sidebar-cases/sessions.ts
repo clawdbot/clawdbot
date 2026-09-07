@@ -439,19 +439,17 @@ describe("AppSidebar session accessibility", () => {
     expect(link?.getAttribute("aria-current")).toBe("page");
     const lead = link?.querySelector(".sidebar-session-indicator");
     expect(lead).not.toBeNull();
-    expect(lead?.childElementCount).toBe(0);
+    expect(lead?.childElementCount).toBe(1);
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
-    const rowState = row?.querySelector(".session-row-state");
-    expect(rowState?.getAttribute("role")).toBe("img");
-    expect(rowState?.getAttribute("aria-label")).toBe("Unread");
-    expect(rowState?.querySelector(".session-unread-dot")).not.toBeNull();
+    const unread = lead?.querySelector(".session-unread-dot");
+    expect(unread?.getAttribute("role")).toBe("img");
+    expect(unread?.getAttribute("aria-label")).toBe("Unread");
+    expect(row?.querySelector(".session-row-state")).toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
     expect(link?.hasAttribute("title")).toBe(false);
-    expect(link?.getAttribute("aria-describedby")).toBe(
-      `sidebar-session-state-${encodeURIComponent(key)}`,
-    );
+    expect(link?.hasAttribute("aria-describedby")).toBe(false);
     expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
 });
