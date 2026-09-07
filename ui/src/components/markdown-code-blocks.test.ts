@@ -102,6 +102,14 @@ describe("Markdown code-block clipboard feedback", () => {
     { name: "indentation and a final newline", source: "  const answer = 42;\n" },
     { name: "boundary blank lines", source: "\n\nconst answer = 42;\n\n" },
     { name: "whitespace-only content", source: " \n\t " },
+    { name: "HTML comments", source: "<!-- ordinary comment -->" },
+    { name: "comment-like arrows", source: "A --> B --!> C" },
+    { name: "CDATA terminators", source: "]]>" },
+    {
+      name: "closing HTML tags",
+      source: '<script>console.log("ok")</script>\n</style></textarea>',
+    },
+    { name: "literal Unicode escapes", source: String.raw`\u003c!-- 🦞 -->\u003e` },
   ])("preserves $name when copying ordinary code", async ({ source }) => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => undefined);
