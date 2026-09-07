@@ -648,13 +648,12 @@ async function buildParams(
         compat.supportsCacheControlOnTools ? cacheControl : undefined,
       )
     : undefined;
-  const tools = convertedTools?.tools;
-  const toolProjection = convertedTools?.projection;
+  const { tools, projection: toolProjection } = convertedTools ?? {};
+  const systemCacheControlCount = countNativeCacheControlMarkers(system);
+  const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
     0,
-    ANTHROPIC_CACHE_CONTROL_LIMIT -
-      countNativeCacheControlMarkers(system) -
-      countNativeCacheControlMarkers(tools),
+    ANTHROPIC_CACHE_CONTROL_LIMIT - systemCacheControlCount - toolCacheControlCount,
   );
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthTokenResult && options?.anthropicServerCompaction === true,

@@ -2417,7 +2417,7 @@ describe("Anthropic provider", () => {
 
   it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
+      { id: "claude-fable-5-1" },
       { stopBeforeNetwork: true },
       {
         systemPrompt: "system",
