@@ -9,6 +9,7 @@ import type {
   ManagedServiceManagerBoundaryResult,
   ManagedServiceManagerBoundaryOptions,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
 /** A LaunchAgent gateway's own environment; the handoff keeps only the label for its children. */
 export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
@@ -65,6 +66,11 @@ export function createManagedServiceCommandFixture(params: {
           ? [
               `import { createRequire } from "node:module";`,
               `const require = createRequire(import.meta.url);`,
+            ]
+          : []),
+        `void (async () => {`,
+        ...(checksServiceIdentity
+          ? [
               `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});`,
               // The recovery command runs from the helper's temp dir; name the repo tsconfig for path aliases.
               `register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`,
@@ -73,33 +79,33 @@ export function createManagedServiceCommandFixture(params: {
           : []),
         `const fs = require("node:fs");`,
         `const { spawnSync } = require("node:child_process");`,
-        `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
-        `state.guardedRestart = process.argv.slice(1);`,
+        `${managedServiceStateUpdateScript(statePath, "state.guardedRestart = process.argv.slice(1)")};`,
         ...(checksServiceIdentity
           ? [
-              `state.recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", process.env);`,
-              `state.recoveryEnv = Object.fromEntries(["LAUNCH_JOB_LABEL", "LAUNCH_JOB_NAME", "XPC_SERVICE_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND", "OPENCLAW_LAUNCHD_LABEL"].map((key) => [key, process.env[key]]));`,
+              `const recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", process.env);`,
+              `${managedServiceStateUpdateScript(
+                statePath,
+                `state.recoveryInsideService = recoveryInsideService;
+                state.recoveryEnv = Object.fromEntries(["LAUNCH_JOB_LABEL", "LAUNCH_JOB_NAME", "XPC_SERVICE_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND", "OPENCLAW_LAUNCHD_LABEL"].map((key) => [key, process.env[key]]))`,
+              )};`,
               // Reproduce the old CLI's early success while its detached restart waits for exit.
-              `if (state.recoveryInsideService) {`,
+              `if (recoveryInsideService) {`,
               `  const { spawn } = require("node:child_process");`,
               `  const child = spawn("/bin/sh", ["-c", ${JSON.stringify('attempts=0; while kill -0 "$1" 2>/dev/null && [ "$attempts" -lt 100 ]; do attempts=$((attempts + 1)); sleep 0.05; done; launchctl enable gui/501/ai.openclaw.gateway; launchctl bootstrap gui/501 "$2"')}, "openclaw-test-recovery", String(process.pid), ${JSON.stringify(path.join(root, "ai.openclaw.gateway.plist"))}], { detached: true, stdio: "ignore" });`,
-              `  state.recoveryHandoffPid = child.pid;`,
-              `  fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `  ${managedServiceStateUpdateScript(statePath, "state.recoveryHandoffPid = child.pid")};`,
               `  child.unref();`,
               `  console.log(JSON.stringify({ action: "restart", ok: true, result: "scheduled" }));`,
               `  process.exit(0);`,
               `}`,
             ]
           : []),
-        `state.recoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;`,
-        `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+        `${managedServiceStateUpdateScript(statePath, "state.recoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")};`,
         ...(options?.recoverySentinel
           ? [
               `const { DatabaseSync } = require("node:sqlite");`,
               `const db = new DatabaseSync(${JSON.stringify(params.stateDatabasePath)});`,
               `const row = db.prepare("SELECT payload_json FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").get();`,
-              `state.sentinelAtRecovery = JSON.parse(row.payload_json);`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `const state = ${managedServiceStateUpdateScript(statePath, "state.sentinelAtRecovery = JSON.parse(row.payload_json)")};`,
               ...(options.recoverySentinel === "consumed"
                 ? [
                     `db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run();`,
@@ -116,8 +122,8 @@ export function createManagedServiceCommandFixture(params: {
         ...(options?.recoveryHang
           ? [
               `const { spawn } = require("node:child_process");`,
-              `state.recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+              `const recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+              `${managedServiceStateUpdateScript(statePath, "state.recoveryDescendantPid = recoveryDescendantPid")};`,
               `setInterval(() => {}, 1000);`,
             ]
           : options?.recoveryExitCode === undefined || options.recoveryExitCode === 0
@@ -140,6 +146,7 @@ export function createManagedServiceCommandFixture(params: {
         ...(checksServiceIdentity
           ? [`console.log(JSON.stringify({ action: "restart", ok: true, result: "restarted" }));`]
           : []),
+        `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
       ].join(""),
       "--",
       "gateway",
@@ -153,29 +160,34 @@ export function createManagedServiceCommandFixture(params: {
           process.execPath,
           "-e",
           [
+            `void (async () => {`,
             `const fs = require("node:fs");`,
             `const args = process.argv.slice(1);`,
-            `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
             `const contextPath = args[args.indexOf("--update-result") + 1];`,
-            `state.triageCalls = (state.triageCalls || 0) + 1;`,
-            `state.triageArgs = args;`,
-            `state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));`,
-            `state.triageInputMode = fs.statSync(contextPath).mode & 0o777;`,
-            `state.triageObservedRestored = state.restored === true;`,
-            `state.triageObservedRecovery = Array.isArray(state.guardedRestart);`,
-            `state.triageRecoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;`,
-            `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+            `${managedServiceStateUpdateScript(
+              statePath,
+              `
+              state.triageCalls = (state.triageCalls || 0) + 1;
+              state.triageArgs = args;
+              state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));
+              state.triageInputMode = fs.statSync(contextPath).mode & 0o777;
+              state.triageObservedRestored = state.restored === true;
+              state.triageObservedRecovery = Array.isArray(state.guardedRestart);
+              state.triageRecoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;
+            `,
+            )};`,
             ...(options?.triageHang
               ? [
                   `const { spawn } = require("node:child_process");`,
-                  `state.triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-                  `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+                  `const triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+                  `${managedServiceStateUpdateScript(statePath, "state.triageDescendantPid = triageDescendantPid")};`,
                   `setInterval(() => {}, 1000);`,
                 ]
               : [
                   `console.log(JSON.stringify({ promptPath: "triage-prompt.md", bundlePath: "support.zip" }));`,
                   `process.exit(${options?.triageExitCode ?? 0});`,
                 ]),
+            `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
           ].join(""),
           "--",
           "triage",

@@ -9,6 +9,7 @@ import type {
   TranscriptOccupancyWatchRequest,
 } from "openclaw/plugin-sdk/transcripts";
 import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
@@ -17,6 +18,7 @@ import type { VoiceOperationResult, VoiceSessionEntry } from "./session.js";
 type CaptureSource = { accountId: string; guildId: string; channelId: string };
 type CaptureTarget = Pick<CaptureSource, "guildId" | "channelId">;
 type DiscordTranscriptsManager = {
+  readPolicy?: DiscordLivePolicyReader;
   resolveAccessTarget: (
     target: CaptureTarget,
   ) => Promise<
@@ -291,6 +293,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       }
       const account = resolveDiscordAccount({ cfg, accountId: callerAccountId });
       const access = await authorizeDiscordVoiceIngress({
+        readPolicy: manager?.readPolicy,
         cfg,
         discordConfig: account.config,
         accountId: account.accountId,

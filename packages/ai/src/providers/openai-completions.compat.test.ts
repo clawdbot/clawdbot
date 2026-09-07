@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -72,11 +72,7 @@ const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
 let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
-function createModel(
-  overrides: Partial<Model<"openai-completions">> & {
-    compat?: OpenAICompletionsCompat;
-  } = {},
-): Model<"openai-completions"> {
+function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
 
@@ -753,7 +749,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
+      expected: {
+        ...defaultResolvedCompat,
+        supportsJsonSchemaResponseFormat: true,
+        supportsPromptCacheKey: true,
+      },
     },
     {
       name: "Azure OpenAI",
@@ -776,7 +776,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",

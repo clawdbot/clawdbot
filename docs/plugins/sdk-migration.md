@@ -91,6 +91,24 @@ External-plugin compatibility work follows this order:
 
 ### Retained helper contracts
 
+Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
+They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
+helpers when those exports are available, with plugin-local fallbacks for the
+2026.9.2 SDK. The fallbacks preserve Discord's timestamp validation, idle-first
+expiry ties, and root/account DM-policy validation through the older SDK
+validators, and llama.cpp's ready, authentication-rejected, and unavailable catalog outcomes
+with credential-profile attribution. They do not retry or suppress errors from
+an available newer helper. Remove these fallbacks only when the declared plugin
+API floor no longer includes 2026.9.2; test built plugin imports against that
+minimum host before changing unconditional SDK imports.
+
+Voice Call also retains its declared 2026.9.2 host support. Its realtime upgrade
+handler keeps the two HTTP rejection responses local because that SDK has no
+`websocket-runtime` subpath. Rejection bytes flush before the socket is destroyed,
+and socket errors retain their normal cleanup behavior. Remove this local
+transport compatibility code only when the declared plugin API floor excludes
+2026.9.2.
+
 Retained compatibility entrypoints keep their shipped caller names:
 `inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
 `resolvePluginProviders`, and `agent-runtime`'s
@@ -329,6 +347,11 @@ media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
 clean published-plugin artifact sweep at that time; migrate before the date.
+
+The unused `buildChannelTurnMediaPayload` alias has been removed from
+`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`buildChannelInboundMediaPayload` export remains available for the compatibility
+window above. New ingress code should pass ordered media facts directly.
 
 For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
 `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,

@@ -294,12 +294,18 @@ export function resolveSqliteStoreScope(
   });
 }
 
-function resolveSqliteAgentId(params: {
+type ResolveSqliteAgentIdParams = {
   scopedAgentId?: string;
   sessionKey?: string;
   storeAgentId?: string;
   storeShared?: boolean;
-}): string | undefined {
+};
+
+export function resolveSqliteAgentId(
+  params: ResolveSqliteAgentIdParams & { storeAgentId: string },
+): string;
+export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string | undefined;
+export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string | undefined {
   const scopedAgentId = params.scopedAgentId ? normalizeAgentId(params.scopedAgentId) : undefined;
   if (
     scopedAgentId &&

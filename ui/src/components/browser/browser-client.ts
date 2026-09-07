@@ -168,6 +168,37 @@ export async function navigateBrowser(
   };
 }
 
+export async function requestBrowserScreencast(
+  client: BrowserRequestClient,
+  params: { targetId: string; maxWidth: number; maxHeight: number },
+): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+  const result = asRecord(
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+  );
+  const token = stringOrEmpty(result?.token);
+  const wsPath = stringOrEmpty(result?.wsPath);
+  if (!token || !wsPath) {
+    throw new Error("browser screencast response is malformed");
+  }
+  return {
+    token,
+    wsPath,
+    targetId: stringOrEmpty(result?.targetId),
+    url: stringOrEmpty(result?.url),
+  };
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  const record = asRecord(error);
+  const details =
+    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  return (
+    details?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+  );
+}
+
 export async function captureBrowserScreenshot(
   client: BrowserRequestClient,
   targetId: string,

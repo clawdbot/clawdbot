@@ -399,11 +399,17 @@ class UsagePage extends OpenClawLightDomElement {
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
-        const sessionKey =
-          this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
-        if (sessionKey && !this.details.contextWeight.status.hasLoaded) {
-          void this.details.contextWeight.load(sessionKey);
-        }
+      }
+    }
+    const sessionKey =
+      this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
+    if (change.becameAvailable && sessionKey) {
+      for (const detail of [
+        this.details.timeSeries,
+        this.details.sessionLogs,
+        this.details.contextWeight,
+      ]) {
+        void detail.recover(sessionKey, detail === this.details.contextWeight);
       }
     }
   }
@@ -625,24 +631,6 @@ class UsagePage extends OpenClawLightDomElement {
           onTimeSeriesCursorRangeChange: (start, end) => {
             this.usageTimeSeriesCursorStart = start;
             this.usageTimeSeriesCursorEnd = end;
-          },
-          onRetryTimeSeries: () => {
-            const sessionKey = this.usageSelectedSessions[0];
-            if (sessionKey) {
-              void this.details.timeSeries.load(sessionKey);
-            }
-          },
-          onRetrySessionLogs: () => {
-            const sessionKey = this.usageSelectedSessions[0];
-            if (sessionKey) {
-              void this.details.sessionLogs.load(sessionKey);
-            }
-          },
-          onRetryContextWeight: () => {
-            const sessionKey = this.usageSelectedSessions[0];
-            if (sessionKey) {
-              void this.details.contextWeight.load(sessionKey);
-            }
           },
         },
       },

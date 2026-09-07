@@ -10,8 +10,11 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 /** Builds a minimal ACP new-session request for translator tests. */
 export function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
@@ -115,7 +118,7 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
   const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
   const request = requestMock as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+  const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
   });
   await agent.loadSession(createLoadSessionRequest(params.sessionId));

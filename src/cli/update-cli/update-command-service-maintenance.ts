@@ -24,6 +24,7 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   assertGatewayServiceManagementAllowedForUpdate,
@@ -315,6 +316,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -510,10 +512,32 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         env: params.updateRun.env,
       });
     }
-    await service.stop({
-      env: currentState.env,
-      stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
-    });
+    if (params.activatedInstall) {
+      // Activation Doctor may have stamped newer config. Keep its service stop
+      // in that runtime too; the old parent's destructive-action guard is valid.
+      const stopped = await runUpdatedInstallGatewayCommand(
+        {
+          result: { root: params.root },
+          opts: { json: params.jsonMode },
+          invocationEnv: process.env,
+          serviceEnv: currentState.env,
+          timeoutMs: params.timeoutMs,
+          nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
+          invocationCwd: params.activatedInstall.invocationCwd,
+        },
+        "stop",
+      );
+      if (stopped !== "accepted") {
+        throw new Error(
+          "Updated Gateway CLI did not confirm the service stopped for plugin maintenance.",
+        );
+      }
+    } else {
+      await service.stop({
+        env: currentState.env,
+        stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+      });
+    }
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
     }

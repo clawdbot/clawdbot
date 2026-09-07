@@ -60,15 +60,6 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
       ),
     },
     { name: "channels", state: booleanState(facts.channelsReady) },
-    {
-      name: "inference",
-      state:
-        facts.inferenceProbe === "skipped" || facts.inferenceProbe === "unavailable"
-          ? "warn"
-          : booleanState(
-              facts.inferenceProbe === undefined ? undefined : facts.inferenceProbe === "passed",
-            ),
-    },
   ] as const;
   const completed = phases.filter((phase) => phase.status === "completed").length;
   const total = phases.filter((phase) => phase.status !== "skipped").length;

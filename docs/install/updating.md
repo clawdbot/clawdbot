@@ -115,6 +115,46 @@ another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+### Updating from 2026.9.2 across a schema bump
+
+Updates driven by OpenClaw 2026.9.2 can cross a shared-state schema bump normally.
+The target applies the migration content while retaining the old published
+schema version, so the old updater can finish its ledger writes and final
+report. Doctor explains that schema content is applied and version publication
+is deferred. The new Gateway runs on the migrated content during this interval.
+
+Publication waits until every affected update run has been terminal for at least
+five minutes. A running row that has not changed for more than 30 minutes counts
+as abandoned for this purpose. The Gateway watcher publishes after the deadline;
+a later database open can also publish it. See the precise timing and residual
+old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+If an agent database also needs migration, required state metadata is missing,
+or the state-content migration fails, Doctor instead reports
+`update-schema-bump-unfenced` with database versions and manual update commands.
+Let the failed update finish restoring the previous package. OpenClaw 2026.9.2
+leaves the Gateway service stopped after failed post-install verification. Run
+the manual update from a shell outside the Gateway, replacing `<target>` with
+the exact target version from the refusal:
+
+```bash
+openclaw gateway stop
+npm install -g openclaw@<target> --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway start
+```
+
+Run each command only after the previous one succeeds. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
+command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
+`bun add -g --trust openclaw@<target>`.
+
+Same-schema updates, earlier ledger-less updaters such as 2026.9.1, and fenced
+transactional updaters from 2026.9.3 onward keep their existing behavior. The
+fallback does not undo an earlier migration; if the database is already newer
+than the restored package, install a compatible target and finish Doctor before
+starting the Gateway.
+
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
@@ -677,7 +717,7 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
-Databases first created during activation or serving verification are
+Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
 or a new database at a foreign version, still blocks rollback. Before restoring
@@ -688,8 +728,9 @@ update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
-identity, plugins, channels, and `/readyz` again, then requires a new successful
-agent turn and fresh readback of its saved request and response.
+identity, plugins, channels, and `/readyz` again. Update verification does not use
+model inference: the managed service must be running and own its port, and the
+Gateway hello handshake must match the expected artifact.
 
 The candidate may have advanced the config writer stamp without changing config
 content. Rollback restores that stamp and uses the existing intentional-recovery
@@ -703,19 +744,11 @@ measured from service stop through verified recovery. The headline is
 verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
-Serving verification is required, not advisory. It uses configured inference and
-has a 60-second budget. The saved reply must include the run-specific verification
-token as a whole word; punctuation or a short sentence around it is accepted.
-Unavailable inference, timeout, an incomplete turn, a non-matching response, or
-missing saved messages fails verification. `response-mismatch` means the turn was
-saved but its reply did not contain the token; `persistence-missing` means no
-committed request/response pair was found. Use `openclaw update status` for the
-recorded reason and `openclaw triage` to diagnose a failed check. Recovery guidance
-reports whether the Gateway is running or stopped from the latest service
-observation, even when a running candidate did not pass verification.
-A restored Gateway must pass its own serving
-check before the run can finish as `rolled-back`; candidate proof cannot be reused
-after a restart or restoration.
+Use `openclaw update status` for the recorded reason and `openclaw triage` to
+diagnose a failed check. Recovery guidance reports whether the Gateway is running
+or stopped from the latest service observation, even when a running candidate did
+not pass verification. A restored Gateway must pass its own verification checks
+before the run can finish as `rolled-back`.
 
 If configuration content changed or the databases are not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts

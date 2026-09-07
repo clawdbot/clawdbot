@@ -5,7 +5,7 @@ import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
@@ -17,7 +17,6 @@ import {
   expectedIntegrityForUpdate,
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
@@ -265,32 +264,6 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     : undefined;
 }
 
-async function loadNpmPackageVersionsForUpdate(params: {
-  packageName: string;
-  timeoutMs?: number;
-}): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(
-    ["npm", "view", params.packageName, "versions", "--json"],
-    {
-      timeoutMs: Math.max(params.timeoutMs ?? 0, 60_000),
-      env: createNpmMetadataEnv(),
-    },
-  );
-  if (!versions || versions.code !== 0) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(versions.stdout.trim());
-  } catch {
-    return null;
-  }
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
-    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
-  );
-}
-
 export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
   metadata: NpmSpecResolution;
   spec: string;
@@ -314,7 +287,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   ) {
     return undefined;
   }
-  const versions = await loadNpmPackageVersionsForUpdate({
+  const versions = await loadNpmPackageVersions({
     packageName: parsedSpec.name,
     timeoutMs: params.timeoutMs,
   });
@@ -454,6 +427,7 @@ export function resolveNpmUpdateTarget(params: {
   syncOfficialPluginInstalls?: boolean;
   updateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
   timeoutMs?: number;
 }) {
   const official = params.trustedOfficialInstall;
@@ -472,6 +446,7 @@ export function resolveNpmUpdateTarget(params: {
           updateChannel: params.updateChannel,
           officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
           coreVersion: params.coreVersion,
+          versionBoundToCore: params.versionBoundToCore,
           timeoutMs: params.timeoutMs,
         }
       : undefined,
@@ -484,6 +459,7 @@ export function resolveClawHubUpdateSpecs(params: {
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
 }): {
   installSpec?: string;
   recordSpec?: string;
@@ -507,6 +483,7 @@ export function resolveClawHubUpdateSpecs(params: {
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
+    versionBoundToCore: params.versionBoundToCore,
   });
 }
 

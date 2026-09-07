@@ -1,6 +1,5 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
@@ -203,14 +202,13 @@ describe("backup archive publication", () => {
       const log = vi.fn();
       const originalOpen = fs.open.bind(fs);
       const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+        const handle = await originalOpen(target, flags, mode);
         if (path.resolve(String(target)) === path.resolve(plan.canonicalParentPath)) {
-          return {
-            close: vi.fn().mockResolvedValue(undefined),
-            stat: vi.fn().mockResolvedValue(plan.parentReceipt.identity),
-            sync: vi.fn().mockRejectedValue(Object.assign(new Error("sync failed"), { code })),
-          } as unknown as FileHandle;
+          vi.spyOn(handle, "sync").mockRejectedValue(
+            Object.assign(new Error("sync failed"), { code }),
+          );
         }
-        return await originalOpen(target, flags, mode);
+        return handle;
       });
       try {
         const error = await publishPreparedBackupArchive({ plan, prepared, log }).catch(

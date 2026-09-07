@@ -406,27 +406,12 @@ function pruneBoundedTimestampMap(
   pruneMapToMaxSize(map, params.maxEntries);
 }
 
-function compactExecEventOutput(raw: string) {
+function compactNodeEventText(raw: string, maxChars: number) {
   const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_EXEC_EVENT_OUTPUT_CHARS) {
+  if (normalized.length <= maxChars) {
     return normalized;
   }
-  const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
-  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
-}
-
-function compactNotificationEventText(raw: string) {
-  const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
-    return normalized;
-  }
-  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
+  const safe = Math.max(1, maxChars - 1);
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
@@ -1000,8 +985,14 @@ export const handleNodeEvent = async (
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ?? null;
-      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
-      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
+      const title = compactNodeEventText(
+        normalizeOptionalString(obj.title) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
+      const text = compactNodeEventText(
+        normalizeOptionalString(obj.text) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -1123,7 +1114,7 @@ export const handleNodeEvent = async (
         }
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
-        const compactOutput = compactExecEventOutput(output);
+        const compactOutput = compactNodeEventText(output, MAX_EXEC_EVENT_OUTPUT_CHARS);
         const shouldNotify = timedOut || exitCode !== 0 || compactOutput.length > 0;
         if (!shouldNotify) {
           return undefined;

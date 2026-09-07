@@ -299,7 +299,6 @@ async function runWorkerEmbeddedTurnWithResources(
             agentId: params.agentId,
           }),
         },
-        agentId: params.agentId,
         abortSignal: toolSignal,
       }).filter((tool) => localToolNameSet.has(tool.name));
       const localTools = unboundLocalTools.map((tool) =>
