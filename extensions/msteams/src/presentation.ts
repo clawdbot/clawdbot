@@ -24,6 +24,18 @@ export const MSTEAMS_PRESENTATION_CAPABILITIES = {
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
 
+export function buildMSTeamsAdaptiveCardActivity(card: Record<string, unknown>) {
+  return {
+    type: "message" as const,
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: card,
+      },
+    ],
+  };
+}
+
 export function buildMSTeamsPresentationCard(params: {
   presentation: MessagePresentation;
   text?: string | null;

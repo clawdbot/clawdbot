@@ -26,6 +26,7 @@ import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js"
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
+import { buildMSTeamsAdaptiveCardActivity } from "./presentation.js";
 import {
   deleteMSTeamsActivityWithReference,
   sendMSTeamsActivityWithReference,
@@ -466,20 +467,10 @@ export async function sendPollMSTeams(
     optionCount: pollCard.options.length,
   });
 
-  const activity = {
-    type: "message",
-    attachments: [
-      {
-        contentType: "application/vnd.microsoft.card.adaptive",
-        content: pollCard.card,
-      },
-    ],
-  };
-
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
   const messageId = await sendProactiveActivity({
     ctx,
-    activity,
+    activity: buildMSTeamsAdaptiveCardActivity(pollCard.card),
     errorPrefix: "msteams poll send",
   });
 
@@ -511,20 +502,10 @@ export async function sendAdaptiveCardMSTeams(
     cardVersion: card.version,
   });
 
-  const activity = {
-    type: "message",
-    attachments: [
-      {
-        contentType: "application/vnd.microsoft.card.adaptive",
-        content: card,
-      },
-    ],
-  };
-
   // Send card via proactive conversation
   const messageId = await sendProactiveActivity({
     ctx,
-    activity,
+    activity: buildMSTeamsAdaptiveCardActivity(card),
     errorPrefix: "msteams card send",
   });
 

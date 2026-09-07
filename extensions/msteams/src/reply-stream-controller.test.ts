@@ -290,13 +290,16 @@ describe("createTeamsReplyStreamController", () => {
   it("holds payloads around replacement text until native settlement", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
 
     ctrl.onPartialReply({ text: "abcde" });
     stream.acknowledge("abcde");
     ctrl.onPartialReply({ text: "provider replacement" });
 
     expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
-    expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
+    expect(ctrl.preparePayload({ text: "provider replacement", presentation })).toBeUndefined();
     expect(
       ctrl.preparePayload({
         text: "second payload",
@@ -311,6 +314,7 @@ describe("createTeamsReplyStreamController", () => {
       logicalContent: "provider replacement\nsecond payload",
       postNativePayloads: [
         { mediaUrl: "https://example.test/before.png" },
+        { text: undefined, presentation },
         { text: "second payload", mediaUrl: "https://example.test/after.png" },
       ],
     });
@@ -386,6 +390,32 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it.each(["partial", "progress"] as const)(
+    "preserves a presentation after %s streaming owns the reply text",
+    (mode) => {
+      const stream = makeStream();
+      const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
+        conversationType: "personal",
+        context: makeContext(stream),
+        feedbackLoopEnabled: false,
+        msteamsConfig: { streaming: { mode } } as never,
+      });
+      const presentation = {
+        title: "Choose",
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+      };
+      if (mode === "partial") {
+        ctrl.onPartialReply({ text: "streamed" });
+      }
+
+      expect(ctrl.preparePayload({ text: "streamed", presentation })).toEqual({
+        text: undefined,
+        presentation,
+      });
+    },
+  );
+
   it("allows fallback delivery for second text segment after tool calls", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
@@ -452,15 +482,22 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "partial complete" })).toBeUndefined();
   });
 
-  it("drops the payload even when it carries media after cancel", () => {
-    // Cancel honored consistently — no leftover media bubble lands either.
+  it.each([
+    { name: "media", content: { mediaUrl: "https://x/y.png" } },
+    {
+      name: "presentation",
+      content: {
+        presentation: {
+          blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+    },
+  ])("drops the payload even when it carries $name after cancel", ({ content }) => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
     ctrl.onPartialReply({ text: "partial" });
     stream.canceled = true;
-    expect(
-      ctrl.preparePayload({ text: "partial complete", mediaUrl: "https://x/y.png" }),
-    ).toBeUndefined();
+    expect(ctrl.preparePayload({ text: "partial complete", ...content })).toBeUndefined();
   });
 
   it("falls back to block delivery when no tokens were streamed", () => {

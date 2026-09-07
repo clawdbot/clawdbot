@@ -50,6 +50,10 @@ function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
 }
 
+function hasMSTeamsUnstreamedContent(payload: ReplyPayload): boolean {
+  return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
+}
+
 /**
  * Bridges openclaw's reply pipeline callbacks to the SDK's `ctx.stream`.
  * Streaming is enabled for personal (DM) conversations only; group/channel
@@ -179,16 +183,16 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     }
     const remainingText = payload.text.slice(acknowledgedText.length);
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    if (!remainingText && !hasMedia) {
+    if (!remainingText && !hasMSTeamsUnstreamedContent(payload)) {
       return undefined;
     }
     return { ...payload, text: remainingText || undefined };
   };
 
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    return hasMedia ? { ...payload, mediaUrl: undefined, mediaUrls: undefined } : payload;
+    return hasMSTeamsUnstreamedContent(payload)
+      ? { ...payload, mediaUrl: undefined, mediaUrls: undefined, presentation: undefined }
+      : payload;
   };
 
   const finalStreamActivity = (text?: string) => ({
@@ -221,9 +225,8 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
       const text = replacementFallback?.text;
-      if (!text && !hasMedia) {
+      if (!text && !hasMSTeamsUnstreamedContent(entry.payload)) {
         return [];
       }
       return [{ ...entry.payload, text: text || undefined }];
@@ -437,11 +440,10 @@ export function createTeamsReplyStreamController(params: {
       // latched mid-flight, deliver only a provider-acknowledged remainder;
       // preserve the full reply when delivery was not acknowledged.
       if (tokensEmitted && !streamFailed) {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        return hasMSTeamsUnstreamedContent(payload) ? { ...payload, text: undefined } : undefined;
       }
       if (streamFailed) {
         // Trim the provider-acknowledged prefix only from the failed segment.
@@ -464,8 +466,7 @@ export function createTeamsReplyStreamController(params: {
           nativeDispatchStarted = true;
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          return hasMedia ? { ...payload, text: undefined } : undefined;
+          return hasMSTeamsUnstreamedContent(payload) ? { ...payload, text: undefined } : undefined;
         } catch (err) {
           if (isStreamCancelledError(err)) {
             canceledLocally = true;

@@ -30,6 +30,7 @@ import {
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
+import { buildMSTeamsAdaptiveCardActivity, buildMSTeamsPresentationCard } from "./presentation.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -85,6 +86,7 @@ type MSTeamsReplyRenderOptions = {
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  adaptiveCard?: Record<string, unknown>;
 };
 
 type MSTeamsSendRetryOptions = {
@@ -233,12 +235,21 @@ export function renderReplyPayloadsToMessages(
       text: formatMSTeamsMarkdown(payload.text ?? "", tableMode),
     });
 
+    if (payload.presentation) {
+      out.push({
+        adaptiveCard: buildMSTeamsPresentationCard({
+          presentation: payload.presentation,
+          text: reply.text,
+        }),
+      });
+    }
     if (!reply.hasContent) {
       continue;
     }
 
+    const text = payload.presentation ? "" : reply.text;
     if (!reply.hasMedia) {
-      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+      pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       continue;
     }
 
@@ -246,7 +257,7 @@ export function renderReplyPayloadsToMessages(
       // For inline mode, combine text with first media as attachment
       const firstMedia = reply.mediaUrls[0];
       if (firstMedia) {
-        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
+        out.push({ text: text || undefined, mediaUrl: firstMedia });
         // Additional media URLs as separate messages
         for (let i = 1; i < reply.mediaUrls.length; i++) {
           if (reply.mediaUrls[i]) {
@@ -254,13 +265,13 @@ export function renderReplyPayloadsToMessages(
           }
         }
       } else {
-        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+        pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
       }
       continue;
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
     for (const mediaUrl of reply.mediaUrls) {
       if (!mediaUrl) {
         continue;
@@ -280,7 +291,9 @@ async function buildActivity(
   mediaMaxBytes?: number,
   options?: { feedbackLoopEnabled?: boolean },
 ): Promise<Record<string, unknown>> {
-  const activity: Record<string, unknown> = { type: "message" };
+  const activity: Record<string, unknown> = msg.adaptiveCard
+    ? buildMSTeamsAdaptiveCardActivity(msg.adaptiveCard)
+    : { type: "message" };
 
   // Mark as AI-generated so Teams renders the "AI generated" badge.
   activity.channelData = {
@@ -409,7 +422,7 @@ export async function sendMSTeamsMessages(params: {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
   const messages = params.messages.filter(
-    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
+    (message) => message.text?.trim() || message.mediaUrl || message.adaptiveCard,
   );
   if (messages.length === 0) {
     return [];
