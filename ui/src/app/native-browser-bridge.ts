@@ -4,7 +4,7 @@
  * or {ok:false,error}. Requests use type: open {tabId,url,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot {tabId}, inspect {tabId,x,y},
  * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
- * IDs and scopes are opaque; web-created IDs are `mac-${crypto.randomUUID()}`.
+ * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
  * Open replies include tabId. The host reuses a tab at the requested URL or its
  * retained initial-request alias, so the returned ID may differ from the request.
  * The requesting panel selects that returned tab; it need not wait for a new tab.

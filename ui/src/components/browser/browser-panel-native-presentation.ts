@@ -1,12 +1,15 @@
 import { postNativeBrowserMessage } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 
 let presentationOrder = 0;
 
 /** The web panel owns geometry and occlusion; native owns the actual views. */
 export class BrowserPanelNativePresentation {
-  readonly scope = crypto.randomUUID();
+  // Every panel builds one of these, including on insecure HTTP origins where
+  // crypto.randomUUID is undefined; the helper falls back to getRandomValues.
+  readonly scope = generateUUID();
   presentedTabId: string | null = null;
   lastPresented = 0;
   private stage: HTMLElement | null = null;

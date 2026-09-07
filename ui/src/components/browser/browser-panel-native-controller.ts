@@ -7,6 +7,7 @@ import {
   type NativeBrowserState,
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
@@ -159,7 +160,7 @@ export class BrowserPanelNativeController {
       await this.send({ type: "navigate", tabId: this.activeTab.id, url });
       return;
     }
-    const tabId = `mac-${crypto.randomUUID()}`;
+    const tabId = `mac-${generateUUID()}`;
     this.pendingActivation = tabId;
     const reply = await postNativeBrowserMessage({ type: "open", tabId, url, activate: true });
     if (this.pendingActivation !== tabId) {

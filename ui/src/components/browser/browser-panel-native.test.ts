@@ -303,6 +303,24 @@ describe("native Browser panel ownership", () => {
     expect(controller.tabs.map((tab) => tab.id)).toEqual(["mac-one", "remote"]);
   });
 
+  it("builds panels and opens Mac tabs without crypto.randomUUID (insecure origins)", async () => {
+    const secureCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: <T extends ArrayBufferView>(array: T) => secureCrypto.getRandomValues(array),
+    });
+    const native = fakeNativeBrowser();
+    const { controller } = controllerFixture();
+    await controller.openUrl("https://example.test/new", { newTab: true, native: true });
+    const message = native.messages().find((candidate) => candidate.type === "open");
+    expect(message?.type).toBe("open");
+    if (message?.type !== "open") {
+      throw new Error("Expected a native open request");
+    }
+    expect(message.tabId).toMatch(/^mac-[0-9a-f-]{36}$/);
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({ type: "present", tabId: message.tabId });
+  });
+
   it("clears the address bar when the last tab closes without a successor", async () => {
     fakeNativeBrowser([nativeTab("mac-one")]);
     const { controller } = controllerFixture();
