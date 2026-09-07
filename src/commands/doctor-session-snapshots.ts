@@ -6,6 +6,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
 import { updateSessionStore } from "../config/sessions/store.js";
+import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -352,16 +353,28 @@ function resolveSessionStorePaths(params: {
 }
 
 function readSnapshotStoreRaw(storePath: string): string {
-  const storeStat = fs.statSync(storePath, { throwIfNoEntry: false });
-  if (!storeStat?.isFile()) {
-    throw new Error(`${storePath}: not a regular file`);
+  // Pin one descriptor, validate that inode, and enforce the byte cap while
+  // reading so a concurrent replace/growth after pathname stat cannot bypass
+  // the promised 16 MiB bound.
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(storePath, "r");
+    const storeStat = fs.fstatSync(fd);
+    if (!storeStat.isFile()) {
+      throw new Error(`${storePath}: not a regular file`);
+    }
+    if (storeStat.size > MAX_SNAPSHOT_STORE_BYTES) {
+      throw new Error(
+        `${storePath}: file too large (${storeStat.size} bytes, max ${MAX_SNAPSHOT_STORE_BYTES})`,
+      );
+    }
+    const buffer = readFileDescriptorBoundedSync(fd, MAX_SNAPSHOT_STORE_BYTES);
+    return buffer.toString("utf-8");
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
   }
-  if (storeStat.size > MAX_SNAPSHOT_STORE_BYTES) {
-    throw new Error(
-      `${storePath}: file too large (${storeStat.size} bytes, max ${MAX_SNAPSHOT_STORE_BYTES})`,
-    );
-  }
-  return fs.readFileSync(storePath, "utf-8");
 }
 
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
@@ -632,6 +645,8 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
+        // Enforce the size bound at the writer's load boundary so growth while
+        // repair was queued cannot allocate above MAX_SNAPSHOT_STORE_BYTES.
         const repairResult = await updateSessionStore(
           storePath,
           async (store) => {
@@ -654,6 +669,7 @@ export async function noteSessionSnapshotHealth(params?: {
           {
             requireWriteSuccess: true,
             skipMaintenance: true,
+            maxBytes: MAX_SNAPSHOT_STORE_BYTES,
             skipSaveWhenResult: (result) => result.replacements === 0,
           },
         );

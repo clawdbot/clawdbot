@@ -1,5 +1,6 @@
 // Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
+import { readFileDescriptorBoundedSync } from "../../infra/file-descriptor-read.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -41,6 +42,8 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 
 type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  /** When set, refuse to allocate more than this many bytes from disk. */
+  maxBytes?: number;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
   clone?: boolean;
@@ -392,7 +395,8 @@ export function loadSessionStore(
 ): Record<string, SessionEntry> {
   const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
   const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  // A maxBytes caller must not hydrate from the unbounded object cache.
+  if (!opts.skipCache && opts.maxBytes === undefined && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
@@ -413,7 +417,28 @@ export function loadSessionStore(
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
-      const raw = fs.readFileSync(storePath, "utf-8");
+      const maxBytes = opts?.maxBytes;
+      let raw: string;
+      if (typeof maxBytes === "number" && Number.isFinite(maxBytes) && maxBytes >= 0) {
+        let fd: number | undefined;
+        try {
+          fd = fs.openSync(storePath, "r");
+          const st = fs.fstatSync(fd);
+          if (!st.isFile()) {
+            throw new Error(`${storePath}: not a regular file`);
+          }
+          if (st.size > maxBytes) {
+            throw new Error(`${storePath}: file too large (${st.size} bytes, max ${maxBytes})`);
+          }
+          raw = readFileDescriptorBoundedSync(fd, maxBytes).toString("utf-8");
+        } finally {
+          if (fd !== undefined) {
+            fs.closeSync(fd);
+          }
+        }
+      } else {
+        raw = fs.readFileSync(storePath, "utf-8");
+      }
       if (raw.length === 0 && attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
@@ -428,6 +453,13 @@ export function loadSessionStore(
       // stale content as current and make future cache hits return old data.
       break;
     } catch (err) {
+      // Size-cap failures are intentional permanent refusals (not transient swap races).
+      if (
+        err instanceof RangeError ||
+        (err instanceof Error && err.message.includes("file too large"))
+      ) {
+        throw err;
+      }
       const code = (err as NodeJS.ErrnoException).code;
       const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
       if (isPermanentReadError) {

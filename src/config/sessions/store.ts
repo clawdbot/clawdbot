@@ -132,6 +132,8 @@ type SaveSessionStoreOptions = {
 type UpdateSessionStoreOptions<T> = SaveSessionStoreOptions & {
   /** Allow a nested mutation only when the caller already owns this store writer lane. */
   reentrant?: boolean;
+  /** Refuse writer hydration when the on-disk store exceeds this many bytes. */
+  maxBytes?: number;
   /**
    * Specialized callers can prove their mutator made no changes through its result.
    * When true, the writer-owned object cache is restored and sessions.json is untouched.
@@ -592,9 +594,14 @@ function storeHasUnsafeUntouchedHydratedSkillPrompts(
   return false;
 }
 
-function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
+function loadMutableSessionStoreForWriter(
+  storePath: string,
+  opts?: { maxBytes?: number },
+): Record<string, SessionEntry> {
   const currentFileStat = getFileStatSnapshot(storePath);
-  if (isSessionStoreCacheEnabled()) {
+  // Skip the mutable object cache when a byte cap is required so hydration
+  // always enforces the bound against the pinned on-disk bytes.
+  if (opts?.maxBytes === undefined && isSessionStoreCacheEnabled()) {
     const cached = takeMutableSessionStoreCache({
       storePath,
       ...currentFileStat,
@@ -605,7 +612,11 @@ function loadMutableSessionStoreForWriter(storePath: string): Record<string, Ses
       return cached;
     }
   }
-  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
+  const store = loadSessionStore(storePath, {
+    skipCache: true,
+    clone: false,
+    ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+  });
   writerStoreFileStats.set(store, currentFileStat ?? null);
   writerLockedSessionEntries.set(store, snapshotLockedSessionEntries(store));
   return store;
@@ -947,7 +958,9 @@ export async function updateSessionStore<T>(
   return await runExclusiveSessionStoreWrite(
     storePath,
     async () => {
-      const store = loadMutableSessionStoreForWriter(storePath);
+      const store = loadMutableSessionStoreForWriter(storePath, {
+        maxBytes: opts?.maxBytes,
+      });
       const storeBeforeMutation = opts?.skipSaveWhenResult ? cloneSessionEntries(store) : undefined;
       const result = await mutator(store);
       if (opts?.skipSaveWhenResult?.(result)) {
