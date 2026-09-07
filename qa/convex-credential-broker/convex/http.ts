@@ -3,7 +3,10 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
-import { normalizeCredentialPayloadForKind } from "./payload_validation";
+import {
+  normalizeCredentialPayloadForKind,
+  normalizeTelegramFixtureReferences,
+} from "./payload_validation";
 
 type ActorRole = "ci" | "maintainer";
 
@@ -444,6 +447,36 @@ http.route({
         credentialId: normalizeCredentialId(
           requireString(body, "credentialId"),
         ) as Id<"credential_sets">,
+        actorId: readOptionalHttpString(body, "actorId"),
+      });
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/admin/telegram-fixtures",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      assertMaintainerAdminAuth(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const references = normalizeTelegramFixtureReferences(
+        body,
+        (httpStatus, code, message) => new BrokerHttpError(httpStatus, code, message),
+      );
+      const result = await ctx.runMutation(internal.credentials.updateTelegramFixtures, {
+        credentialId: normalizeCredentialId(
+          requireString(body, "credentialId"),
+        ) as Id<"credential_sets">,
+        sutBotId: requireString(body, "sutBotId"),
+        testerUserId: requireString(body, "testerUserId"),
+        expectedGroupId: requireString(body, "expectedGroupId"),
+        expectedForumGroupId: readOptionalHttpString(body, "expectedForumGroupId"),
+        ...references,
         actorId: readOptionalHttpString(body, "actorId"),
       });
       return jsonResponse(200, result);

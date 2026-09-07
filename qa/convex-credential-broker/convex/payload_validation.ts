@@ -25,6 +25,25 @@ const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 const TELEGRAM_USER_ID_RE = /^\d+$/u;
 
+export function normalizeTelegramFixtureReferences(
+  payload: Record<string, unknown>,
+  createFailure: PayloadValidationFailureFactory = createCredentialPayloadValidationError,
+) {
+  const kind = "telegram-test-userbot";
+  const groupId = requirePayloadString(payload, "groupId", kind, createFailure);
+  const forumGroupId = requirePayloadString(payload, "forumGroupId", kind, createFailure);
+  if (!/^-[1-9]\d*$/u.test(groupId) || !/^-[1-9]\d*$/u.test(forumGroupId)) {
+    throwPayloadError(
+      createFailure,
+      "Telegram fixture references must be negative group ID strings.",
+    );
+  }
+  if (groupId === forumGroupId) {
+    throwPayloadError(createFailure, "Telegram normal and forum fixtures must be distinct groups.");
+  }
+  return { groupId, forumGroupId };
+}
+
 function createCredentialPayloadValidationError(httpStatus: number, code: string, message: string) {
   return new CredentialPayloadValidationError(httpStatus, code, message);
 }
