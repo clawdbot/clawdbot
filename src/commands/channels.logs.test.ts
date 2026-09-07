@@ -381,6 +381,52 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("advances past an oversized record and keeps filtered follow progress", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "existing" }),
+      );
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        [
+          logLine({
+            module: "gateway/channels/slack/send",
+            message: "x".repeat(1_000_100),
+          }),
+          logLine({ module: "gateway/health", message: "ignored-after-oversized" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "after-oversized" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["existing", "after-oversized"]);
+      expect(records.filter((record) => record.type === "notice")).toEqual([
+        { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+      ]);
+      expect(JSON.stringify(records)).not.toContain("ignored-after-oversized");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("writes text follow output to stdout without re-entering the logger", async () => {
     vi.useFakeTimers();
     try {

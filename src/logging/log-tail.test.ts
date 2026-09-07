@@ -98,6 +98,33 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["custom…wxyz", "second line"]);
   });
 
+  it("does not expose raw generation samples with parsed tails", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const rawLine = `${JSON.stringify({
+      0: "custom-secret-abcdefghijklmnopqrstuvwxyz",
+      time: "2026-01-22T00:00:00.000Z",
+      _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+    })}\n`;
+
+    await fs.writeFile(file, rawLine);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(result.lines).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(Buffer.from(rawLine).toString("base64"));
+    expect(result.generation).toEqual(
+      expect.objectContaining({
+        prefixHash: expect.any(String),
+        boundaryHash: expect.any(String),
+      }),
+    );
+    expect(result.generation).not.toHaveProperty("prefix");
+    expect(result.generation).not.toHaveProperty("boundary");
+  });
+
   it("fills short positional reads before splitting log lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
@@ -143,6 +170,69 @@ describe("readConfiguredLogTail", () => {
       lines: ["partial-completed"],
       cursor: Buffer.byteLength(`${completePrefix}partial-completed\n`),
     });
+  });
+
+  it("skips an oversized record at the byte boundary and advances to later records", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const maxBytes = 64;
+    const prefix = "before\n";
+    const oversized = "x".repeat(maxBytes * 3 + 17);
+    const suffix = "after\n";
+
+    await fs.writeFile(file, `${prefix}${oversized}\n${suffix}`);
+    setLoggerOverride({ file });
+
+    const firstSkip = await readConfiguredLogTail({
+      cursor: Buffer.byteLength(prefix),
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(firstSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes,
+    });
+
+    const secondSkip = await readConfiguredLogTail({
+      cursor: firstSkip.cursor,
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(secondSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes * 2,
+    });
+
+    const thirdSkip = await readConfiguredLogTail({
+      cursor: secondSkip.cursor,
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(thirdSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes * 3,
+    });
+
+    const continuation = await readConfiguredLogTail({
+      cursor: thirdSkip.cursor,
+      maxBytes,
+      filter: (line) => line === suffix.trimEnd(),
+    });
+    expect(continuation.lines).toEqual([suffix.trimEnd()]);
+    expect(continuation.cursor).toBe(Buffer.byteLength(`${prefix}${oversized}\n${suffix}`));
   });
 
   it("reports truncation when the line limit omits complete records", async () => {

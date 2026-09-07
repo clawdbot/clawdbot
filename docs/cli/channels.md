@@ -66,7 +66,8 @@ such as `discord-archive` do not match `discord`.
 
 Pass `--follow` to print the initial tail and poll for newly appended matching records.
 The cursor follows the configured log file and re-anchors after truncation or rolling-file
-rotation, so records already printed are not replayed. `--interval <ms>` controls the
+rotation, validating the current file generation before continuing; a reset may re-read the
+current tail. `--interval <ms>` controls the
 positive polling interval. Press Ctrl-C to stop cleanly. Follow-mode `--json` emits one
 compact JSON record per line (`meta`, `log`, or `notice`); without `--follow`, JSON output
 retains the one-shot object shape.

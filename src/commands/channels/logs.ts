@@ -378,14 +378,18 @@ function isSameTailGeneration(
     return current === undefined;
   }
   const currentPrefix = current ? Buffer.from(current.prefix, "base64") : undefined;
-  const generationPrefix = Buffer.from(generation.prefix, "base64");
+  const generationBoundary = current ? Buffer.from(current.boundary, "base64") : undefined;
   return (
     current?.file === file &&
     current.identity === generation.identity &&
     current.size >= generation.size &&
     current.prefixLength >= generation.prefixLength &&
-    currentPrefix?.subarray(0, generation.prefixLength).equals(generationPrefix) === true &&
-    current.boundary === generation.boundary &&
+    currentPrefix !== undefined &&
+    createHash("sha256")
+      .update(currentPrefix.subarray(0, generation.prefixLength))
+      .digest("hex") === generation.prefixHash &&
+    generationBoundary !== undefined &&
+    createHash("sha256").update(generationBoundary).digest("hex") === generation.boundaryHash &&
     current.contentHash === generation.contentHash &&
     current.contentWindowStart === generation.contentWindowStart &&
     current.contentWindowLength === generation.contentWindowLength

@@ -63,9 +63,9 @@ export type LogTailPayload = {
 export type LogFileGeneration = {
   identity: string;
   size: number;
-  prefix: string;
+  prefixHash: string;
   prefixLength: number;
-  boundary: string;
+  boundaryHash: string;
   contentHash: string;
   contentWindowStart: number;
   contentWindowLength: number;
@@ -190,7 +190,7 @@ async function isStableLogSlice(
     return buffer.subarray(0, bytesRead);
   };
   const prefix = await readWindow(0, generation.prefixLength);
-  if (!prefix.equals(Buffer.from(generation.prefix, "base64"))) {
+  if (createHash("sha256").update(prefix).digest("hex") !== generation.prefixHash) {
     return false;
   }
 
@@ -205,7 +205,7 @@ async function isStableLogSlice(
   const cursor = generation.contentWindowStart + generation.contentWindowLength;
   const boundaryStart = Math.max(0, cursor - 64);
   const boundary = await readWindow(boundaryStart, cursor - boundaryStart);
-  return boundary.equals(Buffer.from(generation.boundary, "base64"));
+  return createHash("sha256").update(boundary).digest("hex") === generation.boundaryHash;
 }
 
 async function readLogSliceAttempt(
@@ -244,14 +244,14 @@ async function readLogSliceAttempt(
     const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
     return buffer.subarray(0, bytesRead);
   };
+
   // Capture the generation before reading returned records so a rewrite cannot replace its
   // fingerprint after the output buffer was produced.
   const prefixLength = Math.min(64, size);
   const prefixSnapshot = await readBytes(0, prefixLength);
-  const generationSnapshotStart = Math.max(0, start - LOG_GENERATION_WINDOW_BYTES);
-  // Cursor-follow reads drain a burst in bounded chunks; later polls continue at the returned cursor.
-  const generationSnapshotEnd = Math.min(size, start + maxBytes);
-  const generationSnapshot = await readBytes(
+  let generationSnapshotStart = Math.max(0, start - LOG_GENERATION_WINDOW_BYTES);
+  let generationSnapshotEnd = Math.min(size, start + maxBytes);
+  let generationSnapshot = await readBytes(
     generationSnapshotStart,
     generationSnapshotEnd - generationSnapshotStart,
   );
@@ -280,15 +280,24 @@ async function readLogSliceAttempt(
     return {
       identity: `${stat.dev}:${stat.ino}`,
       size,
-      prefix: prefixSnapshot.toString("base64"),
+      prefixHash: createHash("sha256").update(prefixSnapshot).digest("hex"),
       prefixLength,
-      boundary: boundary.toString("base64"),
+      boundaryHash: createHash("sha256").update(boundary).digest("hex"),
       contentHash: createHash("sha256").update(contentBuffer).digest("hex"),
       contentWindowStart: contentWindow.start,
       contentWindowLength: contentBuffer.length,
       mtimeNs: stat.mtimeNs.toString(),
       ctimeNs: stat.ctimeNs.toString(),
     };
+  };
+
+  const captureGeneration = async (generationCursor: number) => {
+    generationSnapshotStart = Math.max(0, generationCursor - LOG_GENERATION_WINDOW_BYTES);
+    generationSnapshotEnd = generationCursor;
+    generationSnapshot = await readBytes(
+      generationSnapshotStart,
+      generationSnapshotEnd - generationSnapshotStart,
+    );
   };
 
   if (size === 0 || size <= start) {
@@ -330,10 +339,32 @@ async function readLogSliceAttempt(
     lines = lines.slice(lines.length - limit);
   }
 
-  // Keep an unterminated record pending so a later read can emit it whole.
   const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
   const reachedEnd = start + bytesRead >= size;
-  cursor = reachedEnd && text.endsWith("\n") ? size : start + lastNewline + 1;
+  let skippedOversizedRecord = false;
+  if (lastNewline < 0) {
+    // Keep an unterminated record pending so a later read can emit it whole. If more bytes
+    // exist, discard only this bounded chunk and advance toward its newline without buffering it.
+    lines = [];
+    if (!reachedEnd) {
+      const nextCursor = start + bytesRead;
+      if (nextCursor > start) {
+        truncated = true;
+        skippedBytes = nextCursor - start;
+        cursor = nextCursor;
+        skippedOversizedRecord = true;
+      }
+    }
+    cursor ??= start;
+  } else {
+    cursor = reachedEnd && text.endsWith("\n") ? size : start + lastNewline + 1;
+  }
+
+  if (skippedOversizedRecord) {
+    // The skipped newline can be beyond the initial read window; refresh only this bounded
+    // cursor snapshot so follow checkpoint validation can continue from the new position.
+    await captureGeneration(cursor);
+  }
 
   return {
     cursor,
