@@ -22,13 +22,12 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-const runtimeRegistry = createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
-export const { resolveRuntimePluginRegistry, getRuntimePluginRegistryForLoadOptions } =
-  runtimeRegistry;
+export const resolveRuntimePluginRegistry =
+  createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
-    getRuntimePluginRegistryForLoadOptions,
+    resolveRuntimePluginRegistry,
     isPluginRegistryLoadInFlight,
   }),
 );
