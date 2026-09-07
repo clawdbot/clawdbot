@@ -3,7 +3,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
-import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
+import { createConfigIO, readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -262,16 +262,129 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it.each([
+    ["env", false],
+    ["homedir", false],
+    ["env", true],
+    ["homedir", true],
+  ] as const)(
+    "uses config IO's %s when reading and persisting a legacy workspace (marked: %s)",
+    async (source, marked) => {
+      await withTempHome(async (home) => {
+        const selectedHome = path.join(home, "selected-home");
+        const configPath = path.join(selectedHome, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        const raw = {
+          agents: {
+            list: [{ id: "first", ...(marked ? { default: true } : {}) }, { id: "other" }],
+          },
+          plugins: { enabled: false },
+        };
+        await fs.writeFile(configPath, JSON.stringify(raw));
+        const io = createConfigIO({
+          configPath,
+          env: source === "env" ? { HOME: selectedHome } : {},
+          homedir: () => selectedHome,
+          observe: false,
+          pluginValidation: "core-only",
+        });
+        const snapshot = await io.readConfigFileSnapshot();
+        const workspace = path.join(selectedHome, ".openclaw", "workspace");
+        expect(snapshot.sourceConfig.agents?.entries?.first?.workspace).toBe(
+          marked ? undefined : workspace,
+        );
+        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(raw);
+        const next = structuredClone(snapshot.sourceConfig);
+        next.agents = {
+          ...next.agents,
+          ownership: "explicit",
+          entries: {
+            ...next.agents?.entries,
+            first: { ...next.agents?.entries?.first, name: "first-updated" },
+          },
+        };
+        await io.writeConfigFile(next, {
+          skipPluginValidation: true,
+          explicitSetPaths: [
+            ["agents", "entries"],
+            ["agents", "ownership"],
+          ],
+        });
+        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(saved.agents.entries.first.workspace).toBe(workspace);
+        expect(
+          (await io.readConfigFileSnapshot()).sourceConfig.agents?.entries?.first?.workspace,
+        ).toBe(workspace);
+      });
+    },
+  );
+
+  it.each([
+    {
+      agents: { ownership: "explicit", list: [{ id: "main" }, { id: "other" }] },
+      expectedWorkspace: undefined,
+    },
+    { agents: { entries: { main: {}, other: {} } }, expectedWorkspace: undefined },
+    {
+      agents: { list: [{ id: "main", workspace: "/srv/selected" }, { id: "other" }] },
+      expectedWorkspace: "/srv/selected",
+    },
+  ])(
+    "preserves authored workspace decisions and keyed rosters",
+    ({ agents, expectedWorkspace }) => {
+      const migrated = migratePersistedImplicitMainRoster({
+        agents: { defaults: { workspace: "/srv/shared" }, ...agents },
+      });
+      const cfg = migrated.config as {
+        agents: { entries: Record<string, { workspace?: string }> };
+      };
+      expect(cfg.agents.entries.main?.workspace).toBe(expectedWorkspace);
+      expect(migrated.retainedLegacyDefaultAgentId).toBeUndefined();
+    },
+  );
+
+  it.each(["home", "state", "profile", "workspace"])(
+    "pins a markerless legacy workspace using the supplied %s environment",
+    (kind) => {
+      const home = path.resolve("workspace-migration-home");
+      const env = {
+        HOME: home,
+        ...(kind === "state" ? { OPENCLAW_STATE_DIR: path.join(home, "state") } : {}),
+        ...(kind === "profile" ? { OPENCLAW_PROFILE: "work" } : {}),
+        ...(kind === "workspace" ? { OPENCLAW_WORKSPACE_DIR: path.join(home, "selected") } : {}),
+      };
+      const expected =
+        kind === "state"
+          ? path.join(home, "state", "workspace")
+          : kind === "profile"
+            ? path.join(home, ".openclaw-work", "workspace")
+            : kind === "workspace"
+              ? path.join(home, "selected")
+              : path.join(home, ".openclaw", "workspace");
+      const raw = { agents: { list: [{ id: "first" }, { id: "other" }] } };
+      const options = { materializeWorkspace: false, env };
+      const migrated = migratePersistedImplicitMainRoster(raw, options);
+      expect(migrated.config).toMatchObject({
+        agents: { entries: { first: { workspace: expected }, other: {} } },
+      });
+      expect(migrated.retainedLegacyDefaultAgentId).toBeUndefined();
+      expect(raw).toEqual({ agents: { list: [{ id: "first" }, { id: "other" }] } });
+    },
+  );
+
   it("preserves original list order for markerless numeric ids without inventing an owner", () => {
     const migrated = migratePersistedImplicitMainRoster({
-      agents: { list: [{ id: "10" }, { id: "2" }] },
+      agents: {
+        defaults: { workspace: "/srv/fleet" },
+        list: [{ id: "10" }, { id: "2" }],
+      },
     });
     expect(migrated.changed).toBe(true);
     expect(migrated.config).toMatchObject({
       agents: {
         entries: {
           "2": {},
-          "10": {},
+          "10": { workspace: "/srv/fleet" },
         },
       },
     });

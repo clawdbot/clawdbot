@@ -71,7 +71,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: git@e8cbc62 · 4h ago",
+      "Identity and app menu for Owner: git@e8cbc62 · 4h ago",
     );
 
     setControlUiBuildInfo({
@@ -85,7 +85,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account",
+      "Identity and app menu for Owner",
     );
   });
 
@@ -117,7 +117,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: Local Gateway, primary",
+      "Identity and app menu for Owner: Local Gateway, primary",
     );
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
@@ -146,7 +146,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     status?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: Reconnecting…",
+      "Identity and app menu for Owner: Reconnecting…",
     );
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),

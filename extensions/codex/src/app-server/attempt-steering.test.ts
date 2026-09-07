@@ -27,7 +27,9 @@ describe("Codex app-server steering queue", () => {
 
   function createQueue(
     client: QueueParams["client"] | { request: ReturnType<typeof vi.fn> },
-    options: Partial<Pick<QueueParams, "signal" | "requestTimeoutMs" | "prepareMessage">> = {},
+    options: Partial<
+      Pick<QueueParams, "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit">
+    > = {},
   ) {
     return createCodexSteeringQueue({
       client: client as QueueParams["client"],
@@ -41,7 +43,206 @@ describe("Codex app-server steering queue", () => {
     });
   }
 
-  const steerRequestOptions = { timeoutMs: 60_000, signal: expect.any(AbortSignal) };
+  const steerRequestOptions = {
+    timeoutMs: 60_000,
+    signal: expect.any(AbortSignal),
+    assertCurrent: expect.any(Function),
+  };
+
+  it.each(["committed", "failed", "revoked", "aborted", "sealed"] as const)(
+    "guards physical steering submission after the source commit is %s",
+    async (outcome) => {
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          send({ id: request.id, result: { turnId: "turn-1" } });
+        },
+      });
+      const committing = createDeferred<void>();
+      const releaseCommit = createDeferred<void>();
+      const controller = new AbortController();
+      let sourceCurrent = true;
+      const beforeSubmit = vi.fn(async () => {
+        committing.resolve();
+        await releaseCommit.promise;
+        if (outcome === "failed") {
+          throw new Error("source persistence unavailable");
+        }
+      });
+      const queue = createQueue(harness.client, { signal: controller.signal, beforeSubmit });
+      const onQueueAccepted = vi.fn();
+      const delivery = queue.queue("durable steer", { debounceMs: 0, onQueueAccepted }, () => {
+        if (!sourceCurrent) {
+          throw new Error("source claim replaced");
+        }
+      });
+      const settled = delivery.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await committing.promise;
+        expect(harness.writes).toEqual([]);
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+        if (outcome === "revoked") {
+          sourceCurrent = false;
+        } else if (outcome === "aborted") {
+          controller.abort();
+        } else if (outcome === "sealed") {
+          queue.sealAdmission();
+        }
+        releaseCommit.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (outcome === "committed") {
+          expect(harness.writes).toHaveLength(1);
+          const request = JSON.parse(harness.writes[0]!);
+          expect(queue.confirmConsumed(request.params.clientUserMessageId)).toBe(true);
+          expect(await settled).toBeUndefined();
+          expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        } else {
+          expect(harness.writes).toEqual([]);
+          expect(await settled).toBeInstanceOf(Error);
+          expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+        }
+        expect(beforeSubmit).toHaveBeenCalledOnce();
+      } finally {
+        releaseCommit.resolve();
+        queue.cancel();
+        harness.client.close();
+        await settled;
+      }
+    },
+  );
+
+  it.each(["open", "closed", "reassigned"] as const)(
+    "rechecks each source after later batch preparation at actual I/O: %s",
+    async (transition) => {
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          send({ id: request.id, result: { turnId: "turn-1" } });
+        },
+      });
+      const preparing = createDeferred<void>();
+      const release = createDeferred<void>();
+      let sourceCurrent = true;
+      const controller = new AbortController();
+      const queue = createQueue(harness.client, {
+        signal: controller.signal,
+        prepareMessage: async (text, options) => {
+          if (text === "independent") {
+            preparing.resolve();
+            await release.promise;
+          }
+          return prepareMessage(text, options);
+        },
+      });
+      const acceptance = vi.fn();
+      const first = queue
+        .queue("controlled", { debounceMs: 5, onQueueAccepted: acceptance }, () => {
+          if (!sourceCurrent) {
+            throw new Error(
+              transition === "reassigned" ? "source claim replaced" : "source closed",
+            );
+          }
+        })
+        .then(
+          () => "accepted",
+          () => "rejected",
+        );
+      const second = queue.queue("independent", { debounceMs: 5 }, () => {});
+      try {
+        await vi.advanceTimersByTimeAsync(5);
+        await preparing.promise;
+        expect(harness.writes).toEqual([]);
+        sourceCurrent = transition === "open";
+        release.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        const frame = JSON.parse(harness.writes[0]!);
+        expect(frame.params.input).toEqual(
+          (sourceCurrent ? ["controlled", "independent"] : ["independent"]).map((text) => ({
+            type: "text",
+            text,
+            text_elements: [],
+          })),
+        );
+        expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+        await second;
+        expect(await first).toBe(sourceCurrent ? "accepted" : "rejected");
+        expect(acceptance).toHaveBeenCalledExactlyOnceWith(sourceCurrent);
+        const later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
+        await vi.advanceTimersByTimeAsync(0);
+        const next = JSON.parse(harness.writes[1]!);
+        expect(next.params.input).toEqual([
+          { type: "text", text: "later authorized", text_elements: [] },
+        ]);
+        expect(queue.confirmConsumed(next.params.clientUserMessageId)).toBe(true);
+        await later;
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        release.resolve();
+        queue.cancel();
+        harness.client.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "rechecks authority before physical overload retry: mixed=%s",
+    async (mixed) => {
+      let sourceCurrent = true;
+      let count = 0;
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          if (++count === 1) {
+            sourceCurrent = false;
+            send({ id: request.id, error: { code: -32001, message: "overloaded" } });
+          } else {
+            send({ id: request.id, result: { turnId: "turn-1" } });
+          }
+        },
+      });
+      const queue = createQueue(harness.client);
+      const first = queue
+        .queue("revoked before retry", { debounceMs: 5 }, () => {
+          if (!sourceCurrent) {
+            throw new Error("source closed");
+          }
+        })
+        .then(
+          () => "accepted",
+          () => "rejected",
+        );
+      const sibling = mixed ? queue.queue("independent", { debounceMs: 5 }, () => {}) : undefined;
+      let later: ReturnType<typeof queue.queue> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await first).toBe("rejected");
+        expect(harness.writes).toHaveLength(mixed ? 2 : 1);
+        if (mixed) {
+          const frame = JSON.parse(harness.writes[1]!);
+          expect(frame.params.input).toEqual([
+            { type: "text", text: "independent", text_elements: [] },
+          ]);
+          expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+          await sibling;
+        }
+        later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
+        await vi.advanceTimersByTimeAsync(0);
+        const frame = JSON.parse(harness.writes.at(-1)!);
+        expect(frame.params.input).toEqual([
+          { type: "text", text: "later authorized", text_elements: [] },
+        ]);
+        expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+        await later;
+      } finally {
+        queue.cancel();
+        harness.client.close();
+        await Promise.allSettled([first, sibling, later]);
+      }
+    },
+  );
 
   it("resolves only after the matching Codex user message completes", async () => {
     const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));
@@ -78,7 +279,8 @@ describe("Codex app-server steering queue", () => {
     // Real client over an in-memory transport: only the app-server process is faked,
     // so this exercises the production request deadline rather than a stub.
     const harness = createClientHarness();
-    const queue = createQueue(harness.client, { requestTimeoutMs: 1_000 });
+    const beforeSubmit = vi.fn(async () => {});
+    const queue = createQueue(harness.client, { requestTimeoutMs: 1_000, beforeSubmit });
 
     const outcomes: unknown[] = [];
     void queue.queue("steer me", { debounceMs: 0 }).then(
@@ -94,6 +296,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    expect(beforeSubmit).toHaveBeenCalledOnce();
     expect((outcomes[0] as Error & { cause?: unknown }).cause).toMatchObject({
       message: "turn/steer timed out",
     });
@@ -176,10 +379,14 @@ describe("Codex app-server steering queue", () => {
   });
 
   it("rejects the batch when Codex rejects turn/steer", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("cannot steer this turn");
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line);
+        send({ id: request.id, error: { code: -32600, message: "cannot steer this turn" } });
+      },
     });
-    const queue = createQueue({ request });
+    const beforeSubmit = vi.fn(async () => {});
+    const queue = createQueue(harness.client, { beforeSubmit });
     const onQueueAccepted = vi.fn();
 
     const queued = queue.queue("rejected", { debounceMs: 0, onQueueAccepted });
@@ -187,6 +394,8 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     await rejected;
     expect(onQueueAccepted).toHaveBeenCalledWith(false);
+    expect(beforeSubmit).toHaveBeenCalledOnce();
+    harness.client.close();
   });
 
   it("rejects later steering behind a failed batch", async () => {

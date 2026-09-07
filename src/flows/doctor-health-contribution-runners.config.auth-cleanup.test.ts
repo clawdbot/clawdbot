@@ -1,19 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
-  replaceConfigFile: vi.fn(async () => undefined),
+  replaceConfigFile: vi.fn(async (_params: unknown) => undefined),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
 
+vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
+  restoreDoctorConfigEnvRefs: (cfg: OpenClawConfig) => cfg,
+}));
+
 vi.mock("../config/config.js", () => ({
-  replaceConfigFile: mocks.replaceConfigFile,
+  transformConfigFile: async ({
+    transform,
+    ...options
+  }: Parameters<typeof import("../config/config.js").transformConfigFile>[0]) => {
+    const { nextConfig } = await transform(
+      {},
+      { snapshot: createDoctorConfigSnapshot(), previousHash: null, attempt: 0 },
+      {},
+    );
+    return mocks.replaceConfigFile({ ...options, nextConfig });
+  },
 }));
 
 vi.mock("../config/logging.js", () => ({

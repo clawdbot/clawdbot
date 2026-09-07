@@ -149,20 +149,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
-  it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      config: { messages: { suppressToolErrors: true } },
-    });
-  });
-
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "exec", error: "command not found" },
-      suppressToolErrorWarnings: true,
-    });
-  });
-
   it("keeps exec-like tool error warnings when there is no user-facing reply", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -221,7 +207,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed (exit 1)",
+      text: "⚠️ Exec failed (exit 1)",
       isError: true,
     });
   });
@@ -239,19 +225,19 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py`: Command exited with code 1",
+      text: "⚠️ Exec failed: `python3 /path/to/daily-cost-audit.py`: Command exited with code 1",
       isError: true,
     });
     expect(payloads[0]?.text).not.toContain("`run python3");
   });
 
   it.each([
-    [false, "off", "⚠️ 🛠️ Exec blocked (exit 7)"],
-    [false, "full", "⚠️ 🛠️ Exec blocked: `make build`: Command exited with code 7"],
-    [true, "off", "⚠️ 🛠️ Exec failed (exit 7)"],
-    [true, "full", "⚠️ 🛠️ Exec failed: `make build`: Command exited with code 7"],
-    [undefined, "off", "⚠️ 🛠️ Exec failed (exit 7)"],
-    [undefined, "full", "⚠️ 🛠️ Exec failed: `make build`: Command exited with code 7"],
+    [false, "off", "⚠️ Exec blocked (exit 7)"],
+    [false, "full", "⚠️ Exec blocked: `make build`: Command exited with code 7"],
+    [true, "off", "⚠️ Exec failed (exit 7)"],
+    [true, "full", "⚠️ Exec failed: `make build`: Command exited with code 7"],
+    [undefined, "off", "⚠️ Exec failed (exit 7)"],
+    [undefined, "full", "⚠️ Exec failed: `make build`: Command exited with code 7"],
   ] as const)(
     "renders executionStarted=%s at %s verbosity from structured state",
     (executionStarted, verboseLevel, expected) => {
@@ -276,51 +262,50 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       title: "prefers raw exec metadata when tool progress detail includes it",
       meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
       toolResultFormat: "markdown",
-      expected: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py`: Command exited with code 1",
+      expected: "⚠️ Exec failed: `python3 /tmp/audit.py`: Command exited with code 1",
     },
     {
       title: "prefers raw exec metadata when the literal command contains backticks",
       meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "markdown",
-      expected: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'``: Command exited with code 1",
+      expected: "⚠️ Exec failed: ``node -e 'console.log(1, `x`)'``: Command exited with code 1",
     },
     {
       title: "leaves exec metadata unwrapped for plain tool results",
       meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "plain",
-      expected: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)': Command exited with code 1",
+      expected: "⚠️ Exec failed: node -e 'console.log(1, `x`)': Command exited with code 1",
     },
     {
       title: "preserves raw exec context before trailing raw command metadata",
       meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
       toolResultFormat: "markdown",
-      expected:
-        "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py`: Command exited with code 1",
+      expected: "⚠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py`: Command exited with code 1",
     },
     {
       title: "does not promote display-summary commas into raw exec context",
       meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
       toolResultFormat: "markdown",
-      expected: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src`: Command exited with code 1',
+      expected: '⚠️ Exec failed: `rg "foo,bar" src`: Command exited with code 1',
     },
     {
       title: "does not treat parenthesized raw command arguments as cwd context",
       meta: 'list files in (in progress) · `ls "(in progress)"`',
       toolResultFormat: "markdown",
-      expected: '⚠️ 🛠️ Exec failed: `ls "(in progress)"`: Command exited with code 1',
+      expected: '⚠️ Exec failed: `ls "(in progress)"`: Command exited with code 1',
     },
     {
       title: "does not duplicate compact cwd labels already present in raw command arguments",
       meta: 'print text (repo) · `printf "%s" "(repo)"`',
       toolResultFormat: "markdown",
-      expected: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"`: Command exited with code 1',
+      expected: '⚠️ Exec failed: `printf "%s" "(repo)"`: Command exited with code 1',
     },
     {
       title: "keeps arbitrary exec cwd suffixes inside markdown command text",
       meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
       toolResultFormat: "markdown",
       expected:
-        "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
+        "⚠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
     },
   ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
@@ -373,15 +358,15 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
 
     expectSinglePayloadSummary(cwdPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
+      text: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
       isError: true,
     });
     expectSinglePayloadSummary(workspaceNodePayloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
+      text: "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
       isError: true,
     });
     expectSinglePayloadSummary(semanticCompactPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `git status (repo)`: Command exited with code 1",
+      text: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
       isError: true,
     });
   });
@@ -391,52 +376,52 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       name: "strips a literal synthetic run prefix",
       meta: "run make build",
       error: "Command failed with exit code 2",
-      expected: "⚠️ 🛠️ Exec failed: `make build`: Command failed with exit code 2",
+      expected: "⚠️ Exec failed: `make build`: Command failed with exit code 2",
     },
     {
       name: "preserves a semantic test summary",
       meta: "run tests",
       error: "Command failed with exit code 1",
-      expected: "⚠️ 🛠️ Exec failed: `run tests`: Command failed with exit code 1",
+      expected: "⚠️ Exec failed: `run tests`: Command failed with exit code 1",
     },
     {
       name: "preserves a semantic deploy summary",
       meta: "run deploy",
       error: "Command failed with exit code 1",
-      expected: "⚠️ 🛠️ Exec failed: `run deploy`: Command failed with exit code 1",
+      expected: "⚠️ Exec failed: `run deploy`: Command failed with exit code 1",
     },
     {
       name: "preserves a compound summary",
       meta: "run tests → install dependencies",
       error: "Command failed with exit code 1",
       expected:
-        "⚠️ 🛠️ Exec failed: `run tests → install dependencies`: Command failed with exit code 1",
+        "⚠️ Exec failed: `run tests → install dependencies`: Command failed with exit code 1",
     },
     {
       name: "preserves an inline-script summary",
       meta: "run node inline script",
       error: "Command failed with exit code 1",
-      expected: "⚠️ 🛠️ Exec failed: `run node inline script`: Command failed with exit code 1",
+      expected: "⚠️ Exec failed: `run node inline script`: Command failed with exit code 1",
     },
     {
       name: "preserves a heredoc summary",
       meta: "run python3 inline script (heredoc)",
       error: "Command failed with exit code 1",
       expected:
-        "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)`: Command failed with exit code 1",
+        "⚠️ Exec failed: `run python3 inline script (heredoc)`: Command failed with exit code 1",
     },
     {
       name: "preserves a sed summary",
       meta: "run sed on file",
       error: "Command failed with exit code 1",
-      expected: "⚠️ 🛠️ Exec failed: `run sed on file`: Command failed with exit code 1",
+      expected: "⚠️ Exec failed: `run sed on file`: Command failed with exit code 1",
     },
     {
       name: "preserves a pipeline summary",
       meta: "run tests -> show first 3 lines",
       error: "Command failed with exit code 1",
       expected:
-        "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines`: Command failed with exit code 1",
+        "⚠️ Exec failed: `run tests -> show first 3 lines`: Command failed with exit code 1",
     },
   ])("formats exec metadata: $name", ({ meta, error, expected }) => {
     const payloads = buildPayloads({
@@ -454,8 +439,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
-    // Non-recoverable error so the generic exec-like rule still surfaces a warning
-    // for this no-reply formatting case (recoverable keywords would suppress it).
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "bash",
@@ -468,7 +451,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
+      text: "⚠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
       isError: true,
     });
   });

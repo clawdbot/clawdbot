@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   projectAgentHarnessTranscriptMessageForDisplay,
+  restorePreparedUserTurnOperationalMetaForRuntime,
   runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -212,7 +213,7 @@ export function createAttemptTranscriptJournal(params: {
       message.role === "toolResult"
         ? { toolCallId: message.toolCallId, toolName: message.toolName }
         : {};
-    const prepared = projectDisplay({
+    const projected = projectDisplay({
       ...hooked,
       ...toolIdentity,
       ...(taintMetadata
@@ -222,6 +223,13 @@ export function createAttemptTranscriptJournal(params: {
       ...(message.role === "user" && message.provenance ? { provenance: message.provenance } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
+    const prepared =
+      message.role === "user"
+        ? restorePreparedUserTurnOperationalMetaForRuntime({
+            runtimeMessage: projected,
+            preparedMessage: message,
+          })
+        : projected;
     return options.singleton && !isCompatibleSingletonRewrite(message, prepared)
       ? undefined
       : prepared;
@@ -252,7 +260,9 @@ export function createAttemptTranscriptJournal(params: {
       replayInvalid = true;
     }
     if (outcome.result.message.role === "user") {
-      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor);
+      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor, {
+        appended: outcome.result.appended,
+      });
     }
     return outcome.result as AppendResult;
   };
@@ -447,7 +457,7 @@ export function createAttemptTranscriptJournal(params: {
         accept(outcome);
         persistedInitialUser = persisted;
         terminalAnchor = outcome.anchor;
-        recorder.markRuntimePersisted(persisted, outcome.anchor);
+        recorder.markRuntimePersisted(persisted, outcome.anchor, { appended: outcome.appended });
         params.attempt.onUserMessagePersisted?.(persisted);
         await publish(outcome.appended);
       })();
@@ -484,10 +494,13 @@ export function createAttemptTranscriptJournal(params: {
       schedule(async () => {
         const recorder = sdkUserRecorders.get(input.eventId);
         sdkUserRecorders.delete(input.eventId);
-        const provenance = (await recorder?.resolveMessage())?.provenance;
+        const preparedMessage = await recorder?.resolveMessage();
         const write: PendingWrite = {
           eventId: input.eventId,
-          message: provenance ? { ...input.message, provenance } : input.message,
+          message: restorePreparedUserTurnOperationalMetaForRuntime({
+            runtimeMessage: input.message,
+            preparedMessage,
+          }),
           recorder,
         };
         if (pendingTools) {

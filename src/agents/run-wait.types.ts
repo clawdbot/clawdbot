@@ -1,10 +1,12 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 
 /** Normalized terminal or pending state returned by `agent.wait`. */
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
+  /** Set locally when the wait RPC fails; terminal run text is never retry evidence. */
+  retryableTransportError?: true;
   startedAt?: number;
   endedAt?: number;
   stopReason?: string;
@@ -14,4 +16,5 @@ export type AgentWaitResult = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  sourceReplyDelivered?: true;
 };

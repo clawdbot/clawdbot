@@ -225,6 +225,7 @@ describe("scripts/lib/openclaw-test-state", () => {
     try {
       expect(payload.scenario).toBe("upgrade-survivor");
       expect(payload.config.update).toStrictEqual({ channel: "stable" });
+      expect(payload.config.gateway.reload).toStrictEqual({ mode: "off" });
       expect(payload.config.gateway.auth).toStrictEqual({
         mode: "token",
         token: {
@@ -240,6 +241,18 @@ describe("scripts/lib/openclaw-test-state", () => {
       });
       expect(payload.config.channels.telegram.enabled).toBe(true);
       expect(payload.config.channels.whatsapp.enabled).toBe(true);
+      const renderedFunction = await execFileAsync(process.execPath, [
+        scriptPath,
+        "shell-function",
+      ]);
+      const snippetFile = path.join(payload.root, "state-function.sh");
+      await fs.writeFile(snippetFile, renderedFunction.stdout, "utf8");
+      const shellHome = path.join(payload.root, "shell-home");
+      const shellProbe = await execFileAsync("bash", [
+        "-c",
+        `source ${shellQuote(snippetFile)}; openclaw_test_state_create ${shellQuote(shellHome)} upgrade-survivor; cat "$OPENCLAW_CONFIG_PATH"`,
+      ]);
+      expect(JSON.parse(shellProbe.stdout).gateway).toStrictEqual(payload.config.gateway);
     } finally {
       await fs.rm(payload.root, { recursive: true, force: true });
     }

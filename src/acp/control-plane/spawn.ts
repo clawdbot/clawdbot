@@ -1,80 +1,100 @@
 /** Cleanup helpers for failed ACP spawn flows. */
+import {
+  callInProcessGatewayTool,
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "../../agents/tools/in-process-gateway.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { getAcpSessionManager } from "./manager.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 
-/** Minimal runtime handle needed to close a just-created session during failed spawn cleanup. */
-export type AcpSpawnRuntimeCloseHandle = {
-  runtime: {
-    close: (params: {
-      handle: { sessionKey: string; backend: string; runtimeSessionName: string };
-      reason: string;
-    }) => Promise<void>;
-  };
-  handle: { sessionKey: string; backend: string; runtimeSessionName: string };
-};
-
-/** Best-effort cleanup for partially created ACP sessions, bindings, and transcripts. */
+/** Roll back only the provisional session owned by this failed spawn. */
 export async function cleanupFailedAcpSpawn(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  shouldDeleteSession: boolean;
+  agentId: string;
+  sessionEntry?: SessionEntry;
   deleteTranscript: boolean;
-  runtimeCloseHandle?: AcpSpawnRuntimeCloseHandle;
+  closeRuntimeOnFailure?: () => Promise<void>;
 }): Promise<void> {
-  if (params.runtimeCloseHandle) {
-    await params.runtimeCloseHandle.runtime
-      .close({
-        handle: params.runtimeCloseHandle.handle,
-        reason: "spawn-failed",
-      })
-      .catch((err: unknown) => {
-        logVerbose(
-          `acp-spawn: runtime cleanup close failed for ${params.sessionKey}: ${String(err)}`,
-        );
-      });
-  }
-
-  const acpManager = getAcpSessionManager();
-  await acpManager
-    .closeSession({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      reason: "spawn-failed",
-      allowBackendUnavailable: true,
-      requireAcpSession: false,
-    })
-    .catch((err: unknown) => {
-      logVerbose(
-        `acp-spawn: manager cleanup close failed for ${params.sessionKey}: ${String(err)}`,
-      );
-    });
-
-  await getSessionBindingService()
-    .unbind({
-      targetSessionKey: params.sessionKey,
-      reason: "spawn-failed",
-    })
-    .catch((err: unknown) => {
-      logVerbose(
-        `acp-spawn: binding cleanup unbind failed for ${params.sessionKey}: ${String(err)}`,
-      );
-    });
-
-  if (!params.shouldDeleteSession) {
+  if (!params.sessionEntry) {
     return;
   }
-  await callGateway({
-    method: "sessions.delete",
-    params: {
-      key: params.sessionKey,
-      deleteTranscript: params.deleteTranscript,
-      emitLifecycleHooks: false,
-    },
-    timeoutMs: 10_000,
-  }).catch(() => {
-    // Best-effort cleanup only.
+  const { sessionId, lifecycleRevision } = params.sessionEntry;
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.agentId,
   });
+  const assertCurrent = () => {
+    const current = loadSessionEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      clone: false,
+    });
+    if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
+      throw new Error(`ACP provisional session ${params.sessionKey} changed before cleanup.`);
+    }
+  };
+  let deletionStarted = false;
+  const cancellation = new AbortController();
+  try {
+    await runWithGatewayToolCleanupContext(async () => {
+      assertCurrent();
+      const context = getInProcessGatewayToolContext();
+      if (!context) {
+        throw new Error("ACP provisional cleanup Gateway is unavailable.");
+      }
+      await callInProcessGatewayTool(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          agentId: params.agentId,
+          expectedSessionId: sessionId,
+          ...(lifecycleRevision ? { expectedLifecycleRevision: lifecycleRevision } : {}),
+          deleteTranscript: params.deleteTranscript,
+          emitLifecycleHooks: false,
+        },
+        // New /acp rows can have no revision yet. The private guard preserves
+        // exact absence as well as recorded revisions throughout deletion.
+        {
+          sessionMutationCommitGuard: () => {
+            cancellation.signal.throwIfAborted();
+            context.requestEntryLifetime?.signal.throwIfAborted();
+            assertCurrent();
+            // The router calls this after lazy preparation, before handler entry.
+            deletionStarted = true;
+          },
+          signal: cancellation.signal,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+  } catch (error) {
+    // A retired owner cannot dispatch cleanup. Retain its existing local handle
+    // release, but never repeat a close after canonical deletion has started.
+    if (!deletionStarted) {
+      // A timed-out preparation may still settle; fence its late handler entry.
+      cancellation.abort(error);
+    }
+    if (!deletionStarted && params.closeRuntimeOnFailure) {
+      await runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: [params.sessionKey, sessionId],
+        run: async () => {
+          assertCurrent();
+          await params.closeRuntimeOnFailure!();
+        },
+      }).catch((releaseError: unknown) => {
+        if (isAcpOwnerRepairRequired(releaseError)) {
+          throw releaseError;
+        }
+        logVerbose(`acp-spawn: provisional runtime cleanup failed: ${String(releaseError)}`);
+      });
+    }
+    logVerbose(`acp-spawn: provisional session cleanup failed: ${String(error)}`);
+  }
 }

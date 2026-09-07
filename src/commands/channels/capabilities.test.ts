@@ -453,7 +453,7 @@ describe("channelsCapabilitiesCommand", () => {
     ]);
   });
 
-  it("installs an explicit optional channel before rendering capabilities", async () => {
+  it("installs an explicit optional channel in the selected owner before rendering capabilities", async () => {
     const tokenRef = {
       source: "env",
       provider: "default",
@@ -508,11 +508,11 @@ describe("channelsCapabilitiesCommand", () => {
       };
     });
 
-    await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
+    await channelsCapabilitiesCommand({ channel: "slack", agent: "ops" }, runtime);
 
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ rawChannel: "slack", allowInstall: true }),
+      expect.objectContaining({ rawChannel: "slack", agentId: "ops", allowInstall: true }),
     );
     expect(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0].cfg).toEqual(sourceConfig);
 

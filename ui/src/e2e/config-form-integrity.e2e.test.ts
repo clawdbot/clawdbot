@@ -1,8 +1,9 @@
 // Control UI tests cover schema-backed form constraints, draft recovery, and accessible names.
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,13 +16,15 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofVariant = process.env.OPENCLAW_UI_PROOF_VARIANT ?? "after";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-integrity",
-  proofVariant,
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = path.join(
+      createControlUiE2eArtifactDir("config-form-integrity"),
+      proofVariant,
+    );
+  }
+});
 
 function configFormIntegrityMocks() {
   const config = {
@@ -195,7 +198,6 @@ suite.define(() => {
           expect((await mode.locator("option:checked").textContent())?.trim()).toBe(label);
         }
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -233,7 +235,6 @@ suite.define(() => {
         await metadataEditor.blur();
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator("#config-section-panel").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-invalid-json-draft.png"),
@@ -395,7 +396,6 @@ suite.define(() => {
         expect(rejection.message).toContain(".3.name");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

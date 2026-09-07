@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createWebSocketStream, WebSocket, WebSocketServer, type RawData } from "ws";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
@@ -14,6 +15,7 @@ import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 const DEFAULT_TICKET_TTL_MS = 60_000;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
+const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
@@ -38,10 +40,10 @@ type TicketEntry = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   redeemed: boolean;
-  settled: boolean;
   socket?: Duplex;
   ws?: WebSocket;
   stopKeepalive?: () => void;
+  closeTrigger?: "attach-rejected" | "websocket-error";
 };
 
 type TicketNodeRegistry = Pick<
@@ -169,12 +171,12 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
 
   const rejectTicket = (ticket: string, error: Error): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       return;
     }
-    entry.settled = true;
     entry.reject(error);
     entry.stopKeepalive?.();
+    entry.closeTrigger ??= "attach-rejected";
     entry.ws?.close(1008, `node ${entry.kind} attach rejected`);
     entry.socket?.destroy();
   };
@@ -185,11 +187,10 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     metadata: NodeDesktopStreamMetadata | undefined,
   ): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       stream.destroy();
       return;
     }
-    entry.settled = true;
     entry.resolve(stream, metadata);
   };
 
@@ -226,7 +227,6 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       reject,
       timer,
       redeemed: false,
-      settled: false,
     });
     return {
       ticket,
@@ -310,24 +310,33 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     } catch {
       current = false;
     }
-    if (entry.settled) {
-      return true;
-    }
-    if (!current) {
-      socket.off("error", onSocketError);
-      socket.off("end", onSocketClose);
-      socket.off("close", onSocketClose);
-      writeUnauthorized(socket);
-      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+    if (tickets.get(ticket) !== entry) {
       return true;
     }
     socket.off("error", onSocketError);
     socket.off("end", onSocketClose);
     socket.off("close", onSocketClose);
+    if (!current) {
+      writeUnauthorized(socket);
+      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+      return true;
+    }
     try {
       wss.handleUpgrade(req, socket, head, (ws) => {
         entry.socket = undefined;
         entry.ws = ws;
+        ws.once("close", (closeCode) => {
+          streamLog.info("node stream closed", {
+            streamKind: kind,
+            nodeId: entry.binding.nodeId,
+            connId: entry.binding.connId,
+            trigger: entry.closeTrigger ?? "websocket-close",
+            closeCode,
+          });
+        });
+        ws.once("error", () => {
+          entry.closeTrigger ??= "websocket-error";
+        });
         entry.stopKeepalive = startWebSocketKeepalive(ws);
         const attached = readAttachedStream(ws, kind, (error) => rejectTicket(ticket, error));
         void (async () => {

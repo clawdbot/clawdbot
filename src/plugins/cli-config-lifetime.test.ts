@@ -219,12 +219,15 @@ describe("CLI config producer lifetime", () => {
         ]);
         expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
         const program = new Command();
-        expect(
-          await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+        await expect(
+          registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             session,
             primary: "prepared",
           }),
-        ).toBeNull();
+        ).rejects.toMatchObject({
+          code: "INVALID_CONFIG",
+          details: expect.stringContaining("plugins.entries.invalid-cli.config.label"),
+        });
         expect(program.commands).toEqual([]);
         session.close();
       },

@@ -14,14 +14,6 @@ vi.mock("../plugin-sdk/facade-loader.js", () => ({
   loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
-function requireFirstNoteCall(noteFn: ReturnType<typeof vi.fn>): unknown[] {
-  const call = noteFn.mock.calls[0];
-  if (!call) {
-    throw new Error("expected browser doctor note");
-  }
-  return call;
-}
-
 describe("doctor browser facade", () => {
   beforeEach(() => {
     loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
@@ -178,10 +170,9 @@ describe("doctor browser facade", () => {
     const noteFn = vi.fn();
 
     await expect(noteChromeMcpBrowserReadiness({}, { noteFn })).resolves.toBeUndefined();
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(requireFirstNoteCall(noteFn)).toEqual([
+    expect(noteFn).toHaveBeenCalledExactlyOnceWith(
       "- Browser health check is unavailable: missing browser doctor facade",
       "Browser",
-    ]);
+    );
   });
 });

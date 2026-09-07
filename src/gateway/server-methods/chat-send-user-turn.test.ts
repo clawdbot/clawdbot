@@ -10,6 +10,10 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
+import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -23,14 +27,14 @@ import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 
-function createUserTurnInputController() {
+function createUserTurnInputController(text = "raw message") {
   const baseInput: UserTurnInput = {
-    text: "raw message",
+    text,
     timestamp: 1,
     idempotencyKey: "run-1:user",
   };
@@ -110,8 +114,8 @@ describe("prepareChatSendUserTurn", () => {
         );
         const prepared = prepareChatSendUserTurn({
           request: {
+            inboundMessage: "hello",
             clientInfo,
-            normalizedAttachments: [],
             suppressCommandInterpretation: false,
             systemInputProvenance:
               kind === "system" ? { kind: "internal_system", sourceTool: "fixture" } : undefined,
@@ -191,136 +195,197 @@ describe("prepareChatSendUserTurn", () => {
     },
   );
 
-  it("carries the authenticated guest's required sandbox into session creation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("chat-sandbox-creator@example.com");
-      const { controller } = createUserTurnInputController();
-      const prepared = prepareChatSendUserTurn({
-        request: {
-          clientInfo: createClientInfo(),
-          normalizedAttachments: [],
-          suppressCommandInterpretation: false,
-          systemInputProvenance: undefined,
-          systemProvenanceReceipt: undefined,
-        },
-        session: {
-          agentId: "main",
-          clientRunId: "run-1",
-          sessionKey: "agent:main:dashboard:guest-chat",
-          cfg: {
-            gateway: {
-              roles: {
-                default: "guest",
-                definitions: {
-                  guest: {
-                    sessions: { others: "view" },
-                    agents: "*",
-                    scopes: ["operator.write"],
-                    sandbox: "required",
+  it.each([false, true])(
+    "preserves sandbox policy for attributed chat (system actor: %s)",
+    async (systemActor) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = systemActor
+          ? ensureGatewayOwnerProfile("Gateway Owner")
+          : ensureProfileForEmail("chat-sandbox-creator@example.com");
+        const { controller } = createUserTurnInputController();
+        const prepared = prepareChatSendUserTurn({
+          request: {
+            inboundMessage: "hello",
+            clientInfo: createClientInfo(),
+            suppressCommandInterpretation: false,
+            systemInputProvenance: undefined,
+            systemProvenanceReceipt: undefined,
+          },
+          session: {
+            agentId: "main",
+            clientRunId: "run-1",
+            sessionKey: "agent:main:dashboard:guest-chat",
+            cfg: {
+              gateway: {
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      sessions: { others: "view" },
+                      agents: "*",
+                      scopes: ["operator.write"],
+                      sandbox: "required",
+                    },
                   },
                 },
               },
             },
           },
+          admission: {
+            originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+          },
+          attachments: createAttachments(),
+          client: {
+            ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: profile.displayName,
+              hasAvatar: false,
+              updatedAt: profile.updatedAt,
+            },
+            connect: { scopes: ["operator.write"] },
+          } as never,
+          logGateway: { warn: vi.fn() } as never,
+          userTurn: controller,
+        });
+
+        expect(prepared.ctx.SessionCreation).toEqual({
+          via: "operator",
+          actor: { type: "human", source: "profile", id: profile.id },
+          ...(systemActor ? {} : { sandbox: "required" }),
+          skillLibrarySelections: [],
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "status", inboundMessage: "/status", suppressed: false },
+    {
+      name: "multiline skill",
+      inboundMessage: "/skill weather\n  first\n  second",
+      suppressed: false,
+    },
+    { name: "reset", inboundMessage: "/reset\ninspect this", suppressed: false },
+    { name: "suppressed status", inboundMessage: "/status", suppressed: true },
+  ])(
+    "separates $name command input from attachment text while preserving turn facts",
+    async ({ inboundMessage, suppressed }) => {
+      const { controller, readInput } = createUserTurnInputController(inboundMessage);
+      const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage,
+          clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
+          suppressCommandInterpretation: suppressed,
+          systemInputProvenance: { kind: "internal_system", sourceTool: "test" },
+          systemProvenanceReceipt: "[System receipt]",
+          toolBindings: { browser: { kind: "tab", targetId: "target-1" } },
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-1",
+          sessionKey: "agent:main:main",
         },
         admission: {
-          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
-        },
-        attachments: createAttachments(),
-        client: {
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
+          originatingRoute: {
+            originatingChannel: "discord",
+            originatingTo: "channel:1",
+            accountId: "account-1",
+            messageThreadId: "thread-1",
+            explicitDeliverRoute: true,
           },
-          connect: { scopes: ["operator.write"] },
-        } as never,
+        },
+        attachments: createAttachments({
+          parsedMessage,
+          mediaPathOffloadPaths: ["/workspace/voice.mp3"],
+          mediaPathOffloadTypes: ["audio/mpeg"],
+          mediaPathOffloadWorkspaceDir: "/workspace",
+        }),
+        client: null,
         logGateway: { warn: vi.fn() } as never,
         userTurn: controller,
       });
 
-      expect(prepared.ctx.SessionCreation).toEqual({
-        via: "operator",
-        actor: { type: "human", source: "profile", id: profile.id },
-        sandbox: "required",
-      });
-    });
-  });
-
-  it("assembles command, provenance, sender, and origin facts", async () => {
-    const { controller, readInput } = createUserTurnInputController();
-    const prepared = prepareChatSendUserTurn({
-      request: {
-        clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
-        normalizedAttachments: [],
-        suppressCommandInterpretation: false,
-        systemInputProvenance: { kind: "internal_system", sourceTool: "test" },
-        systemProvenanceReceipt: "[System receipt]",
-        toolBindings: { browser: { kind: "tab", targetId: "target-1" } },
-      },
-      session: {
-        agentId: "main",
-        clientRunId: "run-1",
-        sessionKey: "agent:main:main",
-      },
-      admission: {
-        originatingRoute: {
-          originatingChannel: "discord",
-          originatingTo: "channel:1",
-          accountId: "account-1",
-          messageThreadId: "thread-1",
-          explicitDeliverRoute: true,
+      expect(prepared.ctx).toMatchObject({
+        Body: `[System receipt]\n\n${parsedMessage}`,
+        BodyForAgent: `[System receipt]\n\n${parsedMessage}`,
+        BodyForCommands: inboundMessage,
+        CommandBody: inboundMessage,
+        RawBody: parsedMessage,
+        CommandAuthorized: !suppressed,
+        CommandTurn: {
+          kind: suppressed ? "normal" : "text-slash",
+          source: suppressed ? "message" : "text",
+          authorized: !suppressed,
+          body: inboundMessage,
         },
-      },
-      attachments: createAttachments({ parsedMessage: "/status" }),
-      client: null,
-      logGateway: { warn: vi.fn() } as never,
-      userTurn: controller,
-    });
-
-    expect(prepared.ctx).toMatchObject({
-      Body: "[System receipt]\n\n/status",
-      BodyForAgent: "[System receipt]\n\n/status",
-      BodyForCommands: "/status",
-      RawBody: "/status",
-      CommandSource: "text",
-      CommandAuthorized: true,
-      CommandTurn: {
-        kind: "text-slash",
-        source: "text",
-        authorized: true,
-        body: "/status",
-      },
-      InputProvenance: { kind: "internal_system", sourceTool: "test" },
-      GatewayRunToolBindings: { browser: { kind: "tab", targetId: "target-1" } },
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:1",
-      AccountId: "account-1",
-      MessageThreadId: "thread-1",
-      ExplicitDeliverRoute: true,
-      SenderId: GATEWAY_CLIENT_IDS.CLI,
-      SenderName: "Gateway CLI",
-      SenderUsername: "Gateway CLI",
-    });
-    expect(prepared.accountId).toBe("account-1");
-    expect(prepared.isInternalTextSlashCommandTurn).toBe(true);
-    expect(prepared.ctx).not.toHaveProperty("CommandInterpretationSuppressed");
-    expect(prepared.queuedFollowupOwnerKey).toBeUndefined();
-    expect(prepared.replyOptionImages).toBeUndefined();
-    await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
-    await expect(readInput()).resolves.toEqual(controller.baseInput);
-  });
+        media: [
+          { path: "/workspace/voice.mp3", contentType: "audio/mpeg", workspaceDir: "/workspace" },
+        ],
+        InputProvenance: { kind: "internal_system", sourceTool: "test" },
+        GatewayRunToolBindings: { browser: { kind: "tab", targetId: "target-1" } },
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:1",
+        AccountId: "account-1",
+        MessageThreadId: "thread-1",
+        ExplicitDeliverRoute: true,
+        SenderId: GATEWAY_CLIENT_IDS.CLI,
+        SenderName: "Gateway CLI",
+        SenderUsername: "Gateway CLI",
+      });
+      expect(prepared.accountId).toBe("account-1");
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(!suppressed);
+      expect(prepared.ctx.CommandSource).toBe(suppressed ? undefined : "text");
+      expect(prepared.ctx.CommandInterpretationSuppressed).toBe(suppressed ? true : undefined);
+      const ctx = finalizeInboundContext(prepared.ctx);
+      const routed = resolveReplyDirectiveRouting({
+        commandText: ctx.commandText,
+        agentText: ctx.agentText,
+        modelAliases: [],
+        canInterpretTextDirectives: !suppressed,
+        isAuthorizedSender: !suppressed,
+        isGroup: false,
+        wasMentioned: false,
+        ctx,
+        cfg: {},
+        agentId: "main",
+        resetTriggered: false,
+      });
+      expect(routed.hasInlineStatus).toBe(false);
+      if (inboundMessage.startsWith("/skill")) {
+        expect(normalizeCommandBody(ctx.commandText)).toBe("/skill weather\nfirst\n  second");
+      }
+      if (inboundMessage.startsWith("/reset")) {
+        expect(
+          resolveSessionResetCommand({
+            commandText: ctx.commandText,
+            rawText: ctx.rawText,
+            resetTriggers: ["/reset"],
+            ctx,
+            cfg: {},
+            agentId: "main",
+            isGroup: false,
+            resetAuthorized: true,
+          }).payload,
+        ).toBe("inspect this\n[media attached: media://inbound/voice.mp3]");
+      }
+      expect(prepared.queuedFollowupOwnerKey).toBeUndefined();
+      expect(prepared.replyOptionImages).toBeUndefined();
+      await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
+      await expect(readInput()).resolves.toEqual(controller.baseInput);
+    },
+  );
 
   it("carries pre-staged media and device ownership without UI sender decoration", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const prepared = prepareChatSendUserTurn({
       request: {
+        inboundMessage: "hello",
         clientInfo: createClientInfo({
           id: GATEWAY_CLIENT_IDS.CONTROL_UI,
           mode: GATEWAY_CLIENT_MODES.UI,
         }),
-        normalizedAttachments: [{}],
         suppressCommandInterpretation: true,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
@@ -393,8 +458,8 @@ describe("prepareChatSendUserTurn", () => {
     const mediaRef = "media://inbound/image-1.png";
     const prepared = prepareChatSendUserTurn({
       request: {
+        inboundMessage: "inspect",
         clientInfo: createClientInfo(),
-        normalizedAttachments: [{}],
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
@@ -448,8 +513,8 @@ describe("prepareChatSendUserTurn", () => {
     const { controller, readInput } = createUserTurnInputController();
     prepareChatSendUserTurn({
       request: {
+        inboundMessage: "hello",
         clientInfo: createClientInfo(),
-        normalizedAttachments: [{}, {}],
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
@@ -520,8 +585,8 @@ describe("prepareChatSendUserTurn", () => {
       const { controller, readInput } = createUserTurnInputController();
       const prepared = prepareChatSendUserTurn({
         request: {
+          inboundMessage: "hello",
           clientInfo: createClientInfo(),
-          normalizedAttachments: [{}],
           suppressCommandInterpretation: false,
           systemInputProvenance: undefined,
           systemProvenanceReceipt: undefined,
@@ -564,8 +629,8 @@ describe("prepareChatSendUserTurn", () => {
     const mediaRef = `media://inbound/${fileName}`;
     prepareChatSendUserTurn({
       request: {
+        inboundMessage: "play this",
         clientInfo: createClientInfo(),
-        normalizedAttachments: [{}],
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
@@ -621,8 +686,8 @@ describe("prepareChatSendUserTurn", () => {
     const mediaRef = "media://inbound/report.pdf";
     prepareChatSendUserTurn({
       request: {
+        inboundMessage: "read this",
         clientInfo: createClientInfo(),
-        normalizedAttachments: [{}],
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
         systemProvenanceReceipt: undefined,
@@ -701,8 +766,8 @@ describe("prepareChatSendUserTurn", () => {
       const { controller, readInput } = createUserTurnInputController();
       prepareChatSendUserTurn({
         request: {
+          inboundMessage: "inspect",
           clientInfo: createClientInfo(),
-          normalizedAttachments: [{}],
           suppressCommandInterpretation: false,
           systemInputProvenance: undefined,
           systemProvenanceReceipt: undefined,

@@ -27,7 +27,7 @@ resolve_head_push_url() {
 # symlink/special-file dereference risks from untrusted fork content.
 verify_prep_head_extends_hosted_head() {
   local expected_oid="$1"
-  if ! git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
     echo "Prep sync cannot resolve hosted head $expected_oid locally; re-run prepare-init." >&2
     return 1
   fi
@@ -41,8 +41,8 @@ verify_prep_head_extends_hosted_head() {
 classify_replaced_hosted_ancestry() {
   local hosted_head="$1"
   local prepared_head="$2"
-  if ! git cat-file -e "${hosted_head}^{commit}" 2>/dev/null ||
-    ! git cat-file -e "${prepared_head}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${hosted_head}^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${prepared_head}^{commit}" 2>/dev/null; then
     echo "Cannot inspect hosted and prepared commits; re-run prepare-init." >&2
     return 1
   fi

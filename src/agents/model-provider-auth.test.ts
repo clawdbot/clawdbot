@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  hashRuntimeConfigValue,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import type {
   ModelAuthAvailabilityEvaluation,
@@ -18,6 +25,21 @@ const modelCatalogMocks = vi.hoisted(() => ({
   ownerWorkspaceDir: undefined as string | undefined,
 }));
 
+const syntheticAuthMocks = vi.hoisted(() => {
+  const prepareSyntheticAuth = vi.fn<
+    typeof import("../plugins/provider-runtime.js").prepareProviderSyntheticAuthWithPlugin
+  >(async () => undefined);
+  return {
+    prepareProviderSyntheticAuthWithPlugin: prepareSyntheticAuth,
+    resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+    captureProviderSyntheticAuthFacts: vi.fn<
+      typeof import("../plugins/provider-runtime.js").captureProviderSyntheticAuthFacts
+    >(async () => []),
+  };
+});
+
+vi.mock("../plugins/provider-runtime.js", () => syntheticAuthMocks);
+
 const modelAuthMocks = vi.hoisted(() => ({
   createRuntimeProviderAuthLookup: vi.fn(() => ({
     envApiKey: {
@@ -29,15 +51,8 @@ const modelAuthMocks = vi.hoisted(() => ({
     syntheticAuthProviderRefsComplete: true,
   })),
   hasAvailableAuthForProvider: vi.fn(() => true),
-  hasRuntimeAvailableProviderAuth:
-    vi.fn<
-      (params: {
-        provider: string;
-        cfg?: OpenClawConfig;
-        workspaceDir?: string;
-        runtimeLookup?: unknown;
-      }) => boolean
-    >(),
+  prepareRuntimeAvailableProviderAuth:
+    vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
 }));
 
 const modelAuthAvailabilityMocks = vi.hoisted(() => {
@@ -48,6 +63,7 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
     evaluateModelAuth,
     createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
       evaluateModelAuth,
+      evaluateRuntimeModelAuth: evaluateModelAuth,
       resolveProviderAuthAvailability: vi.fn(() => false),
       hasSyntheticAuth: vi.fn(() => false),
     })),
@@ -66,6 +82,16 @@ const authProfilesMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: (params: { workspaceDir?: string }) =>
+    modelCatalogMocks.ownerWorkspaceDir &&
+    (params.workspaceDir === undefined ||
+      params.workspaceDir === modelCatalogMocks.ownerWorkspaceDir)
+      ? {
+          workspaceDir: modelCatalogMocks.ownerWorkspaceDir,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
+          modelCatalog: { entries: [], routeVariants: [] },
+        }
+      : undefined,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: async (params?: unknown) => ({
     ...(modelCatalogMocks.ownerWorkspaceDir
@@ -81,7 +107,7 @@ vi.mock("./prepared-model-catalog.js", () => ({
 vi.mock("./model-auth.js", () => ({
   createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
   hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
-  hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
+  prepareRuntimeAvailableProviderAuth: modelAuthMocks.prepareRuntimeAvailableProviderAuth,
 }));
 
 vi.mock("./model-auth-availability.js", () => ({
@@ -137,6 +163,106 @@ describe("prepared provider auth state", () => {
     });
   });
 
+  it("consumes prepared native auth when checking runtime availability", async () => {
+    const nativeAuth = { apiKey: "native-marker", source: "Native auth", mode: "oauth" as const };
+    const prepared = createDeferredCore<typeof nativeAuth | undefined>();
+    syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mockImplementationOnce(
+      async () => await prepared.promise,
+    );
+    const { prepareRuntimeAvailableProviderAuth } =
+      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockImplementationOnce(
+      prepareRuntimeAvailableProviderAuth,
+    );
+    let settled = false;
+    const answer = hasAuthForModelProvider({
+      provider: "native",
+      cfg: {},
+      env: {},
+      store: { version: 1, profiles: {} },
+      runtimeAuthLookup: {
+        ...modelAuthMocks.createRuntimeProviderAuthLookup(),
+        syntheticAuthProviderRefs: ["native"],
+      },
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await expect
+        .poll(() => syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mock.calls.length)
+        .toBe(1);
+      expect(settled).toBe(false);
+      prepared.resolve(nativeAuth);
+      await expect(answer).resolves.toBe(true);
+      expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).toHaveBeenCalledOnce();
+    } finally {
+      prepared.resolve(undefined);
+      await Promise.allSettled([answer]);
+    }
+  });
+
+  it("honors cancellation before returning fast-path auth", async () => {
+    const { prepareRuntimeAvailableProviderAuth } =
+      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
+    const lookup = modelAuthMocks.createRuntimeProviderAuthLookup();
+    const params = {
+      provider: "native",
+      env: { NATIVE_FIXTURE_AUTH: "fixture-auth" },
+      runtimeLookup: {
+        ...lookup,
+        envApiKey: { ...lookup.envApiKey, candidateMap: { native: ["NATIVE_FIXTURE_AUTH"] } },
+      },
+    };
+    await expect(prepareRuntimeAvailableProviderAuth(params)).resolves.toBe(true);
+    const reason = new Error("availability cancelled");
+    await expect(
+      prepareRuntimeAvailableProviderAuth({ ...params, signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+    expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not prepare native auth for a managed SecretRef (available: %s)",
+    async (available) => {
+      const { prepareRuntimeAvailableProviderAuth } =
+        await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
+      modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockImplementationOnce(
+        prepareRuntimeAvailableProviderAuth,
+      );
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "managed-native": {
+              api: "openai-completions",
+              apiKey: { source: "file", provider: "vault", id: "/native/key" },
+              baseUrl: "https://example.test/v1",
+              models: [],
+            },
+          },
+        },
+      };
+      clearRuntimeConfigSnapshot();
+      try {
+        if (available) {
+          const runtimeConfig = structuredClone(cfg);
+          runtimeConfig.models!.providers!["managed-native"]!.apiKey = "runtime-auth-not-real";
+          setRuntimeConfigSnapshot(runtimeConfig, cfg);
+        }
+        await expect(
+          hasAuthForModelProvider({
+            provider: "managed-native",
+            cfg,
+            env: {},
+            store: { version: 1, profiles: {} },
+          }),
+        ).resolves.toBe(available);
+        expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
   it("reuses prepared runtime auth lookup data while warming providers", async () => {
     // Warming should build one runtime lookup and carry it across provider
     // checks instead of rediscovering auth for every catalog entry.
@@ -145,15 +271,15 @@ describe("prepared provider auth state", () => {
       { id: "gpt", name: "gpt", provider: "openai" },
       { id: "claude", name: "claude", provider: "anthropic" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     await publishCurrentProviderAuthStateSnapshot(cfg);
 
     expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledTimes(1);
     const firstLookup =
-      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
+      modelAuthMocks.prepareRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
     const secondLookup =
-      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[1]?.[0].runtimeLookup;
+      modelAuthMocks.prepareRuntimeAvailableProviderAuth.mock.calls[1]?.[0].runtimeLookup;
     expect(firstLookup).toBe(secondLookup);
   });
 
@@ -162,7 +288,7 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     await publishCurrentProviderAuthStateSnapshot(cfg);
 
@@ -184,7 +310,7 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     await buildCurrentProviderAuthStateSnapshot(cfg);
 
@@ -201,7 +327,7 @@ describe("prepared provider auth state", () => {
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
     authProfilesMocks.externalCliDiscoveryForProviders.mockReturnValue(externalCli as never);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     await buildCurrentProviderAuthStateSnapshot(cfg, { readOnlyAuthStore: true });
 
@@ -228,7 +354,7 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "plugin-model", name: "Plugin Model", provider: "plugin-provider" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
       runtimeAuthLookups: new Map([
@@ -250,31 +376,84 @@ describe("prepared provider auth state", () => {
     expect(snapshot.agents[0]?.providers).toEqual([]);
   });
 
+  it("replaces a warmed positive with a captured native-auth absence", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "native-provider": {
+            api: "native-api",
+            baseUrl: "https://example.com/v1",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const modelCatalog = {
+      entries: [{ id: "native-model", name: "Native Model", provider: "native-provider" }],
+      routeVariants: [],
+    };
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue(modelCatalog.entries);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
+    await expect(hasAuthForModelProvider({ provider: "native-provider", cfg })).resolves.toBe(true);
+
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
+    await publishCurrentProviderAuthStateSnapshot(cfg, {
+      omitFalseProviderAuth: true,
+      runtimeAuthLookups: new Map([
+        [
+          "default",
+          {
+            ...modelAuthMocks.createRuntimeProviderAuthLookup(),
+            syntheticAuthProviderRefs: ["native-api"],
+          },
+        ],
+      ]),
+      syntheticAuth: new Map([
+        [
+          "default",
+          {
+            agentId: "default",
+            workspaceDir: "/warm/default-workspace",
+            metadataSnapshot: createPluginMetadataSnapshotFixture(),
+            facts: [{ providerRef: "native-provider", result: null }],
+            modelCatalog,
+          },
+        ],
+      ]),
+    });
+    // Foreground facts can still belong to the earlier generation; the refreshed absence wins.
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
+    await expect(hasAuthForModelProvider({ provider: "native-provider", cfg })).resolves.toBe(
+      false,
+    );
+  });
+
   it("hasAuthForModelProvider returns the prepared answer after warm and falls through to compute after clear", async () => {
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
       { id: "claude", name: "claude", provider: "anthropic" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(
-      ({ provider }) => provider === "openai",
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockImplementation(
+      async ({ provider }) => provider === "openai",
     );
 
     await publishCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Flip the underlying answer; if the prepared map is consulted first,
     // hasAuthForModelProvider returns the cached answers without re-running
     // the compute path.
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     await expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).resolves.toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Clearing the prepared state forces the compute path on the next read.
     clearCurrentProviderAuthState();
     await expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
 
   it("hasAuthForModelProvider falls through to compute when the caller narrows the auth-discovery scope", async () => {
@@ -283,14 +462,14 @@ describe("prepared provider auth state", () => {
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
     // Warm with the broad answer: provider has CLI/synthetic auth.
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     await publishCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Flip the underlying compute to false. A narrow-scope caller must NOT
     // pick up the warmed broad answer; gateway models.list can disable runtime
     // auth discovery and needs that narrower answer.
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(
       hasAuthForModelProvider({
         provider: "openai",
@@ -299,7 +478,7 @@ describe("prepared provider auth state", () => {
         allowPluginSyntheticAuth: false,
       }),
     ).resolves.toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Bounded browse callers may explicitly consume the prepared broad answer
     // while keeping slow fallback discovery disabled.
@@ -312,16 +491,16 @@ describe("prepared provider auth state", () => {
         allowPreparedRuntimeAuth: true,
       }),
     ).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Broad-scope caller (default flags) still hits the prepared map.
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
   it("keeps provider-only OpenAI checks on the legacy auth path", async () => {
     const cfg = {} as OpenClawConfig;
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
 
     const hasAuth = createProviderAuthChecker({
       cfg,
@@ -339,11 +518,11 @@ describe("prepared provider auth state", () => {
       includePluginSyntheticAuth: false,
     });
     const runtimeLookup =
-      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
+      modelAuthMocks.prepareRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
     expect(runtimeLookup).toBe(
       modelAuthMocks.createRuntimeProviderAuthLookup.mock.results[0]?.value,
     );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
     expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).not.toHaveBeenCalled();
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).not.toHaveBeenCalled();
   });
@@ -395,7 +574,7 @@ describe("prepared provider auth state", () => {
         syntheticAuthProviderRefs: [],
       }),
     );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
   it("caches OpenAI auth by the complete route tuple", async () => {
@@ -456,7 +635,7 @@ describe("prepared provider auth state", () => {
       "amazon-bedrock",
       ref,
     );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
   it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
@@ -467,19 +646,19 @@ describe("prepared provider auth state", () => {
       evidence: "provider-config" as const,
     };
     modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
     const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
 
     await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
   it("uses an explicit agent auth store directory for provider auth checks", async () => {
     const cfg = {} as OpenClawConfig;
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     authProfilesMocks.listProfilesForProvider.mockReturnValueOnce([{} as never]);
 
     const hasAuth = createProviderAuthChecker({
@@ -505,15 +684,15 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     await publishCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg: clonedCfg })).resolves.toBe(
       true,
     );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
   });
 
   it("hasAuthForModelProvider falls through to compute when the caller passes a non-default workspaceDir", async () => {
@@ -521,14 +700,14 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     await publishCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Per-agent picker calls pass an agent-specific workspaceDir that the
     // warmer did not cover; the prepared answer must not leak across
     // workspaces because env/plugin auth resolution depends on workspaceDir.
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(
       hasAuthForModelProvider({
         provider: "openai",
@@ -536,7 +715,7 @@ describe("prepared provider auth state", () => {
         workspaceDir: "/different/agent-workspace",
       }),
     ).resolves.toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Same workspaceDir as the warmer (the default) still hits the prepared map.
     await expect(
@@ -546,7 +725,7 @@ describe("prepared provider auth state", () => {
         workspaceDir: "/warm/default-workspace",
       }),
     ).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
   it("returns an empty warm snapshot when cancelled before publication", async () => {
@@ -555,23 +734,23 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
 
     await publishCurrentProviderAuthStateSnapshot(cfg, { isCancelled: () => cancelled });
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     clearCurrentProviderAuthState();
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockClear();
     cancelled = true;
     const cancelledSnapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
       isCancelled: () => cancelled,
     });
     expect(cancelledSnapshot).toEqual({ agents: [] });
 
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
   });
 
   it("stops sweeping providers when a warm is cancelled mid-flight", async () => {
@@ -582,7 +761,7 @@ describe("prepared provider auth state", () => {
       { id: "claude", name: "claude", provider: "anthropic" },
       { id: "gemini", name: "gemini", provider: "google" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(() => {
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockImplementation(async () => {
       cancelled = true;
       return false;
     });
@@ -591,12 +770,12 @@ describe("prepared provider auth state", () => {
       isCancelled: () => cancelled,
     });
     expect(snapshot).toEqual({ agents: [] });
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockClear();
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
   });
 
   it("publishes provider auth state produced by the off-main-thread warm runner", async () => {
@@ -604,16 +783,16 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     clearCurrentProviderAuthState();
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockClear();
     const runWorker = vi.fn(async () => snapshot);
     await warmCurrentProviderAuthStateOffMainThread(cfg, { runWorker });
 
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     const runtimeAuthLookup =
       modelAuthMocks.createRuntimeProviderAuthLookup.mock.results.at(-1)?.value;
@@ -624,7 +803,7 @@ describe("prepared provider auth state", () => {
       isCancelled: expect.any(Function),
       workerUrl: undefined,
     });
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
   it("passes runtime auth profile snapshots to the off-main-thread warm runner", async () => {
@@ -720,6 +899,101 @@ describe("prepared provider auth state", () => {
     });
   });
 
+  it("keeps off-main-thread auth warmup in the configured workspace", async () => {
+    const cfg: OpenClawConfig = {};
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-workspace-"));
+    const workerPath = path.join(root, "auth-worker.mjs");
+    modelCatalogMocks.ownerWorkspaceDir = "/warm/gateway-launch-workspace";
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
+    syntheticAuthMocks.captureProviderSyntheticAuthFacts.mockImplementationOnce(
+      async ({ workspaceDir }) => [
+        {
+          providerRef: "openai",
+          result:
+            workspaceDir === modelCatalogMocks.ownerWorkspaceDir
+              ? { apiKey: "launch-workspace-auth", source: "workspace fixture", mode: "oauth" }
+              : null,
+        },
+      ],
+    );
+    try {
+      await fs.writeFile(
+        workerPath,
+        `
+          import { parentPort } from "node:worker_threads";
+          parentPort.on("message", ({ input }) => parentPort.postMessage({
+            status: "ok",
+            value: {
+              status: "ok",
+              snapshot: { agents: [{
+                agentId: "default",
+                configFingerprint: ${JSON.stringify(hashRuntimeConfigValue(cfg))},
+                providers: [["openai", Boolean(input.syntheticAuth[0]?.facts[0]?.result)]]
+              }] }
+            }
+          }));
+        `,
+      );
+      await warmCurrentProviderAuthStateOffMainThread(cfg, {
+        timeoutMs: 5_000,
+        workerUrl: pathToFileURL(workerPath),
+      });
+      // Read through the real warmed cache: launch-only auth must not appear in config scope.
+      await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(false);
+      expect(syntheticAuthMocks.captureProviderSyntheticAuthFacts).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: "/warm/default-workspace" }),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts and joins parent auth capture before cancelled warmup settles", async () => {
+    const cleanup = createDeferredCore();
+    let signal: AbortSignal | undefined;
+    syntheticAuthMocks.captureProviderSyntheticAuthFacts.mockImplementationOnce(async (params) => {
+      signal = params.signal;
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          resolve();
+        } else {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        }
+      });
+      await cleanup.promise;
+      signal?.throwIfAborted();
+      return [];
+    });
+    let cancelled = false;
+    let settled = false;
+    const warm = warmCurrentProviderAuthStateOffMainThread(
+      {},
+      {
+        isCancelled: () => cancelled,
+        timeoutMs: 5_000,
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    void warm.catch(() => {});
+    try {
+      await expect.poll(() => signal !== undefined || settled).toBe(true);
+      if (settled) {
+        await warm;
+      }
+      expect(signal).toBeDefined();
+      cancelled = true;
+      await expect.poll(() => signal?.aborted).toBe(true);
+      expect(settled).toBe(false);
+      cleanup.resolve();
+      await warm;
+    } finally {
+      cancelled = true;
+      cleanup.resolve();
+      await Promise.allSettled([warm]);
+    }
+  });
+
   it("terminates the off-main-thread warm worker when cancellation fires", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-worker-"));
     const workerPath = path.join(tempDir, "slow-worker.mjs");
@@ -728,20 +1002,23 @@ describe("prepared provider auth state", () => {
       workerPath,
       `
         import fs from "node:fs";
-        import { parentPort, workerData } from "node:worker_threads";
-        setTimeout(() => {
-          fs.writeFileSync(workerData.cfg.markerPath, "finished");
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", ({ input }) => setTimeout(() => {
+          fs.writeFileSync(input.cfg.markerPath, "finished");
           parentPort.postMessage({
             status: "ok",
-            snapshot: {
-              agents: [{
-                agentId: "default",
-                configFingerprint: "fingerprint",
-                providers: [["openai", true]]
-              }]
+            value: {
+              status: "ok",
+              snapshot: {
+                agents: [{
+                  agentId: "default",
+                  configFingerprint: "fingerprint",
+                  providers: [["openai", true]]
+                }]
+              }
             }
           });
-        }, 200);
+        }, 200));
       `,
     );
     let cancelled = false;
@@ -773,12 +1050,12 @@ describe("prepared provider auth state", () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     clearCurrentProviderAuthState();
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockClear();
     let resolveWorker: ((value: typeof snapshot) => void) | undefined;
     const warmPromise = warmCurrentProviderAuthStateOffMainThread(cfg, {
       runWorker: () =>
@@ -791,8 +1068,8 @@ describe("prepared provider auth state", () => {
     resolveWorker?.(snapshot);
     await warmPromise;
 
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
   });
 });

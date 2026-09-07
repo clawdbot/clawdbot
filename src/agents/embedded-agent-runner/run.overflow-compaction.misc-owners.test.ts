@@ -6,12 +6,12 @@ import {
   getPreparedRuntimeAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener,
 } from "../auth-profiles/runtime-materializations.js";
+import { copyAttemptDeliveryState } from "./run/attempt-delivery-state.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./run/auth-profile-success.js";
 import { resolveInitialThinkLevel } from "./run/runtime-resolution.js";
-import { copyAttemptDeliveryState } from "./run/terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 vi.mock("../auth-profiles.js", () => ({

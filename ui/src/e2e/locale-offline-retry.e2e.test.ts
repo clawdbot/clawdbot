@@ -1,14 +1,17 @@
 // Control UI tests prove locale chunk recovery through a real browser reconnect.
 import type { BrowserContext, Page, Route } from "playwright";
 import { expect, it } from "vitest";
-import { SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
+import { isSupportedLocale, SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
   startControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI offline locale retry",
@@ -21,11 +24,7 @@ const suite = createControlUiE2eSuite({
 const frenchLocaleModule = /\/src\/i18n\/locales\/fr\.ts(?:\?.*)?$/;
 
 async function createContext(): Promise<BrowserContext> {
-  return suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  return suite.browser.newContext(createControlUiE2eContextOptions());
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
@@ -63,7 +62,8 @@ suite.define(() => {
     const requests = new Map<string, number>();
     page.on("request", (request) => {
       const match = new URL(request.url()).pathname.match(/\/src\/i18n\/locales\/([^/]+)\.ts$/);
-      if (match?.[1] && match[1] !== "en" && match[1] !== "en-agents") {
+      // English registrar modules are not operator-selectable locale adapters.
+      if (match?.[1] && isSupportedLocale(match[1]) && match[1] !== "en") {
         requests.set(match[1], (requests.get(match[1]) ?? 0) + 1);
       }
     });

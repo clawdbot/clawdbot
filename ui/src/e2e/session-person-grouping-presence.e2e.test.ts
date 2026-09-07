@@ -1,14 +1,15 @@
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureSessionOwnerPageProof,
   captureSessionOwnerProof,
   captureUiProofEnabled,
   openSidebarSortMenu,
   routeAvatarFixtures,
-  sessionOwnerProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -75,14 +76,14 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: sessionOwnerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "session-owner-stack"),
               size: { height: 800, width: 1200 },
             },
           }
         : {}),
     });
     const page = await context.newPage();
-    await routeAvatarFixtures(context, page, [
+    await routeAvatarFixtures(page, [
       { id: "profile-ada", background: "#3f6f76", label: "A" },
       { id: "profile-bob", background: "#985b42", label: "B" },
       { id: "profile-morgan", background: "#66508c", label: "M" },
@@ -138,8 +139,46 @@ suite.define(() => {
         adaSection.locator(".session-owner-chip:not(.session-owner-chip--away)"),
       ).toHaveCount(1);
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
-      await captureSessionOwnerProof(page, "person-grouping-live-presence.png");
+      await captureSessionOwnerProof(suite, page, "person-grouping-live-presence.png");
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
+      const adaHeader = adaSection.locator(".sidebar-recent-sessions__head");
+      await adaHeader.hover();
+      await captureSessionOwnerProof(suite, page, "person-grouping-header-hover.png");
+      await page.mouse.move(0, 0);
+      await captureSessionOwnerProof(suite, page, "person-grouping-owner-online.png");
+
+      const textColor = await page.locator(".sidebar-sessions").evaluate((sidebar) => {
+        const probe = document.createElement("span");
+        probe.style.color = getComputedStyle(sidebar).getPropertyValue("--text");
+        sidebar.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await adaHeader.hover();
+      await expectBrowser
+        .poll(() =>
+          adaHeader
+            .locator(".sidebar-recent-sessions__label-text")
+            .evaluate((label) => getComputedStyle(label).color),
+        )
+        .toBe(textColor);
+      await expectBrowser(adaSection.locator(".sidebar-session-group-presence")).toHaveCount(1);
+      await expectBrowser(bobSection.locator(".sidebar-session-group-presence")).toHaveCount(0);
+
+      await adaSection.locator("[data-person-card]").hover();
+      const adaCard = page.getByRole("dialog", { name: "Activity for Ada" });
+      await expectBrowser(adaCard).toBeVisible();
+      await captureSessionOwnerPageProof(suite, adaCard, "person-grouping-header-card.png", [
+        adaCard.getByRole("link", { name: "View activity", exact: true }),
+      ]);
+      await page.mouse.move(0, 0);
+      await adaCard.waitFor({ state: "detached" });
+      await bobSection.locator("[data-person-card]").hover();
+      const bobCard = page.getByRole("dialog", { name: "Activity for Bob" });
+      await expectBrowser(bobCard).toBeVisible();
+      await expectBrowser(bobCard).toContainText("Offline");
+      await expectBrowser(bobCard.locator("dl")).toHaveCount(0);
     } finally {
       await context.close();
     }

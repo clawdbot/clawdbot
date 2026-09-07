@@ -92,7 +92,6 @@ describe("Anthropic SDK host fetch wiring", () => {
       for (const testCase of cases) {
         const result = await streamAnthropic(testCase.model, context, {
           apiKey: testCase.apiKey,
-          maxRetries: 0,
           thinkingEnabled: testCase.thinkingEnabled,
         }).result();
         expect(result.stopReason).toBe("error");

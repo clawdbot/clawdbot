@@ -22,6 +22,38 @@ final class TalkSystemSpeechSynthesizerTests: XCTestCase {
         try await self.assertCanceled(first)
     }
 
+    func testLivePreCancelledSpeechDoesNotReplaceCurrentUtterance() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
+            "Requires working native speech/audio services; run with OPENCLAW_LIVE_TEST=1.")
+        let speaker = TalkSystemSpeechSynthesizer.shared
+        defer { speaker.stop() }
+        let current = await self.startSpeech()
+        defer { current.cancel() }
+
+        let currentFinished = self.expectation(description: "current utterance must keep playing")
+        currentFinished.isInverted = true
+        let observer = Task { @MainActor in
+            _ = await current.result
+            guard !Task.isCancelled else { return }
+            currentFinished.fulfill()
+        }
+        defer { observer.cancel() }
+
+        var successorStarts = 0
+        let successor = Task { @MainActor in
+            XCTAssertTrue(Task.isCancelled)
+            try await speaker.speak(
+                text: "Cancelled successor speech.", language: "en-US",
+                onStart: { successorStarts += 1 })
+        }
+        successor.cancel()
+        try await self.assertCanceled(successor)
+
+        await self.fulfillment(of: [currentFinished], timeout: 0.25)
+        XCTAssertEqual(successorStarts, 0)
+    }
+
     private func startSpeech() async -> Task<Void, Error> {
         let started = self.expectation(description: "utterance started")
         let speech = Task { @MainActor in

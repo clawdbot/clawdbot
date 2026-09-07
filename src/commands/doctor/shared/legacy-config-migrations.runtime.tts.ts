@@ -7,6 +7,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import { visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
@@ -219,11 +220,9 @@ function* visitKnownTtsConfigLocations(
 ): Generator<[Record<string, unknown> | null, string]> {
   yield [getRecord(raw.tts), "tts"];
 
-  const agents = getRecord(raw.agents);
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  for (const [index, entry] of agentList.entries()) {
-    yield [getRecord(getRecord(entry)?.tts), `agents.list[${index}].tts`];
-  }
+  const agentTts: Array<[Record<string, unknown> | null, string]> = [];
+  visitAgentEntries(raw, (entry, path) => agentTts.push([getRecord(entry.tts), `${path}.tts`]));
+  yield* agentTts;
 
   const channels = getRecord(raw.channels);
   for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
@@ -287,7 +286,7 @@ const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
   {
     path: ["agents"],
     message:
-      'agents.list[].tts.enabled is legacy; use agents.list[].tts.auto. Run "openclaw doctor --fix".',
+      'agents.entries.*.tts.enabled is legacy; use agents.entries.*.tts.auto. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyTtsInLocations({ agents: value }, hasLegacyTtsEnabled),
   },
   {
@@ -314,7 +313,7 @@ const LEGACY_TTS_SPEAKER_SELECTION_RULES: LegacyConfigRule[] = [
   {
     path: ["agents"],
     message:
-      'agents.list[].tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      'agents.entries.*.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyTtsInLocations({ agents: value }, hasLegacyTtsSpeakerSelection),
   },
   {

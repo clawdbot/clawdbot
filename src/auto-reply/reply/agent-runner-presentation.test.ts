@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -13,6 +14,7 @@ import {
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { createReplyOperation } from "./reply-run-registry.operation.js";
 
 function normalizeStreamingTextReference(
   payload: ReplyPayload,
@@ -50,13 +52,19 @@ function normalizeStreamingTextReference(
 }
 
 function createPresentation(
-  options: { isHeartbeat?: boolean; silentExpected?: boolean; conversationContext?: string } = {},
+  options: {
+    isHeartbeat?: boolean;
+    silentExpected?: boolean;
+    conversationContext?: string;
+    replyOperation?: AgentTurnParams["replyOperation"];
+  } = {},
 ) {
   const turn = {
     followupRun: { run: { silentExpected: options.silentExpected === true } },
     isHeartbeat: options.isHeartbeat === true,
     sessionCtx: { agentText: options.conversationContext },
     opts: undefined,
+    replyOperation: options.replyOperation,
   } as unknown as AgentTurnParams;
   return createAgentTurnPresentation({
     turn,
@@ -80,6 +88,38 @@ function cumulativePrefixes(text: string, seed: number): string[] {
 }
 
 describe("agent runner streaming presentation", () => {
+  it.each(["active", "committed", "completed"] as const)(
+    "fences delayed typing when the reply operation is %s",
+    async (ending) => {
+      const replyOperation = createReplyOperation({
+        sessionKey: `agent:main:typing-${ending}`,
+        sessionId: `typing-${ending}`,
+        resetTriggered: false,
+      });
+      replyOperation.setPhase("running");
+      const typing = createDeferredCore();
+      const onPresentation = vi.fn(() => true);
+      const presentation = createPresentation({ replyOperation });
+      const pending = presentation.presentWithTyping(typing.promise, onPresentation);
+      try {
+        expect(onPresentation).not.toHaveBeenCalled();
+        if (ending === "committed") {
+          replyOperation.freezeAbort();
+        } else if (ending === "completed") {
+          replyOperation.complete();
+        }
+        expect(replyOperation.abortSignal.aborted).toBe(false);
+        typing.resolve();
+        await pending;
+        expect(onPresentation).toHaveBeenCalledTimes(ending === "active" ? 1 : 0);
+      } finally {
+        typing.resolve();
+        await pending;
+        replyOperation.complete();
+      }
+    },
+  );
+
   it("redacts copied inbound prompts before streamed XML cleanup", () => {
     const conversationContext = [
       "[Chat messages since your last reply - for context]",

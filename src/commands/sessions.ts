@@ -42,7 +42,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
@@ -72,6 +72,8 @@ type SessionRow = SessionDisplayRow & {
   acpRuntime: boolean;
 };
 
+type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
+
 const DEFAULT_SESSIONS_LIMIT = 100;
 const TOP_N_SELECTION_LIMIT = 200;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
@@ -91,11 +93,14 @@ function applyAcpModelOverlayIfNeeded(
   return { provider: "acpx", model: `${agentId}-acp` };
 }
 
-function compareSessionRowsByUpdatedAt(a: SessionRow, b: SessionRow): number {
-  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
+  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined): SessionRow[] {
+function selectNewestSessionRows(
+  rows: SessionCandidate[],
+  limit: number | undefined,
+): SessionCandidate[] {
   if (limit === undefined) {
     return rows.toSorted(compareSessionRowsByUpdatedAt);
   }
@@ -104,7 +109,7 @@ function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined):
   }
   // For small limits, keep only the top N rows without sorting the full store;
   // large limits use the simpler full sort above.
-  const selected: SessionRow[] = [];
+  const selected: SessionCandidate[] = [];
   for (const row of rows) {
     const insertAt = selected.findIndex(
       (candidate) => compareSessionRowsByUpdatedAt(row, candidate) < 0,
@@ -312,19 +317,7 @@ export async function sessionsCommand(
     await contextLookupRuntimeLoader.load();
   const configContextTokens =
     lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-    json: opts.json,
-  });
-  if (!targets) {
-    return;
-  }
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
@@ -344,31 +337,41 @@ export async function sessionsCommand(
 
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
   const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
-  const sessionEntries = targets.flatMap((target) => {
-    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
+  const allEntries = targets.flatMap((target) => {
+    return listSessionEntriesReadOnly({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      projection: "list",
+    })
       .filter(
         ({ entry }) =>
           activeSince === undefined ||
           (typeof entry.updatedAt === "number" && entry.updatedAt >= activeSince),
       )
-      .map(({ sessionKey, entry }) => {
-        const row = toSessionDisplayRow(sessionKey, entry);
-        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-          cfg,
-          agentId,
-          sessionKey: row.key,
-        });
-        return { acpSessionKey, agentId, entry, row };
-      });
+      .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
+  const totalCount = allEntries.length;
+  const sessionEntries = selectNewestSessionRows(allEntries, limit).map(
+    ({ agentId: storeAgentId, entry, sessionKey }) => {
+      const row = toSessionDisplayRow(sessionKey, entry);
+      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: row.key,
+      });
+      return { acpSessionKey, agentId, entry, row };
+    },
+  );
   const acpSessionMetaByEntry = readAcpSessionMetaBatch({
-    entries: sessionEntries.map(({ acpSessionKey, entry }) => ({
+    cfg,
+    entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
       sessionKey: acpSessionKey,
+      agentId,
       entry,
     })),
   });
-  const allRows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
+  const rows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
     const acpMeta = acpSessionMetaByEntry.get(entry);
     const acpRuntime = acpMeta != null;
     // ACP rows need stored-key metadata before model/runtime resolution so
@@ -436,8 +439,6 @@ export async function sessionsCommand(
       }),
     });
   });
-  const totalCount = allRows.length;
-  const rows = selectNewestSessionRows(allRows, limit);
   const hasMore = rows.length < totalCount;
 
   if (opts.json) {

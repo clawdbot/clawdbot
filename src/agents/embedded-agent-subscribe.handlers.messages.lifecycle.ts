@@ -1,33 +1,31 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
- * Handles assistant message lifecycle boundaries, final reconciliation, and usage.
+ * Handles assistant message lifecycle boundaries, and final reconciliation.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { AssistantMessage } from "../llm/types.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
-import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import {
-  isMessagingToolDuplicateNormalized,
-  normalizeTextForComparison,
-} from "./embedded-agent-helpers.js";
+  parseAssistantTextSignature,
+  resolveAssistantMessagePhase,
+} from "../shared/chat-message-content.js";
 import {
-  hasAssistantVisibleReply,
+  recordPendingAssistantReplyDirectives,
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
-  buildAssistantStreamData,
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
+  extractAssistantStreamSnapshot,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isOpenAiCompletionsAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
+  replaceBlockReplyBuffer,
+  scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -36,100 +34,11 @@ import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe
 import {
   createThinkingTagStreamState,
   extractAssistantThinking,
-  extractAssistantVisibleText,
   extractEmbeddedAssistantText,
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
-import {
-  hasBillableUsage,
-  hasNonzeroUsage,
-  makeZeroUsageSnapshot,
-  normalizeUsage,
-  type NormalizedUsage,
-  type UsageLike,
-} from "./usage.js";
-
-export function preservePendingAssistantUsage(
-  message: AssistantMessage,
-  pendingUsage: NormalizedUsage | undefined,
-): AssistantMessage {
-  if (
-    isSubscribeTranscriptOnlyOpenClawAssistantMessage(message) ||
-    !hasBillableUsage(pendingUsage)
-  ) {
-    return message;
-  }
-  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
-  if (hasNonzeroUsage(messageUsage)) {
-    if (
-      pendingUsage.cost?.totalOrigin === "provider-billed" &&
-      messageUsage.cost?.totalOrigin !== "provider-billed"
-    ) {
-      message.usage.cost = {
-        ...makeZeroUsageSnapshot().cost,
-        ...message.usage.cost,
-        ...pendingUsage.cost,
-      };
-    }
-    return message;
-  }
-
-  // Pending usage resets at each assistant-message boundary, so it belongs to
-  // this final snapshot. Only replace missing/zero usage; provider totals win.
-  const input = pendingUsage.input ?? 0;
-  const output = pendingUsage.output ?? 0;
-  const cacheRead = pendingUsage.cacheRead ?? 0;
-  const cacheWrite = pendingUsage.cacheWrite ?? 0;
-  message.usage = {
-    ...makeZeroUsageSnapshot(),
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    ...(pendingUsage.cacheWrite1h !== undefined ? { cacheWrite1h: pendingUsage.cacheWrite1h } : {}),
-    ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
-    totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
-    ...(pendingUsage.reasoningTokens !== undefined
-      ? { reasoningTokens: pendingUsage.reasoningTokens }
-      : {}),
-  };
-  if (pendingUsage.cost) {
-    Object.assign(message.usage.cost, pendingUsage.cost);
-  }
-  return message;
-}
-
-export function capturePendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
-): void {
-  const msg = evt.message;
-  if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
-    return;
-  }
-  const assistantRecord =
-    evt.assistantMessageEvent && typeof evt.assistantMessageEvent === "object"
-      ? (evt.assistantMessageEvent as Record<string, unknown>)
-      : undefined;
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
-  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    ctx.recordAssistantUsage(assistantRecord);
-  }
-}
-
-export function resetPendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  message: AgentMessage,
-): void {
-  if (message?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
-    return;
-  }
-  ctx.state.pendingAssistantUsage = undefined;
-  ctx.state.assistantUsageCommitted = false;
-}
-
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -139,12 +48,9 @@ export function handleMessageStart(
     return;
   }
 
-  // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
-  // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
-  // Start-of-message is a safer reset point than message_end: some providers
-  // may deliver late text_end updates after message_end, which would otherwise
-  // re-trigger block replies.
+  // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
   // Use assistant message_start as the earliest "writing" signal for typing.
   emitAssistantMessageStart(ctx);
 }
@@ -161,7 +67,7 @@ export function handleMessageEnd(
   // Transcript-only messages never reach the provider, so this counts exactly
   // the completed model round trips consumers see as `assistantTurns`.
   ctx.state.assistantTurnCount += 1;
-  const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
+  const assistantMessage = msg;
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -171,8 +77,6 @@ export function handleMessageEnd(
     emitReasoningEnd(ctx);
   }
   ctx.noteLastAssistant(assistantMessage);
-  ctx.noteCompletedAssistant(assistantMessage);
-  ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     appendRawStream(() => ({
       ts: Date.now(),
@@ -182,7 +86,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -201,12 +105,14 @@ export function handleMessageEnd(
     }
     return;
   }
+  const sourceContent = assistantMessage.content;
   promoteThinkingTagsToBlocks(assistantMessage);
 
   let rawText: string | undefined;
   const getRawText = () =>
     (rawText ??= coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)));
-  const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
+  const snapshot = extractAssistantStreamSnapshot(ctx, assistantMessage);
+  const rawVisibleText = snapshot.text;
   appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -216,102 +122,148 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   }));
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
-  const visibleText =
+  const text =
     extractStandaloneMessageToolText(rawVisibleText, {
       allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
       allowCurrentSourceReply:
         ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
         ctx.builtinToolNames?.has("message") === true,
     }) ?? rawVisibleText;
-  const finalVisibleText = ctx.params.enforceFinalTag
-    ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
-    : visibleText;
-
   // Exact NO_REPLY stays silent. The legacy rewrite (silentReplyRewrite) was
   // removed by contract; global messaging-tool send evidence is not a
   // user-route reply and must never be mirrored into the final payload.
-  const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(getRawText())
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
-  const cleanedText = parsedText?.text ?? "";
-  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  ctx.resetPartialReplyDirectives();
+  const parsedText = parseReplyDirectives(trimmedText);
+  // Final media is emitted after the buffered text drains, never on its first chunk.
+  recordPendingAssistantReplyDirectives(ctx.state, parsedText);
+  const cleanedText = parsedText.text;
+  const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText, { text: "" });
   const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
+
+  const sourceMessage = { ...assistantMessage, content: sourceContent };
+  const sourceSnapshot =
+    sourceContent === assistantMessage.content
+      ? snapshot
+      : extractAssistantStreamSnapshot(ctx, sourceMessage);
+  const resolveSourceIndex = (contentIndex: number | undefined, itemId: string | undefined) =>
+    contentIndex ??
+    (Array.isArray(sourceContent) && itemId
+      ? sourceContent.findIndex(
+          (block) => block.type === "text" && parseAssistantTextSignature(block)?.id === itemId,
+        )
+      : -1);
+  const lastIndex = resolveSourceIndex(
+    ctx.state.lastAssistantStreamContentIndex,
+    ctx.state.lastAssistantStreamItemId,
+  );
+  const preparedSourceText = (index: number) =>
+    parseReplyDirectives(
+      extractAssistantStreamSnapshot(
+        ctx,
+        scopeAssistantMessageToStreamBlock(sourceMessage, index, undefined),
+      ).text.trim(),
+    ).text;
+  // Draining hidden reasoning or NO_REPLY consumes source without preparing a
+  // visible reply. A final replacement must rebuild that logical reply in full.
+  if (ctx.state.lastBlockReplyText == null) {
+    ctx.blockChunker.reset();
+  }
+  if (text !== rawVisibleText) {
+    // A structured message-tool result is projected before it enters the reply buffer.
+    ctx.state.blockState.textIsVisible = true;
+    replaceBlockReplyBuffer(ctx, text);
+  } else if (ctx.blockChunker.consumedLength === 0) {
+    // Observing a native index does not mean its predecessors were delivered:
+    // phase-pending and suppressed streams can leave the whole message unsent.
+    const preparedIndex =
+      ctx.state.lastAssistantTextMessageIndex >= ctx.state.assistantMessageStartIndex
+        ? resolveSourceIndex(
+            ctx.state.lastAssistantTextContentIndex,
+            ctx.state.lastAssistantTextItemId,
+          )
+        : -1;
+    const pendingText =
+      preparedIndex >= 0 && Array.isArray(sourceContent)
+        ? extractAssistantStreamSnapshot(ctx, {
+            ...sourceMessage,
+            content: sourceContent.slice(preparedIndex + 1),
+          }).text
+        : sourceSnapshot.text;
+    ctx.state.blockState = {
+      thinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+      textIsVisible: true,
+    };
+    replaceBlockReplyBuffer(ctx, pendingText);
+  } else if (lastIndex >= 0) {
+    const currentPart = sourceSnapshot.parts.find((part) => part.index === lastIndex);
+    const currentText = ctx.state.blockState.textIsVisible
+      ? preparedSourceText(lastIndex)
+      : (currentPart?.text ?? "");
+    replaceBlockReplyBuffer(ctx, currentText, ctx.state.streamBlockOffset);
+    for (const part of sourceSnapshot.parts) {
+      if ((part.index ?? 0) > lastIndex) {
+        const partText = ctx.state.blockState.textIsVisible
+          ? preparedSourceText(part.index ?? 0)
+          : part.text;
+        ctx.blockChunker.append(
+          `${ctx.blockChunker.hasBuffered() ? part.separator : ""}${partText}`,
+        );
+        ctx.state.lastAssistantStreamContentIndex = part.index;
+      }
+    }
+  } else {
+    replaceBlockReplyBuffer(
+      ctx,
+      ctx.state.blockState.textIsVisible ? cleanedText : sourceSnapshot.rawText,
+    );
+  }
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
+    ctx.state.streamBlockText = "";
+    ctx.state.streamBlockOffset = 0;
     ctx.state.thinkingTagStream = createThinkingTagStreamState();
     ctx.state.deltaBufferIsCommentary = false;
     ctx.state.hasFlushedPartialText = false;
-    ctx.state.blockBuffer = "";
-    ctx.blockChunker?.reset();
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningInlineCode = undefined;
-    ctx.state.blockState.reasoningFence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.finalInlineCode = undefined;
-    ctx.state.blockState.finalFence = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-    ctx.state.blockState.pendingTagFragment = undefined;
-    ctx.state.partialBlockState.fence = undefined;
-    ctx.state.partialBlockState.reasoningInlineCode = undefined;
-    ctx.state.partialBlockState.reasoningFence = undefined;
-    ctx.state.partialBlockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.partialBlockState.finalInlineCode = undefined;
-    ctx.state.partialBlockState.finalFence = undefined;
-    ctx.state.partialBlockState.pendingFenceFragment = undefined;
-    ctx.state.partialBlockState.pendingTagFragment = undefined;
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.blockChunker.reset();
+    ctx.state.blockState = { thinking: false, final: false, inlineCode: createInlineCodeState() };
+    // Late text_end events still use the partial lane's tag/inline state.
+    const { thinking, final, inlineCode } = ctx.state.partialBlockState;
+    ctx.state.partialBlockState = { thinking, final, inlineCode };
+    ctx.state.assistantStream = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
-
-  const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";
-  const shouldReplaceFinalStream = Boolean(
-    previousStreamedText && cleanedText && !cleanedText.startsWith(previousStreamedText),
-  );
-  const didTextChangeWithinCurrentMessage = Boolean(
-    previousStreamedText && cleanedText !== previousStreamedText,
-  );
-  const finalStreamDelta = shouldReplaceFinalStream
-    ? ""
-    : cleanedText.slice(previousStreamedText.length);
 
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    (cleanedText || hasMedia) &&
-    (!ctx.state.emittedAssistantUpdate ||
-      shouldReplaceFinalStream ||
-      didTextChangeWithinCurrentMessage ||
-      hasMedia)
+    !suppressMessageToolOnlySourceReplyOutput
   ) {
-    const data = buildAssistantStreamData({
-      text: cleanedText,
-      delta: finalStreamDelta,
-      replace: shouldReplaceFinalStream,
-      mediaUrls,
-      managedMediaUrls,
-      phase: assistantPhase,
-    });
-    ctx.emitAssistantStreamData(data);
-    ctx.state.emittedAssistantUpdate = true;
-    ctx.state.lastStreamedAssistantCleaned = cleanedText;
+    ctx.emitAssistantStreamData(
+      {
+        text: cleanedText,
+        delta: "",
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        managedMediaUrls: managedMediaUrls.length ? managedMediaUrls : undefined,
+        phase: assistantPhase,
+      },
+      { finalMessage: true },
+    );
   }
 
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
   const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
-  const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
+  const chunkerHasBuffered = Boolean(ctx.params.onBlockReply) && ctx.blockChunker.hasBuffered();
   ctx.finalizeAssistantTexts({
     text: finalAssistantText,
     addedDuringMessage,
@@ -344,133 +296,23 @@ export function handleMessageEnd(
     maybeEmitReasoning();
   }
 
-  const emitSplitResultAsBlockReply = (
-    splitResult: ReturnType<typeof ctx.consumeReplyDirectives> | null | undefined,
-  ) => {
-    if (!splitResult || !onBlockReply) {
-      return;
-    }
-    const {
-      text: cleanedTextLocal,
-      mediaUrls: mediaUrlsLocal,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    } = splitResult;
-    // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (
-      hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
-    ) {
-      ctx.emitBlockReply(
-        {
-          text: cleanedTextLocal,
-          mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
-          audioAsVoice,
-          replyToId,
-          replyToTag,
-          replyToCurrent,
-        },
-        { assistantMessageIndex: ctx.state.assistantMessageIndex },
-      );
-    }
-  };
-
-  const consumeFinalReplyDirectives = () => {
-    const bufferedResult = ctx.consumeReplyDirectives("", { final: true });
-    if (!hasMedia || !parsedText) {
-      return bufferedResult;
-    }
-    const bufferedRawText = bufferedResult?.text ?? "";
-    const leadingWhitespace = bufferedRawText.match(/^\s+/u)?.[0] ?? "";
-    const strippedBufferedText = bufferedRawText ? splitMediaFromOutput(bufferedRawText).text : "";
-    const bufferedText =
-      leadingWhitespace &&
-      strippedBufferedText &&
-      !strippedBufferedText.startsWith(leadingWhitespace)
-        ? `${leadingWhitespace}${strippedBufferedText}`
-        : strippedBufferedText;
-    return {
-      ...bufferedResult,
-      ...parsedText,
-      text: bufferedText,
-    };
-  };
-
-  const hasBufferedBlockReply = ctx.blockChunker
-    ? ctx.blockChunker.hasBuffered()
-    : ctx.state.blockBuffer.length > 0;
-
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput &&
-    text &&
-    onBlockReply &&
-    (ctx.state.blockReplyBreak === "message_end" ||
-      hasBufferedBlockReply ||
-      text !== ctx.state.lastBlockReplyText ||
-      hasMedia)
+    onBlockReply
   ) {
-    if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
-      const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
-        assistantMessageIndex: ctx.state.assistantMessageIndex,
-        final: true,
+    // Reconcile source first, then finalize the parser and attachment selection
+    // together. Replaying provider events here would rotate logical-item state.
+    const pending = ctx.flushBlockReplyBuffer({
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      final: true,
+      finalReply: parsedText,
+    });
+    if (pending) {
+      void pending.catch((err: unknown) => {
+        ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
       });
-      if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-        void flushBlockReplyBufferResult.catch((err: unknown) => {
-          ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
-        });
-      }
-      // Final-flush the streaming directive accumulator so any partial
-      // inline reply/audio tag held back by splitTrailingDirective gets
-      // emitted on the message_end / blockReplyChunking path.
-      emitSplitResultAsBlockReply(consumeFinalReplyDirectives());
-    } else if (text !== ctx.state.lastBlockReplyText || hasMedia) {
-      // Guard: for text_end channels, if text_end already delivered content
-      // (lastBlockReplyText is set), skip this safety send. The text comparison
-      // here uses a different stripping pipeline (stripBlockTags with reset state)
-      // than emitBlockChunk (stripBlockTags with running blockState +
-      // stripDowngradedToolCallText), which can false-positive. When text_end
-      // didn't deliver (e.g. commentary suppressed, provider skipped text_end),
-      // lastBlockReplyText is still null and message_end must deliver.
-      if (
-        ctx.state.blockReplyBreak === "text_end" &&
-        ctx.state.lastBlockReplyText != null &&
-        !hasMedia
-      ) {
-        ctx.log.debug(
-          `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
-        );
-      } else {
-        // Check for duplicates before emitting (same logic as emitBlockChunk).
-        const normalizedText = normalizeTextForComparison(hasMedia ? cleanedText : text);
-        if (
-          isMessagingToolDuplicateNormalized(
-            normalizedText,
-            ctx.state.messagingToolSentTextsNormalized,
-          )
-        ) {
-          ctx.log.debug(
-            `Skipping message_end block reply - already sent via messaging tool: ${truncateUtf16Safe(text, 50)}...`,
-          );
-        } else {
-          const alreadyDeliveredFinalText = Boolean(
-            hasMedia && cleanedText && cleanedText === ctx.state.lastBlockReplyText,
-          );
-          ctx.state.lastBlockReplyText = hasMedia ? cleanedText || text : text;
-          ctx.state.lastDeliveredBlockReplyText = hasMedia ? cleanedText || text : text;
-          ctx.state.toolExecutionSinceLastBlockReply = false;
-          emitSplitResultAsBlockReply(
-            hasMedia && parsedText
-              ? {
-                  ...parsedText,
-                  text: alreadyDeliveredFinalText ? "" : cleanedText,
-                }
-              : ctx.consumeReplyDirectives(text, { final: true }),
-          );
-        }
-      }
     }
   }
 
@@ -481,15 +323,6 @@ export function handleMessageEnd(
     // Emit-always: bus/archive get message-end thinking regardless of the
     // streamReasoning rendering setting (gated inside emitReasoningStream).
     ctx.emitReasoningStream(rawThinking);
-  }
-
-  if (
-    !ctx.params.silentExpected &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    ctx.state.blockReplyBreak === "text_end" &&
-    onBlockReply
-  ) {
-    emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
   if (

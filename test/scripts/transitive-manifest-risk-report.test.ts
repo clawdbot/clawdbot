@@ -53,6 +53,10 @@ describe("transitive-manifest-risk-report", () => {
               floating: "^1.2.3",
               exact: "2.0.0",
               gitdep: "github:owner/repo#main",
+              malformedSemver: "01.2.3",
+              fragmentlessGitPath:
+                "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+              pinnedGit: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
             },
             optionalDependencies: {
               optionalFloating: "~3.0.0",
@@ -66,8 +70,8 @@ describe("transitive-manifest-risk-report", () => {
     });
 
     expect(report.byType).toEqual({
-      "exotic-source": 2,
-      "floating-transitive-spec": 3,
+      "exotic-source": 4,
+      "floating-transitive-spec": 5,
       "lifecycle-script": 1,
       "recently-published-version": 1,
     });

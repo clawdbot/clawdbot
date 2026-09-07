@@ -3,6 +3,7 @@ import { resolveExecutableFromUserShellPath as resolveExecutableFromUserShellPat
 
 export {
   decodeNodePtyResumeParams,
+  decodeNodePtyStartParams,
   runNodePtyCommand,
   type NodePtyCommandResult,
   type NodePtyResumeParams,

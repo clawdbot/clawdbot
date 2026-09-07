@@ -4,94 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
 import { createInspectResult } from "./plugins-page.test-support.ts";
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
+import { createPlugin, createProps, createResult, mount } from "./view.test-support.ts";
 import { pluginRowKey, renderPlugins } from "./view.ts";
-
-type PluginsViewProps = Parameters<typeof renderPlugins>[0];
-
-function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
-  return {
-    id: "workboard",
-    name: "Workboard",
-    description: "Agent work queue and session handoff.",
-    version: "1.0.0",
-    kind: ["productivity"],
-    origin: "bundled",
-    installed: true,
-    enabled: false,
-    state: "disabled",
-    featured: true,
-    order: 10,
-    category: "tool",
-    removable: false,
-    ...overrides,
-  };
-}
-
-function createResult(plugins: PluginCatalogItem[]): PluginListResult {
-  return { plugins, diagnostics: [], mutationAllowed: true };
-}
-
-function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProps {
-  return {
-    connected: true,
-    loading: false,
-    result: createResult([createPlugin()]),
-    error: null,
-    activeTab: "installed",
-    query: "",
-    installedFilter: "all",
-    searchResults: null,
-    searchLoading: false,
-    searchError: null,
-    busy: {},
-    messages: {},
-    detailPluginId: null,
-    detailInspection: null,
-    detailInspectionError: null,
-    consent: null,
-    consentInspection: null,
-    consentInspectionLoading: false,
-    consentInspectionError: null,
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    pageNotice: null,
-    mcpSettingsHref: "/settings/mcp",
-    mcpServers: [],
-    mcpMessage: null,
-    mcpBusy: false,
-    mcpFormOpen: false,
-    onQueryChange: () => undefined,
-    onFilterChange: () => undefined,
-    onRefresh: () => undefined,
-    onIconError: () => undefined,
-    onShowDetails: () => undefined,
-    onSetEnabled: () => undefined,
-    onInstall: () => undefined,
-    onCancelConsent: () => undefined,
-    onConfirmConsent: () => undefined,
-    onRetryConsentInspection: () => undefined,
-    onDismissMessage: () => undefined,
-    onUninstall: () => undefined,
-    onAddConnector: () => undefined,
-    onSearchClawHub: () => undefined,
-    onMcpToggle: () => undefined,
-    onMcpRemove: () => undefined,
-    onMcpFormToggle: () => undefined,
-    onMcpAdd: () => undefined,
-    ...overrides,
-  };
-}
-
-function mount(props: PluginsViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderPlugins(props), container);
-  return container;
-}
 
 function normalizedText(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
@@ -609,40 +525,6 @@ describe("renderPlugins", () => {
     );
   });
 
-  it("keeps discovery available while disabling all read-only mutations", () => {
-    const onInstall = vi.fn();
-    const onSetEnabled = vi.fn();
-    const available = createPlugin({
-      id: "lobster",
-      name: "Lobster",
-      installed: false,
-      enabled: false,
-      state: "not-installed",
-      install: { source: "official", pluginId: "lobster" },
-    });
-    const container = mount(
-      createProps({
-        activeTab: "discover",
-        result: createResult([createPlugin(), available]),
-        canMutate: false,
-        mutationBlockedReason: "Browsing only. Plugin changes require operator.admin access.",
-        onInstall,
-        onSetEnabled,
-      }),
-    );
-
-    expect(container.querySelector(".plugins-readonly")?.textContent).toContain("operator.admin");
-    expect(
-      container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
-    ).toBe(true);
-    const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
-    const enableItem = actionButton(workboardRow, "Enable");
-    expect(enableItem?.disabled).toBe(true);
-    enableItem?.click();
-    expect(onInstall).not.toHaveBeenCalled();
-    expect(onSetEnabled).not.toHaveBeenCalled();
-  });
-
   it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
@@ -681,7 +563,7 @@ describe("renderPlugins", () => {
     expect(onInstall).not.toHaveBeenCalled();
   });
 
-  it("renders install policy findings with cancel and acknowledged retry actions", () => {
+  it("renders install policy findings with cancel and acknowledged retry actions", async () => {
     const plugin = createPlugin({
       id: "kitchen-sink",
       name: "OpenClaw Kitchen Sink",
@@ -695,50 +577,49 @@ describe("renderPlugins", () => {
     const onDismissMessage = vi.fn();
     const onShowDetails = vi.fn();
     const request = { source: "official" as const, pluginId: "kitchen-sink" };
-    const container = mount(
-      createProps({
-        activeTab: "discover",
-        result: createResult([plugin]),
-        messages: {
-          [key]: {
-            kind: "warning",
-            text: "ClawScan found issues to review.",
-            installPolicyWarning: {
-              request,
-              details: {
-                installPolicyCode: "install_policy_warning_acknowledgement_required",
-                targetName: "openclaw-kitchen-sink-fixture",
-                targetType: "plugin",
-                requestMode: "install",
-                reason: "ClawScan found issues to review.",
-                findings: [
-                  {
-                    ruleId: "informational-finding",
-                    severity: "info",
-                    message: "The package declares a network integration.",
-                  },
-                  {
-                    ruleId: "semgrep-finding",
-                    severity: "warn",
-                    message: "Semgrep found a risky command.",
-                    file: "index.ts",
-                    line: 12,
-                  },
-                  {
-                    ruleId: "critical-finding",
-                    severity: "critical",
-                    message: "The package executes an untrusted binary.",
-                  },
-                ],
-              },
+    const props = createProps({
+      activeTab: "discover",
+      result: createResult([plugin]),
+      messages: {
+        [key]: {
+          kind: "warning",
+          text: "ClawScan found issues to review.",
+          installPolicyWarning: {
+            request,
+            details: {
+              installPolicyCode: "install_policy_warning_acknowledgement_required",
+              targetName: "openclaw-kitchen-sink-fixture",
+              targetType: "plugin",
+              requestMode: "install",
+              reason: "ClawScan found issues to review.",
+              findings: [
+                {
+                  ruleId: "informational-finding",
+                  severity: "info",
+                  message: "The package declares a network integration.",
+                },
+                {
+                  ruleId: "semgrep-finding",
+                  severity: "warn",
+                  message: "Semgrep found a risky command.",
+                  file: "index.ts",
+                  line: 12,
+                },
+                {
+                  ruleId: "critical-finding",
+                  severity: "critical",
+                  message: "The package executes an untrusted binary.",
+                },
+              ],
             },
           },
         },
-        onInstall,
-        onDismissMessage,
-        onShowDetails,
-      }),
-    );
+      },
+      onInstall,
+      onDismissMessage,
+      onShowDetails,
+    });
+    const container = mount(props);
 
     const row = expectDefined(
       container.querySelector<HTMLElement>('[data-plugin-id="kitchen-sink"]'),
@@ -788,6 +669,31 @@ describe("renderPlugins", () => {
       },
       key,
     );
+
+    render(
+      renderPlugins({
+        ...props,
+        canMutate: false,
+        mutationBlockedReason: "Plugin changes require operator.admin access.",
+      }),
+      container,
+    );
+    const blockedInstall = actionButton(
+      expectDefined(container.querySelector('[role="alert"]'), "blocked policy warning"),
+      "Install anyway",
+    );
+    expect(blockedInstall?.disabled).toBe(false);
+    expect(blockedInstall?.getAttribute("aria-disabled")).toBe("true");
+    const tooltip = blockedInstall?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<unknown> })
+      | null;
+    await tooltip?.updateComplete;
+    expect(tooltip?.content).toBe("Plugin changes require operator.admin access.");
+    expect(blockedInstall?.getAttribute("aria-describedby")).toBeTruthy();
+    blockedInstall?.focus();
+    expect(document.activeElement).toBe(blockedInstall);
+    blockedInstall?.click();
+    expect(onInstall).toHaveBeenCalledTimes(1);
   });
 
   it("shares one install-policy review across catalog, search, and detail aliases", () => {

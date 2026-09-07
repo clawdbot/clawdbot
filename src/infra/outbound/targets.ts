@@ -1,8 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Outbound target helpers resolve direct send targets, heartbeat destinations,
 // sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -10,7 +13,9 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -119,13 +124,31 @@ function resolveHeartbeatOwnerRoute(params: {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): { plugin: ChannelPlugin; ownerId: string; reuseSessionRoute: boolean } | undefined {
   const session = deliveryContextFromSession(params.entry);
-  const plugins: ChannelPlugin[] = [];
+  const plugins: Array<{ plugin: ChannelPlugin; accountId: string }> = [];
   const seen = new Set<string>();
   const add = (plugin: ChannelPlugin | undefined) => {
-    if (plugin && isDeliverableMessageChannel(plugin.id) && !seen.has(plugin.id)) {
-      seen.add(plugin.id);
-      plugins.push(plugin);
+    if (!plugin || !isDeliverableMessageChannel(plugin.id) || seen.has(plugin.id)) {
+      return;
     }
+    seen.add(plugin.id);
+    const accountId =
+      params.heartbeat?.accountId?.trim() ||
+      (session?.channel === plugin.id ? session.accountId : undefined) ||
+      resolveChannelDefaultAccountId({ plugin, cfg: params.cfg });
+    // Owner discovery also runs in status. Exclude cold accounts before any
+    // credential-dependent accessor; stale owners retain their active values.
+    if (!isSecretOwnerAvailable("account", `${plugin.id}:${normalizeAccountId(accountId)}`)) {
+      return;
+    }
+    const inspected = asOptionalRecord(plugin.config.inspectAccount?.(params.cfg, accountId));
+    if (
+      inspected?.enabled === false ||
+      inspected?.configured === false ||
+      hasConfiguredUnavailableCredentialStatus(inspected)
+    ) {
+      return;
+    }
+    plugins.push({ plugin, accountId });
   };
   if (session?.channel) {
     add(resolveOutboundChannelPlugin({ channel: session.channel, cfg: params.cfg }));
@@ -151,7 +174,7 @@ function resolveHeartbeatOwnerRoute(params: {
   // allowFrom fallback, or a session channel's fallback shadows a prefixed
   // configured owner on a later channel.
   const configuredOwners = concreteAllowFromEntries(params.cfg.commands?.ownerAllowFrom);
-  for (const plugin of plugins) {
+  for (const { plugin } of plugins) {
     const configuredOwner = configuredOwners.find((ownerId) => {
       const prefixedChannel = resolveTargetPrefixedChannel(ownerId);
       return (
@@ -163,13 +186,11 @@ function resolveHeartbeatOwnerRoute(params: {
       return buildRoute(plugin, configuredOwner);
     }
   }
-  for (const plugin of plugins) {
+  for (const { plugin, accountId } of plugins) {
     const ownerId = concreteAllowFromEntries(
       plugin.config.resolveAllowFrom?.({
         cfg: params.cfg,
-        accountId:
-          params.heartbeat?.accountId ??
-          (session?.channel === plugin.id ? session.accountId : undefined),
+        accountId,
       }),
     )[0];
     if (ownerId) {
@@ -242,11 +263,12 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const sessionDelivery = deliveryContextFromSession(entry);
   const ownerMode = target === "owner";
   const ownerTurnSource = ownerMode && hasDeliverableHeartbeatTurnSource(params.turnSource);
   const resolvedTurnSource =
     target === "last" || ownerTurnSource
-      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      ? mergeDeliveryContext(params.turnSource, sessionDelivery)
       : undefined;
   const ownerRoute =
     ownerMode && !ownerTurnSource
@@ -260,9 +282,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
       lastAccountId: base.lastAccountId,
     });
   }
-  const ownerSession = ownerRoute?.reuseSessionRoute
-    ? deliveryContextFromSession(entry)
-    : undefined;
+  const ownerSession = ownerRoute?.reuseSessionRoute ? sessionDelivery : undefined;
 
   const resolvedTarget =
     preparedExplicitPlugin && preparedExplicitTo
@@ -360,16 +380,23 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  // Chat type belongs to the stored channel/account/destination, not a later wake route.
+  // A dropped reply thread still shares its parent conversation's chat type.
   const sessionChatTypeHint =
-    (target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute
+    ((target === "last" && !heartbeat?.to) || ownerRoute?.reuseSessionRoute) &&
+    channelRouteTargetsMatchExact({
+      left: { ...sessionDelivery, threadId: undefined },
+      right: {
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
+        accountId: effectiveAccountId,
+      },
+    })
       ? normalizeChatType(entry?.chatType)
       : undefined;
-  const deliveryChatType = resolveHeartbeatDeliveryChatType({
-    channel: resolvedTarget.channel,
-    to: resolved.to,
-    sessionChatType: sessionChatTypeHint,
-    plugin,
-  });
+  const deliveryChatType =
+    sessionChatTypeHint ??
+    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
@@ -628,22 +655,6 @@ function inferChatTypeFromTarget(params: {
       channel: params.channel,
     });
   return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
-}
-
-function resolveHeartbeatDeliveryChatType(params: {
-  channel: string;
-  to: string;
-  sessionChatType?: ChatType;
-  plugin?: ChannelPlugin;
-}): ChatType | undefined {
-  if (params.sessionChatType) {
-    return params.sessionChatType;
-  }
-  return inferChatTypeFromTarget({
-    channel: params.channel,
-    to: params.to,
-    plugin: params.plugin,
-  });
 }
 
 function shouldReuseHeartbeatRouteThreadId(params: {

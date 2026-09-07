@@ -2,7 +2,7 @@
  * Process-local cache for Codex app-server app inventories, keyed by runtime
  * identity and safe to refresh in the background.
  */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   isFutureDateTimestampMs,
   resolveDateTimestampMs,

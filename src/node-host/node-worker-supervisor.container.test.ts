@@ -1,13 +1,18 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processExec from "../process/exec.js";
+import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import { buildWorkerProcessTurn } from "../worker/worker-process-protocol.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -35,6 +40,7 @@ const hostLabel = "openclaw.node-worker.host";
 const gatewayLabel = "openclaw.node-worker.gateway";
 const launchLabel = "openclaw.node-worker.launch";
 const DAEMON_TIMER_SCALE = 5;
+const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
 
 type FakeContainer = {
   id: string;
@@ -81,7 +87,7 @@ function containerFixture(
   fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
   fs.writeFileSync(
     command,
-    `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\n${fakeEngineSource}`,
+    `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\nconst fileLockModule = ${JSON.stringify(fileLockModule)};\n${fakeEngineSource}`,
     { mode: 0o755 },
   );
   const containerEngine = {
@@ -518,6 +524,82 @@ describe("node worker supervisor container isolation", () => {
             .filter((event) => event.argv[0] === "create" || event.argv[0] === "start"),
         ).toEqual([]);
       } finally {
+        await fixture.supervisor.close();
+      }
+    },
+  );
+
+  it.each(["before startup", "while running"] as const)(
+    "force removal fences the fake container %s",
+    async (phase) => {
+      const fixture = containerFixture();
+      const launchId = "container-force-removal";
+      const container = fixture.seed({ id: "9".repeat(64), launchId, status: "created" });
+      const { input } = claimFixtureLaunch(fixture, launchId, container.id);
+      const startMarker = path.join(fixture.engineRoot, "hold-start");
+      if (phase === "before startup") {
+        fs.writeFileSync(startMarker, "hold");
+      }
+      const adapter = await createChildAdapter({
+        argv: [fixture.containerEngine.command, "start", "--attach", "--interactive", container.id],
+        env: fixture.containerEngine.env,
+        exactEnv: true,
+        stdinMode: "pipe-open",
+      });
+      let exited = false;
+      const completed = adapter.wait().finally(() => {
+        exited = true;
+      });
+      try {
+        await sendNodeWorkerInput(
+          adapter,
+          buildWorkerProcessTurn(completeWorkerLaunchDescriptor(input.descriptor, endpoint)),
+        );
+        await vi.waitFor(
+          () => expect(fixture.events().some((event) => event.argv[0] === "start")).toBe(true),
+          { timeout: 5_000 },
+        );
+        let worker: ReturnType<typeof requireNodeWorkerProcessIdentity> | undefined;
+        if (phase === "while running") {
+          await waitForWorkerStarted(fixture.workspaceDir);
+          const started = JSON.parse(
+            fs.readFileSync(path.join(fixture.workspaceDir, `${launchId}.fixture.json`), "utf8"),
+          ) as { pid: number };
+          worker = requireNodeWorkerProcessIdentity(started.pid);
+        }
+        await processExec.runExec(
+          fixture.containerEngine.command,
+          ["rm", "--force", container.id],
+          {
+            baseEnv: fixture.containerEngine.env,
+            timeoutMs: 15_000,
+            logOutput: false,
+          },
+        );
+        expect(fixture.exists(container.id)).toBe(false);
+        if (phase === "before startup") {
+          fs.unlinkSync(startMarker);
+          adapter.stdin?.end();
+          await completed;
+          expect(fixture.exists(container.id)).toBe(false);
+          expect(fs.existsSync(path.join(fixture.workspaceDir, "worker-started"))).toBe(false);
+        } else {
+          await vi.waitFor(() => expect(inspectNodeWorkerProcessIdentity(worker!)).toBe("dead"), {
+            timeout: 5_000,
+          });
+          await completed;
+          expect(fixture.exists(container.id)).toBe(false);
+        }
+      } finally {
+        if (fs.existsSync(startMarker)) {
+          fs.unlinkSync(startMarker);
+        }
+        adapter.stdin?.end();
+        if (!exited) {
+          adapter.kill("SIGKILL");
+        }
+        await completed;
+        adapter.dispose();
         await fixture.supervisor.close();
       }
     },

@@ -119,15 +119,14 @@ describe("Gateway/node MCP real-process stress", () => {
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
-            const { plugins: _plugins, ...withoutPlugins } = cfg;
             return {
-              ...withoutPlugins,
+              ...cfg,
+              plugins: { enabled: false },
               gateway: {
                 ...cfg.gateway,
                 nodes: {
@@ -148,7 +147,6 @@ describe("Gateway/node MCP real-process stress", () => {
             OPENCLAW_CONFIG_PATH: nodeConfigPath,
             OPENCLAW_GATEWAY_TOKEN: gateway.token,
             OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
           },
@@ -285,18 +283,19 @@ describe("Gateway/node MCP real-process stress", () => {
 
         descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
         const streamable = descriptorFor(descriptors, "streamableHttp");
+        // The fixture admits both HTTP requests before expiring their shared session.
         const expired = await Promise.allSettled([
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
         ]);
         expect(expired.every((result) => result.status === "rejected")).toBe(true);

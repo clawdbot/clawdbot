@@ -74,7 +74,9 @@ export function startGatewayCronWithLogging(params: {
       // admission fence; restart and suspension cannot race past this point.
       params.onStartError?.(err);
     }
-  }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
+  }, "runtime:cron-start").catch((err: unknown) =>
+    params.logCron.error(`failed to enter start root: ${String(err)}`),
+  );
 }
 
 export async function clearGatewayMaintenanceHandles(
@@ -142,7 +144,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       if (!params.isClosing()) {
         params.recordPostReadyMemory();
       }
-    }).catch((err: unknown) =>
+    }, "runtime:maintenance").catch((err: unknown) =>
       params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`),
     );
   }, params.delayMs);
@@ -222,6 +224,7 @@ function startPendingOutboundDeliveryRecovery(params: {
           deliver: deliverWithCurrentConversationAuthority,
           log: logRecovery,
           cfg,
+          shouldContinue: () => !stopped,
         });
         return;
       }
@@ -234,8 +237,11 @@ function startPendingOutboundDeliveryRecovery(params: {
         log: logRecovery,
         deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
+        shouldContinue: () => !stopped,
       });
-    }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
+    }, "runtime:delivery-recovery").catch((err: unknown) =>
+      params.log.error(`Delivery recovery failed: ${String(err)}`),
+    );
     const settled: Promise<void> = recovery.finally(() => {
       if (inFlight === settled) {
         inFlight = null;
@@ -280,59 +286,74 @@ function startPendingSessionDeliveryRuntime(params: {
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
   resolveGatewayContext?: GatewayContextResolver;
-}): () => void {
-  let stopped = false;
-  let stopRuntime: (() => void) | undefined;
+}): () => Promise<void> {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let recovery: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
+  let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const {
-        deliverQueuedSessionDelivery,
-        recoverPendingRestartContinuationDeliveries,
-        settleQueuedSessionDelivery,
-      } = await import("./server-restart-sentinel.js");
-      if (stopped) {
-        return;
-      }
-      const logRecovery = params.log.child("session-delivery-recovery");
-      stopRuntime = startSessionDeliveryRuntime({
-        deliver: (entry, context = {}) =>
-          deliverQueuedSessionDelivery({
+    recovery = runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        const {
+          deliverQueuedSessionDelivery,
+          recoverPendingRestartContinuationDeliveries,
+          settleQueuedSessionDelivery,
+        } = await import("./server-restart-sentinel.js");
+        if (signal.aborted) {
+          return;
+        }
+        const logRecovery = params.log.child("session-delivery-recovery");
+        stopRuntime = startSessionDeliveryRuntime({
+          deliver: (entry, context = {}) =>
+            deliverQueuedSessionDelivery({
+              deps: params.deps,
+              entry,
+              ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+              ...(params.resolveGatewayContext
+                ? { resolveGatewayContext: params.resolveGatewayContext }
+                : {}),
+            }),
+          log: logRecovery,
+          onSettled: settleQueuedSessionDelivery,
+        });
+        try {
+          await recoverPendingRestartContinuationDeliveries({
             deps: params.deps,
-            entry,
-            ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+            log: logRecovery,
+            maxEnqueuedAt: params.maxEnqueuedAt,
             ...(params.resolveGatewayContext
               ? { resolveGatewayContext: params.resolveGatewayContext }
               : {}),
-          }),
-        log: logRecovery,
-        onSettled: settleQueuedSessionDelivery,
-      });
-      try {
-        await recoverPendingRestartContinuationDeliveries({
-          deps: params.deps,
-          log: logRecovery,
-          maxEnqueuedAt: params.maxEnqueuedAt,
-          ...(params.resolveGatewayContext
-            ? { resolveGatewayContext: params.resolveGatewayContext }
-            : {}),
-        });
-      } finally {
-        // Recovery and scheduling are independent safeguards. A transient
-        // recovery failure must not leave persisted rows without timers.
-        await schedulePendingSessionDeliveries();
+          });
+        } finally {
+          // Recovery and scheduling are independent safeguards. A transient
+          // recovery failure must not leave persisted rows without timers.
+          if (!signal.aborted) {
+            await schedulePendingSessionDeliveries();
+          }
+        }
+      },
+      "runtime:session-delivery-recovery",
+      signal,
+    ).catch((err: unknown) => {
+      const ownedCancellation =
+        signal.aborted &&
+        (err === signal.reason || (err instanceof Error && err.cause === signal.reason));
+      if (!ownedCancellation) {
+        params.log.error(`Session delivery recovery failed: ${String(err)}`);
       }
-    }).catch((err: unknown) =>
-      params.log.error(`Session delivery recovery failed: ${String(err)}`),
-    );
+    });
   }, 1_250);
   timer.unref?.();
   return () => {
-    stopped = true;
+    // Cancel queued admission, but join imports and work already admitted before their runtime closes.
+    controller.abort();
     clearTimeout(timer);
-    stopRuntime?.();
-    stopRuntime = undefined;
+    stopPromise ??= Promise.all([recovery, stopRuntime?.()]).then(() => {});
+    return stopPromise;
   };
 }
 
@@ -348,13 +369,13 @@ export function activateGatewayScheduledServices(params: {
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
-}): { heartbeatRunner: HeartbeatRunner; stopOutboundDeliveryRecovery: () => Promise<void> } {
+}): { heartbeatRunner: HeartbeatRunner; stopDeliveryRecovery: () => Promise<void> } {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
       heartbeatRunner: createNoopHeartbeatRunner(),
-      stopOutboundDeliveryRecovery: async () => {},
+      stopDeliveryRecovery: async () => {},
     };
   }
   if (
@@ -419,17 +440,25 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  let deliveryRecoveryStopPromise: Promise<void> | undefined;
+  const stopDeliveryRecovery = () => {
+    // Both owners fence synchronously before the close prelude awaits either.
+    deliveryRecoveryStopPromise ??= Promise.all([
+      stopOutboundDeliveryRecovery(),
+      stopSessionDeliveryRuntime(),
+    ]).then(() => {});
+    return deliveryRecoveryStopPromise;
+  };
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
     updateConfig: heartbeatRunner.updateConfig,
     stop: () => {
-      void stopOutboundDeliveryRecovery();
-      stopSessionDeliveryRuntime();
+      void stopDeliveryRecovery();
       sessionUpstreamMonitor.stop();
       heartbeatRunner.stop();
     },
   };
   return {
     heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
-    stopOutboundDeliveryRecovery,
+    stopDeliveryRecovery,
   };
 }

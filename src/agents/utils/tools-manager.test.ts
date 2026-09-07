@@ -52,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("node:os");
   vi.clearAllMocks();
   vi.resetModules();
   vi.unstubAllEnvs();

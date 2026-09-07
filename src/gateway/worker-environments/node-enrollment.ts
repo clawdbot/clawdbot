@@ -1,5 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -13,7 +14,10 @@ import {
 import type { WorkerNodeEnrollment, WorkerNodeRuntimePreparation } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
+import { workerBundleArchiveRelativePath } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH } from "../gateway-http-route-contracts.js";
+import { isLoopbackHost } from "../net.js";
+import type { TransferArtifact } from "./artifact-transfer-service.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -40,7 +44,10 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, { close: () => void }>();
-  const enrollmentClosers = new WeakMap<WorkerNodeRuntimePreparation, () => void>();
+  const enrollmentClosers = new WeakMap<
+    WorkerNodeRuntimePreparation | WorkerNodeEnrollment,
+    () => void
+  >();
   const commandRunner = async (argv: string[], runOptions: { timeoutMs: number }) =>
     await runCommandWithTimeout(argv, { timeoutMs: runOptions.timeoutMs });
 
@@ -56,6 +63,19 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     });
     if (!url.url) {
       throw new Error(url.error ?? "Cloud node bootstrap cannot resolve the Gateway address");
+    }
+    // Cloud workers call back over the public network; a loopback URL can still be
+    // valid for same-host device pairing, so refuse it at this cloud-only boundary.
+    const host = new URL(url.url).hostname;
+    if (
+      isLoopbackHost(host) ||
+      isLinkLocalIpAddress(host) ||
+      host === "0.0.0.0" ||
+      host === "[::]"
+    ) {
+      throw new Error(
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (${url.url}, from ${url.source ?? "unknown"}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+      );
     }
     preparationSignal.throwIfAborted();
     const artifact = await options.prepareArtifact(record, preparationSignal);
@@ -117,12 +137,12 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     return { binding, enrollmentSignal, current };
   };
 
-  const grantRuntime = (
+  const grantArtifact = (
     prepared: Awaited<ReturnType<typeof prepare>>,
+    artifact: TransferArtifact,
     enrollmentSignal: AbortSignal,
     isAuthorized: () => boolean,
-  ): WorkerNodeRuntimePreparation => {
-    const artifact = prepared.artifact;
+  ) => {
     const capability = options.transfer.prepare({
       artifact,
       isAuthorized,
@@ -134,31 +154,47 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     url.search = "";
     url.hash = "";
     return {
-      nodeBootstrap: {
-        url: url.toString(),
-        token: capability.token,
-        sha256: artifact.tarballSha256,
-        bytes: artifact.tarballBytes,
-        openclawVersion: artifact.openclawVersion,
-        enabledPluginIds: artifact.enabledPluginIds,
-        ...(prepared.tlsFingerprint ? { tlsFingerprint: prepared.tlsFingerprint } : {}),
-      },
-      signal: enrollmentSignal,
+      url: url.toString(),
+      token: capability.token,
+      sha256: artifact.tarballSha256,
+      bytes: artifact.tarballBytes,
+      ...(prepared.tlsFingerprint ? { tlsFingerprint: prepared.tlsFingerprint } : {}),
     };
   };
 
+  const grantRuntime = (
+    prepared: Awaited<ReturnType<typeof prepare>>,
+    enrollmentSignal: AbortSignal,
+    isAuthorized: () => boolean,
+  ) => ({
+    nodeBootstrap: {
+      ...grantArtifact(prepared, prepared.artifact, enrollmentSignal, isAuthorized),
+      openclawVersion: prepared.artifact.openclawVersion,
+      enabledPluginIds: prepared.artifact.enabledPluginIds,
+    },
+    signal: enrollmentSignal,
+  });
+
   const prepareRuntime = async (
     record: WorkerEnvironmentRecord,
+    bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
       const owner = current();
-      const runtime = grantRuntime(prepared, enrollmentSignal, () => {
+      const isAuthorized = () => {
         const live = current();
         return live.nodeSetupId === owner.nodeSetupId && live.nodeDeviceId === owner.nodeDeviceId;
-      });
+      };
+      const runtime: WorkerNodeRuntimePreparation = {
+        ...grantRuntime(prepared, enrollmentSignal, isAuthorized),
+        workerBundle: {
+          ...grantArtifact(prepared, bundle, enrollmentSignal, isAuthorized),
+          packageRelativePath: workerBundleArchiveRelativePath(bundle.tarballSha256),
+        },
+      };
       enrollmentClosers.set(runtime, binding.close);
       return runtime;
     } catch (error) {
@@ -326,8 +362,21 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   };
 
   return {
-    prepare: async (record: WorkerEnvironmentRecord) => {
-      await prepare(record);
+    prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
+      const preflight = new AbortController();
+      try {
+        await prepare(
+          record,
+          AbortSignal.any([
+            signal,
+            preflight.signal,
+            ...(operationSignal ? [operationSignal] : []),
+          ]),
+        );
+      } finally {
+        // Preflight creates no transfer grant; release its artifact pin even on success.
+        preflight.abort();
+      }
     },
     prepareRuntime,
     begin,

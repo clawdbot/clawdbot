@@ -8,6 +8,7 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
+import { formatSingleUnitDuration } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -69,6 +70,18 @@ describe("format-duration", () => {
       },
       { input: 59500, expected: "1m" },
       { input: 59400, expected: "59s" },
+      { input: 18_014_398_509_513_598_976, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_598_976,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
+      { input: 18_014_398_509_513_601_024, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_601_024,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
     ])("formats compact duration for %j", ({ input, options, expected }) => {
       expect(formatDurationCompact(input, options)).toBe(expected);
     });
@@ -94,6 +107,27 @@ describe("format-duration", () => {
         { input: 25 * 3600000, expected: "1d" },
         { input: 172800000, expected: "2d" },
       ]);
+    });
+  });
+
+  describe("formatSingleUnitDuration", () => {
+    it.each([
+      [59_500, "60 seconds", "1 minute"],
+      [3_570_000, "60 minutes", "1 hour"],
+      [86_370_000, "24 hours", "1 day"],
+    ])("rolls over %dms to the next unit instead of %s", (input, _buggyOutput, expected) => {
+      expect(formatSingleUnitDuration(input, true)).toBe(expected);
+    });
+
+    it.each([
+      [30_000, "30 seconds"],
+      [89_500, "1 minute"],
+      [1_800_000, "30 minutes"],
+      [5_370_000, "1 hour"],
+      [43_200_000, "12 hours"],
+      [129_570_000, "1 day"],
+    ])("keeps %dms in its own unit as %s", (input, expected) => {
+      expect(formatSingleUnitDuration(input, true)).toBe(expected);
     });
   });
 

@@ -19,9 +19,10 @@ import {
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
-import { execGhRead } from "./lib/plain-gh.mjs";
-import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { execPlainGh } from "./lib/plain-gh.mjs";
+import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
+const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
 const RELEASE_ISOLATION_TOOLING_CONTRACT = "2";
@@ -32,21 +33,17 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 15 * 60_000;
-const FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS = 2;
+export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
+const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
 const RELEASE_DECISION_FILE = "full-release-decision.json";
+const GH_NO_CACHE_HEADER = "Cache-Control: max-age=0";
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
   stdio: ["ignore", "pipe", "inherit"],
   timeout: GH_READ_TIMEOUT_MS,
 } satisfies ExecFileSyncOptionsWithStringEncoding;
-const RELEASE_BRANCH_PATTERN = /^release\/([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)$/u;
-const EXTENDED_STABLE_BRANCH_PATTERN = /^extended-stable\/([0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
-const RELEASE_CONTEXT_BRANCH_PATTERN =
-  /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
-const RELEASE_TAG_PATTERN =
-  /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
 const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
@@ -128,7 +125,9 @@ evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
 -f fail_fast=true to cancel only an exact still-active child after Release
 Decision identifies a blocking failure for that child. The release
-branch accepts only its final package version or a matching beta prerelease.
+branch accepts its final package version or a matching beta prerelease.
+A numeric correction branch also accepts the base package only when its
+published base tag resolves to the exact Validation SHA.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
@@ -159,6 +158,137 @@ function runStatus(command: string, args: string[], options: CommandOptions = {}
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
     timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
   });
+}
+
+function runGh(args: string[], options: CommandOptions = {}) {
+  if (options.dryRun) {
+    console.log(["+", "gh", ...args].join(" "));
+    return "";
+  }
+  const output = execPlainGh(args, {
+    encoding: "utf8",
+    stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
+  });
+  return typeof output === "string" ? output.trim() : "";
+}
+
+function runGhStatus(args: string[], options: CommandOptions = {}): CommandStatus {
+  try {
+    return {
+      signal: null,
+      status: 0,
+      stderr: "",
+      stdout: execPlainGh(args, {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
+        timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
+      }),
+    };
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    const details = failure as Error & {
+      signal?: unknown;
+      status?: number | null;
+      stderr?: unknown;
+      stdout?: unknown;
+    };
+    return {
+      error: failure,
+      signal: details.signal,
+      status: details.status ?? 1,
+      stderr: details.stderr ?? "",
+      stdout: details.stdout ?? "",
+    };
+  }
+}
+
+function readGhApi(
+  endpoint: string,
+  fields: string[] = [],
+  options: ExecFileSyncOptionsWithStringEncoding = GH_READ_OPTIONS,
+) {
+  return execPlainGh(
+    ["api", "--method", "GET", endpoint, ...fields, "-H", GH_NO_CACHE_HEADER],
+    options,
+  );
+}
+
+function commandFailureMessage(error: unknown): string {
+  if (error === undefined || error === null) {
+    return "";
+  }
+  if (!(error instanceof Error)) {
+    return displayValue(error);
+  }
+  const details = error as Error & {
+    cause?: unknown;
+    stderr?: unknown;
+    stdout?: unknown;
+  };
+  const outputText = (value: unknown) => {
+    if (typeof value === "string") {
+      return value.trim();
+    }
+    return Buffer.isBuffer(value) ? value.toString("utf8").trim() : "";
+  };
+  return [
+    outputText(details.stderr),
+    outputText(details.stdout),
+    error.message,
+    details.cause === error ? "" : commandFailureMessage(details.cause),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function createTemporaryRef(ref: string, sha: string, dryRun: boolean) {
+  try {
+    runGh(
+      [
+        "api",
+        "--method",
+        "POST",
+        `repos/${REPOSITORY}/git/refs`,
+        "-f",
+        `ref=${ref}`,
+        "-f",
+        `sha=${sha}`,
+      ],
+      { dryRun, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (error) {
+    const message = commandFailureMessage(error);
+    if (!message.includes("Object does not exist")) {
+      throw new Error(message, { cause: error });
+    }
+    // The refs API cannot transfer a commit that exists only in the local
+    // object database. Preserve the shipped local-candidate contract.
+    run("git", ["push", "origin", `${sha}:${ref}`], {
+      dryRun,
+      stdio: "inherit",
+    });
+  }
+}
+
+function deleteTemporaryRefs(refs: string[], dryRun: boolean) {
+  const failures: string[] = [];
+  for (const ref of refs) {
+    try {
+      runGh(
+        ["api", "--method", "DELETE", `repos/${REPOSITORY}/git/refs/${ref.slice("refs/".length)}`],
+        {
+          dryRun,
+        },
+      );
+    } catch (error) {
+      failures.push(`${ref}: ${commandFailureMessage(error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Failed to delete temporary refs: ${failures.join("; ")}`);
+  }
 }
 
 export function parseArgs(argv: string[]) {
@@ -278,13 +408,11 @@ export function parseArgs(argv: string[]) {
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
     throw new Error("SHA-pinned release validation reserves trusted_workflow_json");
   }
-  if (
-    args.targetRef &&
-    !RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
-    !RELEASE_TAG_PATTERN.test(args.targetRef)
-  ) {
+  const targetContext = parseReleaseContextRef(args.targetRef);
+  if (args.targetRef && !targetContext) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
+  args.targetRef = targetContext?.ref ?? args.targetRef;
   if (
     args.trustedWorkflowRef !== "main" &&
     !TRUSTED_WORKFLOW_TAG_PATTERN.test(args.trustedWorkflowRef)
@@ -299,7 +427,8 @@ export function parseArgs(argv: string[]) {
     );
   }
   if (
-    RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
+    targetContext &&
+    targetContext.kind !== "release tag" &&
     !SHA_PATTERN.test(args.workflowSha.toLowerCase())
   ) {
     throw new Error(
@@ -313,14 +442,19 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit: (args: string[]) => string = (args) => run("git", args),
 ) {
-  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
+  const context = parseReleaseContextRef(targetRef);
+  if (!context) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
+  }
+  if (context.kind !== "release tag") {
     return (
-      executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(/\s+/u)[0] ??
-      ""
+      executeGit(["ls-remote", "--heads", "origin", `refs/heads/${context.ref}`]).split(
+        /\s+/u,
+      )[0] ?? ""
     );
   }
 
-  const tagRef = `refs/tags/${targetRef}`;
+  const tagRef = `refs/tags/${context.ref}`;
   const peeledSha = executeGit(["ls-remote", "--tags", "origin", `${tagRef}^{}`]).split(/\s+/u)[0];
   if (peeledSha) {
     return peeledSha;
@@ -341,52 +475,30 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
-  const releaseMatch = targetRef.match(RELEASE_BRANCH_PATTERN);
-  const extendedStableMatch = targetRef.match(EXTENDED_STABLE_BRANCH_PATTERN);
-  const tagMatch = targetRef.match(RELEASE_TAG_PATTERN);
-  if (releaseMatch) {
-    const releaseVersion = releaseMatch[1]!;
-    const prereleaseMatch = targetVersion.match(
-      /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
-    );
-    if (targetVersion !== releaseVersion && prereleaseMatch?.[1] !== releaseVersion) {
-      throw new Error(
-        `Target package version ${targetVersion} does not belong to release branch ${targetRef}; expected ${releaseVersion} or a beta prerelease of it`,
-      );
-    }
-  } else if (extendedStableMatch) {
-    const branchVersion = parseReleaseVersion(extendedStableMatch[1]!);
-    const candidateVersion = parseReleaseVersion(targetVersion);
-    if (
-      branchVersion === null ||
-      candidateVersion === null ||
-      classifyReleaseTrain(candidateVersion) !== "extended-stable" ||
-      candidateVersion.year !== branchVersion.year ||
-      candidateVersion.month !== branchVersion.month
-    ) {
-      throw new Error(
-        `Target package version ${targetVersion} does not belong to extended-stable branch ${targetRef}; expected a final ${branchVersion?.year}.${branchVersion?.month}.PATCH version with PATCH >= 33`,
-      );
-    }
-  } else if (tagMatch && targetVersion !== tagMatch[1]) {
-    throw new Error(
-      `Target package version ${targetVersion} does not match release tag ${targetRef}`,
-    );
+  const identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  if (!identity) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
   }
   const remoteSha = resolveRemoteSha(targetRef);
   if (!remoteSha) {
     throw new Error(`Target ref ${targetRef} does not resolve to a commit`);
   }
-  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
+  if (identity.kind !== "release tag") {
     if (!isAncestor(targetSha, remoteSha)) {
       throw new Error(
         `Target SHA ${targetSha} is not reachable from release branch ${targetRef} at ${remoteSha}`,
       );
     }
-    return targetRef;
-  }
-  if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
+  } else if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
     throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
+  }
+  if (identity.baseTag) {
+    const baseSha = resolveRemoteSha(identity.baseTag);
+    if (baseSha.toLowerCase() !== targetSha.toLowerCase()) {
+      throw new Error(
+        `Fallback correction ${identity.releaseTag} must use the same source commit as ${identity.baseTag}; expected ${targetSha}, found ${baseSha || "missing"}.`,
+      );
+    }
   }
   return targetRef;
 }
@@ -400,9 +512,11 @@ function fetchTargetRef(targetRef: string) {
   if (!targetRef) {
     return;
   }
-  const sourceRef = RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)
-    ? `refs/heads/${targetRef}`
-    : `refs/tags/${targetRef}`;
+  const context = parseReleaseContextRef(targetRef);
+  if (!context) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
+  }
+  const sourceRef = `refs/${context.kind === "release tag" ? "tags" : "heads"}/${context.ref}`;
   run("git", ["fetch", "--no-tags", "origin", sourceRef], {
     stdio: "inherit",
   });
@@ -508,29 +622,20 @@ function collectRunId(dispatchOutput: string) {
 }
 
 function findLatestRunId(branch: string, sha: string) {
-  const json = execGhRead(
-    [
-      "run",
-      "list",
-      "--workflow",
-      WORKFLOW,
-      "--branch",
-      branch,
-      "--event",
-      "workflow_dispatch",
-      "--limit",
-      "20",
-      "--json",
-      "databaseId,headSha,createdAt",
-    ],
-    GH_READ_OPTIONS,
+  const response: unknown = JSON.parse(
+    readGhApi(
+      `repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs`,
+      ["-f", `branch=${branch}`, "-f", "event=workflow_dispatch", "-f", "per_page=20"],
+      GH_READ_OPTIONS,
+    ),
   );
-  const runs: unknown = JSON.parse(json);
-  if (!Array.isArray(runs)) {
-    throw new Error("Full Release Validation run list response was not an array");
+  if (!isJsonRecord(response) || !Array.isArray(response.workflow_runs)) {
+    throw new Error("Full Release Validation run list response was invalid");
   }
-  const match = runs.find((runItem: unknown) => isJsonRecord(runItem) && runItem.headSha === sha);
-  const databaseId = isJsonRecord(match) ? match.databaseId : undefined;
+  const match = response.workflow_runs.find(
+    (runItem: unknown) => isJsonRecord(runItem) && runItem.head_sha === sha,
+  );
+  const databaseId = isJsonRecord(match) ? match.id : undefined;
   return typeof databaseId === "string" || typeof databaseId === "number" ? String(databaseId) : "";
 }
 
@@ -539,7 +644,7 @@ function readWorkflowRun(parentRunId: string, workflowSha: string) {
     throw new Error("parent run ID must be a positive decimal");
   }
   const workflowRun: unknown = JSON.parse(
-    execGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`], GH_READ_OPTIONS),
+    readGhApi(`repos/${REPOSITORY}/actions/runs/${parentRunId}`, [], GH_READ_OPTIONS),
   );
   if (!isJsonRecord(workflowRun)) {
     throw new Error(`Full Release Validation run ${parentRunId} returned an invalid response`);
@@ -554,8 +659,9 @@ function readWorkflowRun(parentRunId: string, workflowSha: string) {
 
 function readActiveParentJobs(parentRunId: string) {
   const response: unknown = JSON.parse(
-    execGhRead(
-      ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}/jobs?per_page=100`],
+    readGhApi(
+      `repos/${REPOSITORY}/actions/runs/${parentRunId}/jobs`,
+      ["-f", "per_page=100"],
       GH_READ_OPTIONS,
     ),
   );
@@ -603,11 +709,11 @@ export function tryReadReleaseDecision(
   parentRunId: string,
   parentRunAttempt: number,
   workflowSha: string,
-  runStatusImpl: (
-    command: string,
-    args: string[],
-    options?: CommandOptions,
-  ) => CommandStatus = runStatus,
+  runStatusImpl: (command: string, args: string[], options?: CommandOptions) => CommandStatus = (
+    _command,
+    args,
+    options,
+  ) => runGhStatus(args, options),
 ) {
   const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-"));
@@ -619,7 +725,7 @@ export function tryReadReleaseDecision(
         "download",
         parentRunId,
         "--repo",
-        "openclaw/openclaw",
+        REPOSITORY,
         "--name",
         artifactName,
         "--dir",
@@ -678,12 +784,39 @@ export function tryReadReleaseDecision(
   }
 }
 
+function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  try {
+    const response: unknown = JSON.parse(
+      readGhApi(
+        `repos/${REPOSITORY}/actions/runs/${parentRunId}/artifacts`,
+        ["-f", "per_page=100", "-f", `name=${artifactName}`],
+        { ...GH_READ_OPTIONS, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+    if (!isJsonRecord(response) || !Array.isArray(response.artifacts)) {
+      throw new Error(`Full Release Validation run ${parentRunId} returned invalid artifacts`);
+    }
+    return response.artifacts.some(
+      (artifact) =>
+        isJsonRecord(artifact) && artifact.name === artifactName && artifact.expired === false,
+    );
+  } catch (error) {
+    if (classifyReleaseGhTransportError(error) !== "transient") {
+      throw error;
+    }
+    console.warn(`Release Decision metadata unavailable this poll; retrying: ${String(error)}`);
+    return false;
+  }
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
   const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
-  let nextProgressAt = startedAt + FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
+  let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
+  let decision: { attempt: number; state: "unavailable" | "ready" | "passed" } | undefined;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -706,15 +839,30 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       lastSummary = summary;
     }
     if (suite) {
-      const releaseDecision = tryReadReleaseDecision(
-        parentRunId,
-        requiredPositiveInteger(suite.run_attempt, "parent run attempt"),
-        workflowSha,
-      );
-      if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
-        throw new Error(
-          `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-        );
+      const attempt = requiredPositiveInteger(suite.run_attempt, "parent run attempt");
+      if (decision?.attempt !== attempt) {
+        decision = { attempt, state: "unavailable" };
+      }
+      // Metadata is only a readiness hint. Once advertised, keep trying the
+      // authoritative download across status regressions until this attempt validates.
+      if (
+        decision.state === "unavailable" &&
+        (suite.status === "completed" || releaseDecisionAvailable(parentRunId, attempt))
+      ) {
+        decision.state = "ready";
+      }
+      if (decision.state === "ready") {
+        const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
+          throw new Error(
+            `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        // The workflow uploads one immutable decision per attempt; final success
+        // still requires the parent's terminal conclusion and strict evidence verifier.
+        if (releaseDecision?.state === "passed") {
+          decision.state = "passed";
+        }
       }
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
@@ -741,7 +889,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
           `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      nextProgressAt += FULL_RELEASE_GITHUB_POLL_INTERVAL_MS;
+      nextProgressAt = now + FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -959,84 +1107,107 @@ function main() {
   let parentRunId: string | undefined;
   let parentConclusion = "";
   let evidenceVerified = false;
+  let targetRefCreated = false;
+  let workflowRefCreated = false;
+  let dispatchAttempted = false;
+  let operationError: Error | undefined;
   try {
-    run("git", ["push", "origin", `${targetSha}:${remoteTargetBranchRef}`], {
-      dryRun: args.dryRun,
-      stdio: "inherit",
-    });
-    run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
-      dryRun: args.dryRun,
-      stdio: "inherit",
-    });
+    createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
+    targetRefCreated = true;
+    createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
+    workflowRefCreated = true;
 
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
       dispatchArgs.push("-f", `${key}=${value}`);
     }
 
-    const dispatchOutput = run("gh", dispatchArgs, { dryRun: args.dryRun });
+    // Once dispatch starts, the refs may be needed for GitHub reruns even when
+    // the client loses the response. Cleanup resumes only after verified success.
+    dispatchAttempted = true;
+    const dispatchOutput = runGh(dispatchArgs, { dryRun: args.dryRun });
     if (dispatchOutput) {
       console.log(dispatchOutput);
     }
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
-      for (let attempt = 0; attempt < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS; attempt += 1) {
+      for (let attempt = 0; attempt <= FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length; attempt += 1) {
         parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
-        if (attempt + 1 < FULL_RELEASE_RUN_DISCOVERY_ATTEMPTS) {
+        if (attempt < FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length) {
           Atomics.wait(
             new Int32Array(new SharedArrayBuffer(4)),
             0,
             0,
-            FULL_RELEASE_GITHUB_POLL_INTERVAL_MS,
+            FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt],
           );
         }
       }
     }
     if (!parentRunId) {
-      if (args.dryRun) {
-        return;
+      if (!args.dryRun) {
+        throw new Error("Could not determine Full Release Validation run id.");
       }
-      throw new Error("Could not determine Full Release Validation run id.");
-    }
-
-    console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-    const completedRun = waitForWorkflowRun(parentRunId, workflowSha);
-    parentConclusion = stringValue(completedRun.conclusion);
-    if (parentConclusion !== "success") {
-      throw new Error(
-        `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-      );
-    }
-    verifyReleaseEvidence(parentRunId, workflowSha, args.trustedWorkflowRef);
-    evidenceVerified = true;
-  } finally {
-    if (
-      shouldDeleteTemporaryWorkflowRef({
-        keepBranch: args.keepBranch,
-        dryRun: args.dryRun,
-        parentConclusion,
-        evidenceVerified,
-      })
-    ) {
-      run("git", ["push", "origin", `:${remoteBranchRef}`, `:${remoteTargetBranchRef}`], {
-        dryRun: args.dryRun,
-        stdio: "inherit",
-      });
     } else {
-      const keptRefs = `${remoteBranchRef} and ${remoteTargetBranchRef}`;
-      console.warn(
-        args.keepBranch
-          ? `Kept ${keptRefs}`
-          : `Kept ${keptRefs}: ${
-              parentConclusion === "success"
-                ? "release evidence was not verified"
-                : `parent concluded ${parentConclusion || "without a conclusion"}`
-            }. Keep it through GitHub reruns or evidence diagnosis; delete it after verified success.`,
-      );
+      console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
+      const completedRun = waitForWorkflowRun(parentRunId, workflowSha);
+      parentConclusion = stringValue(completedRun.conclusion);
+      if (parentConclusion !== "success") {
+        throw new Error(
+          `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+        );
+      }
+      verifyReleaseEvidence(parentRunId, workflowSha, args.trustedWorkflowRef);
+      evidenceVerified = true;
     }
+  } catch (error) {
+    operationError = error instanceof Error ? error : new Error(String(error));
+  }
+
+  const createdRefs = [
+    ...(workflowRefCreated ? [remoteBranchRef] : []),
+    ...(targetRefCreated ? [remoteTargetBranchRef] : []),
+  ];
+  const cleanupBeforeDispatch = !dispatchAttempted && createdRefs.length > 0;
+  const cleanupAfterSuccess = shouldDeleteTemporaryWorkflowRef({
+    keepBranch: args.keepBranch,
+    dryRun: args.dryRun,
+    parentConclusion,
+    evidenceVerified,
+  });
+  let cleanupError: Error | undefined;
+  if (cleanupBeforeDispatch || cleanupAfterSuccess) {
+    try {
+      deleteTemporaryRefs(createdRefs, args.dryRun);
+    } catch (error) {
+      cleanupError = error instanceof Error ? error : new Error(String(error));
+    }
+  } else if (createdRefs.length > 0) {
+    const keptRefs = createdRefs.join(" and ");
+    console.warn(
+      args.keepBranch
+        ? `Kept ${keptRefs}`
+        : `Kept ${keptRefs}: ${
+            parentConclusion === "success"
+              ? "release evidence was not verified"
+              : `parent concluded ${parentConclusion || "without a conclusion"}`
+          }. Keep it through GitHub reruns or evidence diagnosis; delete it after verified success.`,
+    );
+  }
+
+  if (operationError && cleanupError) {
+    throw new Error(
+      `${commandFailureMessage(operationError)}; temporary ref cleanup also failed: ${commandFailureMessage(cleanupError)}`,
+      { cause: new AggregateError([operationError, cleanupError]) },
+    );
+  }
+  if (operationError) {
+    throw operationError;
+  }
+  if (cleanupError) {
+    throw cleanupError;
   }
 }
 

@@ -173,13 +173,15 @@ function renderFilterChips(
             </div>
           `,
         )}
-      ${(selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
-        ? html`
-            <button class="btn btn--sm" @click=${onClearFilters}>
-              ${t("usage.filters.clearAll")}
-            </button>
-          `
-        : nothing}
+      ${
+        (selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
+          ? html`
+              <button class="btn btn--sm" @click=${onClearFilters}>
+                ${t("usage.filters.clearAll")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -303,14 +305,16 @@ function renderDailyChartCompact(
         )}
         <div class="card-title">
           ${isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
-          ${usesCompressedScale
-            ? html`<span
-                class="daily-chart-scale-badge"
-                title=${t("usage.daily.compressedScaleHint")}
-                aria-label=${t("usage.daily.compressedScaleHint")}
-                >√</span
-              >`
-            : nothing}
+          ${
+            usesCompressedScale
+              ? html`<span
+                  class="daily-chart-scale-badge"
+                  title=${t("usage.daily.compressedScaleHint")}
+                  aria-label=${t("usage.daily.compressedScaleHint")}
+                  >√</span
+                >`
+              : nothing
+          }
         </div>
       </div>
       <div class="daily-chart">
@@ -322,11 +326,13 @@ function renderDailyChartCompact(
             ).map(
               (value) =>
                 html`<span
-                  >${isTokenMode
-                    ? formatUsageTokens(value)
-                    : value === 0
-                      ? formatUsageCost(0)
-                      : formatAnalysisCost(value)}</span
+                  >${
+                    isTokenMode
+                      ? formatUsageTokens(value)
+                      : value === 0
+                        ? formatUsageCost(0)
+                        : formatAnalysisCost(value)
+                  }</span
                 >`,
             )}
           </div>
@@ -375,31 +381,35 @@ function renderDailyChartCompact(
                     @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
                     @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
                   >
-                    ${dailyChartMode === "by-type"
-                      ? html`
-                          <div
-                            class="daily-bar daily-bar--stacked"
-                            style="height: ${heightPx.toFixed(0)}px;"
-                          >
-                            ${segments.map(
-                              ({ className, value }) => html`
-                                <div
-                                  class="cost-segment ${className}"
-                                  style="height: ${(value / segmentTotal) * 100}%"
-                                ></div>
-                              `,
-                            )}
-                          </div>
-                        `
-                      : html`
-                          <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
-                        `}
-                    ${showTotals
-                      ? html`<div class="daily-bar-total">${totalLabel}</div>`
-                      : html`<div
-                          class="daily-bar-total daily-bar-total--placeholder"
-                          aria-hidden="true"
-                        ></div>`}
+                    ${
+                      dailyChartMode === "by-type"
+                        ? html`
+                            <div
+                              class="daily-bar daily-bar--stacked"
+                              style="height: ${heightPx.toFixed(0)}px;"
+                            >
+                              ${segments.map(
+                                ({ className, value }) => html`
+                                  <div
+                                    class="cost-segment ${className}"
+                                    style="height: ${(value / segmentTotal) * 100}%"
+                                  ></div>
+                                `,
+                              )}
+                            </div>
+                          `
+                        : html`
+                            <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
+                          `
+                    }
+                    ${
+                      showTotals
+                        ? html`<div class="daily-bar-total">${totalLabel}</div>`
+                        : html`<div
+                            class="daily-bar-total daily-bar-total--placeholder"
+                            aria-hidden="true"
+                          ></div>`
+                    }
                     <div class="${labelClass}">${shortLabel}</div>
                   </div>
                 </openclaw-tooltip>
@@ -452,9 +462,9 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode
-          ? formatUsageTokens(totals.totalTokens)
-          : formatAnalysisCost(totals.totalCost)}
+        ${
+          isTokenMode ? formatUsageTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)
+        }
       </div>
     </div>
   `;
@@ -477,33 +487,37 @@ function renderInsightList(
   return html`
     <div class=${cardClass}>
       <div class="usage-insight-title">${title}</div>
-      ${items.length === 0
-        ? html`<div class="muted">${emptyLabel}</div>`
-        : html`
-            <div class=${listClass}>
-              ${items.map((item) =>
-                options?.error
-                  ? html`
-                      <div class="usage-error-row">
-                        <div class="usage-error-date">${item.label}</div>
-                        <div class="usage-error-rate">${item.value}</div>
-                        ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
-                      </div>
-                    `
-                  : html`
-                      <div class="usage-list-item">
-                        <span>${item.label}</span>
-                        <span class="usage-list-value">
-                          <span>${item.value}</span>
-                          ${item.sub
-                            ? html`<span class="usage-list-sub">${item.sub}</span>`
-                            : nothing}
-                        </span>
-                      </div>
-                    `,
-              )}
-            </div>
-          `}
+      ${
+        items.length === 0
+          ? html`<div class="muted">${emptyLabel}</div>`
+          : html`
+              <div class=${listClass}>
+                ${items.map((item) =>
+                  options?.error
+                    ? html`
+                        <div class="usage-error-row">
+                          <div class="usage-error-date">${item.label}</div>
+                          <div class="usage-error-rate">${item.value}</div>
+                          ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
+                        </div>
+                      `
+                    : html`
+                        <div class="usage-list-item">
+                          <span>${item.label}</span>
+                          <span class="usage-list-value">
+                            <span>${item.value}</span>
+                            ${
+                              item.sub
+                                ? html`<span class="usage-list-sub">${item.sub}</span>`
+                                : nothing
+                            }
+                          </span>
+                        </div>
+                      `,
+                )}
+              </div>
+            `
+      }
     </div>
   `;
 }
@@ -915,9 +929,11 @@ function renderSessionsCard(
         >
           <span class="session-bar-label">
             <span class="session-bar-title">${displayLabel}</span>
-            ${meta.length > 0
-              ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
-              : nothing}
+            ${
+              meta.length > 0
+                ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
+                : nothing
+            }
           </span>
         </button>
         <div class="session-bar-actions">
@@ -961,9 +977,11 @@ function renderSessionsCard(
         <div class="sessions-card-header">
           <div class="sessions-card-count">
             ${t("usage.sessions.shown", { count: String(sessions.length) })}
-            ${totalSessions !== sessions.length
-              ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
-              : ""}
+            ${
+              totalSessions !== sessions.length
+                ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
+                : ""
+            }
           </div>
         </div>
         <div class="sessions-card-meta">
@@ -1002,62 +1020,74 @@ function renderSessionsCard(
             </select>
           </label>
           <openclaw-tooltip
-            .content=${sessionSortDir === "desc"
-              ? t("usage.sessions.descending")
-              : t("usage.sessions.ascending")}
+            .content=${
+              sessionSortDir === "desc"
+                ? t("usage.sessions.descending")
+                : t("usage.sessions.ascending")
+            }
           >
             <button
               class="btn btn--sm"
-              aria-label=${sessionSortDir === "desc"
-                ? t("usage.sessions.descending")
-                : t("usage.sessions.ascending")}
+              aria-label=${
+                sessionSortDir === "desc"
+                  ? t("usage.sessions.descending")
+                  : t("usage.sessions.ascending")
+              }
               @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
             >
               ${sessionSortDir === "desc" ? "↓" : "↑"}
             </button>
           </openclaw-tooltip>
-          ${selectedCount > 0
-            ? html`
-                <button class="btn btn--sm" @click=${onClearSessions}>
-                  ${t("usage.sessions.clearSelection")}
-                </button>
-              `
-            : nothing}
+          ${
+            selectedCount > 0
+              ? html`
+                  <button class="btn btn--sm" @click=${onClearSessions}>
+                    ${t("usage.sessions.clearSelection")}
+                  </button>
+                `
+              : nothing
+          }
         </div>
-        ${sessionsTab === "recent"
-          ? recentEntries.length === 0
-            ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
-            : html`
-                <div class="session-bars session-bars--recent">
-                  ${renderSessionBarRows(recentEntries)}
+        ${
+          sessionsTab === "recent"
+            ? recentEntries.length === 0
+              ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
+              : html`
+                  <div class="session-bars session-bars--recent">
+                    ${renderSessionBarRows(recentEntries)}
+                  </div>
+                `
+            : sessions.length === 0
+              ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
+              : html`
+                  <div class="session-bars">
+                    ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
+                    ${
+                      sessions.length > 50
+                        ? html`
+                            <div class="usage-more-sessions">
+                              ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
+                            </div>
+                          `
+                        : nothing
+                    }
+                  </div>
+                `
+        }
+        ${
+          selectedCount > 1
+            ? html`
+                <div class="sessions-selected-group">
+                  <div class="sessions-card-count">
+                    ${t("usage.sessions.selected", { count: String(selectedCount) })}
+                  </div>
+                  <div class="session-bars session-bars--selected">
+                    ${renderSessionBarRows(selectedEntries)}
+                  </div>
                 </div>
               `
-          : sessions.length === 0
-            ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
-            : html`
-                <div class="session-bars">
-                  ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
-                  ${sessions.length > 50
-                    ? html`
-                        <div class="usage-more-sessions">
-                          ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
-                        </div>
-                      `
-                    : nothing}
-                </div>
-              `}
-        ${selectedCount > 1
-          ? html`
-              <div class="sessions-selected-group">
-                <div class="sessions-card-count">
-                  ${t("usage.sessions.selected", { count: String(selectedCount) })}
-                </div>
-                <div class="session-bars session-bars--selected">
-                  ${renderSessionBarRows(selectedEntries)}
-                </div>
-              </div>
-            `
-          : nothing}
+            : nothing
+        }
       </div>
     `,
   );

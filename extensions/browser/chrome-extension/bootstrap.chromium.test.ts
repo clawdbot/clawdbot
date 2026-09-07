@@ -519,6 +519,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           const bindingSession = await relayPlaywrightContext.newCDPSession(relayPage);
           const observerSession = await relayPlaywrightContext.newCDPSession(relayPage);
           const bindingName = "__openclawRelayBindingProof";
+          diagnostic.identifyContextBinding(bindingName);
           const bindingPayloads: string[] = [];
           const observerPayloads: string[] = [];
           observerSession.on("Runtime.bindingCalled", (event) => {
@@ -566,19 +567,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .poll(() => extensionConnections, { timeout: 15_000 })
           .toBeGreaterThan(previousConnections);
         await expect.poll(() => relay.bridge.extensionConnected).toBe(true);
-        const reconnectedTabsResponse = await dispatcher.dispatch({
-          method: "GET",
-          path: "/tabs",
-          query: { profile: existingSessionProfile },
+        // Hello starts asynchronous reattachment; the MCP client's page inventory
+        // becomes ready only after it receives the restored target.
+        const reconnectedTarget = await vi.waitFor(async () => {
+          const reconnectedTabsResponse = await dispatcher.dispatch({
+            method: "GET",
+            path: "/tabs",
+            query: { profile: existingSessionProfile },
+          });
+          const target = (
+            reconnectedTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+          ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
+          if (!target) {
+            throw new Error(
+              `Reconnected target missing: ${JSON.stringify(reconnectedTabsResponse.body)}`,
+            );
+          }
+          return target;
         });
-        const reconnectedTarget = (
-          reconnectedTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
-        ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
-        if (!reconnectedTarget) {
-          throw new Error(
-            `Reconnected target missing: ${JSON.stringify(reconnectedTabsResponse.body)}`,
-          );
-        }
         await proveLabeledRefScreenshot({
           dispatcher,
           controlled,
@@ -591,12 +597,20 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           "[browser-extension-e2e] same-browser transport-reconnect labeled-ref screenshot passed\n",
         );
 
-        const distractingPage = await context.newPage();
         const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
-        await distractingPage.goto(distractingUrl);
-        await expect
-          .poll(() => relayPlaywrightContext.pages().some((page) => page.url() === distractingUrl))
-          .toBe(true);
+        diagnostic.arm(reconnectedTarget);
+        diagnostic.inventory(relayPlaywrightContext, relay.bridge, distractingUrl);
+        const distractingPage = await context.newPage();
+        try {
+          await distractingPage.goto(distractingUrl);
+          await expect
+            .poll(() =>
+              relayPlaywrightContext.pages().some((page) => page.url() === distractingUrl),
+            )
+            .toBe(true);
+        } finally {
+          diagnostic.inventory(relayPlaywrightContext, relay.bridge, distractingUrl);
+        }
         const liveTabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",

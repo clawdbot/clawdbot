@@ -402,9 +402,21 @@ describe("bedrock embedding response parsing", () => {
       model: "cohere.embed-english-v3",
       raw: '{"embeddings":[[1],{"bad":true}]}',
     },
+    ...[
+      { model: "amazon.titan-embed-text-v2:0", vector: '"embedding":[3,4]' },
+      { model: "cohere.embed-english-v3", vector: '"embeddings":[[3,4]]' },
+    ].map(({ model, vector }) => ({
+      name: `invalid UTF-8 for ${model}`,
+      model,
+      raw: Buffer.concat([
+        Buffer.from('{"ignored":"bad'),
+        Buffer.from([0xff]),
+        Buffer.from(`",${vector}}`),
+      ]),
+    })),
   ])("rejects $name through the provider boundary", async ({ model, raw }) => {
     vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      body: new TextEncoder().encode(raw),
+      body: typeof raw === "string" ? new TextEncoder().encode(raw) : raw,
     } as never);
     const { provider } = await createBedrockEmbeddingProvider({ config: {}, model });
     const request = model.startsWith("cohere.")

@@ -1,5 +1,6 @@
 // Coverage for cache-TTL session entries after embedded attempts.
 import { describe, expect, it, vi } from "vitest";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -13,6 +14,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
       compactionOccurredThisAttempt: true,
       config: {
@@ -41,6 +43,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
       compactionOccurredThisAttempt: false,
       config: {
@@ -64,6 +67,8 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       timestamp: 123,
       provider: "anthropic",
       modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
     });
   });
 });

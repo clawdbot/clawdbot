@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -28,10 +28,8 @@ import {
   closeRelayVoiceSessionRecord,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
-  ensureClientVoiceAgentSessionEntry,
   isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
-  resolveClientVoiceAgentSessionId,
   resolveClientVoiceRunBinding,
   resolveOpenClientVoiceSessionId,
 } from "./client-voice-session.js";
@@ -183,82 +181,6 @@ describe("client voice session", () => {
     ).toThrow("already closed");
   });
 
-  it.each([false, true])("stamps Talk creation once (required=%s)", async (required) => {
-    const target = { agentId: "main", sessionKey: "agent:main:talk:new" };
-    const actor = required
-      ? { type: "human" as const, source: "profile" as const, id: "profile-required" }
-      : { type: "human" as const, source: "unknown" as const };
-    const creation = required ? { actor, sandbox: "required" as const } : undefined;
-    const sessionId = await ensureClientVoiceAgentSessionEntry({ ...target, creation });
-
-    const original = loadSessionEntry(target);
-    expect(original).toMatchObject({
-      sessionId,
-      createdVia: "talk",
-      createdActor: actor,
-      createdAt: expect.any(Number),
-      ...(required ? { sandbox: "required" } : {}),
-    });
-
-    await ensureClientVoiceAgentSessionEntry({
-      ...target,
-      creation: {
-        actor: { type: "human", source: "profile", id: "another-profile" },
-        sandbox: "required",
-      },
-    });
-    expect(loadSessionEntry(target)).toEqual(original);
-  });
-
-  it("reads an existing agent session without creating a missing row", async () => {
-    const existingKey = "agent:main:talk:existing";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: existingKey },
-      { sessionId: "session-existing", updatedAt: 1 },
-    );
-
-    expect(resolveClientVoiceAgentSessionId({ agentId: "main", sessionKey: existingKey })).toBe(
-      "session-existing",
-    );
-    expect(
-      resolveClientVoiceAgentSessionId({
-        agentId: "main",
-        sessionKey: "agent:main:talk:missing",
-      }),
-    ).toBeUndefined();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:talk:missing" }),
-    ).toBeUndefined();
-  });
-
-  it("does not create an agent session after a browser-session deadline", async () => {
-    const sessionKey = "agent:main:talk:expired";
-
-    await expect(
-      ensureClientVoiceAgentSessionEntry({
-        agentId: "main",
-        sessionKey,
-        deadlineAt: Date.now() - 1,
-      }),
-    ).rejects.toThrow("Realtime browser session expired during startup");
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
-  });
-
-  it("repairs an incomplete existing row without claiming its creation actor", async () => {
-    const sessionKey = "agent:main:talk:incomplete";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey },
-      { sessionId: "", updatedAt: 1, createdVia: "internal", createdAt: 1 },
-    );
-
-    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
-
-    const repaired = loadSessionEntry({ agentId: "main", sessionKey });
-    expect(repaired?.sessionId).toBeTruthy();
-    expect(repaired).toMatchObject({ createdVia: "internal", createdAt: 1 });
-    expect(repaired?.createdActor).toBeUndefined();
-  });
-
   it("marks confirmability by declared capability, relay origin, or observed transcript", () => {
     const capable = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -356,6 +278,7 @@ describe("client voice session", () => {
     const append = appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "final",
       role: "assistant",
@@ -432,6 +355,7 @@ describe("client voice session", () => {
     const append = appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "failed",
       role: "user",
@@ -475,6 +399,7 @@ describe("client voice session", () => {
     const append = appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "retryable",
       role: "user",
@@ -507,6 +432,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "retryable",
       role: "user",
@@ -543,6 +469,7 @@ describe("client voice session", () => {
       appendRelayVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "relay-entry-1",
         role: "user",
@@ -589,6 +516,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: String(index + 1),
         role: index % 2 === 0 ? "user" : "assistant",
@@ -628,6 +556,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "after-overflow",
         role: "user",
@@ -670,6 +599,7 @@ describe("client voice session", () => {
         appendClientVoiceTranscript({
           agentId: "main",
           sessionKey: "agent:main:main",
+          sessionTarget: { sessionKey: "agent:main:main" },
           voiceSessionId,
           entryId: String(index + 1),
           role: "user",
@@ -682,6 +612,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "real",
       role: "user",
@@ -709,6 +640,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "1",
         role: "user",
@@ -719,6 +651,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "2",
         role: "assistant",
@@ -750,6 +683,7 @@ describe("client voice session", () => {
         appendClientVoiceTranscript({
           agentId: "main",
           sessionKey: "agent:main:main",
+          sessionTarget: { sessionKey: "agent:main:main" },
           voiceSessionId,
           entryId,
           role: "user",
@@ -764,6 +698,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "later",
       role: "assistant",
@@ -772,6 +707,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "1",
       role: "user",
@@ -789,6 +725,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "2",
       role: "user",
@@ -820,6 +757,7 @@ describe("client voice session", () => {
         appendClientVoiceTranscript({
           agentId: "main",
           sessionKey: "agent:main:main",
+          sessionTarget: { sessionKey: "agent:main:main" },
           voiceSessionId,
           entryId: String(index),
           role: "user",
@@ -831,6 +769,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "beyond-bound",
         role: "user",
@@ -852,6 +791,7 @@ describe("client voice session", () => {
     await appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:main",
+      sessionTarget: { sessionKey: "agent:main:main" },
       voiceSessionId,
       entryId: "0",
       role: "user",
@@ -864,6 +804,7 @@ describe("client voice session", () => {
       appendClientVoiceTranscript({
         agentId: "main",
         sessionKey: "agent:main:main",
+        sessionTarget: { sessionKey: "agent:main:main" },
         voiceSessionId,
         entryId: "replacement",
         role: "user",
@@ -903,6 +844,7 @@ describe("client voice session", () => {
     const first = appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:first",
+      sessionTarget: { sessionKey: "agent:main:first" },
       voiceSessionId: firstVoiceSessionId,
       entryId: "1",
       role: "user",
@@ -914,6 +856,7 @@ describe("client voice session", () => {
     const second = appendClientVoiceTranscript({
       agentId: "main",
       sessionKey: "agent:main:second",
+      sessionTarget: { sessionKey: "agent:main:second" },
       voiceSessionId: secondVoiceSessionId,
       entryId: "1",
       role: "user",

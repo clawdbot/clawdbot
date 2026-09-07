@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -70,6 +72,18 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
+        await expect
+          .poll(() =>
+            picker.evaluate((element) => {
+              const iconPicker = element.querySelector(".session-menu__icon-picker");
+              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
+              return [
+                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
+                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
+              ];
+            }),
+          )
+          .toEqual(["4px", "4px"]);
         const focused = () =>
           page.evaluate(
             () =>
@@ -95,6 +109,13 @@ suite.define(() => {
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
         await page.keyboard.press("Tab");
         const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
+        await expect
+          .poll(() =>
+            reset.evaluate(
+              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
+            ),
+          )
+          .toBe("separator");
         await expect
           .poll(() =>
             reset.evaluateAll((elements) =>
@@ -142,8 +163,10 @@ suite.define(() => {
   it("sets and clears session colors through desktop and compact menus", async () => {
     const key = "agent:main:color-proof";
     const now = Date.now();
-    const proofDir = "/tmp/session-color-web-proof";
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    const proofDir = capture
+      ? createControlUiE2eArtifactDir("session-color-web-proof", "/tmp/session-color-web-proof")
+      : "";
     const context = await suite.browser.newContext({
       locale: "en-US",
       colorScheme: "dark",
@@ -152,6 +175,12 @@ suite.define(() => {
       recordVideo: capture ? { dir: proofDir, size: { width: 1440, height: 900 } } : undefined,
     });
     const page = await context.newPage();
+    const designReview = sessionRow(key, "Design review", now);
+    const sessions = [
+      designReview,
+      { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
+      { ...sessionRow("agent:main:release", "Release checklist", now - 120_000), color: "orange" },
+    ];
     const gateway = await installMockGateway(page, {
       sessionKey: key,
       historyMessages: [
@@ -166,14 +195,7 @@ suite.define(() => {
         },
       ],
       methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(key, "Design review", now),
-          { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
-          {
-            ...sessionRow("agent:main:release", "Release checklist", now - 120_000),
-            color: "orange",
-          },
-        ]),
+        "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
         "sessions.catalog.list": {
           catalogs: [
@@ -205,14 +227,16 @@ suite.define(() => {
       },
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "sessions.catalog.list"],
     });
-    const shot = async (name: string) => {
+    const shot = async (
+      name: string,
+      surface = page.locator(".shell"),
+      content = [page.locator(".chat-pane__session-title")],
+    ) => {
       if (capture) {
-        await mkdir(proofDir, { recursive: true });
-        await page.screenshot({
-          path: path.join(proofDir, name),
-          animations: "disabled",
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(proofDir, name),
+          await takeControlUiViewportScreenshot(page, surface, content),
+        );
       }
     };
     const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
@@ -264,20 +288,32 @@ suite.define(() => {
           picker.getByRole("button", { name: "Purple", exact: true }).getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await shot("after-dark-menu.png");
+      const appearanceSubmenu = page
+        .getByRole("menuitem", { name: "Icon & color", exact: true })
+        .locator('[part="submenu"]');
+      const appearanceChoices = [
+        picker.getByRole("button", { name: "Purple", exact: true }),
+        picker.getByRole("button", { name: "book", exact: true }),
+      ];
+      await shot("after-dark-menu.png", appearanceSubmenu, appearanceChoices);
       await page.emulateMedia({ colorScheme: "light" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
       await expect.poll(stripe).not.toBe(darkStripe);
-      await shot("after-light-menu.png");
+      await shot("after-light-menu.png", appearanceSubmenu, appearanceChoices);
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
+      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
+      // Only the roster response carries this label; wait for that render so a
+      // transient event-only clear cannot hide a stale color restored by refresh.
+      await row.getByText("Design review refreshed", { exact: true }).waitFor();
+      expect(await row.getAttribute("style")).toBeNull();
       await expect.poll(() => dot.count()).toBe(0);
       await expect
         .poll(() => row.getAttribute("class"))
         .not.toContain("sidebar-recent-session--colored");
-      expect(await row.getAttribute("style")).toBeNull();
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();
@@ -285,7 +321,11 @@ suite.define(() => {
       await page.getByRole("button", { name: "Blue", exact: true }).click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");
       await expect.poll(() => dot.getAttribute("aria-label")).toBe("Session color: Blue");
-      await shot("after-compact-menu.png");
+      await shot(
+        "after-compact-menu.png",
+        page.locator('openclaw-chat-header-session-menu > wa-dropdown [part="menu"]'),
+        [page.getByRole("button", { name: "Blue", exact: true })],
+      );
       await page.getByRole("button", { name: "Reset to default", exact: true }).click();
       await waitForPatch(
         gateway,

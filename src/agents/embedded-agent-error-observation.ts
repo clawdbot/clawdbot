@@ -13,6 +13,7 @@ import {
   parseApiErrorInfo,
   type ProviderRuntimeFailureKind,
 } from "./embedded-agent-helpers.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -122,7 +123,7 @@ function buildObservationFingerprint(params: {
 
 export function buildApiErrorObservationFields(
   rawError?: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
 ): {
   rawErrorPreview?: string;
   rawErrorHash?: string;
@@ -162,12 +163,15 @@ export function buildApiErrorObservationFields(
         ? redactIdentifier(rawFingerprint, { len: 12 })
         : undefined,
       httpCode: parsed?.httpCode,
-      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
-        status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
-        message: trimmed,
-        provider: opts?.provider,
-      }),
-      providerErrorType: parsed?.type,
+      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(
+        {
+          status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
+          message: trimmed,
+          provider: opts?.providerOwner?.id ?? opts?.provider,
+        },
+        { providerPlugin: opts?.providerOwner ?? null },
+      ),
+      providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,
         PROVIDER_ERROR_PREVIEW_MAX_CHARS,
@@ -181,7 +185,7 @@ export function buildApiErrorObservationFields(
 
 export function buildTextObservationFields(
   text?: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
 ): {
   textPreview?: string;
   textHash?: string;

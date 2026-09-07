@@ -63,6 +63,7 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     const state: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: true,
       lifecycleError: "provider failed",
+      lifecycleErrorObservation: { provider: "openai", httpStatus: 502 },
       lifecycleFinishing: true,
       lifecycleEnded: false,
     };
@@ -73,6 +74,7 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     expect(state).toEqual({
       currentTurnUserMessagePersisted: true,
       lifecycleError: undefined,
+      lifecycleErrorObservation: undefined,
       lifecycleFinishing: false,
       lifecycleEnded: false,
     });

@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import * as scenarioCatalog from "./scenario-catalog.js";
 import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
+import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -12,6 +16,10 @@ import type {
   QaSuiteScenarioResult,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
+import * as suite from "./suite.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const tempDirs = createTempDirHarness();
 
 const mocks = vi.hoisted(() => ({
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
@@ -73,6 +81,7 @@ vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
 }));
 vi.mock("./suite-artifacts.js", () => ({
+  invalidateQaSuiteArtifactGeneration: vi.fn(async () => {}),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -121,6 +130,176 @@ describe("isolated QA suite transport cleanup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.disposeRegisteredAgentHarnesses.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    await tempDirs.cleanup();
+  });
+
+  it.each(["running", "pass", "fail"])(
+    "preserves the %s progress publication exception boundary",
+    async (status) => {
+      const lab = createCleanupTestLab();
+      const publicationError = new Error("progress publication rejected");
+      vi.mocked(lab.setScenarioRun).mockImplementation((next) => {
+        if (next?.scenarios[0]?.status === status) {
+          throw publicationError;
+        }
+      });
+      const runChild = vi.fn<QaSuiteRunner>().mockResolvedValue({
+        outputDir: "/qa-child",
+        evidencePath: "/qa-child/qa-evidence.json",
+        reportPath: "/qa-child/qa-suite-report.md",
+        summaryPath: "/qa-child/qa-suite-summary.json",
+        report: "",
+        scenarios: [{ name: "worker result", status: "pass", steps: [] }],
+        startedScenarioIds: ["leased-channel-scenario"],
+        watchUrl: lab.baseUrl,
+      });
+      if (status === "fail") {
+        runChild.mockRejectedValueOnce(new Error("worker failed"));
+      }
+      const run = runQaFlowSuiteIsolated(
+        { lab, startLab: async () => lab },
+        createCleanupTestContext(),
+        runChild,
+      );
+      if (status === "pass") {
+        await expect(run).resolves.toMatchObject({
+          scenarios: [{ status: "fail", details: publicationError.message }],
+        });
+      } else {
+        await expect(run).rejects.toBe(publicationError);
+        expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      }
+      expect(runChild).toHaveBeenCalledTimes(status === "running" ? 0 : 1);
+      expect(mocks.disposeRegisteredAgentHarnesses).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps out-of-order progress times while draining partial artifacts before cleanup", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
+    vi.setSystemTime(at(0));
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.concurrency = 2;
+    context.selectedScenarios = ["first", "second"].map((id) => {
+      const scenario = makeQaSuiteTestScenario(id);
+      scenario.title = `Catalog ${id}`;
+      return scenario;
+    });
+    const snapshots: Parameters<QaLabServerHandle["setScenarioRun"]>[0][] = [];
+    const completed = [createDeferred<void>(), createDeferred<void>()];
+    vi.mocked(lab.setScenarioRun).mockImplementation((next) => {
+      snapshots.push(structuredClone(next));
+      next?.scenarios.forEach((scenario, index) => {
+        if (scenario.status === "pass") {
+          completed[index]!.resolve();
+        }
+      });
+    });
+    const workers = [
+      createDeferred<Awaited<ReturnType<QaSuiteRunner>>>(),
+      createDeferred<Awaited<ReturnType<QaSuiteRunner>>>(),
+    ];
+    const allStarted = createDeferred<void>();
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(() => {
+      if (runChild.mock.calls.length === 2) {
+        allStarted.resolve();
+      }
+      return workers[runChild.mock.calls.length - 1]!.promise;
+    });
+    const partialWrite = createDeferred<void>();
+    const artifacts = {
+      evidence: undefined,
+      evidencePath: "/qa-output/qa-evidence.json",
+      report: "",
+      reportPath: "/qa-output/qa-suite-report.md",
+      summaryPath: "/qa-output/qa-suite-summary.json",
+    };
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      await partialWrite.promise;
+      return artifacts;
+    });
+    mocks.disposeRegisteredAgentHarnesses.mockImplementationOnce(async () => {
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(2);
+      expect(snapshots.at(-1)?.status).toBe("running");
+      vi.setSystemTime(at(10));
+    });
+    const results: QaSuiteScenarioResult[] = [
+      { name: "result first", status: "pass", steps: [] },
+      {
+        name: "result second",
+        status: "pass",
+        details: "",
+        steps: [{ name: "check", status: "pass" }],
+      },
+    ];
+    const run = runQaFlowSuiteIsolated(
+      { lab, startLab: async () => lab, workerStartStaggerMs: 0 },
+      context,
+      runChild,
+    );
+    await allStarted.promise;
+    for (const index of [1, 0]) {
+      vi.setSystemTime(at(2 - index));
+      workers[index]!.resolve({
+        ...artifacts,
+        outputDir: "/qa-child",
+        scenarios: [results[index]!],
+        startedScenarioIds: [context.selectedScenarios[index]!.id],
+        watchUrl: lab.baseUrl,
+      });
+      await completed[index]!.promise;
+    }
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledOnce();
+    expect(mocks.disposeRegisteredAgentHarnesses).not.toHaveBeenCalled();
+    partialWrite.resolve();
+    const result = await run;
+
+    expect(result.scenarios).toEqual(results);
+    expect(
+      snapshots.map((snapshot) => snapshot?.scenarios.map((scenario) => scenario.status)),
+    ).toEqual([
+      ["pending", "pending"],
+      ["running", "pending"],
+      ["running", "running"],
+      ["running", "pass"],
+      ["pass", "pass"],
+      ["pass", "pass"],
+    ]);
+    expect(snapshots.at(-1)).toStrictEqual({
+      kind: "suite",
+      status: "completed",
+      startedAt: at(0).toISOString(),
+      finishedAt: at(10).toISOString(),
+      scenarios: context.selectedScenarios.map((scenario, index) => ({
+        id: scenario.id,
+        name: scenario.title,
+        status: "pass",
+        details: results[index]!.details,
+        steps: results[index]!.steps,
+        startedAt: at(0).toISOString(),
+        finishedAt: at(2 - index).toISOString(),
+      })),
+    });
+    expect(
+      mocks.writeQaSuiteArtifacts.mock.calls.map(([params]) => [params.status, params.scenarios]),
+    ).toEqual([
+      ["running", [results[1]]],
+      ["running", results],
+      [undefined, results],
+    ]);
+    expect(mocks.disposeRegisteredAgentHarnesses.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[2]!,
+    );
+    expect(vi.mocked(lab.setLatestReport).mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      vi.mocked(lab.setScenarioRun).mock.invocationCallOrder.at(-1)!,
+    );
   });
 
   it("records a rejected dispatched worker and leaves the fail-fast tail unstarted", async () => {
@@ -253,7 +432,9 @@ describe("isolated QA suite transport cleanup", () => {
     stderrWrite.mockRestore();
   });
 
-  it("keeps Crabline workers concurrent while publishing readiness only from the final aggregate", async () => {
+  it("preserves nested publication ownership through concurrent worker runtime preparation", async () => {
+    vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const lab = createCleanupTestLab();
     const selection = {
       capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
@@ -276,8 +457,11 @@ describe("isolated QA suite transport cleanup", () => {
       releaseScenarioExecutions = resolve;
     });
     const context = createCleanupTestContext();
+    context.repoRoot = await tempDirs.makeTempDir("qa-nested-workers-");
+    context.outputDir = path.join(context.repoRoot, "output");
     context.channelDriver = "crabline";
     context.concurrency = 2;
+    context.progressEnabled = true;
     context.selectedScenarios = [
       makeQaSuiteTestScenario("first-crabline-scenario"),
       makeQaSuiteTestScenario("second-crabline-scenario"),
@@ -297,6 +481,12 @@ describe("isolated QA suite transport cleanup", () => {
           steps: [],
         };
       });
+    vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
+      agentIdentityMarkdown: "test",
+      kickoffTask: "test",
+      scenarios: context.selectedScenarios,
+    });
+    vi.spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime").mockImplementation(runScenario);
     const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
       if (!params) {
         throw new Error("expected nested standard run params");
@@ -311,22 +501,8 @@ describe("isolated QA suite transport cleanup", () => {
       if (scenarioId === "second-crabline-scenario") {
         await firstScenarioStarted;
       }
-      const scenario = context.selectedScenarios.find((candidate) => candidate.id === scenarioId);
-      if (!scenario) {
-        throw new Error(`missing scenario ${scenarioId}`);
-      }
       try {
-        return await runQaFlowSuiteStandard(
-          params,
-          {
-            ...context,
-            startedAt: new Date("2026-08-04T00:00:01.000Z"),
-            outputDir: params.outputDir ?? `/qa-child/${scenarioId}`,
-            selectedScenarios: [scenario],
-            concurrency: 1,
-          },
-          runScenario,
-        );
+        return await runQaFlowSuiteFromRuntime(params);
       } finally {
         activeWorkers -= 1;
       }
@@ -349,6 +525,13 @@ describe("isolated QA suite transport cleanup", () => {
       expect.objectContaining({ name: "second-crabline-scenario", status: "pass" }),
     ]);
     expect(runScenario).toHaveBeenCalledTimes(2);
+    expect(
+      stderrWrite.mock.calls
+        .flat()
+        .join("")
+        .split("\n")
+        .filter((line) => line.startsWith("[qa-suite] run complete")),
+    ).toEqual(["[qa-suite] run complete"]);
     expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
     for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
       expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });

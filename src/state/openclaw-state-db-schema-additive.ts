@@ -18,7 +18,7 @@ import {
   repairLegacySubagentSuspensionReasons,
   repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
-import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const SECRET_STORE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS secret_store_entries (";
@@ -32,6 +32,67 @@ const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
 const CONFIG_REVISION_KEY_SCHEMA_START = "CREATE TABLE IF NOT EXISTS config_revision_keys (";
 const CONFIG_REVISION_KEY_SCHEMA_END = "\n) STRICT;";
+const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
+
+export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
+  if (repositoryWorkspacePendingSchemas.has(database)) {
+    return true;
+  }
+  const exists = tableHasColumn(
+    database,
+    "worker_workspace_pending_results",
+    "repository_workspace_id",
+  );
+  // Another process can create the column; cache only committed presence.
+  // First-use DDL inside an outer transaction may still roll back.
+  if (exists && !database.isTransaction) {
+    repositoryWorkspacePendingSchemas.add(database);
+  }
+  return exists;
+}
+
+export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
+  if (!hasRepositoryWorkspacePendingResultSchema(database)) {
+    ensureColumn(database, "worker_workspace_pending_results", "repository_workspace_id TEXT");
+  }
+}
+
+export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS session_repository_workspaces (",
+  );
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Repository workspace schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
+}
+
+export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_repository_publication_requests (",
+  );
+  const marker =
+    "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Repository GitHub publication schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; publication rows use Kysely.
+}
+
+export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (",
+  );
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("GitHub publication lifecycle schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; bindings use Kysely.
+}
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -312,6 +373,19 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
       ON github_publication_requests(status, updated_at_ms, request_id);
   `);
+}
+
+/** First personal publication write only; status and old readers leave this surface dormant. */
+export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_personal_publication_requests (",
+  );
+  const marker = "ON github_personal_publication_requests(status, updated_at_ms, request_id);";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Personal GitHub publication schema marker is missing.");
+  }
+  db.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical lazy additive DDL only.
 }
 
 /**

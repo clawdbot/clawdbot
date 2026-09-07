@@ -173,6 +173,8 @@ describe("architecture boundary module reference scanner", () => {
   });
 
   it.each([
+    'const pattern = /"/; import "../../src/allowed.js";',
+    'new URL("../../src/allowed.js", import.m\\u0065ta.url)',
     'const message = `${(24 / 2) ? require("../../src/allowed.js") : null}`',
     'const message = `${/}/.test("safe") ? require("../../src/allowed.js") : null}`',
     'const message = `${\\u0072equire("../../src/allowed.js")}`',
@@ -191,6 +193,16 @@ describe("architecture boundary module reference scanner", () => {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([{ kind: "import", line: 3, specifier: forbiddenPath }]);
+  });
+
+  it("sorts references on the same line by kind and specifier", () => {
+    expect(
+      collectModuleReferencesFromSource('import "./z.js"; require("./z.js"); import "./a.js";'),
+    ).toEqual([
+      { kind: "commonjs-require", line: 1, specifier: "./z.js" },
+      { kind: "import", line: 1, specifier: "./a.js" },
+      { kind: "import", line: 1, specifier: "./z.js" },
+    ]);
   });
 
   it.each([

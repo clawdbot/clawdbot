@@ -86,8 +86,10 @@ describe("secret sentinels", () => {
     },
   );
 
-  it("registers minted values for exact redaction across registry eviction", () => {
-    const first = "sentinel-registry-value-000";
+  it.each([
+    { label: "ordinary", first: "sentinel-registry-value-000" },
+    { label: "64 KiB", first: "x".repeat(64 * 1024) },
+  ])("registers minted values across registry eviction ($label)", ({ first }) => {
     const firstSentinel = mintSecretSentinel(first, { label: "model-auth:0" });
     for (let index = 1; index <= 512; index += 1) {
       mintSecretSentinel(`sentinel-registry-value-${index.toString().padStart(3, "0")}`, {

@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  HOME_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -34,6 +37,7 @@ function configureTerminalShell(terminalElement: TestOptionalCustomElement): She
   shell.runtime = {
     context: {
       gateway: {
+        connection: { gatewayUrl: "ws://127.0.0.1:1" },
         snapshot: {
           phase: "connected",
           client: {},
@@ -66,6 +70,80 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell panel toggles", () => {
+  it.each([false, true])(
+    "captures the terminal chord once before a consuming target (defined: %s)",
+    async (defined) => {
+      const element = createLazyElementSpec("keyboard terminal");
+      const owner = chromeOwner(configureTerminalShell(element));
+      if (defined) {
+        await element.loadModule();
+      }
+      const target = document.body.appendChild(document.createElement("div"));
+      target.addEventListener("keydown", (event) => event.stopPropagation());
+      const toggle = vi.fn();
+      document.addEventListener("keydown", owner.handleDocumentKeydown, true);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, toggle);
+      try {
+        const event = new KeyboardEvent("keydown", {
+          key: "`",
+          code: "Backquote",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        target.dispatchEvent(event);
+        expect(toggle).toHaveBeenCalledOnce();
+        expect(event.defaultPrevented).toBe(true);
+      } finally {
+        document.removeEventListener("keydown", owner.handleDocumentKeydown, true);
+        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, toggle);
+        target.remove();
+      }
+    },
+  );
+
+  it("opens the Home dock from its keyboard chord only when the gateway allows it", () => {
+    const shell = configureTerminalShell(createLazyElementSpec("assistant panel"));
+    const gateway = (
+      shell.runtime.context as unknown as {
+        gateway: {
+          connection?: { gatewayUrl: string };
+          snapshot: { hello: { auth: object; features: { methods: string[] } } };
+        };
+      }
+    ).gateway;
+    gateway.connection = { gatewayUrl: "ws://127.0.0.1:1" };
+    const homeToggle = vi.fn();
+    window.addEventListener(HOME_PANEL_TOGGLE_EVENT, homeToggle);
+    const chord = () =>
+      new KeyboardEvent("keydown", {
+        key: "h",
+        code: "KeyH",
+        metaKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+    try {
+      const owner = chromeOwner(shell);
+      const denied = chord();
+      owner.handleDocumentKeydown(denied);
+      expect(homeToggle).not.toHaveBeenCalled();
+      expect(denied.defaultPrevented).toBe(false);
+
+      gateway.snapshot.hello.features.methods = ["chat.history", "chat.send"];
+      gateway.snapshot.hello.auth = {
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const allowed = chord();
+      owner.handleDocumentKeydown(allowed);
+      expect(homeToggle).toHaveBeenCalledOnce();
+      expect(allowed.defaultPrevented).toBe(true);
+    } finally {
+      window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, homeToggle);
+    }
+  });
+
   it("buffers panel toggle events until the active chat pane mounts", () => {
     const terminalElement = createLazyElementSpec("session terminal panel");
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellPanelToggleState;
@@ -73,11 +151,40 @@ describe("OpenClaw shell panel toggles", () => {
     shell.routeState = { routeId: "chat" };
 
     const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
-    chromeOwner(shell).handleDeferredTerminalToggle(event);
+    chromeOwner(shell).panels.handleDeferredTerminalToggle(event);
 
     expect(customElements.get(terminalElement.tagName)).toBeUndefined();
     expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
+
+  it.each(["context", "document"])(
+    "does not repeat a dismissed restoration until the %s lifecycle resets",
+    async (lifecycle) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      localStorage.setItem("openclaw.terminal.panel.v1", JSON.stringify({ open: true }));
+      const element = createLazyElementSpec("restored terminal", {
+        firstError: new Error("offline"),
+      });
+      const load = vi.spyOn(element, "loadModule");
+      const shell = configureTerminalShell(element);
+      const owner = chromeOwner(shell);
+      owner.panels.restore();
+      await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
+      shell.lazyCustomElements.close();
+      owner.panels.restore();
+      await Promise.resolve();
+      expect(load).toHaveBeenCalledOnce();
+      expect(shell.lazyCustomElements.visibleState).toBeUndefined();
+      if (lifecycle === "context") {
+        owner.abandonPendingLazyActionForContext();
+      } else {
+        owner.preservePendingLazyActionForReload();
+      }
+      owner.panels.restore();
+      await vi.waitFor(() => expect(customElements.get(element.tagName)).toBeDefined());
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("retains the exact rejected panel request through in-place retry", async () => {
     const error = new Error("terminal chunk unavailable");
@@ -91,7 +198,7 @@ describe("OpenClaw shell panel toggles", () => {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, terminalToggle);
 
     try {
-      owner.handleDeferredTerminalToggle(event);
+      owner.panels.handleDeferredTerminalToggle(event);
 
       await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
       expect(shell.lazyCustomElements.visibleState).toMatchObject({ error });
@@ -121,7 +228,8 @@ describe("OpenClaw shell panel toggles", () => {
 
     const replacement = configureTerminalShell(terminalElement);
     const owner = chromeOwner(replacement);
-    const restoreListener = (restored: Event) => owner.handleDeferredTerminalToggle(restored);
+    const restoreListener = (restored: Event) =>
+      owner.panels.handleDeferredTerminalToggle(restored);
     const panelListener = (restored: Event) => {
       if (customElements.get(terminalElement.tagName)) {
         terminalToggle(restored);

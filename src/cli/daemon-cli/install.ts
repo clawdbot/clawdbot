@@ -22,14 +22,13 @@ import {
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
-import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -42,7 +41,7 @@ import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-forma
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
+  resolveDaemonInstallBlockMessage,
   parsePort,
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
@@ -158,13 +157,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       defaultRuntime.log(message);
     }
   };
-  if (failIfNixDaemonInstallMode(fail)) {
-    return;
-  }
-  try {
-    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
-  } catch (error) {
-    fail(`Gateway install blocked: ${String(error)}`);
+  const installBlock = resolveDaemonInstallBlockMessage("gateway");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
@@ -329,13 +324,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
     explicitToken: opts.token,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
-    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);

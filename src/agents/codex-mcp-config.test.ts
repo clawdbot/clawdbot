@@ -6,11 +6,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexMcpServersConfig,
+  loadCodexBundleMcpApprovalConfig,
   loadCodexBundleMcpThreadConfigCore,
 } from "./codex-mcp-config.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
 
 const mocks = vi.hoisted(() => ({
+  loadExecApprovalsReadOnly: vi.fn(),
   loadCalls: [] as Array<Record<string, unknown>>,
   bundleMcp: {
     config: {
@@ -21,6 +23,10 @@ const mocks = vi.hoisted(() => ({
 }));
 const tempDirs: string[] = [];
 
+vi.mock("../infra/exec-approvals-store.js", () => ({
+  loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
+}));
+
 vi.mock("../plugins/bundle-mcp.js", () => ({
   loadEnabledBundleMcpConfig: (params: Record<string, unknown>) => {
     mocks.loadCalls.push(params);
@@ -29,6 +35,7 @@ vi.mock("../plugins/bundle-mcp.js", () => ({
 }));
 
 beforeEach(() => {
+  mocks.loadExecApprovalsReadOnly.mockReset().mockReturnValue({ version: 1, agents: {} });
   mocks.loadCalls.length = 0;
   mocks.bundleMcp = {
     config: {
@@ -98,6 +105,52 @@ describe("buildCodexMcpServersConfig", () => {
 });
 
 describe("loadCodexBundleMcpThreadConfigCore", () => {
+  it("projects durable grants only for configured bundle names and fingerprints their removal", () => {
+    mocks.bundleMcp.config.mcpServers = {
+      configured: { command: "mcp" },
+      prompt: { command: "mcp" },
+      pluginOnly: { command: "mcp" },
+    };
+    mocks.loadExecApprovalsReadOnly.mockReturnValue({
+      version: 1,
+      agents: {
+        main: {
+          mcpTools: ["configured", "prompt", "pluginOnly"].map((server) => ({
+            server,
+            tool: "write.raw_tool",
+            source: "allow-always",
+            addedAt: 1,
+          })),
+        },
+      },
+    });
+    const params = {
+      workspaceDir: "/workspace",
+      agentId: "main",
+      cfg: {
+        mcp: {
+          servers: {
+            configured: { command: "mcp" },
+            prompt: { command: "mcp", codex: { defaultToolsApprovalMode: "prompt" as const } },
+          },
+        },
+      },
+    };
+
+    const granted = loadCodexBundleMcpThreadConfigCore(params);
+
+    expect(granted.configPatch?.mcp_servers).toEqual({
+      configured: { command: "mcp", tools: { "write.raw_tool": { approval_mode: "approve" } } },
+      prompt: { command: "mcp" },
+      pluginOnly: { command: "mcp" },
+    });
+    expect(mocks.loadExecApprovalsReadOnly).toHaveBeenCalledTimes(1);
+    mocks.loadExecApprovalsReadOnly.mockReturnValue({ version: 1, agents: {} });
+    const revoked = loadCodexBundleMcpThreadConfigCore(params);
+    expect(revoked.configPatch?.mcp_servers.configured).not.toHaveProperty("tools");
+    expect(revoked.fingerprint).not.toBe(granted.fingerprint);
+  });
+
   it("forwards a prepared manifest registry to bundle loading", () => {
     const manifestRegistry = { plugins: [] };
 
@@ -120,6 +173,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
           weather: {
             command: "node",
             env: { PLUGIN_DATA: dataDir },
+            codex: { defaultToolsApprovalMode: "prompt" },
           },
           broken: { command: "node", env: { PLUGIN_DATA: collisionPath } },
         },
@@ -131,6 +185,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       },
     });
 
+    expect(loadCodexBundleMcpApprovalConfig({ workspaceDir: "/workspace" })).toEqual({
+      weather: { default_tools_approval_mode: "prompt" },
+      broken: { default_tools_approval_mode: undefined },
+    });
+    await expect(fs.stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });
     const loaded = loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);

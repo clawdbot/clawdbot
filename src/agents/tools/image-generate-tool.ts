@@ -218,30 +218,6 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-function resolveImageGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
-    modelOverride: params.modelOverride,
-    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
-  });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageGenerateToolTestApi")] = {
-    resolveImageGenerationModelConfigForTool,
-  };
-}
-
 function resolveRequestedCount(args: Record<string, unknown>): number {
   if (readSnakeCaseParamRaw(args, "count") === null) {
     throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
@@ -826,12 +802,14 @@ export function createImageGenerateTool(options?: {
       }
 
       const model = readToolStringParam(params, "model");
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+      const imageGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.image,
         modelOverride: model,
+        providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
       });
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");

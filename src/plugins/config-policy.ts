@@ -7,8 +7,8 @@ import {
 } from "./config-activation-shared.js";
 import {
   identityNormalizePluginId,
-  isBundledChannelEnabledByChannelConfig,
   normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
+  resolveChannelConfigEnablement,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
@@ -34,6 +34,7 @@ type PolicyEffectiveActivationParams = {
   sourceConfig?: NormalizedPluginsConfig;
   sourceRootConfig?: OpenClawConfig;
   autoEnabledReason?: string;
+  channelIds?: readonly string[];
 };
 
 export function resolvePolicyPluginActivationState(
@@ -46,7 +47,7 @@ export function resolvePolicyPluginActivationState(
         plugins: params.sourceConfig ?? params.config,
         rootConfig: params.sourceRootConfig ?? params.rootConfig,
       },
-      isBundledChannelEnabledByChannelConfig,
+      resolveChannelConfigEnablement,
     }),
   );
 }

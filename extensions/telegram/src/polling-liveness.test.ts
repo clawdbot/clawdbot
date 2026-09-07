@@ -1,26 +1,23 @@
 // Telegram tests cover polling liveness plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 
 describe("TelegramPollingLivenessTracker", () => {
-  it("records successful getUpdates calls and publishes poll success time", () => {
+  it("records successful getUpdates calls and duration", () => {
     let now = 0;
-    const onPollSuccess = vi.fn();
     const tracker = new TelegramPollingLivenessTracker({
       now: () => now,
       monotonicNow: () => now,
-      onPollSuccess,
     });
 
     now = 10;
     tracker.noteGetUpdatesStarted({ offset: 42 });
     now = 25;
-    tracker.noteGetUpdatesSuccess([{ update_id: 1 }, { update_id: 2 }]);
+    tracker.noteGetUpdatesSuccessCount(2);
     tracker.noteGetUpdatesFinished();
 
-    expect(onPollSuccess).toHaveBeenCalledWith(25);
     expect(tracker.formatDiagnosticFields("error")).toBe(
       "inFlight=0 outcome=ok:2 startedAt=10 finishedAt=25 durationMs=15 offset=42",
     );
@@ -134,7 +131,7 @@ describe("TelegramPollingLivenessTracker", () => {
     expect(stall?.message).toContain("inFlight=1 outcome=started startedAt=1");
     expect(stall?.message).toContain("offset=7");
 
-    tracker.noteGetUpdatesSuccess([]);
+    tracker.noteGetUpdatesSuccessCount(0);
     tracker.noteGetUpdatesFinished();
   });
 
@@ -172,7 +169,7 @@ describe("TelegramPollingLivenessTracker", () => {
     tracker.noteGetUpdatesStarted({ offset: 7 });
     wallNow -= 124_193;
     monotonicNow += 30_000;
-    tracker.noteGetUpdatesSuccess([]);
+    tracker.noteGetUpdatesSuccessCount(0);
     tracker.noteGetUpdatesFinished();
 
     expect(tracker.formatDiagnosticFields()).toContain(
@@ -198,6 +195,20 @@ describe("TelegramPollingLivenessTracker", () => {
     now += 30_001;
     expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })?.message).toContain(
       "active getUpdates stuck",
+    );
+  });
+  it("starts a fresh stall window after a failed poll completes", () => {
+    let now = 0;
+    const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });
+    tracker.noteGetUpdatesStarted({ offset: 1 });
+    now = 80_000;
+    tracker.noteGetUpdatesError(new Error("network unavailable"));
+    tracker.noteGetUpdatesFinished();
+    now = 120_000;
+    expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })).toBeNull();
+    now = 170_001;
+    expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })?.message).toContain(
+      "Polling stall detected",
     );
   });
 });

@@ -5,13 +5,14 @@ import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.j
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 export { buildModelsListResult };
 
 // Automatic clients opt into preparedOnly; omitted mode preserves shipped wildcard discovery.
 export const modelsHandlers: GatewayRequestHandlers = {
-  "models.list": async ({ params, respond, context }) => {
+  "models.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
       return;
     }
@@ -27,7 +28,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      await buildModelsListResult({ context, agentId: resolved.agentId, params }),
+      await buildModelsListResult({
+        context,
+        agentId: resolved.agentId,
+        params,
+        requesterProfileId: resolveAuthenticatedProfileId(client),
+      }),
       undefined,
     );
   },

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -8,6 +9,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -163,7 +165,7 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { recordVideo: { dir: ".artifacts/control-ui-e2e/device-runtime-gating" } }
+          ? { recordVideo: { dir: path.join(suite.artifactDir, "device-runtime-gating") } }
           : {}),
       });
       const page = await context.newPage();
@@ -226,7 +228,15 @@ suite.define(() => {
         expect(await gateway.getRequests("environments.list")).toHaveLength(
           requestsBeforeRefresh + 1,
         );
-        await captureDeviceRuntimeUiProof(page, `failed-topology-${value.replace(":", "-")}.png`);
+        await captureDeviceRuntimeUiProof(
+          suite,
+          page,
+          `failed-topology-${value.replace(":", "-")}.png`,
+          {
+            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            content: [selectedDevice, automaticDevice],
+          },
+        );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
         expect(await automaticDevice.isDisabled()).toBe(true);
@@ -288,8 +298,8 @@ suite.define(() => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       if (preference.kind === "cloud") {
-        // Settle recovery scope after discovery starts: both the retired and
-        // replacement catalog request must stay held until restoration resumes.
+        // Browser recovery hydration must not restart the authenticated catalog
+        // request or let a remembered remote destination fall back to Local.
         await page.addInitScript(() => {
           const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
           const delayed = new Promise<void>((resolve) => {
@@ -350,13 +360,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await expect
-          .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+          .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
           .toBe("true");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
           });
-          await gateway.waitForRequest("environments.list", { after: 1 });
+          await waitForGatewayRecoveryScope(page);
+          expect(await gateway.getRequests("environments.list")).toHaveLength(1);
         }
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });
@@ -534,7 +545,7 @@ suite.define(() => {
       await where.click();
       await page.locator('[data-value="device:paired-runner"]').click();
       await expect.poll(() => where.getAttribute("data-device-id")).toBe("paired-runner");
-      await captureDeviceRuntimeUiProof(page, "01-main-agent-paired-node-selected.png");
+      await captureDeviceRuntimeUiProof(suite, page, "01-main-agent-paired-node-selected.png");
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
@@ -546,7 +557,11 @@ suite.define(() => {
       await expect
         .poll(() => where.locator(".new-session-page__trigger-label").textContent())
         .toBe("Local");
-      await captureDeviceRuntimeUiProof(page, "02-research-agent-local-destination-restored.png");
+      await captureDeviceRuntimeUiProof(
+        suite,
+        page,
+        "02-research-agent-local-destination-restored.png",
+      );
 
       const message = "run this agent locally";
       await page.locator(".new-session-page__message").fill(message);

@@ -144,7 +144,9 @@ class LocationHandler private constructor(
       when (accuracy) {
         // Provider order is part of the accuracy policy: GPS first for precise, network first otherwise.
         "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+
         "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+
         else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
       }
     try {

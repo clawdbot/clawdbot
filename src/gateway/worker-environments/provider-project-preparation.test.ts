@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as support from "./service.test-support.js";
+import * as workspaceGitBase from "./workspace-git-base.js";
 
 type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
@@ -40,6 +42,109 @@ function createService(provision: WorkerProvider["provision"], providerCallTimeo
 
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("cancels project snapshot preparation before creating an allocation intent", async () => {
+    const git = await repository("cancelled-project-snapshot");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const controller = new AbortController();
+    const original = workspaceGitBase.prepareWorkerProjectSnapshot;
+    let snapshotSignal: AbortSignal | undefined;
+    const snapshot = vi
+      .spyOn(workspaceGitBase, "prepareWorkerProjectSnapshot")
+      .mockImplementationOnce(async (params) => {
+        snapshotSignal = params.signal;
+        entered.resolve();
+        await release.promise;
+        return await original(params);
+      });
+    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
+      leaseId: "unexpected-project-lease",
+      ssh: support.SSH_ENDPOINT,
+    }));
+    const service = createService(provision);
+    const creation = service
+      .create(
+        "development",
+        "cancelled-project-snapshot",
+        undefined,
+        undefined,
+        git.root,
+        controller.signal,
+      )
+      .catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      controller.abort(new DOMException("Stop project preparation", "AbortError"));
+      await setImmediate();
+      expect(snapshotSignal?.aborted).toBe(true);
+    } finally {
+      release.resolve();
+      await creation;
+      snapshot.mockRestore();
+    }
+    expect(await creation).toMatchObject({ name: "AbortError" });
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([]);
+  });
+
+  it("interrupts an active project transfer but retains its provider until the transport settles", async () => {
+    const git = await repository("cancelled-project-transfer");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const controller = new AbortController();
+    let transportSignal: AbortSignal | undefined;
+    let settled = false;
+    const events: string[] = [];
+    const service = createService(async (_profile, _operationId, options) => {
+      const project = expectDefined(options?.project, "provider project preparation");
+      await project.prepare({
+        runScript: async (_script, signal) => {
+          transportSignal = signal;
+          entered.resolve();
+          await release.promise;
+          events.push("transport settled");
+          signal.throwIfAborted();
+          return '{"ready":true}';
+        },
+        upload: async () => {
+          throw new Error("No upload should follow canceled inspection");
+        },
+      });
+      return { leaseId: "unexpected-transfer-lease", ssh: support.SSH_ENDPOINT };
+    });
+    const creation = service
+      .create(
+        "development",
+        "cancelled-project-transfer",
+        undefined,
+        undefined,
+        git.root,
+        controller.signal,
+      )
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await entered.promise;
+      controller.abort(new DOMException("Stop project transfer", "AbortError"));
+      await setImmediate();
+      expect(transportSignal?.aborted).toBe(true);
+      expect(settled).toBe(false);
+      expect(events).toEqual([]);
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "provisioning",
+        destroyRequestedAtMs: support.testState.nowMs,
+      });
+    } finally {
+      release.resolve();
+      await creation;
+    }
+    expect(await creation).toMatchObject({ name: "AbortError" });
+    expect(events).toEqual(["transport settled"]);
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+  });
 
   it("persists project identity and the Git base before provision and replays them after restart and HEAD advance", async () => {
     const git = await repository("project");

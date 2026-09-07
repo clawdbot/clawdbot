@@ -106,9 +106,12 @@ hosting and exact capacity from this durable consent when it starts.
 - an `oc-pair://<setup-code>` URL;
 - a bare base64url setup code.
 
-`--target-file <path>` reads the target from a private file and removes that file
-after reading it. The dormant installer wrapper uses this handoff to keep the
-single-use target out of child-process arguments.
+`--target-file <path>` accepts a regular file up to 64 KiB. It removes the path
+only after reading a non-empty target. If the file is empty, too large,
+unreadable, or not a regular file, OpenClaw leaves it in place. A symlink is
+allowed; OpenClaw reads its target, removes the symlink after a successful read,
+and keeps the backing file. The dormant installer wrapper uses this handoff to
+keep the single-use target out of child-process arguments.
 
 Join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
 such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the

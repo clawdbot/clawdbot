@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReefInboxConnection, ReefInboxEntryParkedError, type WebSocketLike } from "./transport.js";
 import {
@@ -224,14 +225,11 @@ describe("ReefInboxConnection recovery", () => {
   it("reports connected before a slow REST catch-up completes", async () => {
     const socket = new ControlledSocket();
     const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
+    const pullGate = createDeferred<void>();
+    const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
+      pullStarted.resolve();
+      await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
@@ -243,13 +241,15 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    expect(states).toEqual(["connected"]);
-
-    releasePull();
-    abort.abort();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => pullStarted.promise);
+      expect(states).toEqual(["connected"]);
+    } finally {
+      pullGate.resolve();
+      abort.abort();
+      await running;
+    }
     expect(states).toEqual(["connected", "disconnected"]);
   });
 
@@ -257,14 +257,11 @@ describe("ReefInboxConnection recovery", () => {
     const socket = new ControlledSocket();
     const processed: number[] = [];
     const persisted: number[] = [];
-    let releaseFirstPull!: () => void;
-    const firstPullGate = new Promise<void>((resolve) => {
-      releaseFirstPull = resolve;
-    });
+    const firstPullGate = createDeferred<void>();
     const client = createClient(async (input) => {
       const after = Number(parseRequestUrl(input).searchParams.get("after"));
       if (after === 0) {
-        await firstPullGate;
+        await firstPullGate.promise;
         return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
       }
       return Response.json({ entries: [], cursor: after });
@@ -280,28 +277,29 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
-    releaseFirstPull();
-    await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
+    try {
+      socket.emit("open");
+      socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
+      socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
+      firstPullGate.resolve();
+      await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
 
-    expect(persisted).toEqual([1, 2, 3]);
-    abort.abort();
-    await running;
+      expect(persisted).toEqual([1, 2, 3]);
+    } finally {
+      firstPullGate.resolve();
+      abort.abort();
+      await running;
+    }
   });
 
   it("reports a socket close immediately while catch-up is still pending", async () => {
     const socket = new ControlledSocket();
     const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
+    const pullGate = createDeferred<void>();
+    const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
+      pullStarted.resolve();
+      await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
@@ -313,14 +311,16 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    socket.emit("close");
-    await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
-
-    abort.abort();
-    releasePull();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => pullStarted.promise);
+      socket.emit("close");
+      await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
+    } finally {
+      abort.abort();
+      pullGate.resolve();
+      await running;
+    }
   });
 
   it("reports unexpected socket close details before retrying", async () => {
@@ -400,11 +400,8 @@ describe("ReefInboxConnection recovery", () => {
   it("waits for an in-flight handler before completing channel abort", async () => {
     const socket = new ControlledSocket();
     const persisted: number[] = [];
-    let releaseHandler!: () => void;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let handlerStarted = false;
+    const handlerGate = createDeferred<void>();
+    const handlerStarted = createDeferred<void>();
     const client = createClient(async () =>
       Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
     );
@@ -412,8 +409,8 @@ describe("ReefInboxConnection recovery", () => {
     const inbox = new ReefInboxConnection(
       client,
       async () => {
-        handlerStarted = true;
-        await handlerGate;
+        handlerStarted.resolve();
+        await handlerGate.promise;
       },
       () => socket as unknown as WebSocketLike,
       { persistCursor: (cursor) => persisted.push(cursor) },
@@ -423,28 +420,28 @@ describe("ReefInboxConnection recovery", () => {
     const running = inbox.start(abort.signal).then(() => {
       finished = true;
     });
-    socket.emit("open");
-    await vi.waitFor(() => expect(handlerStarted).toBe(true));
-    abort.abort();
-    await Promise.resolve();
-    expect(finished).toBe(false);
-
-    releaseHandler();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => handlerStarted.promise);
+      abort.abort();
+      await Promise.resolve();
+      expect(finished).toBe(false);
+    } finally {
+      handlerGate.resolve();
+      abort.abort();
+      await running;
+    }
     expect(persisted).toEqual([1]);
   });
 
   it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
     const socket = new ControlledSocket();
     const errors: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
+    const pullGate = createDeferred<void>();
+    const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
+      pullStarted.resolve();
+      await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
@@ -461,17 +458,23 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    for (let seq = 1; seq <= 257; seq += 1) {
-      socket.emit("message", {
-        data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
-      });
-    }
-    releasePull();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => pullStarted.promise);
+      for (let seq = 1; seq <= 257; seq += 1) {
+        socket.emit("message", {
+          data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
+        });
+      }
+      pullGate.resolve();
+      await running;
 
-    expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
+      expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
+    } finally {
+      pullGate.resolve();
+      abort.abort();
+      await running;
+    }
   });
 
   it("surfaces catch-up failures to channel diagnostics", async () => {

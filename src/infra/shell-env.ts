@@ -1,5 +1,5 @@
 // Loads shell-derived environment variables for provider and command runtimes.
-import { execFileSync } from "node:child_process";
+import { type ExecFileSyncOptionsWithBufferEncoding, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,10 +21,7 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-type CachedLoginShellEnvProbeResult =
-  | { ok: true; entries: Array<[string, string]> }
-  | { ok: false; error: string };
-const loginShellEnvProbeCache = new Map<string, CachedLoginShellEnvProbeResult>();
+const loginShellEnvProbeCache = new Map<string, Array<[string, string]>>();
 const LOGIN_SHELL_ENV_CACHE_LIMIT = 64;
 const execCacheIds = new WeakMap<object, number>();
 type LoginShellEnvProbePurpose = "environment-import" | "path";
@@ -102,14 +99,18 @@ function execLoginShellEnvZero(params: {
   const args = useInteractiveBash
     ? ["-lic", LOGIN_SHELL_ENV_COMMAND]
     : ["-l", "-c", LOGIN_SHELL_ENV_COMMAND];
-  return params.exec(params.shell, args, {
+  // Interactive Bash must not take the CLI's controlling terminal. execFileSync forwards
+  // detached to spawnSync, but its options type omits it.
+  const options: ExecFileSyncOptionsWithBufferEncoding & { detached: boolean } = {
     encoding: "buffer",
     timeout: params.timeoutMs,
     maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
     env: params.env,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
-  });
+    detached: true,
+  };
+  return params.exec(params.shell, args, options);
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {
@@ -194,11 +195,6 @@ type LoginShellEnvProbeResult =
   | { ok: true; shellEnv: Map<string, string> }
   | { ok: false; error: string };
 
-function cacheLoginShellEnvProbe(cacheKey: string, result: CachedLoginShellEnvProbeResult): void {
-  loginShellEnvProbeCache.set(cacheKey, result);
-  pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
-}
-
 function probeLoginShellEnv(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -228,7 +224,7 @@ function probeLoginShellEnv(params: {
     // colder entries when the shared insertion-order pruning helper enforces the bound.
     loginShellEnvProbeCache.delete(cacheKey);
     loginShellEnvProbeCache.set(cacheKey, cached);
-    return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
+    return { ok: true, shellEnv: new Map(cached) };
   }
 
   try {
@@ -240,12 +236,12 @@ function probeLoginShellEnv(params: {
       purpose: params.purpose,
     });
     const shellEnv = parseShellEnv(stdout);
-    cacheLoginShellEnvProbe(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
+    // Failed startup can recover on the next lookup; retain only successful probes.
+    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
+    pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
     return { ok: true, shellEnv };
   } catch (err) {
-    const result = { ok: false as const, error: formatErrorMessage(err) };
-    cacheLoginShellEnvProbe(cacheKey, result);
-    return result;
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -354,8 +350,7 @@ export function getShellPathFromLoginShell(opts: {
     purpose: "path",
   });
   if (!probe.ok) {
-    cachedShellPath = null;
-    return cachedShellPath;
+    return null;
   }
 
   const shellPath = probe.shellEnv.get("PATH")?.trim();

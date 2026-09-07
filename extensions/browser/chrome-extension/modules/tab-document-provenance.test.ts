@@ -28,7 +28,7 @@ type TabDocumentProvenance = Pick<TabAccessPolicy, "forwardDocumentEvent" | "nav
   revokeDocument(tabId: number): void;
   retireAttachment: TabAccessPolicy["retireTabDocument"];
   invalidateAll(): void;
-  invalidateGroup: TabAccessPolicy["invalidateDocumentGroup"];
+  invalidateGroup(group?: { id: number }): void;
 };
 
 type TabDocumentProvenanceModule = {
@@ -59,8 +59,8 @@ const contextEvent = {
 };
 
 function createHarness() {
-  const epoch: TabAccessEpoch = { revision: 1, tabRevision: 1 };
-  const attachmentEpoch: TabAccessEpoch = { revision: 1, tabRevision: 2 };
+  const epoch: TabAccessEpoch = { revision: 1, groupRevision: 0, tabRevision: 1 };
+  const attachmentEpoch: TabAccessEpoch = { revision: 1, groupRevision: 0, tabRevision: 2 };
   const proven = new Set([epoch, attachmentEpoch]);
   const isAttached = vi.fn<() => TabAccessEpoch | undefined>(() => attachmentEpoch);
   const isCurrent = vi.fn(() => true);

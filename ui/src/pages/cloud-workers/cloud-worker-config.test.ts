@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
@@ -11,19 +12,26 @@ import {
 const configuredProfile = {
   provider: "crabbox",
   install: "npm",
-  label: "preserved",
+  suspendAfter: "30m",
   settings: {
     provider: "aws",
     class: "beast",
     ttl: "24h",
     idleTimeout: "60m",
     setup: "install-node",
-    setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
+    setupEnv: ["QA_WORKER_FLAG"],
     desktop: true,
     binary: "/opt/crabbox",
-    region: "eu-west-1",
+    opaque: { nullable: null, flags: ["kept"] },
   },
 };
+
+function requirePatch(result: ReturnType<typeof buildCloudWorkerUpsertPatch>) {
+  if ("error" in result) {
+    throw new Error(`Unexpected profile patch error: ${result.error}`);
+  }
+  return result;
+}
 
 describe("cloud worker settings state", () => {
   it.each([undefined, ""])("requires an explicit class for an empty draft (%j)", (machineClass) => {
@@ -89,7 +97,7 @@ describe("cloud worker settings state", () => {
     expect(validateCloudWorkerDraft(draft, { production: configuredProfile }, null)).toBe(expected);
   });
 
-  it("builds a full edit patch with tombstones while preserving unknown fields", () => {
+  it("clears setup with exact array intent while preserving opaque fields", () => {
     const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
     const draft = {
       ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
@@ -101,15 +109,14 @@ describe("cloud worker settings state", () => {
       desktop: false,
       binary: "",
     };
-
-    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+    const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+    expect(built).toEqual({
       patch: {
         cloudWorkers: {
           profiles: {
             production: {
               provider: "crabbox",
               install: "npm",
-              label: "preserved",
               settings: {
                 provider: "hetzner",
                 class: "large",
@@ -119,8 +126,26 @@ describe("cloud worker settings state", () => {
                 setupEnv: null,
                 desktop: null,
                 binary: null,
-                region: "eu-west-1",
               },
+            },
+          },
+        },
+      },
+      replacePaths: ["cloudWorkers.profiles.production.settings.setupEnv"],
+    });
+    expect(applyMergePatch(config, built.patch)).toEqual({
+      cloudWorkers: {
+        profiles: {
+          production: {
+            provider: "crabbox",
+            install: "npm",
+            suspendAfter: "30m",
+            settings: {
+              provider: "hetzner",
+              class: "large",
+              ttl: "8h",
+              idleTimeout: "45m",
+              opaque: configuredProfile.settings.opaque,
             },
           },
         },
@@ -141,49 +166,43 @@ describe("cloud worker settings state", () => {
         backend: "hetzner",
         binary: "/opt/crabbox-next",
       };
-
-      expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
-        patch: {
-          cloudWorkers: {
-            profiles: {
-              production: {
-                ...profile,
-                settings: {
-                  ...profile.settings,
-                  provider: "hetzner",
-                  binary: "/opt/crabbox-next",
-                },
+      const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+      expect(applyMergePatch(config, built.patch)).toEqual({
+        cloudWorkers: {
+          profiles: {
+            production: {
+              ...profile,
+              settings: {
+                ...profile.settings,
+                provider: "hetzner",
+                binary: "/opt/crabbox-next",
               },
             },
           },
         },
       });
+      expect(built.replacePaths).toEqual([]);
     },
   );
 
-  it.each([undefined, []])("keeps empty setup environment unchanged (%j)", (setupEnv) => {
-    const existingSettings = Object.fromEntries(
-      Object.entries(configuredProfile.settings).filter(
-        ([key]) => key !== "setupEnv" || setupEnv !== undefined,
-      ),
-    );
-    if (setupEnv) {
-      existingSettings.setupEnv = setupEnv;
-    }
-    const profile = { ...configuredProfile, settings: existingSettings };
-    const config = { cloudWorkers: { profiles: { production: profile } } };
-    const draft = { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), setup: "" };
-
-    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
-      patch: {
+  it.each([{ setupEnv: undefined }, { setupEnv: [] }])(
+    "keeps empty setup environment unchanged ($setupEnv)",
+    ({ setupEnv }) => {
+      const { setupEnv: _setupEnv, ...settings } = configuredProfile.settings;
+      const existingSettings = { ...settings, ...(setupEnv ? { setupEnv } : {}) };
+      const profile = { ...configuredProfile, settings: existingSettings };
+      const config = { cloudWorkers: { profiles: { production: profile } } };
+      const draft = { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), setup: "" };
+      const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+      const { setup: _setup, ...retainedSettings } = existingSettings;
+      expect(applyMergePatch(config, built.patch)).toEqual({
         cloudWorkers: {
-          profiles: {
-            production: { ...profile, settings: { ...existingSettings, setup: null } },
-          },
+          profiles: { production: { ...profile, settings: retainedSettings } },
         },
-      },
-    });
-  });
+      });
+      expect(built.replacePaths).toEqual([]);
+    },
+  );
 
   it.each([
     {
@@ -214,13 +233,12 @@ describe("cloud worker settings state", () => {
       desktop: false,
       binary: "",
     });
-
     expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
       error: "profileMissing",
     });
   });
 
-  it("builds add and delete payloads against the complete profile record", () => {
+  it("adds only the new profile without resending existing profiles", () => {
     const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
     const draft = {
       ...createCloudWorkerDraft(),
@@ -228,12 +246,11 @@ describe("cloud worker settings state", () => {
       backend: "hetzner",
       machineClass: "standard",
     };
-    const added = buildCloudWorkerUpsertPatch(config, draft, null);
-    expect(added).toMatchObject({
+    const built = requirePatch(buildCloudWorkerUpsertPatch(config, draft, null));
+    expect(built).toEqual({
       patch: {
         cloudWorkers: {
           profiles: {
-            production: configuredProfile,
             "build-fleet": {
               provider: "crabbox",
               install: "bundle",
@@ -242,25 +259,27 @@ describe("cloud worker settings state", () => {
                 class: "standard",
                 ttl: "8h",
                 idleTimeout: "45m",
+                setup: null,
+                desktop: null,
+                binary: null,
               },
             },
           },
         },
       },
+      replacePaths: [],
     });
-    expect(buildCloudWorkerDeletePatch(config, "production")).toEqual({
-      patch: {
-        cloudWorkers: {
-          profiles: { production: null },
-        },
-      },
-    });
+    expect(applyMergePatch(config, built.patch)).toMatchObject(config);
   });
 
-  it("removes only project defaults that reference a deleted profile", () => {
+  it("deletes only the target and its project defaults with exact array intent", () => {
+    const deleted = {
+      ...configuredProfile,
+      settings: { ...configuredProfile.settings, empty: [] },
+    };
     const config = {
       cloudWorkers: {
-        profiles: { production: configuredProfile, retained: configuredProfile },
+        profiles: { production: deleted, retained: configuredProfile },
         projectProfiles: {
           "github.com/acme/app": "production",
           "github.com/acme/docs": "production",
@@ -268,16 +287,27 @@ describe("cloud worker settings state", () => {
         },
       },
     };
-
-    expect(buildCloudWorkerDeletePatch(config, "production")).toEqual({
+    const built = requirePatch(buildCloudWorkerDeletePatch(config, "production"));
+    expect(built).toEqual({
       patch: {
         cloudWorkers: {
-          profiles: { production: null, retained: configuredProfile },
+          profiles: { production: null },
           projectProfiles: {
             "github.com/acme/app": null,
             "github.com/acme/docs": null,
           },
         },
+      },
+      replacePaths: [
+        "cloudWorkers.profiles.production.settings.setupEnv",
+        "cloudWorkers.profiles.production.settings.opaque.flags",
+        "cloudWorkers.profiles.production.settings.empty",
+      ],
+    });
+    expect(applyMergePatch(config, built.patch)).toEqual({
+      cloudWorkers: {
+        profiles: { retained: configuredProfile },
+        projectProfiles: { "github.com/acme/retained": "retained" },
       },
     });
   });

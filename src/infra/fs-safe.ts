@@ -10,6 +10,7 @@ import {
   type Root as FsSafeRoot,
   type RootDefaults,
 } from "@openclaw/fs-safe/root";
+import { writeOwnedTempFile } from "./owned-temp-file.js";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
@@ -119,7 +120,7 @@ export async function writeExternalFileWithinRoot(
   const result = await writeExternalFileWithinRootBase({
     rootDir: options.rootDir,
     path: options.path,
-    write: options.write,
+    write: (tempPath) => writeOwnedTempFile(tempPath, options.write),
     staging: "sibling",
     fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
   });

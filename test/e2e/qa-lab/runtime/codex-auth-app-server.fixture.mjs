@@ -14,6 +14,15 @@ if (!appServerVersion) {
   throw new Error("missing OPENCLAW_QA_CODEX_APP_SERVER_VERSION");
 }
 
+let turnCount = 0;
+const threadResponse = (params) =>
+  createFakeThreadStartResponse({
+    params,
+    threadId: "thread-qa-codex-auth",
+    sessionId: "session-qa-codex-auth",
+    version: appServerVersion,
+  });
+
 runFakeCodexAppServer({
   requestLog,
   logMode: "messages",
@@ -52,21 +61,14 @@ runFakeCodexAppServer({
         },
         requiresOpenaiAuth: true,
       }),
-    "thread/start": ({ params, sendResult }) =>
-      sendResult(
-        createFakeThreadStartResponse({
-          params,
-          threadId: "thread-qa-codex-auth",
-          sessionId: "session-qa-codex-auth",
-          version: appServerVersion,
-        }),
-      ),
+    "thread/start": ({ params, sendResult }) => sendResult(threadResponse(params)),
+    "thread/resume": ({ params, sendResult }) => sendResult(threadResponse(params)),
     "turn/start": ({ notify, params, sendResult }) => {
       const threadId = params?.threadId ?? "thread-qa-codex-auth";
-      const turnId = "turn-qa-codex-auth";
+      const turnId = `turn-qa-codex-auth-${++turnCount}`;
       const message = {
         type: "agentMessage",
-        id: "message-qa-codex-auth",
+        id: `message-${turnId}`,
         text: "QA_CODEX_AUTH_PRODUCT_PROOF_OK",
       };
       sendResult({

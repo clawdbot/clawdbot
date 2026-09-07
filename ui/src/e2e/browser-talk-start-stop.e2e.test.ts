@@ -7,9 +7,9 @@ import {
   captureVideoTalkProof,
   dispatchOpenAiTalkEvent,
   installBlockedMicrophoneFixture,
-  installBlockedVideoTalkFixture,
-  installTalkBrowserFixtures,
   installOpenAiTalkFixture,
+  installTalkBrowserFixtures,
+  installVideoTalkMediaFixture,
   videoTalkCatalog,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -258,7 +258,7 @@ suite.define(() => {
           Number(await page.locator(".agent-chat__voice-activity").getAttribute("data-level")),
         )
         .toBeGreaterThan(0);
-      await captureComposerProof(page, "01-voice-live-listening.png");
+      await captureComposerProof(suite, page, "01-voice-live-listening.png");
 
       // Enter-sends while voice is active; the deferred chat.send keeps the
       // run abortable so both stop controls render side by side.
@@ -296,16 +296,16 @@ suite.define(() => {
       ).toBe(false);
       expect(await stopVoice.locator(".agent-chat__voice-activity").count()).toBe(1);
       expect(await page.locator(".chat-send-btn--stop").count()).toBe(1);
-      await captureComposerProof(page, "02-voice-plus-run-stop.png");
+      await captureComposerProof(suite, page, "02-voice-plus-run-stop.png");
 
       await page.emulateMedia({ colorScheme: "dark" });
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
         .toBe("dark");
-      await captureComposerProof(page, "03-voice-plus-run-stop-dark.png");
+      await captureComposerProof(suite, page, "03-voice-plus-run-stop-dark.png");
 
       await stopVoice.hover();
-      await captureComposerProof(page, "04-voice-live-hover-stop-glyph.png");
+      await captureComposerProof(suite, page, "04-voice-live-hover-stop-glyph.png");
 
       // Stopping voice must leave the run (and its stop control) untouched.
       await stopVoice.click();
@@ -333,7 +333,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureVideoTalkProof(page, "01-before-video-talk.png");
+      await captureVideoTalkProof(suite, page, "01-before-video-talk.png");
 
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
@@ -382,7 +382,7 @@ suite.define(() => {
         item_id: "unintelligible-input",
         error: { message: "The audio could not be transcribed." },
       });
-      await captureMicrophoneLossProof(page, "input-transcription-error.png");
+      await captureMicrophoneLossProof(suite, page, "input-transcription-error.png");
       const transcriptionError = page.getByRole("alert").filter({
         hasText: "The audio could not be transcribed.",
       });
@@ -409,7 +409,7 @@ suite.define(() => {
       console.info(
         `[video-talk-e2e] preview=live,width:${dimensions.width},height:${dimensions.height}`,
       );
-      await captureVideoTalkProof(page, "02-live-camera-preview.png");
+      await captureVideoTalkProof(suite, page, "02-live-camera-preview.png");
 
       await dispatchOpenAiTalkEvent(page, {
         type: "response.done",
@@ -476,7 +476,7 @@ suite.define(() => {
       );
       expect(trackStates).toHaveLength(2);
       expect(trackStates?.every((state) => state === "ended")).toBe(true);
-      await captureVideoTalkProof(page, "04-after-video-talk-stop.png");
+      await captureVideoTalkProof(suite, page, "04-after-video-talk-stop.png");
       console.info("[video-talk-e2e] stop=preview-removed,tracks:ended+ended");
     });
   });
@@ -529,25 +529,7 @@ suite.define(() => {
           }
         });
       });
-      await page.addInitScript(() => {
-        const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-        Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
-          configurable: true,
-          value: async (constraints: MediaStreamConstraints) => {
-            const stream = await getUserMedia(constraints);
-            (
-              window as Window & {
-                openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
-              }
-            ).openclawGeminiVideoTalkTracks = [
-              ...((window as Window & { openclawGeminiVideoTalkTracks?: MediaStreamTrack[] })
-                .openclawGeminiVideoTalkTracks ?? []),
-              ...stream.getTracks(),
-            ];
-            return stream;
-          },
-        });
-      });
+      await installVideoTalkMediaFixture(page, { camera: "native" });
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -604,7 +586,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.client.create",
       ]);
-      await captureVideoTalkProof(page, "05-gemini-live-camera-preview.png");
+      await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
       console.info(
         "[video-talk-e2e] gemini=realtimeInput.video+functionResponse,gateway_frame_requests:0",
       );
@@ -614,9 +596,9 @@ suite.define(() => {
       const trackStates = await page.evaluate(() =>
         (
           window as Window & {
-            openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
+            openclawVideoTalkTracks?: MediaStreamTrack[];
           }
-        ).openclawGeminiVideoTalkTracks?.map((track) => track.readyState),
+        ).openclawVideoTalkTracks?.map((track) => track.readyState),
       );
       expect(trackStates).toHaveLength(2);
       expect(trackStates?.every((state) => state === "ended")).toBe(true);
@@ -657,7 +639,7 @@ suite.define(() => {
           }
         });
       });
-      await installBlockedVideoTalkFixture(page);
+      await installVideoTalkMediaFixture(page, { camera: "blocked" });
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -673,8 +655,17 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Turn camera on" }).isVisible())
         .toBe(true);
-      await captureVideoTalkProof(page, "03-camera-permission-blocked.png");
-      console.info("[video-talk-e2e] camera_denial=actionable,no-audio-fallback");
+      await captureVideoTalkProof(suite, page, "03-camera-permission-blocked.png");
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      const trackStates = await page.evaluate(() =>
+        (
+          window as Window & {
+            openclawVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawVideoTalkTracks?.map((track) => track.readyState),
+      );
+      expect(trackStates).toEqual(["ended"]);
+      console.info("[video-talk-e2e] camera_denial=actionable,audio_track:ended");
     });
   });
 
@@ -834,7 +825,7 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
         .toBe(1);
-      await captureComposerProof(page, "relay-input-backpressure-error.png");
+      await captureComposerProof(suite, page, "relay-input-backpressure-error.png");
     });
   });
 

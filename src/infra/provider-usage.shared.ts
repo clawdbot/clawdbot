@@ -16,6 +16,7 @@ export const PROVIDER_LABELS = {
   openai: "OpenAI",
   openrouter: "OpenRouter",
   venice: "Venice",
+  xai: "xAI",
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",

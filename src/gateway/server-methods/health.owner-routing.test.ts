@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
@@ -10,7 +11,7 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
-async function callStatus(config: OpenClawConfig) {
+async function callStatus(config: OpenClawConfig, scopes = ["operator.read"]) {
   setRuntimeConfigSnapshot(config, config);
   const respond = vi.fn();
   await healthHandlers.status!({
@@ -18,7 +19,7 @@ async function callStatus(config: OpenClawConfig) {
     params: { includeChannelSummary: false },
     respond: respond as never,
     context: {} as never,
-    client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+    client: { connect: { role: "operator", scopes } } as never,
     isWebchatConnect: () => false,
   });
   return respond;
@@ -68,6 +69,31 @@ describe("Gateway status owner routing", () => {
       expect(respond).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+    });
+  });
+
+  it("limits startup migration details to admin status while readers retain the repair hint", async () => {
+    await withStateDirEnv("openclaw-gateway-status-warning-", async ({ stateDir }) => {
+      const warning = `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
+      recordStartupMigrationWarnings([warning]);
+      const config = {
+        agents: { entries: { main: {} } },
+        session: { store: path.join(stateDir, "sessions.json") },
+      };
+      const hint =
+        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+
+      const reader = await callStatus(config);
+      const readerPayload = reader.mock.calls[0]?.[1];
+      expect(reader.mock.calls[0]?.[0]).toBe(true);
+      expect(readerPayload.startupMigrationWarning).toContain(hint);
+      expect(readerPayload.startupMigrationWarning).not.toContain(stateDir);
+      expect(readerPayload.startupMigrationWarning).not.toContain("EACCES");
+
+      const admin = await callStatus(config, ["operator.admin"]);
+      expect(admin.mock.calls[0]?.[0]).toBe(true);
+      expect(admin.mock.calls[0]?.[1].startupMigrationWarning).toContain(warning);
+      expect(admin.mock.calls[0]?.[1].startupMigrationWarning).toContain(hint);
     });
   });
 });

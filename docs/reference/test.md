@@ -33,6 +33,53 @@ fresh lease. Every run still syncs the current checkout.
 `OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
 release proof.
 
+The Testbox workflow registers a separate disposable checkout for native sync.
+The hydrated execution workspace stays at its original absolute path, so native
+Git cleanup and rsync cannot delete dependencies, build output, or ignored runtime
+there. The wrapper applies and verifies the source bundle in that execution
+workspace, runs its frozen dependency install, and checks the source and Git
+identity again before the payload. Install output goes to stderr; an install or
+verification failure stops the payload. It never restores runtime from the caller
+or changes the selected rsync binary.
+
+Workspace preparation changes require a fresh lease. A missing or overlapping
+execution-workspace binding stops the payload; stop that lease and warm a new one.
+Use the OpenClaw wrapper for proof: direct native Blacksmith commands target the
+transport checkout, which deliberately has no hydrated runtime.
+
+Testbox requests with `--artifact-glob` or `--require-artifact` also require the
+`prepared-artifact-workspace` feature in the selected Crabbox binary's
+`providers describe blacksmith-testbox --json` response. The wrapper checks this
+before sync or lease work, rather than collecting missing or stale transport files.
+Update Crabbox if that capability is absent. Collection stays anchored in the
+prepared workspace across payload directory changes and normal failure exits;
+existing cancellation and signal-related artifact withholding remains unchanged.
+Ordinary runs without artifact requests do not require this additional capability.
+
+Testbox runs and POSIX remote changed gates freeze source into a Git bundle
+against the pinned base. These runs require Crabbox 0.37.0 or later for
+`sync-plan --json`; upgrade Crabbox before retrying an older binary. This API floor
+does not apply to help, warmup, status, or runs that do not prepare a source bundle.
+Selection uses Crabbox's sync policy and Git's repository, info, and effective global
+exclusions, including repo-local overrides, for untracked files. Tracked ignored
+files and staged ignored additions remain source; an explicit privacy exclusion
+conflicting with required tracked source stops the run before upload.
+
+The command binds the bundle digest and raw source tree. Before running the payload,
+the receiver applies deletions and restores file bytes, symlink target bytes, and
+Git executable modes, then verifies the filesystem directly. Git text filters do not
+normalize this snapshot. Missing, stale, or mismatched bundles fail closed.
+Producer-declared deletions must also be absent, even when the remote index has lost
+them. Deletions use the same privacy policy as source selection; unknown ignored
+runtime data is preserved. Unexpected nonignored receiver files stop the run instead
+of being deleted. The verification receipt reports the original source revision
+separately from the synthetic transport commit; remote `HEAD` identifies that
+verified transport tree, and changed gates compare it with the pinned base.
+Raw-byte differences can conservatively select additional changed paths. Git path
+names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crabbox
+configuration or ignore files, and privacy-excluded runtime configuration, are
+rejected before upload rather than changing their trust or privacy treatment.
+
 Local test commands below are the normal trusted development path. Keep proof
 proportional to the touched contract.
 
@@ -79,6 +126,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
+native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
+`--provider blacksmith-testbox` prevents automatic Azure routing but does not
+enable Windows support. Blacksmith CLI 0.4.57 targets `runner` and has no native
+username override, so supported CLI sync/run on this Windows image remains
+blocked. Native SSH inspection with the per-Testbox key is not CLI end-to-end
+proof.
+
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
 its source rather than trusting a directory name. If it needs repair or is
@@ -122,6 +177,34 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+- For Testbox scripts, run a synced file as trailing command arguments or use
+  `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
+  source preparation or lease work.
+
+When remote sync uses a temporary checkout, the wrapper preserves native
+`.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+Repeated runs retain separate evidence even when native filenames match. The
+wrapper prints the old-to-new root mapping; native logs and generated proof may
+still reference the old paths. A preservation error fails the wrapper and retains
+the temporary checkout at the reported path for manual recovery, preserving the
+child's nonzero exit code. The wrapper rejects symlinks in artifact trees
+and destination parents, and copies only regular files and real directories.
+Retained files use mode `0600` and new directories use `0700` on POSIX systems.
+If preservation fails, recover the outputs from the reported checkout before
+removing it; incomplete destination copies are removed.
+
+These are local artifacts, not published or fully sanitized proof. Blacksmith's
+native failure bundle contains captured stdout/stderr and diagnostic metadata;
+it does not automatically include remote UI screenshots or reports. Retrieve
+those separately before stopping the owned Testbox, and inspect all artifacts
+for secrets and private data before sharing.
+
+The native Windows Testbox idle monitor uses the running `sshd` service's local
+listener ports, not Blacksmith's externally forwarded SSH port. Established SSH
+connections keep the job alive; the `~/.testbox-last-activity` modification time
+covers short commands between the 30-second polls. Once neither indicates recent
+activity, the configured idle timeout still ends the job.
 
 The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
@@ -149,6 +232,26 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+The project runner prints wrapper usage for a sole `--help` or `-h` request.
+Compound requests, including `--help --no-help`, follow native Vitest option semantics.
+
+An existing UI directory target stays scoped to that directory, including when
+combined with explicit E2E test files. Tests retain their owning shared, isolated,
+or browser lane. UI source/support-file targets that need whole-lane coverage
+(such as shared styles or setup files) still use that broader fallback; use a
+directory or explicit test files when you want a bounded run.
+
+When a one-shot routed run targets only explicit test-file paths, each selected
+Vitest invocation must discover at least one test file. Excluding every selected
+file fails even when the lane normally permits empty runs. To allow that outcome
+intentionally, use `pnpm test <test-file-path> -- --passWithNoTests`. Use
+`--passWithNoTests=false` to require nonempty discovery explicitly. Broader
+selectors and source-derived selections retain their lane defaults.
+
+An explicit `--config` run through `scripts/run-vitest.mjs` keeps its stricter
+named-file policy and does not permit empty named-file runs. Plugin
+`--allow-no-tests` and `--allow-empty-after-exclude` controls are unchanged.
+
 Codex and other linked/sparse worktrees can run local tests and checks. When the
 dependency install is ready, use the normal commands above. If pnpm would
 reconcile a shared install, use the direct Node harnesses to bypass that
@@ -164,13 +267,52 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Maintained JavaScript tooling wrappers and root package commands use tsx's
-in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This cache policy does not clean
+Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
+excludes Node 25 from its declared engine range; packaged OpenClaw runtime
+support for Node 25.9+ is unchanged.
+
+The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+packages. Use `describe(name, { concurrent: false }, callback)` for ordered
+suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
+scope, and perform actions whose mock calls you assert inside the test.
+OpenClaw sets `clearMocks: false`, so setup and `beforeAll` calls are preserved.
+Clear or reset each assertion's owned mock actions explicitly as needed.
+Name patterns spanning suites use `suite > test`; native JSON retains its
+space-joined `fullName`, so evidence readers match `ancestorTitles` plus `title`.
+
+Filesystem transform caching uses `test.fsModuleCache` and
+`test.fsModuleCachePath`; the existing `OPENCLAW_VITEST_FS_MODULE_CACHE` and
+`OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` controls retain their ownership and
+disable behavior. Cache-key plugins use `defineCacheKeyGenerator`.
+Inline projects inherit root configuration in Vitest 5, including concatenated
+setup and include arrays. The four UI E2E resource projects declare
+`extends: false` because each supplies its complete inventory and setup.
+
+Maintained JavaScript tooling wrappers and root package commands load TypeScript
+through `scripts/tsx.mjs`, using tsx's ESM entry. This preserves native loading of
+compiled ESM plugins and their import-only dependencies, including when loaded
+through `require()`. Source TypeScript imports and tsconfig path aliases remain
+available.
+
+These launchers retain tsx's in-process transform cache and Node's module cache.
+They skip tsx's shared disk cache before the loader starts, and child tooling
+inherits that policy. This cache policy does not clean
 existing temporary directories, Node or Vitest caches, or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
+Parallel project runs on macOS and Linux reuse filesystem transforms within
+exclusive worker slots, with separate directories for each Vitest configuration.
+A slot stays owned through preflight, retries, and verified child/group completion;
+uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
+and Windows retain their existing cache ownership. Concurrent invocations still
+need separate cache roots.
+
+Control UI builds report size budgets without enforcing them. Run
+`pnpm ui:check-performance` after a build to enforce absolute budgets, or
+`pnpm ui:check-performance:base <base-commit-sha>` to build and compare both
+revisions with the same toolchain. See [Control UI size budgets](/ci#control-ui-size-budgets).
 
 ### Source tests and subprocess builds
 
@@ -179,17 +321,32 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The seven application subprocess entries run as plain Node JavaScript without a
+The ten declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
-route ownership, the service relay, its POSIX and Windows anchors, and the memory
-plugin's KNN child. The same generation also compiles the fake-backend TUI
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, session transcript archive and reconciliation workers, and
+managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Application/package build entries and Vitest source parents stay unchanged. This
-does not convert Worker-thread entries or arbitrary source CLI fixtures.
+Existing package build entry paths and Vitest source parents stay unchanged. The
+CLI fork-recovery regression also compiles the real CLI entry and its concurrent
+rebind's session accessor and binding helper together. Both processes use the same
+runtime graph while retaining the durable-write race and process-exit assertions.
+Doctor process output tests with bundled plugins disabled reuse that compiled CLI
+inside one lazily created package fixture per test run, keeping real UI checks on
+fixture-owned assets and each scenario’s state separate. Standalone and watch runs
+use live source inside the same fixture. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+
+The session-title and child-link retention tests declare their title-reader,
+session-utils, and listing roots in this same generation. Each fresh
+heap-measurement child runs their JavaScript without spending its execution
+deadline on TypeScript imports.
+
+Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -202,12 +359,18 @@ Node or Bun compiler child and joins it before returning the verified manifest t
 borrowers. The compiler module graph lives in that child, not the long-lived runner
 or Vitest worker. No shard can select a different build graph or adopt another invocation's output. The outer
 runner retains the generation until child close and process-group cleanup
-finish, then verifies it before reporting success. Standalone Vitest and watch runs retain
-source execution: its public close hooks run concurrently with pool shutdown,
-so compilation and artifact deletion require the repository runner's ownership.
+finish, then verifies it before reporting success. Verification reads every recorded
+input and output with bounded asynchronous I/O, keeping the runner responsive during
+large shutdown scans. The invocation owner verifies each borrower's preparation
+before replying and verifies again after all borrowers close; Vitest does not repeat
+these scans inside each shard or during its concurrent pool shutdown. Standalone
+Vitest and watch runs retain source execution: compilation, verification, and artifact
+deletion require the repository runner's ownership.
 A lost owner or failed build fails the run.
-Disposal cancels pending compilation and joins it and every borrower before
-removing the directory. An uncertain compiler or borrower join retains the
+Disposal cancels pending compilation and joins it, every borrower, and outstanding
+preparation requests before asynchronously removing the directory. Signal handlers
+remain active through removal, even when large generations take time to delete.
+Borrower completion does not wait for compilation, so an early child exit can reach that cancellation path. An uncertain compiler or borrower join retains the
 generation and fails the run. Abnormal termination can also leave an unused
 directory; later runs never adopt it.
 
@@ -215,13 +378,12 @@ Every preparation compiles current source; checkout `dist/` is neither an input
 nor a fallback. Build errors, missing artifacts, and changes to recorded build
 inputs fail the run. Compilation includes the native subprocess fixtures before
 they impose resource limits. Third-party dependencies remain external except for
-the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
-native helpers in its own private tree, using the package runtime's loader-relative
-layout. The package itself shares one native tree between runtime entries and its
-sealed worker; it does not copy a second tree beside that worker. The helpers'
-original source hashes are pinned before copying and verified alongside compiler
-output; missing or altered assets fail verification. The default stays off, and
-the existing `off`/`auto`/`require` opt-ins retain their behavior.
+the always-bundled OpenClaw packages. fs-safe remains external so its native loader
+resolves the optional platform package from fs-safe's own dependency scope, including
+nested pnpm installs. Compiled workers use that same installed package; they do not
+copy native binaries. The default stays off, and the existing `off`/`auto`/`require`
+opt-ins retain their behavior. Sealed portable worker bundles use guarded JavaScript
+only and explicitly disable native loading.
 
 Watch mode deliberately keeps the existing live-source path, including tsx for
 Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
@@ -229,6 +391,12 @@ reads current source rather than reusing a compiled snapshot. Existing Vitest
 watch dependency tracking still determines when tests rerun.
 
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
+
+A failed invocation ends with one `[test] FAILED (exit N)` line after child
+processes, cleanup, and report publication settle. Direct `run-vitest.mts` calls
+use `[vitest]` instead. Nested runners retain their diagnostics and exit status;
+the top-level CLI owns the final failure line. Successful runs emit no failure
+trailer.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -240,6 +408,13 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Runs the local changed formatting/typecheck/lint/guard plan, including targeted Vitest owner tests for selected paths. Use `pnpm test:changed` or `pnpm test <target>` for additional test proof matching the touched contract.                                                                                                                       |
+
+`pnpm check:changed` also runs the mobile protocol-event coverage guard when
+changes affect the gateway event catalog or constants, scanned mobile sources,
+coverage declarations, or the guard, its execution helpers, and its routing.
+All-lane checks include it too. Every gateway event must have a handler or an
+explicitly approved non-consumption declaration for each mobile client. To run
+only this guard, use `pnpm check:protocol-coverage`.
 
 For native app changes, `pnpm check:changed` uses platform scope to select lint:
 Android selects `pnpm android:lint` (the Gradle ktlint checks), while Apple app
@@ -271,8 +446,17 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
-Local plugin lint and package-boundary compilation consume native declarations in
-`packages/plugin-sdk/dist` and seven separate plugin API trees in
+Lint reports its final failure on stderr after child joins and artifact ownership
+have settled, including retained ownership when cleanup is uncertain. Standalone
+Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
+whole pipeline and ends with one `[lint] FAILED (exit N)` instead. Shard progress
+distinguishes `passed` from `failed (exit N)`, and stdout remains available for
+machine-readable tool output. Successful runs have no failure trailer. Signals
+forwarded during child execution and shard timeouts fail the command; whole-host
+loss or `SIGKILL` of the reporting process can prevent a final line.
+
+Local plugin lint consumes native SDK declarations in `packages/plugin-sdk/dist`.
+The dedicated package-boundary compiler also consumes seven plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile
 owner validates its consumed source content, inherited config, selected compiler,
 and complete output inventory. Unrelated existing source or test edits retain
@@ -283,11 +467,55 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
-Packaged declarations belong to the public/private tsdown SDK groups. Full and
-package builds emit them in the canonical build; `ciArtifacts` stages only those
-two groups and publishes after both succeed and their relative declaration closure
-is complete. Local preparation never overwrites packaged declarations or writes
-workspace forwarding bridges.
+Native declaration and package-boundary records accept only checkout-owned input
+realpaths, including compiler libraries, inherited config, dependency links, and
+package manifests. Local pnpm links remain supported when their targets stay
+inside the checkout. The tsgo wrapper does not create or reuse a shared external
+install; invocations from subdirectories still use the containing checkout as
+the ownership boundary. Declared checkout junctions and platform path aliases map
+to the same native root for validation and actual snapshot reads. Native resolution
+itself is not sandboxed: an ancestor install can still enter a successful compiler
+receipt. Resolution can read an ancestor's candidate `package.json` while searching
+for declarations, then resolve the import to checkout-local JavaScript. This can
+happen with a complete local frozen install and no external source files in the
+compiler Program; it does not by itself prove an undeclared dependency. Those
+manifests still affect resolution and must remain in the receipt. The owner fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. Warm records use the same input check.
+
+Repair this at checkout provisioning: use a separate physical checkout whose
+ancestor directories do not contain `node_modules`, with the same candidate source
+(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
+Run declaration preparation and dependent lint or package-boundary checks in that
+checkout, so the checks consume its freshly sealed receipts. A symlink to the
+nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
+native ancestor lookup. Do not alter the ancestor installation, add incidental
+dependencies, filter compiler receipts, or transplant declarations to bypass the
+checks. The pinned native compiler's filesystem callback API supports analysis,
+not declaration and build-info emission; native validation does not automatically
+create an isolated checkout.
+
+Packaged SDK declarations belong to one staged owner shared by full, package, and
+`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+and caches their complete staged generation. Each successful compiler supplies its
+source membership through a private staged receipt; missing receipts or inputs
+changed during compilation prevent publication. The shared input snapshot policy
+validates consumed bytes, inherited configuration, generator and manifest inputs,
+and resolution topology without starting a compiler on hits. Cache hits restore
+into fresh staging and pass the same entry and relative declaration closure checks
+before publication.
+All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
+and the AI package) resolve source and dependency realpaths within their checkout.
+Ancestor installs are invisible to TypeScript lookup; selected declaration paths
+that escape through symlinks or bundler resolution fail the build. Each checkout
+needs its own installed declaration inputs, including compiler libraries. Local
+pnpm links are supported when their targets remain inside the checkout; shared
+external installs are not. Actual compiler receipts remain unfiltered, and input
+changes still prevent publication. Runtime module resolution is unchanged;
+native tsgo uses the separate receipt-admission policy above.
+
+Local preparation never overwrites packaged declarations or writes workspace
+forwarding bridges.
 
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
@@ -296,30 +524,79 @@ allowing artifact stamps or downstream checks to proceed. Windows retains normal
 joined-launcher completion because strict group verification is unsupported there.
 This does not detect descendants that deliberately leave the managed groups.
 
-On POSIX hosts, `run-vitest` (including project shards), plugin batches, `test-live`
+`run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
 Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
+Before Vitest starts, isolated invocations also receive native `HOME` and
+`USERPROFILE` inside that namespace. This protects home fallbacks used by worker
+threads, named builtin imports, and import-time captures; changing only a worker's
+JavaScript `process.env` does not change native thread home lookup. Per-worker and
+per-test fixture homes remain separate. Installed Corepack and Playwright browser
+caches retain their caller-selected locations.
+
+Live-aware setup still loads the original profile and stages live state when
+requested. A bounded invocation artifact carries the original home to that setup;
+it does not grant live access, and hermetic setup never consults it. Known
+hermetic selections ignore ambient live and real-home flags. Known wholly
+live-aware selections retain explicit `OPENCLAW_LIVE_USE_REAL_HOME` behavior.
+An explicitly real-home live invocation is refused before config loading if its
+selection mixes home policies or cannot be classified, including custom configs
+and ambiguous project selectors. Run hermetic tests without `LIVE`,
+`OPENCLAW_LIVE_TEST`, `OPENCLAW_LIVE_GATEWAY`, and `OPENCLAW_LIVE_USE_REAL_HOME`
+using `node scripts/run-vitest.mjs <test-path>`, then run the intended live
+selection separately using `node scripts/test-live.mts -- <live-test-path>`.
+The launcher does not split runs or change watch, filter, or report semantics.
+
 The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
 roots, and fallback SQLite state; its lifetime spans shared-worker files and module
-resets. The parent removes
-only that namespace after its child process group has stopped and output pipes
-have closed, including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
+resets. On POSIX detached launches, the parent removes
+only that namespace after its child process group has stopped, output pipes
+have closed, and nested resource owners have released their pending claims,
+including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
 signals, and watchdog termination where supported. Explicit state, profile output,
 and mirror artifacts outside the namespace remain untouched. Failed or unverified
-group joins retain the namespace and report the exact path for manual recovery.
-Windows and raw external invocations retain their existing behavior. Forced parent
-or supervisor death (such as `SIGKILL`) can prevent cleanup; descendants that
-intentionally escape the owned group can recreate removed paths. The wrappers do
+group joins or unresolved nested claims retain the namespace and report the exact
+path for manual recovery. Nested namespaces, fixture lifetimes, and managed commands
+register ephemeral filesystem ownership before admitting work. Release requires
+positive completion evidence; caught cleanup failures, module resets, worker exit,
+or an intermediate runner crash cannot release a pending claim or its ancestors.
+Managed commands keep their existing close-based completion contract unless strict
+tree verification is requested; failed finalization never releases ownership.
+Stop all remaining writers before manually removing the reported exact directory.
+Windows and non-detached launches allocate the same isolated native home, but retain
+their namespace and enclosing claims with a diagnostic after child exit and pipe
+closure because descendant completion cannot be verified. Raw external invocations do not gain
+this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
+cleanup; unregistered descendants that intentionally escape the owned group remain
+outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+This is home isolation, not a filesystem sandbox: explicit absolute paths,
+`os.userInfo()` account lookup, children with stripped or replaced home variables,
+and intentionally real-home live execution remain outside its protection.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
 - Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
 
+`createOpenClawTestState` selects and owns temporary paths and process environment
+selectors. It is not filesystem sandboxing and does not stop external producers.
+Await its asynchronous `restoreEnv()`; stop and join required producers before
+restoring selectors or removing state. Runtime reproductions of state-selection
+leaks require enforced storage isolation, such as a VM or container without access
+to operator stores, not merely temporary `HOME` or state-directory overrides.
+
 ## Control UI, TUI, and extension lanes
 
-- **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript and OpenClaw-delegation real-Gateway suites. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI real-Gateway approval proof:** Check default and explicit Full Access delegation against an isolated Gateway with a mock provider. Build the runtime before running the targeted proof:
+
+  ```bash
+  pnpm build qaRuntime
+  node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts \
+    --configLoader runner extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
+  ```
+
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - **Browser native host:** `node scripts/run-vitest.mjs extensions/browser/src/browser/extension-install.native-host.e2e.test.ts` runs the real native messaging launcher on macOS or Linux against built dist with synthetic installation state; it does not launch Chrome or a Gateway. Windows skips this POSIX process proof because [native bootstrap uses manual pairing there](/tools/chrome-extension#requirements). The E2E owner prepares artifacts before workers. With an already-built candidate, prefix the command with `OPENCLAW_E2E_USE_PREBUILT_DIST=1` to reuse it; missing artifacts fail the test. This case belongs to `pnpm test:e2e`, not the browser source shard or untargeted `pnpm test` unit suite. Linux CI runs it explicitly in `build-artifacts` and validates a JSON report proving the exact named test passed. The workflow skips only frozen historical checkouts missing this test file; that skip is unavailable proof, not a pass or coverage.
@@ -329,6 +606,134 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Selected `plugin-sdk` and `commands` test files route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Base Vitest config defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
+
+### Real-Gateway Control UI fixture lifetimes
+
+Use `createControlUiE2eSuite` from
+`ui/src/e2e/control-ui-e2e-suite.test-support.ts` for real-Gateway browser fixtures.
+`suite.define(...)` owns the native hooks. Each native `it` passes its test context
+to `suite.runScenario(context, ...)`, which owns acquisition, the test body, and
+finalization before another case starts. Acquire and close browser contexts through
+`suite.newBrowserContext` and `suite.closeBrowserContext` so late acquisitions and
+pending closes remain owned.
+
+Retain test state immediately after `createOpenClawTestState` resolves, including
+when later config writes, imports, or startup fail. Hold original startup promises,
+not just their timeout wrappers. Close required producers before releasing state.
+For producers shared across cases, as in the MCP and auth suites, use the suite's
+`resources.run`, `resources.close`, and `resources.release` callbacks instead of
+independent `beforeAll`/`afterAll` cleanup. Resource acquisition follows shared
+server/browser acquisition; teardown joins cases and browser cleanup, closes
+required producers and servers, and releases state only after those closes succeed.
+
+Failed or unjoined cleanup retains selectors and state, blocks later cases using
+this suite owner, and leaves native Vitest to terminate and join the isolated fork. Do not
+swallow close failures or restore the environment beneath unfinished work. The
+lifetime owner preserves existing hook, test, and action budgets.
+
+Gateway close joins received WebSocket work and asynchronous connection cleanup,
+including cooperating background refreshes registered at their producer with
+`trackAsyncWork`. Connection-dependent worker sidecars must stop successfully
+before supervisor transports or other dependencies close; failure retains those
+dependencies and rejects shutdown. Register the actual operation, not just its
+response or timeout wrapper; cache eviction does not end its lifetime. `withOpenClawTestState` likewise
+joins registered callback descendants before releasing state. MCP requests observe
+both caller cancellation and their closing work owner, so shutdown cancels pending
+requests before joining handlers and disposing transports. These scopes do not
+automatically track arbitrary detached work or replace native test-timeout ownership.
+Other Gateway subsystems can retain documented bounded shutdown behavior, so close
+is not a guarantee of universal subsystem or descendant-process quiescence.
+
+<a id="retained-mocked-control-ui-proof" />
+
+### Retained Control UI proof
+
+For startup ownership changes, exercise authenticated hello before browser recovery migration finishes. Project and environment discovery can start from hello; migration completion must not refetch those catalogs or invalidate an admitted start. Keep changed-owner, process-restart, and late-result fences covered separately. Count storage reads by key around rerenders, typing, and streaming without recording credential values. Compare route payload bytes and loaded module closures separately from timings; CSS ownership changes also need retained screenshots and computed-style or geometry checks across New session and Chat.
+
+Migrated mocked and real-Gateway browser proof uses fresh retained directories.
+Scenario captures using `suite.artifactDir`, including Logs and Usage, allocate
+lazily per test attempt; standalone captures allocate per invocation. MCP
+conformance and auth transports each allocate one suite-owned directory after the
+browser-availability check, even when media capture is disabled. Auth transport
+screenshots wait for meaningful content and the presentation owner's finite
+entrance or resize animations, while perpetual descendant activity continues.
+The shared agent-file capture helper allocates once per module evaluation when
+capture is enabled, sharing that directory across the module's scenarios. The Node-only
+`createControlUiE2eArtifactDir(scope, parentDir?)` helper in
+`ui/src/test-helpers/control-ui-e2e-artifacts.ts` prints the actual allocated path.
+An explicit parent wins; otherwise it uses the trimmed existing
+`OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e`
+parent. Existing feature-specific directory controls and script output arguments
+select parents, with unique children beneath them. Explicit screenshot filename
+controls preserve the basename and print the relocated path.
+
+Keep capture gates independent from allocation: `OPENCLAW_CAPTURE_UI_PROOF`,
+`OPENCLAW_UI_E2E_RECORD`, and output-presence gates retain their existing meanings.
+For per-attempt captures, allocate during scenario execution or `beforeEach`.
+Pass the same owner to shared capture helpers so screenshots, reports, and video
+stay together. Distinguish stage names within an attempt. Close the browser context
+before finalizing video.
+
+Successful and failed evidence is retained. Cleanup is manual: remove only exact
+directories that you own and have finished reviewing. Never recursively delete
+the shared parent before a replay. Disposable build/media fixtures and temporary
+raw video have their own cleanup. New captures cannot recover overwritten evidence;
+do not describe a replay as recovery of lost files.
+
+Timeout diagnostics allocate fresh children beneath the existing
+`OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
+JSON report together. Their `ci.shardIndex` and `ci.vitestShardCount` fields record
+`VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal
+CI. Missing values remain `null`; manual and separate release E2E invocations do
+not infer this metadata from Vitest's `--shard` argument.
+
+Mantis allocates an invocation directory for setup logs,
+capture attempts, and its report; the builder preserves each attempt's relative
+paths and refuses to overwrite an existing report.
+
+Separate output owners remain, including `chat-attachment-read-lifecycle`.
+Do not assume unmigrated owners share this retention guarantee.
+
+### Screenshots during Chromium recordings
+
+The session-host command-state real-Gateway proof uses `page.screenshot({ path })`
+without `clip` or `fullPage: true`, keeping its existing viewport, recording size,
+waits, and animation options. This path was verified on Linux with Playwright
+1.62.1 and full Chrome for Testing 151.0.7922.34.
+
+Other recording owners have not been migrated or certified by this proof; some
+still use locator or full-page screenshots. This is not a suite-wide capture
+policy. Verify each owner's screenshot content and finalized video before
+changing its capture mode. When using the verified viewport path, crop any
+element-only PNG outside the browser. Cropping cannot recover missing content
+from an already-corrupted recording.
+
+In a macOS arm64 reproduction with Playwright 1.62.1 and its bundled full Chrome
+for Testing 151.0.7922.34, `locator.screenshot()` and
+`page.screenshot({ clip })` caused small screencast frames. The element appears at
+the video origin with gray elsewhere, even though the PNG, DOM geometry, and
+functional assertions are correct. `fullPage: true` is not a general workaround:
+a document larger than the viewport can instead produce a shrunken page with
+gray padding. Unclipped viewport captures preserved the recording in the same
+synthetic reproduction; other browser versions and platforms require their own
+verification.
+
+This is an upstream capture limitation, not a Gateway or context-cleanup failure.
+[Chromium's screenshot handler](https://chromium.googlesource.com/chromium/src/+/151.0.7922.34/content/browser/devtools/protocol/page_handler.cc#1492)
+temporarily changes the shared view size and restores it after capture; its
+screencast producer can observe the intermediate surface.
+[Playwright's recorder](https://github.com/microsoft/playwright/blob/v1.62.1/packages/playwright-core/src/server/videoRecorder.ts#L166)
+pads undersized frames with gray. Closing the context finalizes the video but
+does not repair those frames. Do not filter out bad frames or change UI behavior
+to conceal this limitation.
+
+Verify finalized video content around every capture, not just its dimensions or
+the success of locator assertions. For a dependency upgrade, reproduce with a
+synthetic page containing an offset small element, compare element, clipped,
+viewport, and oversized full-page screenshots, and inspect every decoded frame.
+Keep real host/profile footage local; inspect public proof for synthetic-only
+content before sharing. Correct PNGs remain useful still-image proof, but a
+corrupted video is not continuous-flow proof.
 
 ## Gateway and E2E
 
@@ -428,6 +833,8 @@ They print a companion `<output>.reports-<unique>` directory. Keep that director
 it contains original reports, per-attempt coverage files when coverage is enabled,
 and an `index.json` with child exit codes, signals, timeouts and unstarted work.
 Only the accepted retry attempt contributes to the aggregate.
+Blob reports are exact-version artifacts. Rerun child reports with the current
+Vitest version before merging artifacts produced by another version.
 
 The aggregate preserves the accepted case inventory, but is not a lossless
 replacement for the originals. Native merging does not restore snapshot summaries
@@ -521,15 +928,20 @@ Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-ben
 
 <Accordion title="Gateway startup (scripts/bench-gateway-startup.ts)">
 
+Gateway startup, restart, and agent concurrency benchmark fixtures use temporary home and state directories, loopback binding, and `discovery.mdns.mode: "off"` so synthetic Gateways do not advertise on the LAN, including on macOS.
+
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
 ```bash
 pnpm test:startup:gateway -- --runs 5 --warmup 1
 pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5
 node --import tsx scripts/bench-gateway-startup.ts --case default --runs 5 --output .artifacts/gateway-startup.json
+node --import tsx scripts/bench-gateway-startup.ts --case incidentCombined --runs 5 --warmup 1 --timeout-ms 60000 --output .artifacts/gateway-startup-incident.json
 ```
 
-Case ids: `default`, `skipChannels` (channel startup skipped), `oneInternalHook`, `allInternalHooks`, `fiftyPlugins` (50 manifest plugins), `fiftyStartupLazyPlugins` (50 startup-lazy manifest plugins).
+Case ids: `default`, `skipChannels` (channel startup skipped), `oneInternalHook`, `allInternalHooks`, `fiftyPlugins` (50 manifest plugins), `fiftyStartupLazyPlugins` (50 startup-lazy manifest plugins), `incidentDatabase`, `incidentNullMetadata`, `incidentWorkspace`, `incidentPackagedPlugins`, and `incidentCombined`.
+
+The incident cases are opt-in because each sample builds an isolated, non-sensitive load fixture: current global and agent databases, 100,000 retained audit rows with freelist fragmentation, eight agent workspaces containing 80,000 files (about 800 MB), and the packaged plugin inventory. Run the combined case only on a clean machine with enough free disk space; the fixture directory is removed after each sample. `incidentCombined` fails when `/healthz` p95 reaches 30 seconds or `/readyz` p95 reaches 60 seconds.
 
 Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time, Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace metrics, event-loop delay, and plugin lookup-table detail metrics. The script sets `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
 

@@ -8,13 +8,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import {
+  executeSystemAgentOperation as executeSystemAgentOperationImpl,
+  type SystemAgentCommandDeps,
+} from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
   type SystemAgentPluginMetadataTestSnapshot,
@@ -162,9 +165,12 @@ const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const executeSystemAgentOperation: typeof executeSystemAgentOperationImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => executeSystemAgentOperationImpl(...args));
+
 beforeAll(() => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
   mockConfig.setPluginMetadataBinder((config) => {
     pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
   });
@@ -173,7 +179,7 @@ beforeAll(() => {
 
 afterAll(() => {
   mockConfig.setPluginMetadataBinder(() => {});
-  pluginMetadataSnapshot?.restore();
+
   restoreCliBackendFixture?.();
 });
 
@@ -253,7 +259,7 @@ describe("parseSystemAgentOperation", () => {
         surface: "cli",
         runtime,
       },
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
     const audit = readLastAuditEntry();
@@ -410,7 +416,7 @@ describe("parseSystemAgentOperation", () => {
     expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
   });
 
@@ -482,7 +488,7 @@ describe("parseSystemAgentOperation", () => {
         surface: "cli",
         runtime,
       },
-      { commit: expect.any(Function) },
+      { beforePersistentApply: undefined },
     );
   });
 
@@ -930,7 +936,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -976,7 +982,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }

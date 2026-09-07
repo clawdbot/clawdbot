@@ -2,15 +2,13 @@ import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 
 export type HovercardBootstrapTrigger = "focus" | "pointer";
 
-export class LazyHovercardBootstrap<TElement extends HTMLElement, TProperties> {
+export class LazyHovercardBootstrap<TElement extends HTMLElement> {
   private stopListeners: (() => void) | null = null;
 
   constructor(
     private readonly params: {
       tag: string;
       load: () => Promise<CustomElementConstructor>;
-      snapshot: (element: TElement) => TProperties;
-      restore: (element: TElement, properties: TProperties) => void;
       onDefined?: () => void;
     },
   ) {}
@@ -26,20 +24,11 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement, TProperties> {
   }
 
   async define(): Promise<void> {
-    const pending = new Map(
-      [...document.querySelectorAll<TElement>(this.params.tag)].map((element) => [
-        element,
-        this.params.snapshot(element),
-      ]),
-    );
     await ensureCustomElementDefined(this.params.tag, async () => {
       const provider = await this.params.load();
-      // Non-isolated test modules can share one document and element registry.
+      // Another loader may register the tag while this import is pending.
       if (!customElements.get(this.params.tag)) {
         customElements.define(this.params.tag, provider);
-      }
-      for (const [element, properties] of pending) {
-        this.params.restore(element, properties);
       }
     });
     this.stopListeners?.();

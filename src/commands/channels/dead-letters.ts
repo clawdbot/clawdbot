@@ -18,7 +18,12 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  return { channelId, accountId: options.account?.trim() || "default" };
+  // Only omission selects the default queue; an explicit blank selector must not change scope.
+  const accountId = options.account?.trim() ?? "default";
+  if (!accountId) {
+    throw new Error("--account must not be blank");
+  }
+  return { channelId, accountId };
 }
 
 function parseLimit(value: unknown): number {

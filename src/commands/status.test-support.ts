@@ -7,6 +7,7 @@ import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
+import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
@@ -101,6 +102,17 @@ export const baseStatusOverviewSurface = {
   ...baseStatusOverviewScanFields,
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
+
+export function getStatusOverviewRowValue(
+  item: string,
+  overrides: Partial<Parameters<typeof buildStatusOverviewSurfaceRows>[0]> = {},
+): string | undefined {
+  return buildStatusOverviewSurfaceRows({
+    ...baseStatusOverviewSurface,
+    agentsValue: "2 total",
+    ...overrides,
+  }).find((row) => row.Item === item)?.Value;
+}
 
 const baseStatusSummary = {
   tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
@@ -228,32 +240,17 @@ const statusTestDecorators = {
   ok: (value: string) => `ok(${value})`,
   warn: (value: string) => `warn(${value})`,
   muted: (value: string) => `muted(${value})`,
-  accentDim: (value: string) => `accent(${value})`,
 };
 
 const statusTestFormatting = {
-  shortenText: (value: string) => value,
-  formatCliCommand: (value: string) => `cmd:${value}`,
   formatTimeAgo: (value: number) => `${value}ms`,
   formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
-  formatTokensCompact: () => "12k",
-  formatPromptCacheCompact: () => "cache ok",
-  formatHealthChannelLines: () => ["QuietChat: OK · ready"],
-  formatPluginCompatibilityNotice: (notice: { message?: unknown }) => String(notice.message),
-  formatUpdateAvailableHint: () => "update available",
 };
 
 const statusTestMemoryResolvers = {
   resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
   resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
   resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
-};
-
-const statusTestTheme = {
-  heading: (value: string) => `# ${value}`,
-  muted: (value: string) => `muted(${value})`,
-  warn: (value: string) => `warn(${value})`,
-  error: (value: string) => `error(${value})`,
 };
 
 export function createStatusCommandOverviewRowsParams(
@@ -313,11 +310,6 @@ export function createStatusCommandReportDataParams(
     pluginCompatibility: baseStatusPluginCompatibility,
     pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
-    ...statusTestDecorators,
-    ...statusTestFormatting,
-    ...statusTestMemoryResolvers,
-    theme: statusTestTheme,
-    renderTable: ({ rows }: { rows: Array<Record<string, string>> }) => `table:${rows.length}`,
     updateValue: "available · custom update",
     ...overrides,
   };

@@ -1,17 +1,24 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   loadSessionEntry,
+  markSessionAbortTarget,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -64,6 +71,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
       await replaceSessionEntry({ storePath, sessionKey }, entry);
       const controller = createReplyRestartRecoveryClaimController({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         admissionRunId: "recovery-run",
         getEntry: () => entry,
         getSessionId: () => sessionId,
@@ -110,6 +118,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
       getSessionId: () => sessionId,
@@ -131,6 +140,173 @@ describe("createReplyRestartRecoveryClaimController", () => {
       restartRecoveryDeliveryRunId: "recovery-run",
       status: "running",
     });
+  });
+
+  it.each([
+    "restart-handoff",
+    "restart-abort",
+    "successor-generation",
+    "missing-generation",
+    "commit-rotation",
+    "commit-abort",
+  ] as const)(
+    "preserves the delivery claim when queued cleanup loses ownership through %s",
+    async (interruption) => {
+      const root = tempDirs.make("openclaw-reply-claim-queued-cleanup-");
+      const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
+      let restartAborted = false;
+      let interruptBeforeCommit = false;
+      let entry: InternalSessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "source-turn",
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoverySourceIngress: "channel",
+      };
+      await replaceSessionEntry(scope, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        lifecycleGeneration:
+          interruption === "missing-generation" ? undefined : lifecycleGeneration,
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => {
+          if (interruptBeforeCommit) {
+            interruptBeforeCommit = false;
+            // The store awaits the prepared patch before entering its write transaction.
+            queueMicrotask(() => {
+              if (interruption === "commit-rotation") {
+                rotateAgentEventLifecycleGeneration();
+              } else {
+                restartAborted = true;
+              }
+            });
+          }
+          return "session";
+        },
+        isRestartAbort: () => restartAborted,
+        resolveDeliveryContext: () => deliveryContext,
+        setEntry: (next) => {
+          entry = next;
+        },
+        ...scope,
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+
+      const writerEntered = createDeferred();
+      const releaseWriter = createDeferred();
+      let successorGeneration: string | undefined;
+      const handoff = updateSessionEntry(scope, async (current) => {
+        writerEntered.resolve();
+        await releaseWriter.promise;
+        if (interruption === "restart-handoff" || interruption === "successor-generation") {
+          transitionMainSessionRecovery(current, {
+            kind: "mark_interrupted",
+            cycleId: "restart-cycle",
+            now: 2,
+            runs: [{ runId: "original-run", lifecycleGeneration }],
+          });
+          if (successorGeneration) {
+            const recovery = current.mainRestartRecovery!;
+            transitionMainSessionRecovery(current, {
+              kind: "prepare_attempt",
+              attempt: 1,
+              lifecycleGeneration: successorGeneration,
+              now: 3,
+              observation: {
+                sessionId: current.sessionId,
+                cycleId: recovery.cycleId,
+                revision: recovery.revision,
+              },
+              runId: "recovery-run",
+              executionIdentity: { state: "disabled" },
+            });
+            transitionMainSessionRecovery(current, {
+              kind: "admit_recovery",
+              lifecycleGeneration: successorGeneration,
+              now: 4,
+              runId: "recovery-run",
+              sessionId: current.sessionId,
+            });
+          }
+        }
+        return current;
+      });
+      await writerEntered.promise;
+      interruptBeforeCommit = interruption === "commit-rotation" || interruption === "commit-abort";
+      // The old cleanup enters before shutdown; its actual write waits behind the handoff.
+      const clearing = controller.clear().catch((error: unknown) => {
+        expect(isAgentRunStaleLifecycleError(error)).toBe(true);
+      });
+      try {
+        if (interruption === "restart-abort") {
+          restartAborted = true;
+        } else if (interruption === "successor-generation") {
+          successorGeneration = rotateAgentEventLifecycleGeneration();
+        }
+      } finally {
+        releaseWriter.resolve();
+      }
+      await Promise.all([handoff, clearing]);
+
+      const persisted = loadSessionEntry(scope);
+      expect(persisted).toMatchObject({
+        status: "running",
+        abortedLastRun: interruption === "restart-handoff",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "source-turn",
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoverySourceIngress: "channel",
+      });
+      expect(persisted?.restartRecoveryTerminalRunIds).toBeUndefined();
+      if (successorGeneration) {
+        expect(persisted?.restartRecoveryRuns).toContainEqual({
+          runId: "recovery-run",
+          lifecycleGeneration: successorGeneration,
+        });
+      }
+    },
+  );
+
+  it("retires the source claim after an ordinary user abort", async () => {
+    const root = tempDirs.make("openclaw-reply-claim-user-abort-");
+    const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
+    let entry: InternalSessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      status: "running",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryContext: { channel: "telegram", to: "chat" },
+      restartRecoverySourceIngress: "channel",
+    };
+    await replaceSessionEntry(scope, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      admissionRunId: "recovery-run",
+      getEntry: () => entry,
+      getSessionId: () => "session",
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => undefined,
+      setEntry: (next) => {
+        entry = next;
+      },
+      ...scope,
+    });
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    await markSessionAbortTarget({ scope });
+    await controller.clear();
+
+    const persisted = loadSessionEntry(scope);
+    expect(persisted?.abortedLastRun).toBe(true);
+    expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryTerminalRunIds).toContain("source-turn");
   });
 
   it("adopts an exact channel recovery claim before execution starts", async () => {
@@ -160,6 +336,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
       getSessionId: () => sessionId,
@@ -228,6 +405,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
       isRestartAbort: () => false,
@@ -311,6 +489,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
       isRestartAbort: () => false,
@@ -405,6 +584,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
       isRestartAbort: () => false,
@@ -505,6 +685,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       },
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
       isRestartAbort: () => false,

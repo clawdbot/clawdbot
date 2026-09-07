@@ -1,7 +1,7 @@
 // Qa Lab plugin module implements token efficiency report behavior.
 import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
-import { resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
+import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 type ProcessedTokenEvidence = "measured" | "derived" | "unavailable";
 
@@ -99,15 +99,6 @@ const ZERO_AGGREGATE: TokenEfficiencyReport["aggregate"] = {
   flaggedScenarios: [],
   savingsScenarios: [],
 };
-
-function normalizeRuntimePair(
-  pair: [RuntimeId, RuntimeId] | null | undefined,
-): [RuntimeId, RuntimeId] {
-  if (pair?.[0] && pair?.[1]) {
-    return pair;
-  }
-  return ["openclaw", "codex"];
-}
 
 function normalizeTokenCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;

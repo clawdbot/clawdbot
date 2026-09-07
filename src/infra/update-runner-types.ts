@@ -1,11 +1,15 @@
+import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
-export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+export type UpdateStepAdvisory =
+  | PackageUpdateStepAdvisory
+  | { kind: "candidate-runtime-unavailable"; message: string };
 
 export type UpdateStepResult = {
   name: string;
@@ -22,11 +26,12 @@ export type UpdateStepResult = {
 };
 
 export type UpdateRunResult = {
+  runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
   root?: string;
   reason?: string;
-  before?: { sha?: string | null; version?: string | null };
+  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
     version?: string | null;
@@ -35,18 +40,7 @@ export type UpdateRunResult = {
   };
   steps: UpdateStepResult[];
   durationMs: number;
-  recovery?:
-    | { serviceRestartSafe: true }
-    | {
-        serviceRestartSafe: false;
-        reason:
-          | "source-rollback-failed"
-          | "manager-unavailable"
-          | "deps-install-failed"
-          | "build-failed"
-          | "rollback-checkout-dirty"
-          | "runtime-verification-failed";
-      };
+  recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";
@@ -67,21 +61,7 @@ export type UpdateRunResult = {
       };
       npm: {
         changed: boolean;
-        outcomes: Array<{
-          pluginId: string;
-          status: "updated" | "unchanged" | "skipped" | "error";
-          message: string;
-          currentVersion?: string;
-          nextVersion?: string;
-          channelFallback?: {
-            requestedSpec: string;
-            usedSpec: string;
-            requestedLabel: string;
-            usedLabel: string;
-            reason: "unavailable" | "failed";
-            message: string;
-          };
-        }>;
+        outcomes: PluginUpdateOutcome[];
       };
       integrityDrifts: Array<{
         pluginId: string;
@@ -123,6 +103,7 @@ export type UpdateStepProgress = {
 };
 
 export type UpdateRunnerOptions = {
+  runId?: string;
   cwd?: string;
   argv1?: string;
   tag?: string;
@@ -131,6 +112,19 @@ export type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  /** Expose a new checkout only after target admission; subsequent work uses the published path. */
+  publishGitCheckout?: () => Promise<string>;
+  /** Read-only admission before executing a fetched candidate; never stops a service. */
+  inspectGitTarget?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<void>;
+  validateCandidate?: (root: string) => Promise<void>;
+  prepareGitExposure?: (
+    candidateRoot: string,
+    candidateSha: string,
+    env: NodeJS.ProcessEnv | undefined,
+  ) => Promise<void>;
   beforeGitMutation?: (target: {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   collectModuleExportNames,
@@ -10,11 +9,8 @@ import {
   type SourceModule,
 } from "./check-export-name-collisions.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveSourceRoots,
-  runAsScript,
-} from "./lib/ts-guard-utils.mts";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
+import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 export type WrapperShadowingViolation = {
   name: string;
@@ -147,21 +143,15 @@ export function findWrapperShadowingViolations(modules: SourceModule[]) {
 }
 
 export async function collectRepositoryWrapperShadowing(repoRoot: string) {
-  const collectedFiles = await collectTypeScriptFilesFromRoots(
-    resolveSourceRoots(repoRoot, ["src"]),
-    {
-      fileExtensions: [".ts", ".mts", ".js", ".mjs"],
-      includeTests: true,
-      skipDirectories: ["test", "__fixtures__"],
-    },
-  );
-  const files = collectedFiles.filter((filePath) => !isExcludedWrapperShadowingSource(filePath));
-  const modules = await Promise.all(
-    files.map(async (filePath) => ({
-      content: await fs.readFile(filePath, "utf8"),
-      path: normalizeRelativePath(path.relative(repoRoot, filePath)),
-    })),
-  );
+  const files = await collectSourceFileContents({
+    repoRoot,
+    scanRoots: ["src"],
+    scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
+    ignoredDirNames: new Set(["node_modules", "test", "__fixtures__"]),
+  });
+  const modules = files
+    .filter(({ relativeFile }) => !isExcludedWrapperShadowingSource(relativeFile))
+    .map(({ content, relativeFile }) => ({ content, path: relativeFile }));
   return findWrapperShadowingViolations(modules);
 }
 

@@ -1,40 +1,15 @@
 /**
  * Worker entrypoint for warming provider auth state off the main thread.
  */
-import { parentPort, workerData } from "node:worker_threads";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { replaceRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "./auth-profiles.js";
-import type { RuntimeProviderAuthLookup } from "./model-auth.js";
+import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
+import { listAgentIds } from "./agent-scope-config.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles.js";
+import type {
+  ProviderAuthWarmWorkerInput,
+  ProviderAuthWarmWorkerResult,
+} from "./model-provider-auth-warm.js";
 import { buildCurrentProviderAuthStateSnapshot } from "./model-provider-auth.js";
-
-/**
- * Worker entrypoint for warming provider auth state without blocking the foreground
- * model-selection path.
- */
-type ProviderAuthWarmRuntimeAuthStore = {
-  agentDir?: string;
-  store: AuthProfileStore;
-};
-
-type ProviderAuthWarmWorkerInput = {
-  cfg: OpenClawConfig;
-  runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
-  runtimeAuthLookups?: Array<{
-    agentId: string;
-    lookup: RuntimeProviderAuthLookup;
-  }>;
-  omitFalseProviderAuth?: boolean;
-};
-
-type ProviderAuthWarmWorkerResult =
-  | {
-      status: "ok";
-      snapshot: Awaited<ReturnType<typeof buildCurrentProviderAuthStateSnapshot>>;
-    }
-  | {
-      status: "failed";
-      error: string;
-    };
 
 function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   if (!value || typeof value !== "object") {
@@ -43,6 +18,7 @@ function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   const record = value as Record<string, unknown>;
   return (
     "cfg" in record &&
+    Array.isArray(record.syntheticAuth) &&
     (!("runtimeAuthStores" in record) || Array.isArray(record.runtimeAuthStores)) &&
     (!("runtimeAuthLookups" in record) || Array.isArray(record.runtimeAuthLookups)) &&
     (!("omitFalseProviderAuth" in record) || typeof record.omitFalseProviderAuth === "boolean")
@@ -60,6 +36,16 @@ export async function runProviderAuthWarmWorkerInput(
     };
   }
   try {
+    const syntheticAuth = new Map(input.syntheticAuth.map((scope) => [scope.agentId, scope]));
+    for (const agentId of listAgentIds(input.cfg)) {
+      const scope = syntheticAuth.get(agentId);
+      if (!scope) {
+        throw new Error(`Prepared synthetic auth scope is missing for ${agentId}`);
+      }
+      restorePreparedSyntheticAuthFacts(input.cfg, scope.facts, {
+        workspaceDir: scope.workspaceDir,
+      });
+    }
     if (input.runtimeAuthStores?.length) {
       // Worker threads do not share module-local caches, so hydrate runtime stores explicitly.
       replaceRuntimeAuthProfileStoreSnapshots(input.runtimeAuthStores);
@@ -70,6 +56,7 @@ export async function runProviderAuthWarmWorkerInput(
       runtimeAuthLookups: new Map(
         input.runtimeAuthLookups?.map(({ agentId, lookup }) => [agentId, lookup]),
       ),
+      syntheticAuth,
       omitFalseProviderAuth: input.omitFalseProviderAuth,
     });
     return {
@@ -84,8 +71,4 @@ export async function runProviderAuthWarmWorkerInput(
   }
 }
 
-if (parentPort) {
-  const sendToParent: (message: ProviderAuthWarmWorkerResult) => void =
-    parentPort.postMessage.bind(parentPort);
-  sendToParent(await runProviderAuthWarmWorkerInput(workerData));
-}
+serveWorkerTasks(runProviderAuthWarmWorkerInput);

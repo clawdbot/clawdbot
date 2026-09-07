@@ -8,6 +8,7 @@ export {
 } from "./systemd-exec.js";
 export {
   installSystemdService,
+  refreshLegacySystemdServiceMetadata,
   stageSystemdService,
   uninstallSystemdService,
 } from "./systemd-install.js";

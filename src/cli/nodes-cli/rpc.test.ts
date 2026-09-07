@@ -10,7 +10,7 @@ vi.mock("../gateway-rpc.js", () => ({
   callGatewayFromCliWithTransport: gatewayMocks.callGatewayFromCliWithTransport,
 }));
 
-import { resolveCliNode, resolveNodeDiagnosticsId } from "./rpc.js";
+import { buildNodeInvokeParams, resolveCliNode, resolveNodeDiagnosticsId } from "./rpc.js";
 
 function requestError(params: {
   code?: string;
@@ -134,5 +134,45 @@ describe("node inventory resolution", () => {
   it.each(["", " \t "])("rejects explicit blank --timeout %j before transport", async (timeout) => {
     await expect(resolveCliNode({ timeout }, "some-node")).rejects.toThrow(/Invalid --timeout/);
     expect(gatewayMocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
+  });
+});
+
+describe("node invoke envelope", () => {
+  it("preserves caller-owned params, idempotency key, descriptors, and key order", () => {
+    const params = { url: "openclaw://widget/local" };
+    const result = buildNodeInvokeParams({
+      nodeId: "mac-1",
+      command: "canvas.present",
+      params,
+      idempotencyKey: "caller-supplied-key",
+      timeoutMs: 35_000,
+    });
+
+    expect(Object.keys(result)).toEqual([
+      "nodeId",
+      "command",
+      "params",
+      "idempotencyKey",
+      "timeoutMs",
+    ]);
+    expect(result.params).toBe(params);
+    expect(result.idempotencyKey).toBe("caller-supplied-key");
+    expect(Object.getOwnPropertyDescriptor(result, "params")).toEqual({
+      value: params,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
+  it("retains undefined params while generating an idempotency key", () => {
+    const result = buildNodeInvokeParams({ nodeId: "mac-1", command: "canvas.hide" });
+
+    expect(Object.keys(result)).toEqual(["nodeId", "command", "params", "idempotencyKey"]);
+    expect(Object.hasOwn(result, "params")).toBe(true);
+    expect(result.params).toBeUndefined();
+    expect(result.idempotencyKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
   });
 });

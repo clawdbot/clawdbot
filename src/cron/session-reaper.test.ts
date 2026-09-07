@@ -148,7 +148,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.swept).toBe(true);
@@ -211,7 +210,6 @@ describe("sweepCronRunSessions", () => {
         sessionStorePath: storePath,
         nowMs: now,
         log: failingLog,
-        force: true,
       });
 
       expect(result).toEqual({ swept: true, pruned: 1 });
@@ -327,7 +325,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result).toEqual({ swept: true, pruned: 1 });
@@ -351,7 +348,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(0);
@@ -379,7 +375,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(0);
@@ -422,7 +417,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(2);
@@ -453,7 +447,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
     const admissionPromise = beginSessionWorkAdmission({
       scope: storePath,
@@ -482,6 +475,55 @@ describe("sweepCronRunSessions", () => {
     }
   });
 
+  it("prunes idle siblings while skipping rows claimed by an in-flight run", async () => {
+    const now = Date.now();
+    const busyKey = "agent:main:cron:job1:run:busy-run";
+    const idleKey = "agent:main:cron:job2:run:idle-run";
+    await seedSessionEntries(storePath, {
+      [busyKey]: {
+        sessionId: "busy-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+      [idleKey]: {
+        sessionId: "idle-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["busy-run"],
+      assertAllowed: () => {},
+    });
+    const warn = vi.fn();
+    const busyLog: Logger = { ...log, warn };
+
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: busyLog,
+      });
+
+      expect(result.swept).toBe(true);
+      expect(result.pruned).toBe(1);
+      expect(warn).not.toHaveBeenCalled();
+      const remaining = readSessionEntries(storePath);
+      expect(remaining[busyKey]).toMatchObject({ sessionId: "busy-run" });
+      expect(remaining[idleKey]).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+
+    const retry = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 5 * 60_000,
+      log: busyLog,
+    });
+    expect(retry).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[busyKey]).toBeUndefined();
+  });
+
   it("respects custom retention", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -497,7 +539,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(1);
@@ -518,7 +559,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.swept).toBe(false);
@@ -542,7 +582,6 @@ describe("sweepCronRunSessions", () => {
         sessionStorePath: storePath,
         nowMs: now,
         log,
-        force: true,
       });
 
       expect(result.swept).toBe(false);
@@ -580,7 +619,7 @@ describe("sweepCronRunSessions", () => {
     expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
   });
 
-  it("throttles sweeps without force", async () => {
+  it("throttles repeated sweeps", async () => {
     const now = Date.now();
     // First sweep runs
     const r1 = await sweepCronRunSessions({
@@ -747,7 +786,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(1);
@@ -777,7 +815,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
 
     expect(result.pruned).toBe(1);

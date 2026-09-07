@@ -202,11 +202,11 @@ function pinExecToolArgs(
   };
 }
 
-function restrictExecToolParameters(
-  parameters: AnyAgentTool["parameters"],
+function restrictExecToolParameters<T>(
+  parameters: T,
   host: PinnedExecToolTarget["host"],
   hasPinnedNode: boolean,
-): AnyAgentTool["parameters"] {
+): T {
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     return parameters;
   }
@@ -228,9 +228,8 @@ function restrictExecToolParameters(
     ? rawRequired.filter((name) => typeof name !== "string" || includeParameter(name))
     : rawRequired;
   return {
-    ...schema,
+    ...parameters,
     properties,
     ...(Array.isArray(rawRequired) ? { required } : {}),
-    // SAFETY: this preserves the original schema shape and only removes properties and required names.
-  } as AnyAgentTool["parameters"];
+  };
 }

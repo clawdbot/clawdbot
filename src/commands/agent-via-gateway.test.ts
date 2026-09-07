@@ -364,14 +364,31 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
-  it("rejects a blank agent before selecting a local or Gateway target", async () => {
-    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
-      "--agent must not be blank",
-    );
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["agent", "--agent"],
+    ["sessionId", "--session-id"],
+    ["sessionKey", "--session-key"],
+    ["to", "--to"],
+  ] as const)(
+    "rejects blank %s selectors before local or Gateway dispatch",
+    async (option, flag) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+        for (const local of [false, true]) {
+          for (const value of ["", "   "]) {
+            await expect(
+              agentCliCommand(
+                { message: "hi", to: "agent:main:explicit-target", local, [option]: value },
+                runtime,
+              ),
+            ).rejects.toThrow(`${flag} must not be blank`);
+          }
+        }
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(agentCommand).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
@@ -1267,25 +1284,28 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("scopes legacy global session keys to the requested agent before gateway dispatch", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
+  it.each(["global", "unknown"])(
+    "preserves logical %s keys with an explicit agent before gateway dispatch",
+    async (sessionKey) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+          await agentCliCommand({ message: "hi", agent: "ops", sessionKey }, runtime);
 
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:ops:global");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          const params = requireRecord(request.params, "gateway request params");
+          expect(params.agentId).toBe("ops");
+          expect(params.sessionKey).toBe(sessionKey);
+        },
+        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      );
+    },
+  );
 
   it("preserves unscoped global session keys when no agent is requested", async () => {
     await withTempStore(
