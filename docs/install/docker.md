@@ -44,7 +44,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh
     ```
 
-    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.2.26` and prereleases such as `2026.2.26-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in, useful for the [sandboxed browser](/gateway/sandboxing#sandboxed-browser) tool without a first-run Playwright install.
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.2.26` and prereleases such as `2026.2.26-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in for the [Gateway-controlled browser](/install/docker#using-the-control-ui-browser). The agent sandbox browser uses a separate image.
 
   </Step>
 
@@ -104,6 +104,70 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 
   </Step>
 </Steps>
+
+### Using the Control UI browser
+
+The [Control UI Browser panel](/web/control-ui/panels#browser-panel) displays a
+browser controlled by the Gateway. It is separate from the browser on your laptop
+or phone that opens the dashboard. For a local managed browser with a Docker
+Gateway, Chromium must be available **inside the Gateway container**.
+
+For a new installation, use the official browser-equipped image with the normal
+Compose setup; no custom Dockerfile is needed:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest-browser"
+./scripts/docker/setup.sh
+```
+
+For a pinned deployment, choose a release's `-browser` tag instead of the moving
+`latest-browser` tag. For an existing Compose installation, change `OPENCLAW_IMAGE`
+in its `.env` to the browser variant, then pull and recreate the Gateway using
+the same Compose files and overlays as your current deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose up -d openclaw-gateway
+```
+
+Keep your existing volumes, ports, and other settings. Do not rerun setup with an
+empty shell environment to change only the image: setup rewrites `.env` from the
+current shell and defaults.
+
+An existing home volume or bind mount covering `/home/node/.cache/ms-playwright`
+can hide the image's bundled Chromium. If browser discovery still fails after the
+image switch, check those mounts. Preserve the data, then either provision
+Chromium in the mounted home or adjust the mounts to leave the image's browser
+cache visible; recreating the container does not refresh a populated home volume.
+
+For a new installation from a local source build, bake Chromium into the image:
+
+```bash
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+```
+
+This build-time option installs Chromium and Xvfb; setting it on
+an already-built container does not install a browser.
+
+The image supplies Chromium, not a replacement for your browser configuration:
+
+- Keep browser control enabled (`browser.enabled`). Use a local managed profile
+  such as `openclaw` for the container's Chromium, not an extension, attach-only,
+  or remote-CDP profile intended for another browser.
+- OpenClaw auto-detects the image's Playwright-managed Chromium on Linux. An
+  explicit `browser.executablePath` or profile executable path must point to a
+  binary inside the container; a path from your laptop will not work there.
+- A headless container needs headless browser operation. Check explicit
+  `browser.headless`, profile headless settings, and `OPENCLAW_BROWSER_HEADLESS`
+  overrides if startup reports a missing display. See [Browser configuration](/tools/browser-control).
+- Connect with `operator.admin` access to a Gateway advertising `browser.request`.
+  Open **+ → Browser** in the Chat side panel, navigate to a page, and confirm that
+  its snapshot loads and navigation works. Loading the dashboard alone does not
+  verify that Chromium can start.
+
+This is not the separate [sandboxed browser](/gateway/sandboxing#sandboxed-browser)
+container used by sandboxed agent sessions. Selecting a Gateway `-browser` image
+does not build or configure that sandbox image.
 
 ### Headless bootstrap
 
