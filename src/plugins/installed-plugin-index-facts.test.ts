@@ -61,6 +61,8 @@ describe("prepared installed-index readers", () => {
         expect(ownerIds(lookup, " SHARED ")).toEqual(["alpha", "beta"]);
         expect(lookup.canResolveDirectProviderIds(["shared"], new Set())).toBe(false);
         expect(lookup.canResolveDirectProviderIds(["alpha"], new Set())).toBe(true);
+        expect(lookup.hasInstalledPluginIds([" ALPHA ", "beta"])).toBe(true);
+        expect(lookup.hasInstalledPluginIds(["shared"])).toBe(false);
         expect(lookup.hasShorthandModelOwners(["fixture-model"])).toBe(true);
         expect(lookup.hasShorthandModelOwners(["fixture/anything"])).toBe(true);
         expect(lookup.hasAgentHarnessOwners(["fixture-runtime"])).toBe(true);

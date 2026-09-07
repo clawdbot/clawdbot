@@ -1,14 +1,9 @@
 import { isProxy } from "node:util/types";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { InstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexFacts,
+} from "./installed-plugin-index-types.js";
 import { getPluginCache } from "./plugin-cache.js";
-
-export type InstalledPluginIndexFacts = {
-  fingerprint?: string;
-  scopeLookup?: InstalledPluginIndexScopeLookup;
-  installRecords?: Record<string, PluginInstallRecord>;
-};
 
 function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
   if (!value || typeof value !== "object") {

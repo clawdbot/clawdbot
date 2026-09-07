@@ -3,8 +3,10 @@ import type { BundledChannelCatalogEntry } from "../channels/bundled-channel-cat
 import type { ManifestChannelPlugin } from "../channels/plugins/manifest-channel-plugin.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "./discovery.types.js";
-import type { InstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexFacts,
+} from "./installed-plugin-index-types.js";
 import type { ManifestModelSuppressionResolver } from "./manifest-model-suppression.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
