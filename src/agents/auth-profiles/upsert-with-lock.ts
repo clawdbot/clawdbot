@@ -100,7 +100,7 @@ function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
     if (
       params.allowOAuthGenerationReplacement ||
       params.current === undefined ||
-      isOAuthRefreshFence(params.current)
+      (params.current.type === "oauth" && isOAuthRefreshFence(params.current))
     ) {
       return false;
     }

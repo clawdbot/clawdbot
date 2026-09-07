@@ -465,7 +465,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           }
           // The receipt owns compensation until the config transform publishes this result.
           params.beforePersistentApply?.();
-          configCommitReceipt = await params.prepareConfigCommit?.();
+          const preparedReceipt = await params.prepareConfigCommit?.();
+          configCommitReceipt = preparedReceipt ? preparedReceipt : undefined;
 
           return {
             nextConfig,

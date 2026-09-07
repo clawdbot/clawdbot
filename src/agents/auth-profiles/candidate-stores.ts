@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
@@ -35,7 +36,7 @@ function canonicalizeDatabasePath(databasePath: string): string {
 
 async function collectStateRootCandidates(env: NodeJS.ProcessEnv): Promise<CandidateSource[]> {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
-  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(agentsRoot, { withFileTypes: true });
   } catch (error) {
