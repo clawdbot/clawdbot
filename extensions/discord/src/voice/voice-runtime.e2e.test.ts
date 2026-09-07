@@ -221,6 +221,7 @@ defineDiscordVoiceTests(
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
         sessionKey: entry.route?.sessionKey,
+        runTarget: null,
         text: "use the smaller implementation",
       });
       expect(agentCommandMock).not.toHaveBeenCalled();

@@ -175,6 +175,10 @@ export {
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
 export {
+  resolveOwnedActiveRealtimeVoiceRunTargetForAgent,
+  type RealtimeVoiceAgentRunTarget,
+} from "../talk/realtime-voice-run-target.js";
+export {
   resolveRealtimeVoiceFastContextConsult,
   type RealtimeVoiceFastContextConfig,
   type RealtimeVoiceFastContextConsultResult,
