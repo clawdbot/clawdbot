@@ -1,8 +1,8 @@
 // Prove configured Zalo delivery against the actual Bot API HTTP boundary.
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 type RecordedZaloRequest = {
   body: Record<string, unknown>;

@@ -3,7 +3,6 @@ title: Live OpenAI multi-restart task recovery
 scenario:
   id: gateway-restart-multi-live
   surface: runtime
-  runtimePairLane: core
   coverage:
     primary:
       - session-memory.recovery-restart-recovery
@@ -35,6 +34,7 @@ scenario:
     - src/agents/main-session-recovery/main-session-restart-recovery.ts
   execution:
     kind: flow
+    runtime: openclaw
     retryCount: 0
     summary: Run a fixture-backed audit with GPT-5.4 while replacing the Gateway child three times at durable wait checkpoints.
     suiteIsolation: isolated
@@ -48,21 +48,26 @@ scenario:
       prompt: |-
         Perform a restart-resilience release audit. This is one task; do not ask me to follow up.
 
-        Complete this checkpoint protocol before any audit work:
-        - Inspect prior assistant `exec` calls and count only calls whose JavaScript contains both `qa_restart_wait` and a `CHECKPOINT-N` literal.
-        - If fewer than three matching calls exist, your only work in this turn is the next checkpoint. Make exactly one `exec` call with `restartSafe: true`. Its JavaScript must search for `qa_restart_wait`, call the single match with `{}`, and return the next literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`).
-        - If that `exec` reports waiting, call `wait` with its run id. Do not read audit files, search for the unsafe probe, or write the final report in the same turn.
-        - A Gateway restart will interrupt the wait. A failed, unavailable, expired, or aborted `wait` result after restart is expected checkpoint evidence, not an audit failure. Do not retry that old wait.
-        - `CHECKPOINT-N` is internal tool output, never a user-facing answer. Do not echo a checkpoint marker or end the turn after an interrupted checkpoint.
-        - On the recovery turn, inspect the transcript again and immediately perform only the next missing checkpoint. Never repeat a completed checkpoint.
-        - Begin the audit immediately after the transcript contains all three distinct checkpoint `exec` calls, even when the third interrupted `wait` ended with an expected restart error. Do not send any assistant text before the final audit report.
+        This task spans four Gateway lifecycles. Use the lifecycle phase, not tool-call counts, to decide your work:
+        - On this original user turn, perform only checkpoint 1.
+        - After the first Gateway-recovery system message, perform only checkpoint 2.
+        - After the second Gateway-recovery system message, perform only checkpoint 3.
+        - After the third Gateway-recovery system message, perform the audit and final report.
 
-        After three checkpoint calls are visible, use restart-safe Code Mode to search for `qa_restart_unsafe_probe` and record whether it is visible. Do not call it. Do not read the `restart-audit/` directory path itself. Read these exact files:
+        For each checkpoint phase, make exactly one `exec` call with `restartSafe: true`. Its JavaScript must search for `qa_restart_wait`, bind the single match as `target`, explicitly suspend with `await Promise.all([target({}), yield_control("restart checkpoint")])`, and then return only that phase's literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`). `yield_control` is a built-in function; never search for or redeclare it. Once `exec` reports waiting, call `wait` exactly once with its run id. Do not issue another `exec` until a new Gateway-recovery system message arrives. Do not read audit files, search for the unsafe probe, or write the final report during a checkpoint phase.
+
+        A Gateway restart will interrupt each checkpoint wait. A failed, unavailable, expired, or aborted `wait` result after restart is expected checkpoint evidence, not an audit failure; do not retry the old wait. Checkpoint literals are internal tool output. Never echo them or send assistant text during a checkpoint phase.
+
+        In the audit phase, use restart-safe Code Mode to search for `qa_restart_unsafe_probe` and set `unsafeVisible` with this exact identity check:
+        `(await catalog.search("qa_restart_unsafe_probe")).some(candidate => candidate.toolName === "qa_restart_unsafe_probe")`
+        Do not call the unsafe probe. Do not read the `restart-audit/` directory path itself. Read these exact files:
         - `restart-audit/components.md`
         - `restart-audit/risks.md`
         - `restart-audit/deployments.md`
         - `restart-audit/controls.md`
         - `restart-audit/recommendation.md`
+
+        Each file read returns `{ kind: "text", content: string }`. Use the `content` strings. Parse the `key=value` lines by splitting on newlines and `=`, then convert each value with `Number`; do not use regular expressions.
 
         Then calculate:
         - component total from services, workers, and jobs
@@ -175,7 +180,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker, pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}` }).then((summary) => summary.hasPendingCodeModeWait ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 180000)
                   - 50
               - call: readRawQaSessionStore
@@ -209,7 +214,7 @@ flow:
               - call: waitForCondition
                 args:
                   - lambda:
-                      expr: "readGatewayLogs().slice(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
+                      expr: "readGatewayLogs(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 50
         - call: waitForOutboundMessage
@@ -262,7 +267,7 @@ flow:
               expr: "`restart recovery left a terminal artifact: ${JSON.stringify(finalTranscript)}`"
         - set: recoveryLogs
           value:
-            expr: readGatewayLogs().slice(gatewayLogCursor)
+            expr: readGatewayLogs(gatewayLogCursor)
         - set: recoveryDispatches
           value:
             expr: "recoveryLogs.split('dispatching restart-safe recovery').length - 1"
@@ -281,6 +286,6 @@ flow:
             message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
         - call: assertNoGatewayLogSentinels
           args:
-            - sinceIndex:
+            - since:
                 ref: gatewayLogCursor
       detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

@@ -65,6 +65,7 @@ export function resolveChannelSessionInfo(
 
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
+  repository?: { url: string; branch: string };
   execNode?: string;
   execCwd?: string;
   spawnedWorkspaceDir?: string;
@@ -121,8 +122,12 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  const rawBranch = normalizeOptionalString(row.worktree?.branch);
+  const repoRoot =
+    normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
+    normalizeOptionalString(row.worktree?.repoRoot);
+  const rawBranch =
+    normalizeOptionalString(row.repository?.branch) ??
+    normalizeOptionalString(row.worktree?.branch);
   const branch = rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
     : rawBranch;
@@ -157,11 +162,8 @@ type SessionKeyInfo = {
  * Two DMs from different accounts routinely share a name, so the account is the
  * only discriminator; `default` is what key builders write for absence and says
  * nothing. Which account to show comes from the recorded fact alone, never from
- * the rendered name. The suffix check is idempotence, not inference: the chat
- * pane's inline rename seeds its input with the rendered title
- * (`beginHeaderRename`), so a partially edited submit can persist a label that
- * already ends in this suffix, and appending twice would render
- * `Alice · cards · cards`.
+ * the rendered name. The suffix check preserves labels persisted by older
+ * clients that included this decoration, avoiding `Alice · cards · cards`.
  */
 function withAccountDisambiguator(name: string, accountId: string | undefined): string {
   if (!accountId || accountId === "default") {

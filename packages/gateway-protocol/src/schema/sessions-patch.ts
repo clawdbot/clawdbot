@@ -8,9 +8,18 @@ import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessi
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
+const ExpectedMarkedUnreadAt = Type.Optional(
+  Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
+    description:
+      "Apply an automatic unread=false acknowledgement only if the explicit unread marker still matches; null asserts no marker.",
+  }),
+);
+
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
+  color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
@@ -47,6 +56,8 @@ const SessionsPatchMutationProperties = {
   ),
   elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  // Retired v4 fields stay wire-valid so the applier can explain their replacement.
+  // Remove them only with the next owner-approved protocol version bump.
   execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -69,6 +80,14 @@ export const SessionsPatchParamsSchema = closedObject({
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(
+    Type.Union([SessionToolOverridesSchema, Type.Null()], {
+      description:
+        "Replace toolOverrides only when the current sparse overlay still matches this value; null asserts no overlay.",
+    }),
+  ),
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionsPatchMutationProperties,
 });
 

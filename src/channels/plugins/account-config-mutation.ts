@@ -12,7 +12,10 @@ import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-export type ChannelAccountMutationPlugin = ChannelPlugin;
+export type ChannelAccountMutationPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "config" | "setup" | "setupContract" | "gateway" | "lifecycle"
+>;
 
 type ChannelSetupExecutionAdapter = NonNullable<
   ReturnType<typeof resolveChannelSetupExecutionAdapter>
@@ -23,14 +26,17 @@ type ChannelAccountConfigurationError =
   | { kind: "invalid-input"; message: string };
 
 type PreparedChannelAccountConfiguration = {
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   setup: ChannelSetupExecutionAdapter;
   applyAccountConfig: NonNullable<ChannelSetupExecutionAdapter["applyAccountConfig"]>;
   accountId: string;
   input: unknown;
 };
 
-function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): string | undefined {
+function resolveMissingSetupEnvMessage(
+  plugin: ChannelAccountMutationPlugin,
+  input: unknown,
+): string | undefined {
   if (!plugin.setupContract || !isRecord(input) || input.useEnv !== true) {
     return undefined;
   }
@@ -54,7 +60,7 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
 
 export async function prepareChannelAccountConfiguration(params: {
   cfg: OpenClawConfig;
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   requestedAccountId?: string;
   resolveInput: () => unknown;
   runtime: RuntimeEnv;
@@ -170,7 +176,7 @@ export async function applyPreparedChannelAccountConfiguration(params: {
 type ChannelAccountRemovalAction = "delete" | "disable";
 
 type PreparedChannelAccountRemoval = {
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   action: ChannelAccountRemovalAction;
   accountId: string;
   accountKey: string;
@@ -183,7 +189,7 @@ type ChannelAccountRemovalError = {
 };
 
 export function prepareChannelAccountRemoval(params: {
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   accountId?: string;
   action: ChannelAccountRemovalAction;
 }): PreparedChannelAccountRemoval {

@@ -24,7 +24,9 @@ export type CronDeliveryPlan = {
 };
 
 /** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
-export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+export function hasExplicitCronDeliveryTarget(
+  plan: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId">,
+): boolean {
   return Boolean(
     (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
   );
@@ -190,10 +192,10 @@ export function resolveFailureDestination(
         : undefined);
     const overrideAccountId = normalizeOptionalString(routeOverride.accountId);
     const overrideMode = normalizeFailureMode(routeOverride.mode);
-    const hasChannelField = "channel" in routeOverride;
-    const hasToField = "to" in routeOverride;
-    const hasAccountIdField = "accountId" in routeOverride;
-    const hasModeField = "mode" in routeOverride;
+    const hasChannelField = Object.hasOwn(routeOverride, "channel");
+    const hasToField = Object.hasOwn(routeOverride, "to");
+    const hasAccountIdField = Object.hasOwn(routeOverride, "accountId");
+    const hasModeField = Object.hasOwn(routeOverride, "mode");
 
     const hasExplicitTo = hasToField && overrideTo !== undefined;
     const globalChannel = resolveAnnounceChannel({ channel, to });

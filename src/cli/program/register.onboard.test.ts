@@ -23,8 +23,8 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
-  CORE_ONBOARD_AUTH_FLAGS: [
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
@@ -32,18 +32,13 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
     },
     {
       cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key (core fallback)",
-      optionKey: "openaiApiKey",
-    },
-  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
-}));
-
-vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [
-    {
-      cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",
       optionKey: "openaiApiKey",
+    },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "Another provider's conflicting API key flag",
+      optionKey: "anotherProviderApiKey",
     },
   ],
 }));
@@ -69,7 +64,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerOnboardCommand(program);
     await program.parseAsync(args, { from: "user" });
   }
@@ -144,6 +139,7 @@ describe("registerOnboardCommand", () => {
     const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
@@ -154,6 +150,36 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--json", "recommendations"]);
 
     expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
+  it.each(
+    [
+      { flag: "--reset", option: ["--reset"] },
+      { flag: "--workspace", option: ["--workspace", "/tmp/recommendations"] },
+      { flag: "--classic", option: ["--classic"] },
+      { flag: "--flow", option: ["--flow", "advanced"] },
+      { flag: "--mode", option: ["--mode", "remote"] },
+      { flag: "--gateway-port", option: ["--gateway-port", "18789"] },
+      { flag: "--install-daemon", option: ["--install-daemon"] },
+      { flag: "--skip-skills", option: ["--skip-skills"] },
+      { flag: "--import-from", option: ["--import-from", "hermes"] },
+    ].flatMap(({ flag, option }) => [
+      { flag, placement: "parent", args: ["--json", ...option, "recommendations"] },
+      { flag, placement: "leaf", args: [...option, "recommendations", "--json"] },
+    ]),
+  )("reports rejected $flag as one $placement JSON error", async ({ flag, args }) => {
+    await runCli(["onboard", ...args]);
+
+    const message = `This recommendations command does not support parent option(s): ${flag}.`;
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -179,7 +205,7 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);

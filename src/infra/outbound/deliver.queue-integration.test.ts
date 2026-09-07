@@ -20,11 +20,11 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  loadPendingDeliveries,
   reserveDeliveryAttempt,
   enqueueDeliveryOnce,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
@@ -503,9 +503,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -532,9 +530,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -575,9 +571,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
     resolveSend({ messageId: "concurrent-stable-message" });
     await expect(first).resolves.toMatchObject([{ messageId: "concurrent-stable-message" }]);
-    await expect(concurrentReplay).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(concurrentReplay).resolves.toEqual([]);
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
@@ -742,7 +736,11 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
       }),
-    ).rejects.toThrow(timeout.message);
+    ).rejects.toMatchObject({
+      message: timeout.message,
+      queueCustody: "held",
+      sentBeforeError: true,
+    });
 
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
@@ -768,7 +766,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
         onDeliveryIntent: () =>
           controller.abort(new DOMException("Operator cancelled delivery", "AbortError")),
       }),
-    ).rejects.toThrow("Operation aborted");
+    ).rejects.toMatchObject({ message: "Operation aborted", queueCustody: "released" });
 
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
@@ -1009,7 +1007,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     const failure = await attemptProvenNotSentSend(error, thrown, {
       deliveryRetryOwner: "caller",
     });
-    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
+    expect(isOutboundDeliveryError(failure) && failure.queueCustody).toBe("released");
 
     // The caller received the proven-not-sent error and owns the retry; a
     // pending row here is what produced duplicate sends (#124279).
@@ -1039,7 +1037,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     "replays %s after a proven pre-connect failure clears send evidence",
     async (_label, extra) => {
       const failure = await attemptProvenNotSentSend(connectRefusedError(), "ECONNREFUSED", extra);
-      expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).toBe(true);
+      expect(isOutboundDeliveryError(failure) && failure.queueCustody).toBe("held");
 
       // Neither entry has a caller that resends: reusable intents belong to the
       // queue, and CLI/RPC callers only report the error. Both must stay pending

@@ -3,14 +3,19 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   ConnectErrorDetailCodes,
   readControlUiBuildMismatchId,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -40,7 +45,10 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: () => gatewayConfig,
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
-vi.mock("../../../infra/system-presence.js", () => ({ upsertPresence: upsertPresenceMock }));
+vi.mock("../../../infra/system-presence.js", () => ({
+  upsertPresence: upsertPresenceMock,
+  listSystemPresence: vi.fn(() => []),
+}));
 vi.mock("../../../state/user-profiles.js", () => ({
   adoptTailscaleProfileAvatar: vi.fn(),
   ensureProfileForEmail: vi.fn(async () => ({
@@ -77,7 +85,6 @@ vi.mock("../health-state.js", () => ({
   })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
-  incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 vi.mock("../../../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../version.js")>();
@@ -131,7 +138,12 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot(gatewayConfig);
+});
+
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
   resolveRuntimeServiceBuildIdMock.mockReturnValue("gateway-build");
   const { rm } = await import("node:fs/promises");
@@ -158,6 +170,7 @@ describe("Control UI build admission over WebSocket", () => {
     },
   ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
     const { clientBuildId } = testCase;
+    const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(
       new Promise<void>((resolve) => {
@@ -186,6 +199,7 @@ describe("Control UI build admission over WebSocket", () => {
       };
       attachGatewayWsMessageHandler({
         socket,
+        connectionWork,
         upgradeReq: request as IncomingMessage,
         ingressAttribution: {
           kind: "direct-local",
@@ -211,7 +225,12 @@ describe("Control UI build admission over WebSocket", () => {
         gatewayMethods: [],
         events: [],
         extraHandlers: {},
-        buildRequestContext: () => ({ broadcast: vi.fn() }) as unknown as GatewayRequestContext,
+        buildRequestContext: () =>
+          ({
+            broadcast: vi.fn(),
+            incrementPresenceVersion: incrementPresenceVersionMock,
+            getHealthVersion: () => 1,
+          }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,
@@ -332,13 +351,22 @@ describe("Control UI build admission over WebSocket", () => {
       });
       expect(handleGatewayRequestMock).not.toHaveBeenCalled();
     } finally {
+      releasePostRejectionFrame();
       ws.terminate();
-      await withDeadline(
-        new Promise<void>((resolve) => {
-          wss.close(() => resolve());
-        }),
-        "cleanup",
-      );
+      for (const socket of wss.clients) {
+        socket.terminate();
+      }
+      connectionWork.beginClose();
+      try {
+        await withDeadline(
+          new Promise<void>((resolve) => {
+            wss.close(() => resolve());
+          }),
+          "cleanup",
+        );
+      } finally {
+        await connectionWork.drain();
+      }
     }
   });
 });

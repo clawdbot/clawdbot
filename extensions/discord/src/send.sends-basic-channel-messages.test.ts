@@ -216,6 +216,30 @@ describe("resolveDiscordTargetChannelId", () => {
 });
 
 describe("sendMessageDiscord", () => {
+  it("keeps missing platform identity ambiguous in progress and final results", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        messageId: "",
+        channelId: "789",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+    }
+  });
+
   function expectReplyReference(
     body: { message_reference?: unknown } | undefined,
     messageId: string,
@@ -503,6 +527,69 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
+  it("sends a pre-sized fenced media tail once", async () => {
+    let messageCount = 0;
+    const loopback = await createDiscordLoopbackRest({
+      respond: (request) =>
+        request.method === "GET"
+          ? { id: "789", type: ChannelType.GuildText }
+          : { id: `message-${++messageCount}`, channel_id: "789" },
+    });
+    try {
+      const body = "abc ".repeat(14);
+      const onDeliveryResult = vi.fn();
+      const result = await sendMessageDiscord("channel:789", `\`\`\`txt\n${body}\n\`\`\``, {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+        maxLinesPerMessage: 2,
+        onDeliveryResult,
+      });
+      const requests = loopback.requests.filter((request) => request.method === "POST");
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(JSON.parse(requests[1]?.body ?? "{}").content).toBe(`\`\`\`txt\n${body}\n\`\`\``);
+      expect(result.messageId).toBe("message-1");
+      expect(result.receipt.platformMessageIds).toEqual(["message-1", "message-2"]);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual([
+        "message-1",
+        "message-2",
+      ]);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each(["delivery callback", "later text send"])(
+    "does not retry accepted media when its %s raises an upload error",
+    async (failure) => {
+      const { rest, postMock } = makeDiscordRest();
+      const error = Object.assign(new Error("upload-shaped follow-up failure"), {
+        status: 413,
+        code: 40005,
+      });
+      postMock.mockResolvedValueOnce({ id: "media-1", channel_id: "789" });
+      const onDeliveryResult = vi.fn();
+      if (failure === "delivery callback") {
+        onDeliveryResult.mockRejectedValue(error);
+      } else {
+        postMock.mockRejectedValueOnce(error);
+      }
+      await expect(
+        sendMessageDiscord("channel:789", "a".repeat(2500), {
+          rest,
+          token: "t",
+          cfg: DISCORD_TEST_CFG,
+          mediaUrl: "file:///tmp/photo.jpg",
+          onDeliveryResult,
+        }),
+      ).rejects.toBe(error);
+      expect(postMock).toHaveBeenCalledTimes(failure === "delivery callback" ? 1 : 2);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual(["media-1"]);
+    },
+  );
+
   it("rechecks delivery authority before media caption follow-up chunks", async () => {
     const loopback = await createDiscordLoopbackRest();
     try {
@@ -571,6 +658,38 @@ describe("sendMessageDiscord", () => {
       expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
       const messageRequests = loopback.requests.filter((request) => request.method === "POST");
       expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it("fences provider-owned delivery after async dispatch refresh and before REST I/O", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
+      let authorityActive = true;
+      const onPlatformSendDispatch = async () => {
+        await Promise.resolve();
+        authorityActive = false;
+      };
+      const assertPlatformSendAuthorized = () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      };
+
+      await expect(
+        sendMessageDiscord("channel:789", "must not send", {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          onPlatformSendDispatch,
+          assertPlatformSendAuthorized,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(0);
     } finally {
       await loopback.close();
     }
@@ -680,27 +799,35 @@ describe("sendMessageDiscord", () => {
     expect(body).not.toHaveProperty("flags");
   });
 
-  it("rewrites cached @username mentions to id-based mentions", async () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789012345678",
-      handles: ["Alice"],
-    });
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
-    postMock.mockResolvedValue({
-      id: "msg1",
-      channel_id: "789",
-    });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
-      rest,
-      token: "t",
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
-    });
-    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
-  });
+  it.each([
+    { input: "ping @Alice", expected: "ping <@123456789012345678>" },
+    { input: "Run `notify @Alice", expected: "Run `notify @Alice" },
+    { input: "literal \\` ping @Alice", expected: "literal \\` ping <@123456789012345678>" },
+    { input: "literal \\\\` inside @Alice", expected: "literal \\\\` inside @Alice" },
+  ])(
+    "rewrites cached @username mentions only outside code: $input",
+    async ({ input, expected }) => {
+      rememberDiscordDirectoryUser({
+        accountId: "default",
+        userId: "123456789012345678",
+        handles: ["Alice"],
+      });
+      const { rest, postMock, getMock } = makeDiscordRest();
+      getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+      postMock.mockResolvedValue({
+        id: "msg1",
+        channel_id: "789",
+      });
+      await sendMessageDiscord("channel:789", input, {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        accountId: "default",
+      });
+      expectRestRoute(postMock, 0, Routes.channelMessages("789"));
+      expect(requireRestBody(postMock).content).toBe(expected);
+    },
+  );
 
   it("rewrites configured @username aliases to id-based mentions", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
@@ -1262,7 +1389,12 @@ describe("reactMessageDiscord", () => {
     },
   ])("$name", async ({ emoji, encoded }) => {
     const { rest, putMock } = makeDiscordRest();
-    await reactMessageDiscord("chan1", "msg1", emoji, { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    await reactMessageDiscord("chan1", "msg1", emoji, {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
     expect(putMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", encoded),
     );
@@ -1276,7 +1408,12 @@ describe("removeReactionDiscord", () => {
 
   it("removes a unicode emoji reaction", async () => {
     const { rest, deleteMock } = makeDiscordRest();
-    await removeReactionDiscord("chan1", "msg1", "✅", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    await removeReactionDiscord("chan1", "msg1", "✅", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
     );
@@ -1320,6 +1457,7 @@ describe("removeOwnReactionsDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
+      accountId: "default",
     });
     expect(res).toEqual({ ok: true, removed: ["✅", "party_blob:123"] });
     expect(deleteMock).toHaveBeenCalledWith(
@@ -1406,6 +1544,7 @@ describe("fetchReactionsDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
+      accountId: "default",
     });
     expect(res).toEqual([
       {

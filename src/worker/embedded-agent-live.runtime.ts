@@ -1,7 +1,17 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  type AgentRunAttemptTerminal,
+} from "../agents/agent-run-terminal-outcome.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import {
+  resolveAssistantMessagePhase,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
@@ -104,14 +114,25 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
   return bounded;
 }
 
-function readAssistantText(message: AgentMessage): string {
+function readAssistantSnapshot(message: AgentMessage): { text: string; phase?: AssistantPhase } {
   if (message.role !== "assistant") {
-    return "";
+    return { text: "" };
   }
-  return message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("");
+  // A late commentary signature applies to its block, not unphased siblings.
+  const blocks = message.content.flatMap((part) =>
+    part.type === "text"
+      ? [{ text: part.text, phase: resolveAssistantMessagePhase({ ...message, content: [part] }) }]
+      : [],
+  );
+  const firstPhase = blocks[0]?.phase;
+  const phase = blocks.every((block) => block.phase === firstPhase) ? firstPhase : undefined;
+  return {
+    text: blocks
+      .filter((block) => phase === "commentary" || block.phase !== "commentary")
+      .map((block) => block.text)
+      .join(""),
+    phase,
+  };
 }
 
 function readAssistantThinking(message: AgentMessage): string {
@@ -143,29 +164,79 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
   };
   const startedAt = Date.now();
-  let lifecycleFinished = false;
   // Terminal lifecycle events are deferred past the final transcript flush so the
   // gateway never sees an end/error before the authoritative transcript commit.
   let terminalLiveEvent: WorkerLiveEvent | undefined;
+  let terminalOutcome: AgentRunAttemptTerminal = { kind: "ok" };
+  const enqueueTerminal = (input: { aborted?: boolean; error?: string; stopReason?: string }) => {
+    // Cleanup can fail after agent_end. Merge through the attempt owner so it
+    // promotes success to failure without replacing an earlier cancellation.
+    terminalOutcome = mergeAgentRunAttemptTerminal(
+      terminalOutcome,
+      normalizeAgentRunAttemptTerminal({ aborted: input.aborted, promptError: input.error }),
+    );
+    const terminal = projectAgentRunAttemptTerminal(terminalOutcome);
+    const stopReason = terminal.aborted ? "aborted" : terminal.failed ? "error" : input.stopReason;
+    terminalLiveEvent = {
+      kind: "lifecycle",
+      payload: {
+        phase: "finishing",
+        startedAt,
+        endedAt: Date.now(),
+        ...(stopReason ? { stopReason } : {}),
+        ...(terminal.aborted ? { aborted: true } : {}),
+        ...(!terminal.aborted && typeof terminal.promptError === "string"
+          ? { error: redactLiveText(terminal.promptError) }
+          : {}),
+      },
+    };
+  };
   let streamedText = "";
+  let streamedPhase: AssistantPhase | undefined;
+  let assistantMessageIndex = 0;
   let streamedThinking = "";
+  const emitAssistantSnapshot = (message: AgentMessage) => {
+    const { text, phase } = readAssistantSnapshot(message);
+    if (text === streamedText && phase === streamedPhase) {
+      return;
+    }
+    // Commentary never contributed to the answer, even if a final repeats its prefix.
+    const previousText =
+      streamedPhase === "commentary" && phase !== "commentary" ? "" : streamedText;
+    const replace = !text.startsWith(previousText);
+    enqueueLive({
+      kind: "assistant",
+      payload: {
+        text,
+        delta: replace ? text : text.slice(previousText.length),
+        ...(replace ? { replace: true as const } : {}),
+        ...(phase ? { phase } : {}),
+        // Provider signatures can arrive only at text_end. Message lifecycle,
+        // not those late ids, owns this cumulative snapshot's stable scope.
+        itemId: `assistant-${assistantMessageIndex}`,
+      },
+    });
+    streamedText = text;
+    streamedPhase = phase;
+  };
   const handleSessionEvent = (event: AgentSessionEvent) => {
     if (event.type === "agent_start") {
       enqueueLive({ kind: "lifecycle", payload: { phase: "start", startedAt } });
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
+      assistantMessageIndex += 1;
       streamedText = "";
+      streamedPhase = undefined;
       streamedThinking = "";
       return;
     }
     if (event.type === "message_update") {
-      if (event.assistantMessageEvent.type === "text_delta") {
-        streamedText = readAssistantText(event.message);
-        enqueueLive({
-          kind: "assistant",
-          payload: { text: streamedText, delta: event.assistantMessageEvent.delta },
-        });
+      if (
+        event.assistantMessageEvent.type === "text_delta" ||
+        event.assistantMessageEvent.type === "text_end"
+      ) {
+        emitAssistantSnapshot(event.message);
       } else if (event.assistantMessageEvent.type === "thinking_delta") {
         streamedThinking = readAssistantThinking(event.message);
         enqueueLive({
@@ -176,13 +247,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
-      const finalText = readAssistantText(event.message);
-      if (finalText !== streamedText) {
-        enqueueLive({
-          kind: "assistant",
-          payload: { text: finalText, delta: finalText, replace: true },
-        });
-      }
+      emitAssistantSnapshot(event.message);
       const finalThinking = readAssistantThinking(event.message);
       if (finalThinking !== streamedThinking) {
         enqueueLive({
@@ -233,41 +298,18 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "agent_end") {
-      lifecycleFinished = true;
       const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
-      const terminal = {
-        startedAt,
-        endedAt: Date.now(),
-        ...(lastAssistant ? { stopReason: lastAssistant.stopReason } : {}),
-      };
-      terminalLiveEvent = {
-        kind: "lifecycle",
-        payload: {
-          phase: "finishing",
-          ...terminal,
-          ...(lastAssistant?.stopReason === "error"
-            ? { error: redactLiveText(lastAssistant.errorMessage ?? "Worker inference failed.") }
-            : {}),
-          ...(lastAssistant?.stopReason === "aborted" ? { aborted: true } : {}),
-        },
-      };
+      enqueueTerminal({
+        stopReason: lastAssistant?.stopReason,
+        aborted: lastAssistant?.stopReason === "aborted",
+        ...(lastAssistant?.stopReason === "error"
+          ? { error: lastAssistant.errorMessage ?? "Worker inference failed." }
+          : {}),
+      });
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
-    if (lifecycleFinished) {
-      return;
-    }
-    terminalLiveEvent = {
-      kind: "lifecycle",
-      payload: {
-        phase: "finishing",
-        startedAt,
-        endedAt: Date.now(),
-        ...(failure.aborted
-          ? { stopReason: "aborted", aborted: true }
-          : { error: redactLiveText(failure.error.message) }),
-      },
-    };
+    enqueueTerminal({ aborted: failure.aborted, error: failure.error.message });
   };
   // Emits directly (not via the degradable preview queue): finishing is the durable
   // result fence that must reach the Gateway before post-worker reconciliation.

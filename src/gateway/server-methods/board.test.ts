@@ -1,18 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import {
+  boardWidgetContentPermissionCases,
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
+
+const reviewWidgetApproval = vi.hoisted(() => vi.fn());
+const readSessionEntry = vi.hoisted(() => vi.fn());
+const sessionKey = "agent:main:session";
+const boardBroadcastScope = { sessionKeys: [sessionKey], agentId: "main" };
+
+vi.mock("../../agents/exec-auto-reviewer.js", () => ({
+  createModelExecAutoReviewer: vi.fn(() => reviewWidgetApproval),
+}));
+vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.entry.js")>()),
+  loadSessionEntryReadOnly: readSessionEntry,
+}));
 
 describe("board gateway methods", () => {
   beforeEach(() => {
-    resetBoardEventNoticeStateForTest();
-    resetSystemEventsForTest();
+    resetPluginRuntimeStateForTest();
+    reviewWidgetApproval.mockReset();
+    readSessionEntry.mockReset();
+    return () => resetPluginRuntimeStateForTest();
   });
 
   it("registers every contract method with its required scope", () => {
@@ -20,7 +36,6 @@ describe("board gateway methods", () => {
       Object.fromEntries(
         [
           "board.get",
-          "board.metadata",
           "board.update",
           "board.widget.put",
           "board.widget.grant",
@@ -33,7 +48,6 @@ describe("board gateway methods", () => {
       ),
     ).toEqual({
       "board.get": "operator.read",
-      "board.metadata": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
       "board.widget.grant": "operator.approvals",
@@ -57,7 +71,11 @@ describe("board gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(store.listSessionsWithBoards()).toEqual([]);
+    expect(store.getSnapshot({ sessionKey: "session", agentId: "main" })).toMatchObject({
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
   });
 
   it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
@@ -76,13 +94,18 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({ sessionKey: "agent:work:global" }),
     );
-    expect(store.listSessionsWithBoards()).toContain("agent:work:global");
+    expect(store.getSnapshot({ sessionKey: "global", agentId: "work" })).toMatchObject({
+      sessionKey: "global",
+      revision: 1,
+      widgets: [{ name: "owner" }],
+    });
 
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
     expect(main).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ sessionKey: "agent:main:global", revision: 0 }),
     );
+    expect(store.getSnapshot({ sessionKey: "global", agentId: "main" }).widgets).toEqual([]);
 
     const ambiguous = await invoke("board.get", { sessionKey: "global" });
     expect(ambiguous).toHaveBeenCalledWith(
@@ -90,43 +113,6 @@ describe("board gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-  });
-
-  it("canonicalizes every board.metadata target through board.get ownership rules", async () => {
-    const { invoke, store } = createHarness(undefined, undefined, undefined, {
-      getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
-      }),
-    });
-    await invoke("board.widget.put", {
-      sessionKey: "global",
-      agentId: "work",
-      name: "owner",
-      content: { kind: "html", html: "work" },
-    });
-    expect(store.listSessionsWithBoards()).toContain("agent:work:global");
-
-    const respond = await invoke("board.metadata", {
-      targets: [
-        // Explicit per-target agent identity resolves like board.get.
-        { sessionKey: "global", agentId: "work" },
-        { sessionKey: "global", agentId: "main" },
-        // Ambiguous ownerless key becomes an isolated per-target error — it
-        // must not read (or reveal the presence of) another agent's board.
-        { sessionKey: "global" },
-      ],
-    });
-    expect(respond).toHaveBeenCalledWith(true, {
-      outcomes: [
-        expect.objectContaining({ ok: true, sessionKey: "global", hasBoard: true }),
-        expect.objectContaining({ ok: true, sessionKey: "global", hasBoard: false }),
-        expect.objectContaining({
-          ok: false,
-          sessionKey: "global",
-          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-        }),
-      ],
-    });
   });
 
   it("adds fresh frame URLs only to admitted HTML widgets on board.get", async () => {
@@ -176,7 +162,7 @@ describe("board gateway methods", () => {
       decision: "rejected",
       revision: 1,
       instanceId: store
-        .getSnapshot("agent:main:main")
+        .getSnapshot({ sessionKey: "agent:main:main" })
         .widgets.find((widget) => widget.name === "rejected")?.instanceId,
     });
 
@@ -267,7 +253,8 @@ describe("board gateway methods", () => {
   });
 
   it("applies updates and broadcasts board.changed", async () => {
-    const { invoke, broadcast } = createHarness();
+    const { invoke, broadcast, context } = createHarness();
+    const before = readSessionsMutationVersion(context);
     const response = await invoke("board.update", {
       sessionKey: "session",
       ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
@@ -276,10 +263,12 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({ sessionKey: "agent:main:session", revision: 1 }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1 },
+      boardBroadcastScope,
+    );
+    expect(readSessionsMutationVersion(context)).toBe(before + 1);
   });
 
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {
@@ -302,11 +291,11 @@ describe("board gateway methods", () => {
         widgets: [expect.objectContaining({ declaredSummary: ["Tool access: weather.refresh"] })],
       }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-      widget: "weather",
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1, widget: "weather" },
+      boardBroadcastScope,
+    );
 
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const grant = await invoke("board.widget.grant", {
@@ -323,11 +312,100 @@ describe("board gateway methods", () => {
         widgets: [expect.objectContaining({ grantState: "granted" })],
       }),
     );
-    expect(broadcast).toHaveBeenLastCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 2,
-    });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      "board.changed",
+      { sessionKey, revision: 2 },
+      boardBroadcastScope,
+    );
   });
+
+  it.each(boardWidgetContentPermissionCases)(
+    "routes $contentKind through session $permissionMode / effective $mode ($grantState)",
+    async (testCase) => {
+      const { contentKind, grantState } = testCase;
+      const permissionMode = "permissionMode" in testCase ? testCase.permissionMode : undefined;
+      const mode = "mode" in testCase ? testCase.mode : undefined;
+      const reviewDecision = "reviewDecision" in testCase ? testCase.reviewDecision : undefined;
+      const reviewRisk = "reviewRisk" in testCase ? testCase.reviewRisk : undefined;
+      const reviewFailure = "reviewFailure" in testCase && testCase.reviewFailure;
+      if (permissionMode) {
+        readSessionEntry.mockReturnValue({ permissionMode });
+      }
+      if (reviewDecision) {
+        reviewWidgetApproval.mockResolvedValue({
+          decision: reviewDecision,
+          risk: reviewRisk ?? (reviewDecision === "allow-once" ? "low" : "high"),
+          rationale: "widget capability review",
+        });
+      } else if (reviewFailure) {
+        reviewWidgetApproval.mockRejectedValue(new Error("reviewer unavailable"));
+      }
+      const { invoke, broadcast, store, mcpApp } = createHarness(undefined, undefined, undefined, {
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }] },
+          ...(mode ? { tools: { exec: { mode } } } : {}),
+        }),
+      });
+
+      const put = await invoke("board.widget.put", {
+        sessionKey: "agent:main:session",
+        name: "weather",
+        content:
+          contentKind === "html"
+            ? { kind: "html", html: "<p>weather</p>" }
+            : { kind: "mcp-app", viewId: "mcp-app-source" },
+        declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
+      });
+
+      expect(put).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          resolvedWidgetName: "weather",
+          widgets: [expect.objectContaining({ name: "weather", grantState })],
+        }),
+      );
+      const stored =
+        contentKind === "html"
+          ? store.readWidgetHtml({ sessionKey: "agent:main:session" }, "weather")
+          : store.readWidgetMcpApp({ sessionKey: "agent:main:session" }, "weather");
+      expect(stored?.grantState).toBe(grantState);
+      const reviewed = permissionMode === "workspace" || mode === "auto";
+      expect(reviewWidgetApproval).toHaveBeenCalledTimes(reviewed ? 1 : 0);
+      if (reviewed) {
+        expect(reviewWidgetApproval).toHaveBeenCalledWith({
+          kind: "board-widget",
+          name: "weather",
+          declared:
+            contentKind === "html"
+              ? { netOrigins: ["https://api.example.com"], tools: ["health"] }
+              : { tools: ["server.refresh", "server.search"] },
+          agent: { id: "main", sessionKey: "agent:main:session" },
+        });
+      }
+
+      const response = await invoke("board.get", { sessionKey: "agent:main:session" });
+      const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot | undefined;
+      const widget = snapshot?.widgets[0];
+      expect(Boolean(widget?.frameUrl)).toBe(contentKind === "html" && grantState === "granted");
+      if (contentKind === "mcp-app") {
+        await invoke("board.widget.appView", {
+          sessionKey: "agent:main:session",
+          name: "weather",
+          revision: widget?.revision,
+          instanceId: widget?.instanceId,
+        });
+        expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+          expect.objectContaining({ readOnly: grantState !== "granted" }),
+        );
+      }
+      expect(broadcast).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey, revision: grantState === "pending" ? 1 : 2, widget: "weather" },
+        boardBroadcastScope,
+      );
+    },
+  );
 
   it("admits only a live MCP App view and persists its server-derived descriptor", async () => {
     const { invoke, mcpApp, store } = createHarness();
@@ -352,7 +430,7 @@ describe("board gateway methods", () => {
     expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: "agent:main:main", viewId: "mcp-app-source" }),
     );
-    expect(store.readWidgetMcpApp("agent:main:main", "server-app")).toMatchObject({
+    expect(store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "server-app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
@@ -363,6 +441,50 @@ describe("board gateway methods", () => {
       interactive: true,
     });
   });
+
+  it.each([
+    { permissionMode: "full", grantState: "granted" },
+    { permissionMode: "workspace", grantState: "granted" },
+    { permissionMode: "guarded", grantState: "pending" },
+    { permissionMode: "read-only", grantState: "rejected" },
+  ] as const)(
+    "routes zero-tool interactive MCP Apps through $permissionMode ($grantState)",
+    async ({ permissionMode, grantState }) => {
+      readSessionEntry.mockReturnValue({ permissionMode });
+      reviewWidgetApproval.mockResolvedValue({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "no tool capabilities",
+      });
+      const mcpApp = createMcpAppDependencies();
+      vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValue([]);
+      const { invoke, store } = createHarness(undefined, mcpApp);
+
+      const response = await invoke("board.widget.put", {
+        sessionKey: "agent:main:main",
+        name: "message-app",
+        content: { kind: "mcp-app", viewId: "mcp-app-source" },
+      });
+
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        widgets: [{ name: "message-app", grantState }],
+      });
+      expect(
+        store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "message-app"),
+      ).toMatchObject({
+        grantState,
+        interactive: true,
+        declaredTools: [],
+      });
+      if (permissionMode === "workspace") {
+        expect(reviewWidgetApproval).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "board-widget", declared: {} }),
+        );
+      } else {
+        expect(reviewWidgetApproval).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("never upgrades a restart-reconstructed read-only source", async () => {
     const mcpApp = createMcpAppDependencies();
@@ -389,7 +511,7 @@ describe("board gateway methods", () => {
     const widget = snapshot.widgets[0]!;
 
     expect(widget.grantState).toBe("none");
-    expect(store.readWidgetMcpApp("agent:main:main", "restored")).toMatchObject({
+    expect(store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "restored")).toMatchObject({
       interactive: false,
       declaredTools: [],
     });
@@ -437,7 +559,7 @@ describe("board gateway methods", () => {
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     expect(snapshot.widgets[0]?.grantState).toBe("none");
     expect(mcpApp.resolveAllowedToolNames).not.toHaveBeenCalled();
-    expect(store.readWidgetMcpApp("agent:main:main", "revoked")).toMatchObject({
+    expect(store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "revoked")).toMatchObject({
       interactive: false,
       declaredTools: [],
     });
@@ -488,7 +610,9 @@ describe("board gateway methods", () => {
         }),
       ],
     });
-    expect(store.readWidgetMcpApp("agent:main:main", "revoked-during-resolution")).toMatchObject({
+    expect(
+      store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "revoked-during-resolution"),
+    ).toMatchObject({
       interactive: false,
       declaredTools: [],
     });
@@ -510,7 +634,7 @@ describe("board gateway methods", () => {
       code: "UNAVAILABLE",
       message: "Error: catalog failed",
     });
-    expect(store.getSnapshot("agent:main:main").widgets).toEqual([]);
+    expect(store.getSnapshot({ sessionKey: "agent:main:main" }).widgets).toEqual([]);
   });
 
   it("keeps zero-tool MCP Apps read-only until an explicit grant", async () => {
@@ -556,12 +680,21 @@ describe("board gateway methods", () => {
     expect(interactive?.authorizeAppInteraction).toBeTypeOf("function");
   });
 
-  it("captures MCP App tools at pin time and mints grant-bound fresh leases", async () => {
-    const { invoke, mcpApp, store } = createHarness();
+  it.each([
+    { sessionKey: "agent:main:main", agentId: "main" },
+    { sessionKey: "global", agentId: "work" },
+  ])("captures MCP App tools and binds fresh leases to $agentId/$sessionKey", async (target) => {
+    const { invoke, mcpApp, store } = createHarness(undefined, {}, undefined, {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+        mcp: { apps: { enabled: true } },
+        tools: { exec: { mode: "ask" } },
+      }),
+    });
     const content = { kind: "mcp-app", viewId: "mcp-app-source" };
 
     const put = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       content,
     });
@@ -578,13 +711,13 @@ describe("board gateway methods", () => {
       }),
     );
     expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", viewId: "mcp-app-source" }),
+      expect.objectContaining({ ...target, viewId: "mcp-app-source" }),
     );
-    const originalInstanceId = store.getSnapshot("agent:main:main").widgets[0]?.instanceId;
+    const originalInstanceId = store.getSnapshot(target).widgets[0]?.instanceId;
     expect(originalInstanceId).toMatch(/^[a-f0-9]{32}$/u);
 
     const readOnly = await invoke("board.widget.appView", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       revision: 1,
       instanceId: originalInstanceId,
@@ -595,21 +728,21 @@ describe("board gateway methods", () => {
     });
     expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:main",
+        ...target,
         allowedAppToolNames: new Set(),
         readOnly: true,
       }),
     );
 
     await invoke("board.widget.grant", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       decision: "granted",
       revision: 1,
       instanceId: originalInstanceId,
     });
     const interactive = await invoke("board.widget.appView", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       revision: 1,
       instanceId: originalInstanceId,
@@ -633,19 +766,19 @@ describe("board gateway methods", () => {
     expect(await authorizeAppInteraction()).toBe(true);
 
     await invoke("board.update", {
-      sessionKey: "agent:main:main",
+      ...target,
       ops: [{ kind: "widget_remove", name: "server-app" }],
     });
     expect(await authorizeAppInteraction()).toBe(false);
 
     await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       content,
     });
-    const replacementInstanceId = store.getSnapshot("agent:main:main").widgets[0]?.instanceId;
+    const replacementInstanceId = store.getSnapshot(target).widgets[0]?.instanceId;
     const staleGrant = await invoke("board.widget.grant", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       decision: "granted",
       revision: 1,
@@ -653,7 +786,7 @@ describe("board gateway methods", () => {
     });
     expect(staleGrant.mock.calls[0]?.[0]).toBe(false);
     await invoke("board.widget.grant", {
-      sessionKey: "agent:main:main",
+      ...target,
       name: "server-app",
       decision: "granted",
       revision: 1,
@@ -681,7 +814,7 @@ describe("board gateway methods", () => {
     });
     expect(response.mock.calls[0]?.[0]).toBe(false);
     expect(mcpApp.mintFromTranscript).not.toHaveBeenCalled();
-    expect(store.getSnapshot("agent:main:main").widgets[0]?.revision).toBe(1);
+    expect(store.getSnapshot({ sessionKey: "agent:main:main" }).widgets[0]?.revision).toBe(1);
   });
 
   it("materializes canvas document sources before storing and broadcasting", async () => {
@@ -699,7 +832,10 @@ describe("board gateway methods", () => {
     });
 
     expect(readCanvasDocument).toHaveBeenCalledWith("cv_123");
-    const stored = store.readWidgetHtml("session", "canvas-widget");
+    const stored = store.readWidgetHtml(
+      { sessionKey: "session", agentId: "main" },
+      "canvas-widget",
+    );
     expect(stored).toMatchObject({ revision: 1 });
     expect(stored && "html" in stored ? stored.html : "").toContain(
       "<!doctype html><p>same wrapped bytes</p>",
@@ -711,11 +847,11 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-      widget: "canvas-widget",
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1, widget: "canvas-widget" },
+      boardBroadcastScope,
+    );
   });
 
   it("installs the trusted bridge before arbitrary complete HTML", async () => {
@@ -734,7 +870,10 @@ describe("board gateway methods", () => {
     });
 
     expect(response.mock.calls[0]?.[0]).toBe(true);
-    const stored = store.readWidgetHtml("session", "complete-document");
+    const stored = store.readWidgetHtml(
+      { sessionKey: "session", agentId: "main" },
+      "complete-document",
+    );
     const html = stored && "html" in stored ? stored.html : "";
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html.indexOf("openclaw:widget-bridge-port-offer")).toBeLessThan(html.indexOf(untrusted));
@@ -759,9 +898,10 @@ describe("board gateway methods", () => {
       name: "canonical",
       decision: "granted",
       revision: 1,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+      instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+        ?.instanceId,
     });
-    const granted = store.readWidgetHtml("session", "canonical");
+    const granted = store.readWidgetHtml({ sessionKey: "session", agentId: "main" }, "canonical");
 
     const updated = await invoke("board.widget.put", {
       sessionKey: "session",
@@ -787,7 +927,9 @@ describe("board gateway methods", () => {
         ],
       }),
     );
-    expect(store.readWidgetHtml("session", "canonical")).toMatchObject({
+    expect(
+      store.readWidgetHtml({ sessionKey: "session", agentId: "main" }, "canonical"),
+    ).toMatchObject({
       sha256: granted && "sha256" in granted ? granted.sha256 : "missing",
       grantState: "granted",
     });
@@ -808,7 +950,7 @@ describe("board gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(store.getSnapshot("session").widgets).toEqual([]);
+    expect(store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets).toEqual([]);
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -830,7 +972,7 @@ describe("board gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(store.getSnapshot("session").widgets).toEqual([]);
+    expect(store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets).toEqual([]);
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -888,49 +1030,6 @@ describe("board gateway methods", () => {
     });
   });
 
-  it("appends bounded dashboard notices and coalesces duplicate bursts", async () => {
-    const { invoke } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "ok" },
-    });
-    const first = await invoke("board.event", {
-      sessionKey: "session",
-      widget: "counter",
-      payload: { count: 1 },
-    });
-    const duplicate = await invoke("board.event", {
-      sessionKey: "session",
-      widget: "counter",
-      payload: { count: 1 },
-    });
-    expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
-    expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
-    expect(peekSystemEvents("agent:main:session")).toEqual([
-      '[dashboard] {"count":1} on widget counter',
-    ]);
-  });
-
-  it("binds state.emit notices to the widget view ticket", async () => {
-    const { invoke } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "ok" },
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const ticket = snapshot.widgets[0]?.viewTicket;
-
-    const response = await invoke("board.event", { ticket, payload: { count: 2 } });
-
-    expect(response.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
-    expect(peekSystemEvents("agent:main:session")).toEqual([
-      '[dashboard] {"count":2} on widget counter',
-    ]);
-  });
-
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
     const { invoke, store } = createHarness();
     await invoke("board.widget.put", {
@@ -956,8 +1055,9 @@ describe("board gateway methods", () => {
       name: "approved",
       decision: "granted",
       revision: 1,
-      instanceId: store.getSnapshot("session").widgets.find((widget) => widget.name === "approved")
-        ?.instanceId,
+      instanceId: store
+        .getSnapshot({ sessionKey: "session", agentId: "main" })
+        .widgets.find((widget) => widget.name === "approved")?.instanceId,
     });
     board = await invoke("board.get", { sessionKey: "session" });
     snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;

@@ -31,6 +31,7 @@ import {
   canResolveOperatorApproval,
   canReviewOperatorApproval,
 } from "../operator-approval-authorization.js";
+import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   getOperatorApprovalDetailed,
   listTerminalOperatorApprovals,
@@ -61,24 +62,13 @@ function buildApprovalSnapshot(
   record: OperatorApprovalRecord,
   controlUiBasePath: string,
 ): ApprovalSnapshot | null {
-  const common = {
-    id: record.id,
-    status: record.status,
-    presentation: record.presentation,
-    urlPath: `${controlUiBasePath}/approve/${encodeURIComponent(record.id)}`,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-  if (record.status === "pending") {
-    return common as ApprovalSnapshot;
+  const snapshot = projectOperatorApprovalSnapshot(record, controlUiBasePath);
+  if (!snapshot || snapshot.status === "pending") {
+    return snapshot;
   }
-  if (record.resolvedAtMs === null || record.terminalReason === null) {
-    return null;
-  }
-  const terminal = {
-    ...common,
-    resolvedAtMs: record.resolvedAtMs,
-    reason: record.terminalReason,
+  // Terminal attribution belongs to RPC readers; session events omit it.
+  return {
+    ...snapshot,
     source: {
       ...(record.source.agentId ? { agentId: record.source.agentId } : {}),
       ...(record.source.sessionKey ? { sessionKey: record.source.sessionKey } : {}),
@@ -92,16 +82,6 @@ function buildApprovalSnapshot(
         }
       : {}),
   };
-  if (record.status === "allowed") {
-    if (record.decision !== "allow-once" && record.decision !== "allow-always") {
-      return null;
-    }
-    return { ...terminal, decision: record.decision } as ApprovalSnapshot;
-  }
-  if (record.status === "denied") {
-    return { ...terminal, decision: "deny" } as ApprovalSnapshot;
-  }
-  return terminal as ApprovalSnapshot;
 }
 
 function resolveApprovalResolver(client: GatewayClient | null): OperatorApprovalResolver {
@@ -261,6 +241,7 @@ function applyApprovalDecision<TPayload>(params: {
   forceMalformedDeny: boolean;
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
+  grantExpiresAtMs?: number;
 }): ApplyApprovalDecisionResult<TPayload> {
   const result = params.forceMalformedDeny
     ? params.manager.forceDenyDetailed(
@@ -277,6 +258,8 @@ function applyApprovalDecision<TPayload>(params: {
         params.decision as ExecApprovalDecision,
         params.resolver,
         params.localResolvedBy,
+        "operator",
+        params.grantExpiresAtMs !== undefined ? { grantExpiresAtMs: params.grantExpiresAtMs } : {},
       );
   if (result.outcome === "decision-not-allowed") {
     return applyApprovalDecision({ ...params, forceMalformedDeny: true });
@@ -426,7 +409,7 @@ export function createApprovalHandlers(
       const custody = resolveParams?.reviewer
         ? prepareApprovalChannelCustody({
             cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind === "plugin" ? "plugin" : "exec",
+            approvalKind: record.kind,
             reviewer: resolveParams.reviewer,
           })
         : null;
@@ -435,7 +418,7 @@ export function createApprovalHandlers(
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
-            : undefined;
+            : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
       if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
@@ -481,6 +464,15 @@ export function createApprovalHandlers(
                 forceMalformedDeny,
                 resolver,
                 localResolvedBy,
+                // Grant terms freeze at resolve; an explicit per-resolve
+                // override (custom operator UIs, CLI) beats the config default.
+                ...(requestedDecision === "allow-always" &&
+                typeof resolveParams?.grantExpiresInDays === "number"
+                  ? {
+                      grantExpiresAtMs:
+                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+                    }
+                  : {}),
               })
             : record.kind === "plugin"
               ? applyApprovalDecision({

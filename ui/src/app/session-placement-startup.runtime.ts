@@ -1,26 +1,32 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../api/types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionScope,
 } from "../lib/gateway-connection-lifecycle.ts";
-import { hasVideoMediaFileExtension } from "../lib/media-file-extension.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   clearSessionPlacementRecovery,
   listSessionPlacementRecoveries,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
+  type SessionPlacementPendingRecovery,
+  type SessionPlacementPausedRecovery,
+  pauseSessionPlacementRecovery,
+  writeSessionPlacementRecoveryIfAvailable,
 } from "../lib/sessions/session-placement-recovery.ts";
 import {
   advanceSessionPlacementDraft,
   type SessionPlacementDraftAdvanceResult,
 } from "../lib/sessions/session-placement-submit.ts";
-import type { ApplicationInitialUserMessage } from "./initial-user-message-handoff.ts";
-import type {
-  ApplicationPlacementStartupRuntime,
-  ApplicationPlacementStartupDependencies,
+import { generateUUID } from "../lib/uuid.ts";
+import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
+import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
+import {
+  capturePlacementStartupConnection,
+  type ApplicationPlacementStartupRuntime,
+  type ApplicationPlacementStartupDependencies,
 } from "./session-placement-startup.ts";
 
 type PlacementStartupPhase = NonNullable<
@@ -48,85 +54,39 @@ type PlacementStartupOwner = Pick<
 >;
 
 type PlacementStartupEntry = {
-  recovery: SessionPlacementRecovery | null;
+  work:
+    | { kind: "running"; recovery: SessionPlacementPendingRecovery }
+    | { kind: "checking"; recovery: SessionPlacementRecovery }
+    | { kind: "paused"; recovery: SessionPlacementPausedRecovery };
   readonly owner: PlacementStartupOwner;
-  persistRecovery: boolean;
+  readonly attachments: ChatAttachment[];
+  readonly persistRecovery: boolean;
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
-  state: "pending" | "sending" | "failed";
-  error?: string;
-  retryable?: boolean;
+  readonly retainsConnection: () => boolean;
 };
 
-type DurableAttachment = {
-  content: string;
-  fileName?: string;
-  mimeType: string;
-};
-
-const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
-const BASE64_CONTENT = /^[A-Za-z0-9+/]+={0,2}$/;
-
-function readDurableAttachment(value: unknown): DurableAttachment | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const record = value;
-  const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
-  const content = typeof record.content === "string" ? record.content : "";
-  if (!MIME_TYPE.test(mimeType) || !BASE64_CONTENT.test(content)) {
-    return null;
-  }
+function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
+  const recovery = entry.work.recovery;
   return {
-    content,
-    mimeType,
-    ...(typeof record.fileName === "string" ? { fileName: record.fileName } : {}),
-  };
-}
-
-function buildInitialUserMessage(
-  recovery: SessionPlacementRecovery,
-  createdAt: number,
-  identity: { messageId: string; messageSeq?: number },
-): ApplicationInitialUserMessage {
-  const content: ApplicationInitialUserMessage["content"] = [];
-  const text = recovery.message.trim();
-  if (text) {
-    content.push({ type: "text", text });
-  }
-  for (const value of recovery.attachments ?? []) {
-    const attachment = readDurableAttachment(value);
-    if (!attachment) {
-      continue;
-    }
-    const url = `data:${attachment.mimeType};base64,${attachment.content}`;
-    if (attachment.mimeType.startsWith("image/")) {
-      content.push({ type: "image", url, source: { type: "url", url } });
-      continue;
-    }
-    const normalizedMimeType = attachment.mimeType.toLowerCase();
-    const video =
-      normalizedMimeType.startsWith("video/") ||
-      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
-        hasVideoMediaFileExtension(attachment.fileName ?? ""));
-    content.push({
-      type: "attachment",
-      attachment: {
-        url,
-        kind: normalizedMimeType.startsWith("audio/") ? "audio" : video ? "video" : "document",
-        label: attachment.fileName?.trim() || "Attached file",
-        mimeType: attachment.mimeType,
-      },
-    });
-  }
-  return {
-    role: "user",
-    content,
-    timestamp: createdAt,
-    __openclaw: {
-      idempotencyKey: `${identity.messageId}:user`,
-      ...(identity.messageSeq !== undefined ? { seq: identity.messageSeq } : {}),
-    },
+    id: recovery.messageId,
+    text: recovery.message,
+    ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
+    attachments: entry.attachments,
+    createdAt: entry.createdAt,
+    sessionKey: recovery.sessionKey,
+    agentId: recovery.agentId,
+    sendRunId: recovery.messageId,
+    sendAttempts: 1,
+    sendState:
+      entry.work.kind === "checking"
+        ? "unconfirmed"
+        : recovery.phase === "paused"
+          ? recovery.reason === "unconfirmed"
+            ? "unconfirmed"
+            : "failed"
+          : "sending",
+    ...(recovery.phase === "paused" ? { sendError: recovery.error } : {}),
   };
 }
 
@@ -136,9 +96,6 @@ export default function createApplicationPlacementStartupRuntime(
   const listeners = new Set<() => void>();
   const entries = new Map<string, PlacementStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
-  let lastRecoveryClient: object | null = null;
-  const recoveredFingerprints = new Set<string>();
-  let disposed = false;
 
   const publish = () => {
     for (const listener of listeners) {
@@ -161,33 +118,24 @@ export default function createApplicationPlacementStartupRuntime(
   const lifecycleCurrent = (entry: PlacementStartupEntry) => {
     const snapshot = params.gateway.snapshot;
     return Boolean(
+      entry.retainsConnection() &&
       connection.isCurrent(entry.scope) &&
-      snapshot.client?.recoveryScopeReady &&
-      params.gateway.connection.gatewayUrl === entry.owner.gatewayUrl &&
-      snapshot.client.recoveryScope === entry.owner.recoveryScope,
+      snapshot.client?.recoveryScopeReady,
     );
   };
 
-  const setEntryState = (
-    entry: PlacementStartupEntry,
-    state: PlacementStartupEntry["state"],
-    details: { error?: string; retryable?: boolean } = {},
-  ) => {
-    if (!ownsEntry(entry)) {
-      return;
-    }
-    if (
-      entry.state === state &&
-      entry.error === details.error &&
-      entry.retryable === details.retryable
-    ) {
-      return;
-    }
-    entry.state = state;
-    entry.error = details.error;
-    entry.retryable = details.retryable;
-    publish();
+  const ownsRecovery = (entry: PlacementStartupEntry) => {
+    const stored = entry.persistRecovery
+      ? readSessionPlacementRecovery(
+          entry.owner.gatewayUrl,
+          entry.owner.recoveryScope,
+          entry.owner.sessionKey,
+        )
+      : null;
+    return ownsEntry(entry) && (!stored || stored.messageId === entry.owner.messageId);
   };
+  const isCurrent = (entry: PlacementStartupEntry) =>
+    lifecycleCurrent(entry) && ownsRecovery(entry);
 
   const retireEntry = (entry: PlacementStartupEntry, notify = true) => {
     const found = findEntry(entry.owner.sessionKey);
@@ -205,19 +153,40 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
-    params.initialUserMessage.prepare({
-      sessionKey: entry.owner.sessionKey,
-      owner: entry.scope.client,
-      pendingRunId: result.messageId,
-      message: buildInitialUserMessage(recovery, entry.createdAt, result),
-    });
+    params.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        entry.owner.sessionKey,
+        {
+          text: recovery.message,
+          mentions: recovery.mentions,
+          attachments: entry.attachments,
+          createdAt: entry.createdAt,
+        },
+        entry.scope.client,
+        result.messageId,
+      ),
+    );
   };
 
   const refreshAfterFailure = (entry: PlacementStartupEntry) => {
-    if (!lifecycleCurrent(entry)) {
+    if (!isCurrent(entry)) {
       return;
     }
     void params.sessions.refresh({ force: true, backgroundHydrate: true }).catch(() => undefined);
+  };
+
+  const pauseEntry = (
+    entry: PlacementStartupEntry,
+    recovery: SessionPlacementRecovery,
+    error: string,
+  ) => {
+    const { recovery: paused } = pauseSessionPlacementRecovery(
+      recovery,
+      error,
+      entry.persistRecovery,
+    );
+    entry.work = { kind: "paused", recovery: paused };
+    publish();
   };
 
   const run = (
@@ -225,90 +194,76 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     recovering: boolean,
   ) => {
-    let accepted = false;
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
-      cleanupOnCancellation: !entry.persistRecovery,
+      cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
       recovering,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
-      ownsRecovery: () => ownsEntry(entry),
+      ownsRecovery: () => ownsRecovery(entry),
       clearRecovery: () =>
         clearSessionPlacementRecovery(
           entry.owner.gatewayUrl,
           entry.owner.recoveryScope,
           entry.owner.sessionKey,
+          entry.owner.messageId,
         ),
-      setRecoveryPhase: (phase, durable) => {
-        if (phase !== "sending") {
-          return;
-        }
-        const sendingRecovery = { ...currentRecovery, phase };
-        entry.recovery = sendingRecovery;
-        entry.persistRecovery = durable;
-        currentRecovery = sendingRecovery;
-        setEntryState(entry, "sending");
+      setRecoveryPhase: (phase) => {
+        currentRecovery = { ...currentRecovery, phase };
+        entry.work = { kind: "running", recovery: currentRecovery };
+        publish();
       },
     })
       .then((result) => {
-        if (findEntry(entry.owner.sessionKey)?.entry !== entry) {
-          return;
-        }
-        if (result.status === "started") {
-          accepted = true;
-          prepareAcceptedMessage(entry, currentRecovery, result);
+        if (!ownsRecovery(entry) || !entry.retainsConnection()) {
           retireEntry(entry);
           return;
         }
-        if (result.status === "send-rejected" || result.status === "cleanup-rejected") {
-          setEntryState(entry, "failed", { error: result.error, retryable: true });
-          if (entry.persistRecovery) {
-            entry.recovery = null;
-          }
-          return;
-        }
-        if (result.status === "dispatch-rejected") {
-          entry.recovery = null;
-          setEntryState(entry, "failed", { error: result.error, retryable: false });
+        if (result.status === "paused") {
+          entry.work = { kind: "paused", recovery: result.recovery };
+          publish();
+          handleGatewaySnapshot(params.gateway.snapshot);
           return;
         }
         if (result.status === "cancelled" && result.cleanupError) {
-          setEntryState(entry, "failed", {
-            error: result.cleanupError,
-            retryable: result.recoveryPersisted,
-          });
-          if (entry.persistRecovery) {
-            entry.recovery = null;
+          pauseEntry(entry, currentRecovery, result.cleanupError);
+          handleGatewaySnapshot(params.gateway.snapshot);
+          return;
+        }
+        if (!lifecycleCurrent(entry)) {
+          // Interruption retains intent; only confirmed retirement releases admission.
+          if (result.status !== "interrupted") {
+            retireEntry(entry);
           }
           return;
+        }
+        // Retained custody already owns the visible input; a local handoff would duplicate it.
+        if (result.status === "started") {
+          prepareAcceptedMessage(entry, currentRecovery, result);
         }
         retireEntry(entry);
       })
       .catch((error: unknown) => {
-        if (findEntry(entry.owner.sessionKey)?.entry === entry) {
-          setEntryState(entry, "failed", { error: formatUiError(error), retryable: true });
-          if (entry.persistRecovery) {
-            entry.recovery = null;
-          }
+        if (isCurrent(entry)) {
+          pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => {
-        if (!accepted) {
-          refreshAfterFailure(entry);
-        }
-      });
+      .finally(() => refreshAfterFailure(entry));
   };
 
   const start = (input: PlacementStartupInput) => {
     if (input.recovery.phase === "creating") {
       return;
     }
+    connection.transition(params.gateway.snapshot);
     const existing = findEntry(input.recovery.sessionKey)?.entry;
     if (
-      (existing?.state === "pending" || existing?.state === "sending") &&
-      lifecycleCurrent(existing)
+      existing &&
+      isCurrent(existing) &&
+      existing.owner.messageId === input.recovery.messageId &&
+      (existing.work.kind !== "paused" || input.recovery.phase === "paused")
     ) {
       return;
     }
@@ -326,16 +281,26 @@ export default function createApplicationPlacementStartupRuntime(
       recoveryScope: input.recovery.recoveryScope,
     };
     const entry: PlacementStartupEntry = {
-      recovery: input.recovery,
+      work:
+        input.recovery.phase === "paused"
+          ? { kind: "paused", recovery: input.recovery }
+          : {
+              kind: input.recovery.phase === "sending" ? "checking" : "running",
+              recovery: input.recovery,
+            },
       owner,
+      // Status reads must not rescan payloads or mint new attachment identities.
+      attachments: restoreChatApiAttachments(input.recovery.attachments),
       persistRecovery: input.persistRecovery,
       createdAt: input.createdAt,
       scope,
-      state: "pending",
+      retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
     };
     entries.set(owner.sessionKey, entry);
     publish();
-    run(entry, input.recovery, input.recovering);
+    if (input.recovery.phase !== "paused") {
+      run(entry, input.recovery, input.recovering);
+    }
   };
 
   const handleGatewaySnapshot = (
@@ -343,53 +308,54 @@ export default function createApplicationPlacementStartupRuntime(
   ) => {
     connection.transition(snapshot);
     if (snapshot.phase !== "connected") {
-      lastRecoveryClient = null;
-      recoveredFingerprints.clear();
       return;
     }
     if (!snapshot.client?.recoveryScopeReady || !snapshot.client.recoveryScope) {
       return;
     }
-    const recoveries = listSessionPlacementRecoveries(
+    // Paused memory-only submissions have no storage row to rehydrate. Replace
+    // their lifecycle binding only after the same credential scope is validated.
+    for (const entry of entries.values()) {
+      if (
+        entry.work.kind !== "running" &&
+        !lifecycleCurrent(entry) &&
+        entry.retainsConnection() &&
+        ownsRecovery(entry)
+      ) {
+        start({
+          recovery: entry.work.recovery,
+          persistRecovery: entry.persistRecovery,
+          recovering: true,
+          createdAt: entry.createdAt,
+        });
+      }
+    }
+    for (const recovery of listSessionPlacementRecoveries(
       params.gateway.connection.gatewayUrl,
       snapshot.client.recoveryScope,
-    ).filter((recovery) => recovery.phase !== "creating");
-    if (lastRecoveryClient !== snapshot.client) {
-      lastRecoveryClient = snapshot.client;
-      recoveredFingerprints.clear();
-    }
-    const currentFingerprints = new Set<string>();
-    for (const recovery of recoveries) {
-      const fingerprint = `${recovery.sessionKey}\0${recovery.messageId}\0${recovery.phase}`;
-      currentFingerprints.add(fingerprint);
-      if (recoveredFingerprints.has(fingerprint)) {
-        continue;
-      }
-      recoveredFingerprints.add(fingerprint);
+    )) {
       start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
     }
-    for (const fingerprint of recoveredFingerprints) {
-      if (!currentFingerprints.has(fingerprint)) {
-        recoveredFingerprints.delete(fingerprint);
-      }
-    }
   };
-  const stopGateway = params.gateway.subscribe(handleGatewaySnapshot);
-  // Let the facade drain queued fresh Starts before durable recovery claims the same session.
-  queueMicrotask(() => {
-    if (!disposed) {
-      handleGatewaySnapshot(params.gateway.snapshot);
-    }
-  });
 
   return {
+    resumeRecovery: () => handleGatewaySnapshot(params.gateway.snapshot),
+    hasPendingTurn(sessionKey) {
+      const entry = findEntry(sessionKey)?.entry;
+      return Boolean(entry && entry.retainsConnection() && ownsRecovery(entry));
+    },
     get(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
-      if (!entry) {
+      if (!entry || !isCurrent(entry)) {
         return null;
       }
-      let phase: PlacementStartupPhase = entry.state;
-      if (entry.state === "pending") {
+      let phase: PlacementStartupPhase =
+        entry.work.kind !== "running"
+          ? "failed"
+          : entry.work.recovery.phase === "sending"
+            ? "sending"
+            : "pending";
+      if (phase === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
         );
@@ -400,36 +366,77 @@ export default function createApplicationPlacementStartupRuntime(
       }
       return {
         sessionKey: entry.owner.sessionKey,
+        targetKind: entry.work.recovery.target.kind,
         phase,
         startedAt: entry.createdAt,
-        ...(entry.error ? { error: entry.error } : {}),
-        ...(entry.retryable !== undefined ? { retryable: entry.retryable } : {}),
+        initialTurn: initialTurn(entry),
+        ...(entry.work.kind !== "running"
+          ? {
+              ...(entry.work.recovery.phase === "paused"
+                ? { error: entry.work.recovery.error }
+                : {}),
+              retryable: true,
+              action:
+                entry.work.kind === "checking" ||
+                (entry.work.recovery.phase === "paused" &&
+                  entry.work.recovery.reason === "unconfirmed")
+                  ? ("check-delivery" as const)
+                  : ("retry" as const),
+            }
+          : {}),
       };
     },
     start,
-    retry(sessionKey) {
+    pause(sessionKey, error) {
       const entry = findEntry(sessionKey)?.entry;
-      if (!entry?.retryable || !lifecycleCurrent(entry)) {
+      if (!entry || !isCurrent(entry)) {
         return;
       }
-      const recovery = entry.persistRecovery
-        ? readSessionPlacementRecovery(
-            entry.owner.gatewayUrl,
-            entry.owner.recoveryScope,
-            entry.owner.sessionKey,
-          )
-        : entry.recovery;
+      const { recovery } = pauseSessionPlacementRecovery(
+        entry.work.recovery,
+        error,
+        entry.persistRecovery,
+      );
+      // Replace the owner before Stop leaves the browser; late active dispatch replies lose send authority.
+      entry.work = { kind: "paused", recovery };
+      retireEntry(entry, false);
+      start({
+        recovery,
+        persistRecovery: entry.persistRecovery,
+        recovering: true,
+        createdAt: entry.createdAt,
+      });
+    },
+    retry(sessionKey) {
+      const entry = findEntry(sessionKey)?.entry;
+      if (!entry || entry.work.kind !== "paused" || !isCurrent(entry)) {
+        return;
+      }
+      if (entry.work.recovery.reason === "unconfirmed") {
+        entry.work = { kind: "checking", recovery: entry.work.recovery };
+        publish();
+        run(entry, entry.work.recovery, true);
+        return;
+      }
+      const { reason, error: _error, ...submission } = entry.work.recovery;
+      const recovery: SessionPlacementPendingRecovery = {
+        ...submission,
+        phase: "dispatching",
+        messageId: reason === "rejected" ? generateUUID() : submission.messageId,
+      };
+      // Rotate a known failed attempt atomically with its durable ownership.
+      // Late completion of the old key cannot retire or replace this attempt.
       if (
-        !recovery ||
-        !areUiSessionKeysEquivalent(recovery.sessionKey, entry.owner.sessionKey) ||
-        recovery.messageId !== entry.owner.messageId
+        entry.persistRecovery &&
+        !writeSessionPlacementRecoveryIfAvailable(recovery, submission.messageId)
       ) {
+        pauseEntry(entry, entry.work.recovery, "placement recovery storage is unavailable");
         return;
       }
       start({
         recovery,
         persistRecovery: entry.persistRecovery,
-        recovering: true,
+        recovering: false,
         createdAt: entry.createdAt,
       });
     },
@@ -438,9 +445,7 @@ export default function createApplicationPlacementStartupRuntime(
       return () => listeners.delete(listener);
     },
     dispose() {
-      disposed = true;
       connection.dispose();
-      stopGateway();
       entries.clear();
       listeners.clear();
     },

@@ -26,7 +26,6 @@ describe("SidebarMenusController session routes", () => {
     const onNavigate = vi.fn();
     const host = {
       activeRouteId: "chat",
-      activeWorkboardBoardId: "",
       addController: vi.fn(),
       basePath: "",
       enabledRouteIds: ["chat", "dashboard"],

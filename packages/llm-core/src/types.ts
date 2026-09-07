@@ -1,5 +1,4 @@
 import type { TSchema } from "typebox";
-// LLM Core type module defines shared TypeScript contracts.
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
 export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
@@ -118,6 +117,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -128,10 +144,7 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
-  /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
   maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
@@ -275,6 +288,8 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;
@@ -309,6 +324,24 @@ export interface Usage {
   };
 }
 
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelCostRates & {
+  /** `[start]` is an open-ended upper tier. */
+  range: [number, number] | [number];
+};
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
+
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -322,12 +355,9 @@ export interface UserMessage {
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
-   * Marks a user message that carries transient current-turn runtime context
-   * (e.g. an OpenClaw runtime-context carrier appended after the active user
-   * turn). Such messages are volatile — present only on the turn they belong to
-   * and stripped on replay — so providers must NOT anchor a prompt-cache
-   * breakpoint on them, or the breakpoint would land on bytes that change every
-   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   * Marks a user message carrying runtime context. Provider replay policy decides
+   * whether the carrier is transient or retained append-only; only retained
+   * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
 }
@@ -347,6 +377,8 @@ export interface AssistantMessage {
   content: (TextContent | ThinkingContent | ToolCall)[];
   openclawDelivery?: {
     audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
     /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
@@ -481,6 +513,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -526,12 +560,18 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -653,7 +693,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;
@@ -667,12 +706,7 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
+  cost: RawModelCostConfig;
   contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
@@ -689,7 +723,7 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

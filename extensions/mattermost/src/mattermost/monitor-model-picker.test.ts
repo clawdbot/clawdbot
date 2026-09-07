@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   buildEventPlan: vi.fn(),
-  buildModelsProviderData: vi.fn(),
+  buildPreparedModelsProviderData: vi.fn(),
   deliverReply: vi.fn(),
   dispatch: vi.fn(),
   parseContext: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
-    buildModelsProviderData: mocks.buildModelsProviderData,
+    buildPreparedModelsProviderData: mocks.buildPreparedModelsProviderData,
   };
 });
 
@@ -66,7 +66,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
       channelDisplay: "Lifecycle",
       roomLabel: "#lifecycle",
     });
-    mocks.buildModelsProviderData.mockResolvedValue({ providers: [{ id: "openai" }] });
+    mocks.buildPreparedModelsProviderData.mockResolvedValue({ providers: [{ id: "openai" }] });
     mocks.deliverReply.mockResolvedValue({
       outcome: "text",
       visibleReplySent: true,
@@ -101,65 +101,97 @@ describe("Mattermost model-picker interaction dispatch", () => {
     });
   });
 
-  it("reserves independent work before ack", async () => {
-    let detachedRun: (() => Promise<void>) | undefined;
-    mocks.runDetachedWebhookWork.mockImplementation((run: () => Promise<void>) => {
-      detachedRun = run;
-      return Promise.resolve();
-    });
-    const updateModelPickerPost = vi.fn(async () => ({}));
-    const monitor = {
-      account: { accountId: "default", config: {} },
-      cfg: {},
-      core: {
-        channel: {
-          commands: { shouldHandleTextCommands: vi.fn(() => true) },
-          inbound: { dispatch: mocks.dispatch },
-          text: {
-            convertMarkdownTables: vi.fn((text: string) => text),
-            hasControlCommand: vi.fn(() => true),
+  it.each(["providers", "back", "list", "select"] as const)(
+    "updates the picker once after loading recovered data for %s",
+    async (action) => {
+      const order: string[] = [];
+      mocks.parseContext.mockReturnValueOnce({
+        action,
+        ownerUserId: "user-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        page: 0,
+      });
+      mocks.buildPreparedModelsProviderData.mockImplementationOnce(async () => {
+        order.push("load");
+        return { providers: [{ id: "openai" }] };
+      });
+      let detachedRun: (() => Promise<void>) | undefined;
+      mocks.runDetachedWebhookWork.mockImplementation((run: () => Promise<void>) => {
+        order.push("detach");
+        detachedRun = run;
+        return Promise.resolve();
+      });
+      const updateModelPickerPost = vi.fn(async () => {
+        order.push("update");
+        return {};
+      });
+      const monitor = {
+        account: { accountId: "default", config: {} },
+        cfg: {},
+        core: {
+          channel: {
+            commands: { shouldHandleTextCommands: vi.fn(() => true) },
+            inbound: { dispatch: mocks.dispatch },
+            text: {
+              convertMarkdownTables: vi.fn((text: string) => text),
+              hasControlCommand: vi.fn(() => true),
+            },
           },
         },
-      },
-      pairing: { readAllowFromStore: vi.fn(async () => []) },
-      resources: {
-        resolveChannelInfo: vi.fn(async () => ({ id: "channel-1", type: "O" })),
-        updateModelPickerPost,
-      },
-      runtime: { error: vi.fn() },
-    } as unknown as MattermostMonitorContext;
-    const handler = createMattermostModelPickerInteractionHandler(monitor);
+        pairing: { readAllowFromStore: vi.fn(async () => []) },
+        resources: {
+          resolveChannelInfo: vi.fn(async () => ({ id: "channel-1", type: "O" })),
+          updateModelPickerPost,
+        },
+        runtime: { error: vi.fn() },
+      } as unknown as MattermostMonitorContext;
+      const handler = createMattermostModelPickerInteractionHandler(monitor);
 
-    const response = await handler({
-      payload: {
-        channel_id: "channel-1",
-        post_id: "picker-post-1",
-        team_id: "team-1",
-        user_id: "user-1",
-      },
-      userName: "tester",
-      context: {},
-      post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
-    });
+      const response = await handler({
+        payload: {
+          channel_id: "channel-1",
+          post_id: "picker-post-1",
+          team_id: "team-1",
+          user_id: "user-1",
+        },
+        userName: "tester",
+        context: {},
+        post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
+      });
 
-    expect(response).toEqual({});
-    expect(mocks.runDetachedWebhookWork).toHaveBeenCalledOnce();
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-    expect(detachedRun).toBeTypeOf("function");
+      expect(response).toEqual({});
+      expect(mocks.buildPreparedModelsProviderData).toHaveBeenCalledOnce();
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      if (action !== "select") {
+        expect(mocks.runDetachedWebhookWork).not.toHaveBeenCalled();
+        expect(detachedRun).toBeUndefined();
+        expect(updateModelPickerPost).toHaveBeenCalledOnce();
+        expect(order).toEqual(["load", "update"]);
+        return;
+      }
 
-    await detachedRun?.();
+      expect(mocks.runDetachedWebhookWork).toHaveBeenCalledOnce();
+      expect(detachedRun).toBeTypeOf("function");
+      expect(updateModelPickerPost).not.toHaveBeenCalled();
+      expect(order).toEqual(["load", "detach"]);
 
-    expect(mocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "mattermost",
-        delivery: expect.objectContaining({ observeMessageSent: true }),
-      }),
-    );
-    expect(mocks.deliverReply).toHaveBeenCalledWith(
-      expect.objectContaining({ channelId: "channel-1", replyToId: "picker-post-1" }),
-    );
-    expect(updateModelPickerPost).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "updated picker" }),
-    );
-  });
+      await detachedRun?.();
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "mattermost",
+          delivery: expect.objectContaining({ observeMessageSent: true }),
+        }),
+      );
+      expect(mocks.deliverReply).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "channel-1", replyToId: "picker-post-1" }),
+      );
+      expect(updateModelPickerPost).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "updated picker" }),
+      );
+      expect(updateModelPickerPost).toHaveBeenCalledOnce();
+      expect(order).toEqual(["load", "detach", "update"]);
+    },
+  );
 });

@@ -1,4 +1,4 @@
-// Plugin list format tests cover installed plugin table and JSON formatting.
+// Plugin list format tests cover verbose installed plugin details.
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { formatPluginLine } from "./plugins-list-format.js";
@@ -9,6 +9,7 @@ describe("formatPluginLine", () => {
 
     expect(output).toContain("enabled");
     expect(output).not.toContain("loaded");
+    expect(output).not.toContain("bundle capabilities:");
   });
 
   it("shows imported state in verbose output", () => {
@@ -20,7 +21,6 @@ describe("formatPluginLine", () => {
         activated: true,
         explicitlyEnabled: false,
       }),
-      true,
     );
 
     expect(output).toContain("activated: yes");
@@ -28,17 +28,18 @@ describe("formatPluginLine", () => {
     expect(output).toContain("explicitly enabled: no");
   });
 
-  it("labels portable bundle records as Agent Plugins", () => {
+  it("shows bundle subtype and detected capabilities", () => {
     const output = formatPluginLine(
       createPluginRecord({
         id: "portable",
         format: "bundle",
         bundleFormat: "agent",
+        bundleCapabilities: ["skills", "mcpServers"],
       }),
-      true,
     );
 
     expect(output).toContain("bundle format: agent (Agent Plugins)");
+    expect(output).toContain("bundle capabilities: skills, mcpServers");
   });
 
   it("sanitizes activation reasons in verbose output", () => {
@@ -50,18 +51,10 @@ describe("formatPluginLine", () => {
         activationSource: "auto",
         activationReason: "\u001B[31mconfigured\nnext\tstep",
       }),
-      true,
     );
 
     expect(output).toContain("activation reason: configured\\nnext\\tstep");
     expect(output).not.toContain("\u001B[31m");
     expect(output.match(/activation reason:/g)).toHaveLength(1);
-  });
-
-  it("keeps truncated descriptions free of lone surrogates", () => {
-    const output = formatPluginLine(
-      createPluginRecord({ id: "demo", description: `${"a".repeat(56)}😀tail` }),
-    );
-    expect(Buffer.from(output).toString()).toBe(output);
   });
 });

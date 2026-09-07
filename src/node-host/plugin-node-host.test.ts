@@ -286,7 +286,10 @@ describe("plugin node-host registry", () => {
       invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
     ).resolves.toBe('{"ok":true}');
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, context);
+    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, {
+      ...context,
+      prepareExecAuthorization: expect.any(Function),
+    });
   });
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {

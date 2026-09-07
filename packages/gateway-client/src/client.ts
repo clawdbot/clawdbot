@@ -19,7 +19,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { WebSocket } from "ws";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSensitiveUrlQueryParamName,
   normalizeTlsFingerprint,
@@ -58,6 +58,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
+import { WebSocket } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -204,6 +205,7 @@ export type GatewayClientCloseInfo = {
 };
 
 export { GatewayClientRequestError } from "./request-error.js";
+export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
 export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
   constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
@@ -264,6 +266,7 @@ export type GatewayClientOptions = {
   clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
+  modelIdentifier?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -430,6 +433,8 @@ export class GatewayClient {
       },
       notifyStoppedClose: true,
       onConnectError: (error) => this.notifyConnectError(error),
+      onReconnectStopped: (error) =>
+        this.notifyReconnectPaused({ code: 1008, reason: error.message, detailCode: null }),
       onParseError: (error) =>
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
@@ -557,14 +562,8 @@ export class GatewayClient {
     this.transportValidated = false;
     let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
-      handlers.open();
-      const tlsError = transport.validateSocket(ws);
-      if (tlsError) {
-        handlers.error(tlsError);
-        ws.close(1008, tlsError.message);
-        return;
-      }
       this.transportValidated = true;
+      handlers.open();
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
@@ -578,6 +577,14 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
+        let gatewayError: { type?: unknown; message?: unknown } | undefined;
+        try {
+          const parsed: unknown = JSON.parse(body);
+          const parsedError = isRecord(parsed) ? parsed.error : undefined;
+          gatewayError = isRecord(parsedError) ? parsedError : undefined;
+        } catch {
+          // Plain-text and truncated rejections remain visible in the original error message.
+        }
         const rawLocation = response.headers.location;
         const location = rawLocation
           ? redactSensitiveUrlLikeString(
@@ -593,6 +600,14 @@ export class GatewayClient {
             reason: "websocket-upgrade-rejected",
             ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
             ...(location ? { location } : {}),
+            ...(typeof gatewayError?.type === "string"
+              ? {
+                  gatewayErrorType: gatewayError.type,
+                  ...(typeof gatewayError.message === "string"
+                    ? { gatewayErrorMessage: gatewayError.message }
+                    : {}),
+                }
+              : {}),
           },
         });
         handlers.error(upgradeError);
@@ -794,6 +809,7 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
+          modelIdentifier: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },

@@ -1,10 +1,12 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import { testing as mcpResolverTesting } from "../agents/mcp-connection-resolver.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -15,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   buildGatewayProbeConnectionDetails: vi.fn(),
   callGateway: vi.fn(),
   isGatewayCredentialsRequiredError: vi.fn(),
+  isContainerEnvironment: vi.fn(() => false),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
@@ -58,6 +61,16 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: mocks.resolveGatewayService,
 }));
 
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
+}));
+
+vi.mock("../daemon/systemd.js", () => ({
+  findInstalledSystemdGatewayScope: vi
+    .fn<typeof import("../daemon/systemd.js").findInstalledSystemdGatewayScope>()
+    .mockResolvedValue(null),
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
@@ -96,6 +109,7 @@ function bundleMcpTool(name: string, parameters: unknown): AnyAgentTool {
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
+    mcpResolverTesting.setMcpServerConnectionResolversForTest(undefined);
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -434,50 +448,91 @@ describe("doctor runtime tool schema checks", () => {
     );
   });
 
-  it("loads bundled MCP runtime once per distinct agent workspace", async () => {
+  it("reuses one bundled MCP probe for equivalent agent workspaces", async () => {
     mocks.createOpenClawCodingTools.mockReturnValue([]);
-    mocks.createBundleMcpToolRuntime.mockImplementation(
-      async (options: { workspaceDir: string }) => ({
-        tools: options.workspaceDir.includes("worker")
-          ? [
-              bundleMcpTool("fuzzplugin__move_angles", {
-                type: "array",
-                items: { type: "number" },
-              }),
-            ]
-          : [bundleMcpTool("healthy", { type: "object", properties: {} })],
-        dispose: mocks.disposeBundleRuntime,
-      }),
+    mocks.createBundleMcpToolRuntime.mockResolvedValue({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "fuzzplugin",
+          safeServerName: "fuzzplugin",
+          launchSummary: "node fuzzplugin-mcp.mjs",
+          message: "connection failed",
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    const findings = await collectRuntimeToolSchemaFindings({
+      mcp: {
+        servers: {
+          fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/main-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      },
+    });
+
+    expect(findings).toEqual([
+      {
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message:
+          'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: "connection failed",
+        fixHint:
+          "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+      },
+    ]);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
     );
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not probe requester-scoped MCP servers without a requester", async () => {
+    const resolveConnection = vi.fn();
+    mcpResolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        pluginId: "fuzzplugin",
+        serverName: "fuzzplugin",
+        resolve: resolveConnection,
+      },
+    ]);
 
     await expect(
       collectRuntimeToolSchemaFindings({
-        agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/main-workspace" },
-            { id: "worker", workspace: "/tmp/worker-workspace" },
-          ],
+        mcp: {
+          servers: {
+            fuzzplugin: {
+              url: "https://placeholder.invalid/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+            },
+          },
         },
       }),
     ).resolves.toContainEqual({
       checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
+      severity: "info",
       message:
-        "Agent worker tool fuzzplugin__move_angles from plugin bundle-mcp has an unsupported input schema for runtime projection.",
-      path: "mcp.servers",
-      target: "fuzzplugin__move_angles",
-      requirement: 'fuzzplugin__move_angles.parameters.type must be "object"',
-      fixHint:
-        "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor.",
+        'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
+      path: "mcp.servers.fuzzplugin",
+      requirement: "authenticated requester context",
+      fixHint: "Verify this server from an authenticated agent turn.",
     });
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(2);
+    expect(resolveConnection).not.toHaveBeenCalled();
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
+      expect.objectContaining({
+        excludeServerNames: new Set(["fuzzplugin"]),
+      }),
     );
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: expect.stringContaining("worker-workspace") }),
-    );
-    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(2);
   });
 
   it("does not report bundle MCP schemas filtered out by the final runtime tool policy", async () => {
@@ -558,6 +613,7 @@ describe("doctor runtime tool schema checks", () => {
 
 describe("doctor gateway runtime checks", () => {
   beforeEach(() => {
+    mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
     });
@@ -676,6 +732,8 @@ describe("doctor gateway runtime checks", () => {
       credentialsRequired: true,
       message:
         "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+      fixHint:
+        "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
     },
     {
       label: "an unavailable Gateway authentication SecretRef",
@@ -683,6 +741,8 @@ describe("doctor gateway runtime checks", () => {
       credentialsRequired: false,
       message:
         "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+      fixHint:
+        "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
     },
     {
       label: "temporary Gateway authentication rate limiting",
@@ -694,14 +754,20 @@ describe("doctor gateway runtime checks", () => {
       }),
       credentialsRequired: false,
       message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
     },
     {
       label: "an unreachable Gateway with terminal control characters",
       error: new Error("connect ECONNREFUSED 127.0.0.1:5829\u001b]52;c;attack\u0007\u009b"),
       credentialsRequired: false,
       message: "Gateway status could not be inspected: connect ECONNREFUSED 127.0.0.1:5829",
+      fixHint:
+        "Inspect the service with `openclaw gateway status --deep`, or run `openclaw doctor` for guided checks.",
     },
   ])("reports $label from exactly one sanitized status attempt", async (entry) => {
+    if (entry.error instanceof GatewayClientRequestError) {
+      retainGatewayResponsePayload(entry.error, undefined);
+    }
     mocks.callGateway.mockRejectedValueOnce(entry.error);
     mocks.isGatewayCredentialsRequiredError.mockReturnValueOnce(entry.credentialsRequired);
 
@@ -714,6 +780,7 @@ describe("doctor gateway runtime checks", () => {
         message: entry.message,
         path: "gateway.mode",
         target: "http://127.0.0.1:5829",
+        fixHint: entry.fixHint,
       }),
     ]);
     expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
@@ -759,7 +826,8 @@ describe("doctor gateway runtime checks", () => {
         checkId: "core/doctor/gateway-health",
         severity: "warning",
         message: expect.stringContaining("intentionally skipped"),
-        fixHint: expect.stringContaining("--allow-exec"),
+        fixHint:
+          "Rerun `openclaw doctor --lint --only core/doctor/gateway-health --allow-exec` to permit configured secret execution.",
       }),
     ]);
     expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
@@ -794,30 +862,74 @@ describe("doctor gateway runtime checks", () => {
     expect(JSON.stringify(findings)).not.toContain("token=secret");
   });
 
-  it("reports missing local gateway daemon service", async () => {
-    mocks.readGatewayServiceState.mockResolvedValueOnce({
+  it.each([
+    {
+      label: "missing",
       installed: false,
-      loadState: { status: "not-loaded" },
+      loadState: "not-loaded",
+      runtimeStatus: "stopped",
+      message: "Gateway service is not installed.",
+      path: "gateway.mode",
+      fixHint: "Run `openclaw gateway install` to install the service.",
+    },
+    {
+      label: "installed but not loaded",
+      installed: true,
+      loadState: "not-loaded",
+      runtimeStatus: "stopped",
+      message: "Gateway service is installed but not loaded.",
+      path: "/tmp/gateway.service",
+      fixHint: "Start the installed service with `openclaw gateway start`.",
+    },
+    {
+      label: "loaded with unconfirmed runtime",
+      installed: true,
+      loadState: "loaded",
+      runtimeStatus: "unknown",
+      message: "Gateway service runtime is unknown, not running.",
+      path: "/tmp/gateway.service",
+      fixHint:
+        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    },
+  ])("reports actionable advice for a $label local gateway daemon", async (entry) => {
+    mocks.readGatewayServiceState.mockResolvedValueOnce({
+      installed: entry.installed,
+      loadState: { status: entry.loadState },
       running: false,
       env: {},
-      command: null,
+      command: entry.installed
+        ? { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" }
+        : null,
+      runtime: { status: entry.runtimeStatus },
     });
 
     await expect(
       collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      target: "openclaw-gateway",
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
-    });
+    ).resolves.toEqual([
+      {
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        message: entry.message,
+        path: entry.path,
+        target: "openclaw-gateway",
+        fixHint: entry.fixHint,
+      },
+    ]);
   });
 
   it("skips daemon findings for remote gateway mode", async () => {
     await expect(
       collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
+    ).resolves.toEqual([]);
+
+    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
+  });
+
+  it("skips host-service findings for a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
     ).resolves.toEqual([]);
 
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();

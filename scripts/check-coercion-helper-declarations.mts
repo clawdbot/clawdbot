@@ -62,6 +62,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
       "normalizeAtHashSlug",
@@ -154,6 +155,9 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     kind: "function",
     names: [
       "coerceErrorMessage",
+      "collectErrorGraphCandidates",
+      "collectNestedErrorCandidates",
+      "extractErrorCodeOrErrno",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -203,6 +207,16 @@ const MIXED_CANONICAL_COERCION_MODULES = ["scripts/lib/arg-utils.runtime.mjs"] a
 export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
   {
     file: "packages/normalization-core/src/error-coercion.ts",
+    name: "extractErrorCode",
+    reason: "Provider adapters share this name for nested response-code extraction.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "readErrorName",
+    reason: "Diagnostic adapters share this name for filtered or non-blank error names.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
     name: "formatErrorMessage",
     reason: "Structural formatter shares its public name with redacting owner adapters.",
   },
@@ -215,13 +229,19 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
+    file: "scripts/lib/ci-test-timings-schema.mts",
+    name: "isRecord",
+    kind: "function",
+    reason: "Dependency-free CI preflight runs before install and cannot use workspace resolution.",
+  },
+  {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
     kind: "function",
     reason: "Serialized mock Gateway closure cannot capture module imports.",
   },
   {
-    file: "src/gateway/mcp-app-standalone.ts",
+    file: "src/gateway/mcp-app-standalone-host.ts",
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",

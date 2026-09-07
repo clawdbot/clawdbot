@@ -911,12 +911,48 @@ describe("openai-compatible generic embedding provider", () => {
   });
 
   it.each([
+    {
+      name: "out-of-order indexed",
+      data: [
+        { index: 1, embedding: [0.2] },
+        { index: 0, embedding: [0.1] },
+      ],
+    },
+    {
+      name: "fully positional compatible-provider",
+      data: [{ embedding: [0.1] }, { embedding: [0.2] }],
+    },
+  ])("returns $name responses in original document order", async ({ data }) => {
+    const server = await startEmbeddingServer({ respond: () => ({ data }) });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([[0.1], [0.2]]);
+  });
+
+  it.each([
     { name: "missing vectors", input: "hello", response: { data: [] } },
     { name: "empty direct vector", input: "hello", response: { data: [{ embedding: [] }] } },
     {
       name: "empty batch vector",
       input: ["hello", "world"],
       response: { data: [{ embedding: [1] }, { embedding: [] }] },
+    },
+    {
+      name: "mixed indexed and positional vectors",
+      input: ["hello", "world"],
+      response: { data: [{ index: 0, embedding: [1] }, { embedding: [2] }] },
+    },
+    {
+      name: "duplicate vector indexes",
+      input: ["hello", "world"],
+      response: {
+        data: [
+          { index: 0, embedding: [1] },
+          { index: 0, embedding: [2] },
+        ],
+      },
     },
     { name: "null response root", input: "hello", response: null },
   ])("rejects malformed $name with the provider-specific error", async ({ input, response }) => {

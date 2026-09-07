@@ -4,7 +4,9 @@ import {
   errorShape,
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionRestoreParams,
+  type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions.js";
 import {
@@ -12,239 +14,153 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
   createFileBackedCompactionCheckpointStore,
   getSessionCompactionCheckpoint,
 } from "../session-compaction-checkpoints.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { interruptSessionRunIfActive } from "./session-run-interruption.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,
   resolveSessionWorkerPlacementMutationError,
-  respondSessionWorkerPlacementMutationError,
-  type SessionWorkerPlacementMutationError,
 } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
+type CheckpointAction = "branch" | "restore";
+type CheckpointMutationResult = Awaited<
+  ReturnType<typeof compactionCheckpointStore.branchCheckpointSession>
+>;
 
-function respondCheckpointConflict(
-  key: string,
-  action: "branch" | "restore",
-  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
-): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Session ${key} changed before checkpoint ${action}. Retry.`,
-      { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
-    ),
+function checkpointConflict(key: string, action: CheckpointAction): ErrorShape {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    `Session ${key} changed before checkpoint ${action}. Retry.`,
+    { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
   );
 }
 
-export const sessionCheckpointHandlers: GatewayRequestHandlers = {
-  "sessions.compaction.branch": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCompactionBranchParams,
-        "sessions.compaction.branch",
-        respond,
-      )
-    ) {
+function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandler {
+  const validate =
+    action === "branch"
+      ? validateSessionsCompactionBranchParams
+      : validateSessionsCompactionRestoreParams;
+  return async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validate, `sessions.compaction.${action}`, respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const fail = (error: ErrorShape | string) =>
+      respond(
+        false,
+        undefined,
+        typeof error === "string" ? errorShape(ErrorCodes.INVALID_REQUEST, error) : error,
+      );
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
-    const checkpointId =
-      typeof p.checkpointId === "string" && p.checkpointId.trim() ? p.checkpointId.trim() : "";
+    const checkpointId = params.checkpointId.trim();
     if (!checkpointId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "checkpointId required"));
-      return;
+      return fail("checkpointId required");
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
     if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
+      return fail(requestedAgent.error);
     }
     const { entry, canonicalKey, sessionStoreKey, target, storePath } =
-      loadAccessorSessionEntryForGatewayTarget({
-        key,
-        cfg,
-        agentId: requestedAgent.agentId,
-      });
+      loadAccessorSessionEntryForGatewayTarget({ key, cfg, agentId: requestedAgent.agentId });
     if (!entry?.sessionId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-      );
-      return;
+      return fail(`session not found: ${key}`);
     }
-    const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
-      );
-      return;
-    }
-    const creationError = authorizeGatewaySessionCreation({
-      cfg,
-      client,
-      agentId: target.agentId,
-    });
-    if (creationError) {
-      respond(false, undefined, creationError);
-      return;
-    }
-    const nextKey = buildDashboardSessionKey(target.agentId);
-    const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
-      agentId: target.agentId,
-      expectedState: {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-      },
-      storePath,
-      sourceKey: canonicalKey,
-      sourceStoreKey: sessionStoreKey,
-      nextKey,
-      checkpointId,
-    });
-    if (
-      branchedSession.status === "missing-checkpoint" ||
-      branchedSession.status === "missing-boundary"
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
-      );
-      return;
-    }
-    if (branchedSession.status === "missing-session") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-      );
-      return;
-    }
-    if (branchedSession.status === "model-selection-locked") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
-      );
-      return;
-    }
-    if (branchedSession.status === "conflict") {
-      respondCheckpointConflict(key, "branch", respond);
-      return;
-    }
-    if (branchedSession.status === "failed") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "failed to create checkpoint branch transcript"),
-      );
-      return;
+    if (!getSessionCompactionCheckpoint({ entry, checkpointId })) {
+      return fail(`checkpoint not found: ${checkpointId}`);
     }
 
-    respond(
-      true,
-      {
-        ok: true,
-        sourceKey: canonicalKey,
-        key: branchedSession.key,
-        sessionId: branchedSession.entry.sessionId,
-        checkpoint: branchedSession.checkpoint,
-        entry: branchedSession.entry,
-      },
-      undefined,
-    );
-    emitSessionsChanged(context, {
-      sessionKey: canonicalKey,
-      agentId: requestedAgent.agentId,
-      reason: "checkpoint-branch",
-    });
-    emitSessionsChanged(context, {
-      sessionKey: branchedSession.key,
-      reason: "checkpoint-branch",
-    });
-  },
-  "sessions.compaction.restore": async ({
-    req,
-    params,
-    respond,
-    context,
-    client,
-    isWebchatConnect,
-  }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCompactionRestoreParams,
-        "sessions.compaction.restore",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-    const checkpointId =
-      typeof p.checkpointId === "string" && p.checkpointId.trim() ? p.checkpointId.trim() : "";
-    if (!checkpointId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "checkpointId required"));
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const { entry, canonicalKey, sessionStoreKey, storePath } =
-      loadAccessorSessionEntryForGatewayTarget({
-        key,
-        cfg,
+    const complete = (result: CheckpointMutationResult, sourceKey: string) => {
+      switch (result.status) {
+        case "missing-checkpoint":
+        case "missing-boundary":
+          return fail(`checkpoint not found: ${checkpointId}`);
+        case "missing-session":
+          return fail(`session not found: ${key}`);
+        case "model-selection-locked":
+          return fail(MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE);
+        case "conflict":
+          return fail(checkpointConflict(key, action));
+        case "failed":
+          return fail(
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              action === "branch"
+                ? "failed to create checkpoint branch transcript"
+                : "failed to restore checkpoint transcript",
+            ),
+          );
+        case "created":
+          break;
+        default:
+          return result satisfies never;
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          ...(action === "branch" ? { sourceKey } : {}),
+          key: result.key,
+          sessionId: result.entry.sessionId,
+          checkpoint: result.checkpoint,
+          entry: result.entry,
+        },
+        undefined,
+      );
+      emitSessionsChanged(context, {
+        sessionKey: sourceKey,
         agentId: requestedAgent.agentId,
+        reason: `checkpoint-${action}`,
       });
-    if (!entry?.sessionId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-      );
-      return;
+      if (action === "branch") {
+        emitSessionsChanged(context, { sessionKey: result.key, reason: "checkpoint-branch" });
+      }
+    };
+
+    if (action === "branch") {
+      const creationError = authorizeGatewaySessionCreation({
+        cfg,
+        client,
+        agentId: target.agentId,
+      });
+      if (creationError) {
+        return fail(creationError);
+      }
+      const nextKey = buildDashboardSessionKey(target.agentId);
+      const creation = resolveOperatorSessionCreation(client);
+      // Owner attribution keeps the source isolation inherited by identityless branches.
+      const sandbox =
+        creation.actor?.id === GATEWAY_OWNER_PROFILE_ID
+          ? entry.sandbox
+          : resolveCreatorSandbox(cfg, creation);
+      const result = await compactionCheckpointStore.branchCheckpointSession({
+        agentId: target.agentId,
+        expectedState: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+        storePath,
+        sourceKey: canonicalKey,
+        sourceStoreKey: sessionStoreKey,
+        nextKey,
+        checkpointId,
+        ...(creation.actor ? { creation: { ...creation, sandbox } } : {}),
+      });
+      return complete(result, canonicalKey);
     }
-    const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
-      );
-      return;
-    }
+
     const initialPlacementError = resolveSessionWorkerPlacementMutationError({
       action: "restore",
       context,
@@ -252,8 +168,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
       sessionId: entry.sessionId,
     });
     if (initialPlacementError) {
-      respondSessionWorkerPlacementMutationError(initialPlacementError, respond);
-      return;
+      return fail(initialPlacementError.message);
     }
     const lifecycleIdentities = [
       key,
@@ -262,16 +177,12 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
       entry.sessionId,
       entry.lifecycleRevision,
     ];
-    const restoreLockIdentities = [entry.sessionId, entry.lifecycleRevision];
-    let admittedWorkReleased = true;
-    let restoreTargetStillCurrent = true;
-    let restoreBlockedByModelLock = false;
-    let restorePlacementError: SessionWorkerPlacementMutationError | undefined;
+    let preparationError: ErrorShape | undefined;
     // Restore replaces the active transcript identity. Hold the same lifecycle fence as
     // compaction so neither operation can publish state from the other's obsolete session.
     await runExclusiveSessionLifecycleMutation({
       scope: storePath,
-      identities: restoreLockIdentities,
+      identities: [entry.sessionId, entry.lifecycleRevision],
       prepare: async () => {
         const current = loadAccessorSessionEntryForGatewayTarget({
           key,
@@ -281,70 +192,52 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
         const currentCheckpoint = current.entry
           ? getSessionCompactionCheckpoint({ entry: current.entry, checkpointId })
           : undefined;
-        restoreTargetStillCurrent =
-          current.entry?.sessionId === entry.sessionId &&
-          current.entry.lifecycleRevision === entry.lifecycleRevision &&
-          currentCheckpoint !== undefined;
-        if (!restoreTargetStillCurrent) {
+        if (
+          current.entry?.sessionId !== entry.sessionId ||
+          current.entry.lifecycleRevision !== entry.lifecycleRevision ||
+          !currentCheckpoint
+        ) {
+          preparationError = checkpointConflict(key, "restore");
           return;
         }
-        restoreBlockedByModelLock = current.entry?.modelSelectionLocked === true;
-        if (restoreBlockedByModelLock) {
+        if (current.entry.modelSelectionLocked === true) {
+          preparationError = errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE,
+          );
           return;
         }
-        restorePlacementError = resolveSessionWorkerPlacementMutationError({
+        const placementError = resolveSessionWorkerPlacementMutationError({
           action: "restore",
           context,
           key,
-          sessionId: current.entry?.sessionId,
+          sessionId: current.entry.sessionId,
         });
-        if (restorePlacementError) {
+        if (placementError) {
+          preparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
           return;
         }
         clearSessionQueues([
           key,
           current.canonicalKey,
           current.sessionStoreKey,
-          current.entry?.sessionId,
+          current.entry.sessionId,
         ]);
-        admittedWorkReleased = await interruptSessionWorkAdmissions({
+        const released = await interruptSessionWorkAdmissions({
           scope: storePath,
           identities: lifecycleIdentities,
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
         });
+        if (!released) {
+          preparationError = errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${key} is still active; try again.`,
+          );
+        }
       },
       run: async () => {
-        if (!restoreTargetStillCurrent) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Session ${key} changed before checkpoint restore. Retry.`,
-              { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
-            ),
-          );
-          return;
-        }
-        if (restoreBlockedByModelLock) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
-          );
-          return;
-        }
-        if (restorePlacementError) {
-          respondSessionWorkerPlacementMutationError(restorePlacementError, respond);
-          return;
-        }
-        if (!admittedWorkReleased) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
-          );
-          return;
+        if (preparationError) {
+          return fail(preparationError);
         }
         const current = loadAccessorSessionEntryForGatewayTarget({
           key,
@@ -352,32 +245,13 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
           agentId: requestedAgent.agentId,
         });
         if (!current.entry?.sessionId) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-          );
-          return;
+          return fail(`session not found: ${key}`);
         }
         if (current.entry.modelSelectionLocked === true) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
-          );
-          return;
+          return fail(MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE);
         }
-        const currentCheckpoint = getSessionCompactionCheckpoint({
-          entry: current.entry,
-          checkpointId,
-        });
-        if (!currentCheckpoint) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
-          );
-          return;
+        if (!getSessionCompactionCheckpoint({ entry: current.entry, checkpointId })) {
+          return fail(`checkpoint not found: ${checkpointId}`);
         }
         const interruptResult = await interruptSessionRunIfActive({
           req,
@@ -390,11 +264,9 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
           sessionId: current.entry.sessionId,
         });
         if (interruptResult.error) {
-          respond(false, undefined, interruptResult.error);
-          return;
+          return fail(interruptResult.error);
         }
-
-        const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
+        const result = await compactionCheckpointStore.restoreCheckpointSession({
           agentId: requestedAgent.agentId,
           expectedState: {
             sessionId: current.entry.sessionId,
@@ -405,63 +277,13 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
           sessionStoreKey: current.sessionStoreKey,
           checkpointId,
         });
-        if (
-          restoredSession.status === "missing-checkpoint" ||
-          restoredSession.status === "missing-boundary"
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
-          );
-          return;
-        }
-        if (restoredSession.status === "missing-session") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-          );
-          return;
-        }
-        if (restoredSession.status === "model-selection-locked") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
-          );
-          return;
-        }
-        if (restoredSession.status === "conflict") {
-          respondCheckpointConflict(key, "restore", respond);
-          return;
-        }
-        if (restoredSession.status === "failed") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "failed to restore checkpoint transcript"),
-          );
-          return;
-        }
-
-        respond(
-          true,
-          {
-            ok: true,
-            key: restoredSession.key,
-            sessionId: restoredSession.entry.sessionId,
-            checkpoint: restoredSession.checkpoint,
-            entry: restoredSession.entry,
-          },
-          undefined,
-        );
-        emitSessionsChanged(context, {
-          sessionKey: current.canonicalKey,
-          agentId: requestedAgent.agentId,
-          reason: "checkpoint-restore",
-        });
+        complete(result, current.canonicalKey);
       },
     });
-  },
+  };
+}
+
+export const sessionCheckpointHandlers: GatewayRequestHandlers = {
+  "sessions.compaction.branch": createCheckpointHandler("branch"),
+  "sessions.compaction.restore": createCheckpointHandler("restore"),
 };

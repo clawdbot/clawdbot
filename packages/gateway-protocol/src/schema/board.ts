@@ -1,7 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString } from "./primitives.js";
 
 export const BoardTabIdSchema = Type.String({ pattern: "^[a-z0-9-]{1,40}$" });
@@ -168,36 +167,6 @@ export const BoardGetParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
-
-export const BOARD_METADATA_MAX_TARGETS = 100;
-export const BoardMetadataParamsSchema = closedObject({
-  targets: Type.Array(BoardGetParamsSchema, {
-    minItems: 1,
-    maxItems: BOARD_METADATA_MAX_TARGETS,
-  }),
-});
-export type BoardMetadataParams = Static<typeof BoardMetadataParamsSchema>;
-
-const BoardMetadataOutcomeIdentitySchema = { sessionKey: NonEmptyString };
-export const BoardMetadataResultSchema = closedObject({
-  outcomes: Type.Array(
-    Type.Union([
-      closedObject({
-        ok: Type.Literal(true),
-        ...BoardMetadataOutcomeIdentitySchema,
-        revision: Type.Integer({ minimum: 0 }),
-        hasBoard: Type.Boolean(),
-      }),
-      closedObject({
-        ok: Type.Literal(false),
-        ...BoardMetadataOutcomeIdentitySchema,
-        error: ErrorShapeSchema,
-      }),
-    ]),
-    { maxItems: BOARD_METADATA_MAX_TARGETS },
-  ),
-});
-export type BoardMetadataResult = Static<typeof BoardMetadataResultSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,

@@ -13,26 +13,27 @@ type CliNoOutputTimeoutPolicyParams = {
   outstandingWorkGraceMs?: number;
 };
 
+export const isReplaySafeCliResumeControlOnly = (useResume: boolean, ...unsafe: boolean[]) =>
+  useResume && !unsafe.some(Boolean);
 export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPolicyParams): {
   deferMs?: number;
   error: FailoverError;
 } {
   const outstandingWork =
-    params.cliTimeout.activeToolCount > 0 || params.cliTimeout.backgroundTaskCount > 0;
-  // Live-only: tracked work may extend the watchdog; spawn has already terminated its child.
+    params.cliTimeout.activeToolCount + params.cliTimeout.backgroundTaskCount > 0;
   const deferMs =
     outstandingWork && params.outstandingWorkGraceMs !== undefined
       ? Math.max(params.timeoutMs, params.outstandingWorkGraceMs) - params.quietDurationMs
       : undefined;
-  // Live-only: resume control traffic is distinguishable from replay-unsafe substantive output.
-  const retryableResumeStall =
-    params.allowResumeControlOnlyRetry === true &&
-    params.useResume &&
-    !params.hasOutputText &&
-    !params.hasReplayUnsafeActivity &&
-    !outstandingWork;
   const retryable =
-    (!params.cliTimeout.observedActivity && !params.hasOutputText) || retryableResumeStall;
+    (!params.cliTimeout.observedActivity && !params.hasOutputText) ||
+    (params.allowResumeControlOnlyRetry === true &&
+      isReplaySafeCliResumeControlOnly(
+        params.useResume,
+        params.hasOutputText,
+        params.hasReplayUnsafeActivity,
+        outstandingWork,
+      ));
   return {
     ...(deferMs !== undefined && deferMs > 0 ? { deferMs } : {}),
     error: createCliTimeoutError(
@@ -54,6 +55,6 @@ export function createCliTimeoutError(
       : `CLI exceeded timeout (${cliTimeout.timeoutSeconds}s) and was terminated.`,
     "timeout",
     context,
-    { code, cliTimeout },
+    { code, cliTimeout, timeout: { timeoutPhase: "provider" } },
   );
 }

@@ -32,6 +32,7 @@ const OperatorScopeSchema = z.enum([
 ]);
 const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({ others: z.enum(["none", "view", "suggest", "write"]) }),
+  sandbox: z.enum(["inherit", "required"]).optional(),
   agents: z.union([
     z.literal("*"),
     z
@@ -79,6 +80,7 @@ export const GatewayConfigSchema = z
         dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
+        experimental: z.strictObject({ customPlugins: z.boolean().optional() }).optional(),
         root: z.string().optional(),
         environment: z
           .strictObject({
@@ -86,10 +88,10 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
+        communityInvite: z.boolean().optional(),
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
           .optional(),
-        toolTitles: z.boolean().optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])

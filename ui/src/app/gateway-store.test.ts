@@ -1,22 +1,25 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import type {
-  GatewayBrowserClient,
-  GatewayBrowserClientOptions,
-  GatewayEventFrame,
-  GatewayHelloOk,
-} from "../api/gateway.ts";
-import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { createApplicationGateway } from "./gateway-store.ts";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore as createStore,
+  GATEWAY_STORE_TEST_HELLO as HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
+import type { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "./user-profile.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
-  scheduleStaleChunkReloadMock: vi.fn(async () => true),
+  scheduleStaleChunkReloadMock: vi.fn<typeof scheduleStaleChunkReload>(async () => true),
 }));
 
-vi.mock("./stale-chunk-reload.ts", () => ({
+vi.mock("./stale-chunk-reload.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stale-chunk-reload.ts")>()),
   scheduleStaleChunkReload: scheduleStaleChunkReloadMock,
 }));
 
@@ -43,95 +46,10 @@ vi.mock("../build-info.ts", () => ({
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
-
-function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload,
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
-}
-
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
-
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn(
-    (_method: string, _params: unknown): Promise<unknown> =>
-      Promise.reject(new Error("unexpected gateway request")),
-  );
-
-  addEventListener() {
-    return () => {};
-  }
-}
-
-function createStore(
-  params: {
-    settings?: ReturnType<typeof loadSettings>;
-    persistDefaultConnectionSettings?: boolean;
-    resourceBasePath?: string;
-  } = {},
-) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      resourceBasePath: params.resourceBasePath,
-    },
-  );
-  const current = () => {
-    const client = clients.at(-1);
-    if (!client) {
-      throw new Error("expected a gateway client");
-    }
-    return client;
-  };
-  return { gateway, clients, current };
-}
-
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     scheduleStaleChunkReloadMock.mockClear();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("location", {
-      protocol: "http:",
-      host: "127.0.0.1:18789",
-      hostname: "127.0.0.1",
-      origin: "http://127.0.0.1:18789",
-      pathname: "/",
-      href: "http://127.0.0.1:18789/",
-    } as Location);
+    stubGatewayStoreTestGlobals();
   });
 
   afterEach(() => {
@@ -176,6 +94,85 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
+  it("passes native client identity and bounded scopes to the gateway client", () => {
+    const clientOptions = {
+      clientName: "openclaw-ios" as const,
+      mode: "ui" as const,
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    };
+    const { gateway, current } = createStore({ clientOptions });
+
+    gateway.start();
+
+    expect(current().opts).toMatchObject(clientOptions);
+  });
+
+  it("retires a completed native handoff while keeping stale hello operations fenced", () => {
+    const { gateway, current } = createStore({
+      clientOptions: { clientName: "openclaw-ios", mode: "ui" },
+    });
+    gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
+    expect(current().request).not.toHaveBeenCalled();
+    gateway.connect();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().opts.bootstrapProfile).toBeUndefined();
+    gateway.stop();
+  });
+
+  it.each(["snapshot", "probe"])(
+    "does not reload a native stale hello after its %s replaces the connection",
+    async (stage) => {
+      const actual =
+        await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
+      scheduleStaleChunkReloadMock.mockImplementationOnce(actual.scheduleStaleChunkReload);
+      const probe = createDeferred<Response>();
+      const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      const replace = vi.fn();
+      const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
+      vi.stubGlobal("window", { location });
+      const { gateway, current } = createStore({
+        clientOptions: { clientName: "openclaw-ios", mode: "ui" },
+      });
+      gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
+      if (stage === "snapshot") {
+        gateway.subscribe((snapshot) => {
+          if (snapshot.phase === "reconnecting") {
+            gateway.connect();
+          }
+        });
+      }
+      current().opts.onHello?.({
+        ...HELLO,
+        server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      });
+      if (stage === "probe") {
+        gateway.connect();
+      }
+      probe.resolve(new Response(null, { status: 200 }));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(stage === "probe" ? 1 : 0);
+      expect(replace).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+      gateway.stop();
+    },
+  );
+
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -219,53 +216,6 @@ describe("createApplicationGateway connection phase", () => {
     });
 
     expect(gateway.snapshot.phase).toBe("connected");
-  });
-
-  it.each([
-    {
-      name: "missing-token auth detail",
-      outerCode: "INVALID_REQUEST",
-      detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      message: "token missing",
-    },
-    {
-      name: "pairing-required detail",
-      outerCode: "NOT_PAIRED",
-      detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      message: "device is not approved",
-    },
-  ])("preserves the structured $name in the login snapshot", (fixture) => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 4008,
-      reason: "connect failed",
-      error: {
-        code: fixture.outerCode,
-        message: fixture.message,
-        details: { code: fixture.detailCode },
-      },
-      willRetry: false,
-    });
-
-    expect(gateway.snapshot.lastError).toBe(fixture.message);
-    expect(gateway.snapshot.lastErrorCode).toBe(fixture.detailCode);
-  });
-
-  it("preserves an outer code when a transport failure has no structured detail", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 1006,
-      reason: "websocket error",
-      error: { code: "UNAVAILABLE", message: "WebSocket connection failed" },
-      willRetry: false,
-    });
-
-    expect(gateway.snapshot.lastError).toBe("WebSocket connection failed");
-    expect(gateway.snapshot.lastErrorCode).toBe("UNAVAILABLE");
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {
@@ -317,7 +267,8 @@ describe("createApplicationGateway connection phase", () => {
       ...HELLO,
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
     });
-    await vi.waitFor(() => expect(first.request).toHaveBeenCalledOnce());
+    await vi.dynamicImportSettled();
+    expect(first.request).toHaveBeenCalledOnce();
 
     gateway.connect();
     current().opts.onHello?.({
@@ -329,9 +280,7 @@ describe("createApplicationGateway connection phase", () => {
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/stale-refresh" },
       expiresAtMs: Date.now() + 60_000,
     });
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, 0);
-    });
+    await vi.dynamicImportSettled();
 
     expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
       "https://canvas.test/__openclaw__/cap/current",
@@ -421,6 +370,70 @@ describe("createApplicationGateway connection phase", () => {
     expect(current().opts.url).toBe("wss://other-gateway.example.test");
     expect(current().opts.token).toBe("other-token");
     expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("restores the newly selected Gateway's saved agent", () => {
+    const otherGateway = "wss://other-gateway.example.test";
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${otherGateway}`,
+      JSON.stringify({
+        gatewayUrl: otherGateway,
+        sessionsByGateway: {
+          [otherGateway]: {
+            sessionKey: "global",
+            lastActiveSessionKey: "global",
+            selectedAgentId: "research",
+          },
+        },
+      }),
+    );
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: otherGateway });
+
+    expect(gateway.snapshot.sessionKey).toBe("global");
+    expect(loadSettings()).toMatchObject({
+      sessionKey: "global",
+      lastActiveSessionKey: "global",
+      selectedAgentId: "research",
+    });
+  });
+
+  it("does not carry an agent selection into an unsaved Gateway", () => {
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: "wss://fresh-gateway.example.test" });
+
+    expect(loadSettings().selectedAgentId).toBeUndefined();
+  });
+
+  it("clears inherited credentials when selecting another Gateway", () => {
+    const settings = { ...loadSettings(), token: "old-token" };
+    const { gateway, current } = createStore({ settings });
+    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
+
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    expect(current().opts.token).toBeUndefined();
+    expect(current().opts.password).toBeUndefined();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+  });
+
+  it("advances the connection revision only when credentials change", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.connectionRevision).toBe(0);
+    gateway.connect({ sessionKey: "agent:main:other" });
+    expect(gateway.connectionRevision).toBe(0);
+
+    gateway.connect({ token: "replacement-token" });
+    expect(gateway.connectionRevision).toBe(1);
   });
 
   it("keeps a newly selected Gateway's first retry at the login gate", () => {
@@ -594,9 +607,9 @@ describe("createApplicationGateway connection phase", () => {
       willRetry: false,
     });
 
-    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
-      buildId: "replacement-build",
-    });
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ buildId: "replacement-build" }),
+    );
     expect(gateway.snapshot.phase).toBe("reload-required");
   });
 
@@ -621,9 +634,9 @@ describe("createApplicationGateway connection phase", () => {
       willRetry: true,
     });
 
-    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
-      buildId: "replacement-build",
-    });
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ buildId: "replacement-build" }),
+    );
     expect(gateway.snapshot.phase).toBe("reload-required");
     expect(gateway.snapshot.lastError).toContain("Control UI updated");
     expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
@@ -941,6 +954,50 @@ describe("createApplicationGateway connection phase", () => {
     });
     expect(gateway.eventLog).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    "keeps refreshed self authoritative over hello (initial profile: %s)",
+    (qualified) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
+      const profile = { ...user, identity: { type: "profile" as const, id: user.id } };
+      const initialUser = qualified ? profile : user;
+      current().opts.onHello?.({
+        ...HELLO,
+        snapshot: { presence: [{ instanceId: current().instanceId, user: initialUser }] },
+      });
+      const renderedSelf = vi.fn(() =>
+        resolveCurrentSelfUser({
+          snapshotUser: gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(gateway.snapshot.hello?.snapshot),
+          presenceInstanceId: current().instanceId,
+        }),
+      );
+      gateway.subscribeEvents(renderedSelf);
+      for (const nextUser of [
+        profile,
+        user,
+        {
+          ...profile,
+          id: "merged-profile",
+          identity: { type: "profile" as const, id: "merged-profile" },
+        },
+      ]) {
+        current().opts.onEvent?.({
+          type: "event",
+          event: "presence",
+          payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+        });
+        expect(gateway.snapshot.selfUser).toEqual(nextUser);
+        expect(renderedSelf.mock.lastCall).toBeDefined();
+        expect(renderedSelf.mock.results.at(-1)?.value).toEqual(nextUser);
+        expect(readPresenceEntries(gateway.snapshot.hello?.snapshot)?.[0]?.user).toEqual(
+          initialUser,
+        );
+      }
+    },
+  );
 
   it("projects only this browser connection's optional presence identity", () => {
     const { gateway, current } = createStore();

@@ -21,6 +21,7 @@ import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-r
 import {
   archiveStaleDashboardEntries,
   capEntryCount,
+  countUnarchivedSessionEntries,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
   shouldRunModelRunPrune,
@@ -45,6 +46,7 @@ import {
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../sessions/agent-harness-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
@@ -239,7 +241,9 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizeRestartRecoveryFields(
-            normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
+            normalizeLegacySessionEntryDelivery(
+              migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
+            ),
           ),
         ),
       ),
@@ -263,7 +267,7 @@ export function loadLegacySessionStore(
   normalizeLegacySessionStore(sessionStore);
   if (options.runMaintenance) {
     const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = Object.keys(sessionStore).length;
+    const beforeCount = countUnarchivedSessionEntries(sessionStore);
     if (maintenance.mode === "enforce") {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
         storePath,
@@ -272,6 +276,7 @@ export function loadLegacySessionStore(
       archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
+        preserveRecentMs: maintenance.preserveRecentMs,
       });
       if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
@@ -280,7 +285,7 @@ export function loadLegacySessionStore(
           preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
-      if (Object.keys(sessionStore).length > maintenance.maxEntries) {
+      if (countUnarchivedSessionEntries(sessionStore) > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
@@ -288,7 +293,7 @@ export function loadLegacySessionStore(
         });
         if (
           shouldRunSessionEntryMaintenance({
-            entryCount: Object.keys(sessionStore).length,
+            entryCount: countUnarchivedSessionEntries(sessionStore),
             maxEntries: maintenance.maxEntries,
           })
         ) {

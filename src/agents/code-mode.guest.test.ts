@@ -148,6 +148,40 @@ describe("Code Mode guest execution", () => {
     expect(testing.resumingRunIds.size).toBe(0);
   });
 
+  it("serializes catalog handles nested inside arrays and plain objects", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const noop = pluginTool("fake_noop", "Noop");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, noop],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const batches = await Promise.all([catalog.search("noop"), catalog.search("noop")]);
+        const shared = { tool: batches[0][0] };
+        return { batches, byKey: shared, aliases: { first: shared, second: shared } };
+      `,
+    });
+
+    const handle = { callableName: "fake_noop", toolName: "fake_noop", description: "Noop" };
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        batches: [[handle], [handle]],
+        byKey: { tool: handle },
+        aliases: { first: { tool: handle }, second: { tool: handle } },
+      },
+    });
+    expect(JSON.stringify(details.value)).not.toContain("null");
+  });
+
   it("exposes catalog tools as bare globals and removes the legacy guest surface", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const search = pluginTool("web_search", "Search the web");
@@ -458,6 +492,12 @@ describe("Code Mode guest execution", () => {
       sessionKey: "agent:main:main",
       runId: "run-code-mode",
       catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
     });
 
     let result = await expectDefined(tools[0], "exec tool").execute("code-call-network-error", {
@@ -640,7 +680,7 @@ describe("Code Mode guest execution", () => {
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-syntax",
-        { code: "const x = ;" },
+        { code: "const valid = 1;\nconst x = ;" },
       ),
     );
 
@@ -651,10 +691,18 @@ describe("Code Mode guest execution", () => {
     // actual cause dropped. The model now sees the name and message.
     expect(error).toContain("SyntaxError");
     expect(error).toContain("unexpected token");
+    expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
     expect(error.startsWith("at ")).toBe(false);
   });
 
-  it("surfaces the QuickJS error name and message for guest runtime errors", async () => {
+  it.each([
+    {
+      name: "ReferenceError",
+      code: "const valid = 1;\nreturn missingFn();",
+      cause: "missingFn is not defined",
+    },
+    { name: "TypeError", code: "const value = 1;\nvalue();", cause: "not a function" },
+  ])("surfaces the QuickJS $name at the submitted source line", async ({ name, code, cause }) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -668,14 +716,16 @@ describe("Code Mode guest execution", () => {
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-runtime",
-        { code: "return missingFn();" },
+        { code },
       ),
     );
 
     expect(details.status).toBe("failed");
     const error = String(details.error);
-    expect(error).toContain("ReferenceError");
-    expect(error).toContain("missingFn is not defined");
+    expect(error).toContain(name);
+    expect(error).toContain(cause);
+    expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+    expect(error).not.toContain("<eval>");
     expect(error.startsWith("at ")).toBe(false);
   });
 

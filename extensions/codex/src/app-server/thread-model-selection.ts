@@ -1,13 +1,8 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveCodexAppServerReasoningEffort,
-  type CodexReasoningEffort,
-} from "./reasoning-effort.js";
 import {
   isCodexAppServerNativeAuthProfile,
   type CodexAppServerAuthProfileLookup,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+} from "./auth-profile.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 
@@ -132,18 +127,4 @@ export function resolveCodexAppServerModelProvider(params: {
     return undefined;
   }
   return normalizedLower === "openai" ? "openai" : normalized;
-}
-
-// Provider catalog metadata owns model-specific effort support. Keeping this
-// bridge model-agnostic prevents the picker and native runtime from drifting.
-export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
-  modelId: string,
-  supportedReasoningEfforts?: readonly string[],
-): CodexReasoningEffort | null {
-  return resolveCodexAppServerReasoningEffort({
-    thinkLevel,
-    modelId,
-    supportedReasoningEfforts,
-  });
 }

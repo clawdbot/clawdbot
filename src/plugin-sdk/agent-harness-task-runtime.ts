@@ -35,7 +35,6 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 export type { TaskRecord as AgentHarnessTaskRecord };
 export type { AgentHarnessTaskRuntimeScope };
@@ -250,7 +249,6 @@ export async function deliverAgentHarnessTaskCompletion(params: {
       completionDirectOrigin: completionDirectOrigin ?? directOrigin,
       directOrigin,
       sourceSessionKey: childSessionKey,
-      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
       targetRequesterSessionKey: requesterSessionKey,
       requesterIsSubagent,

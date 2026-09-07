@@ -277,4 +277,4 @@ function waitForTriggerLookup<T>(work: Promise<T>, signal?: AbortSignal): Promis
   });
 }
 
-export { MAX_TRIGGER_CONTEXT_CHARS, STRONG_TRIGGER_MATCH_SCORE };
+export { MAX_TRIGGER_CONTEXT_CHARS };

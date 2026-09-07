@@ -70,7 +70,8 @@ vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -108,7 +109,7 @@ describe("agent command registration", () => {
     return call;
   }
 
-  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+  it("keeps agent help aligned with supported thinking levels and auth sources", () => {
     const program = new Command();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     const agent = program.commands.find((command) => command.name() === "agent");
@@ -119,6 +120,9 @@ describe("agent command registration", () => {
     );
     expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
       "ultra",
+    );
+    expect(agent?.options.find((option) => option.long === "--local")?.description).toContain(
+      "configured provider credentials or local CLI logins",
     );
   });
 
@@ -177,12 +181,22 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
-  it("keeps bare agent on the existing parent action", async () => {
-    await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+  it.each([0, 1])("keeps bare agent on the parent action with exit code %i", async (exitCode) => {
+    const previousExitCode = process.exitCode;
+    agentCliCommandMock.mockImplementationOnce(async () => {
+      process.exitCode = exitCode;
+    });
 
-    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
-    expect(agentExecCommandMock).not.toHaveBeenCalled();
-    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime, 0);
+    try {
+      await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+
+      expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+      expect(agentExecCommandMock).not.toHaveBeenCalled();
+      expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
+      expect(process.exitCode).toBe(exitCode);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
   });
 
   it("keeps an exec-valued parent message on the existing parent action", async () => {
@@ -376,6 +390,15 @@ describe("agent command registration", () => {
       },
       runtime,
     );
+  });
+
+  it("documents set-identity --workspace as a locator", () => {
+    const program = new Command();
+    registerAgentsCommands(program);
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const setIdentity = agents?.commands.find((command) => command.name() === "set-identity");
+    const help = setIdentity?.helpInformation() ?? "";
+    expect(help.replace(/\s+/g, " ")).toContain("does not change the stored workspace");
   });
 
   it("documents bind accountId resolution behavior in help text", () => {

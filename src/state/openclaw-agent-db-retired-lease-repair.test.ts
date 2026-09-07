@@ -8,6 +8,7 @@ import {
   migrateOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
+  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -68,7 +69,7 @@ afterEach(() => {
 });
 
 describe("retired agent state lease repair", () => {
-  it("repairs a mis-stamped v17 database while preserving auth and ownership", () => {
+  it("repairs a mis-stamped v17 database while preserving auth and ownership", async () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     installRetiredLeaseSchema(databasePath);
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
@@ -88,8 +89,8 @@ describe("retired agent state lease repair", () => {
       database.close();
     }
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {
@@ -131,17 +132,19 @@ describe("retired agent state lease repair", () => {
     }
   });
 
-  it("leaves a clean v17 database unchanged", () => {
-    const { databasePath } = createCurrentAgentDatabase();
+  it("leaves a clean v17 database unchanged", async () => {
+    const { databasePath, env } = createCurrentAgentDatabase();
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
     const before = openNodeSqliteDatabase(databasePath, { readOnly: true });
     const beforeSchemaVersion = before.prepare("PRAGMA schema_version").get();
     before.close();
 
-    migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: "worker-1",
-      pathname: databasePath,
-    });
+    await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+      migrateOpenClawAgentDatabaseForMaintenance(
+        { agentId: "worker-1", pathname: databasePath },
+        maintenance,
+      ),
+    );
 
     const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {
@@ -160,8 +163,8 @@ describe("retired agent state lease repair", () => {
     }
   });
 
-  it("rejects a foreign state_leases structure without changing it", () => {
-    const { databasePath } = createCurrentAgentDatabase();
+  it("rejects a foreign state_leases structure without changing it", async () => {
+    const { databasePath, env } = createCurrentAgentDatabase();
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
     const database = openNodeSqliteDatabase(databasePath);
     try {
@@ -176,12 +179,14 @@ describe("retired agent state lease repair", () => {
       database.close();
     }
 
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/state_leases.*noncanonical|column definitions differ for state_leases/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/state_leases.*noncanonical|column definitions differ for state_leases/iu);
 
     const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {
@@ -199,8 +204,8 @@ describe("retired agent state lease repair", () => {
     }
   });
 
-  it("rolls back the lease drop when canonical validation fails", () => {
-    const { databasePath } = createCurrentAgentDatabase();
+  it("rolls back the lease drop when canonical validation fails", async () => {
+    const { databasePath, env } = createCurrentAgentDatabase();
     installRetiredLeaseSchema(databasePath);
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
     const database = openNodeSqliteDatabase(databasePath);
@@ -213,12 +218,14 @@ describe("retired agent state lease repair", () => {
       database.close();
     }
 
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/session_key_contract/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/session_key_contract/iu);
 
     const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {

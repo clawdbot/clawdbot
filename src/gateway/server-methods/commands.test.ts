@@ -3,6 +3,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
@@ -204,6 +205,7 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
+  CommandsListResultSchema,
 } from "../../../packages/gateway-protocol/src/schema.js";
 import { commandsHandlers, buildCommandsListResult } from "./commands.js";
 
@@ -344,6 +346,20 @@ describe("commands.list handler", () => {
     expect(requireCommand(commands, "commands").scope).toBe("text");
     expect(requireCommand(commands, "debug_prompt").scope).toBe("native");
     expect(requireCommand(commands, "tts").scope).toBe("both");
+  });
+
+  it("projects legacy SDK categories into the current command catalog", () => {
+    const command = expectDefined(mockChatCommands[0], "model command fixture");
+    const category = command.category;
+    command.category = "docks";
+    try {
+      const { ok, payload } = callHandler();
+      expect(ok).toBe(true);
+      expect(Value.Check(CommandsListResultSchema, payload)).toBe(true);
+      expect(requireCommand(listCommands(), "model").category).toBe("tools");
+    } finally {
+      command.category = category;
+    }
   });
 
   it("skips args when acceptsArgs is false", () => {

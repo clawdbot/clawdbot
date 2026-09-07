@@ -12,7 +12,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
-import { buildTelemetryPayload, checkTelemetryUpdate } from "./telemetry.js";
+import {
+  buildTelemetryPayload,
+  checkTelemetryUpdate,
+  resolveTelemetryStatus,
+} from "./telemetry.js";
 
 const NOW = Date.parse("2026-08-23T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -86,6 +90,7 @@ describe("anonymous telemetry", () => {
       layout: "state-only",
       prefix: "openclaw-telemetry-",
       env: {
+        CI: undefined,
         DO_NOT_TRACK: undefined,
         OPENCLAW_NIX_MODE: undefined,
         OPENCLAW_NO_AUTO_UPDATE: undefined,
@@ -360,6 +365,35 @@ describe("anonymous telemetry", () => {
     expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
   });
 
+  it("never sends a request from an automated environment", async () => {
+    setTestEnvValue("CI", "true");
+
+    await expect(
+      checkTelemetryUpdate(createFeatureConfig(), {
+        surface: "gateway",
+        fetchImpl: globalThis.fetch,
+        nowMs: NOW,
+      }),
+    ).resolves.toBeNull();
+
+    expect(mockHttp.requests()).toHaveLength(0);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+    expect(resolveTelemetryStatus(createFeatureConfig()).reason).toBe("automated-environment");
+  });
+
+  it("still reports from an automated environment when an endpoint is configured for it", async () => {
+    const customEndpoint = "https://telemetry.example.invalid/api/latest-version";
+    setTestEnvValue("CI", "true");
+    setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", customEndpoint);
+    mockHttp.intercept({ url: customEndpoint, reply: { json: { version: "2026.8.24" } } });
+
+    await expect(
+      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl: globalThis.fetch, nowMs: NOW }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+
+    expect(mockHttp.requests()).toHaveLength(1);
+  });
+
   it("never sends a request for Nix-managed installations", async () => {
     setTestEnvValue("OPENCLAW_NIX_MODE", "1");
 
@@ -431,5 +465,55 @@ describe("anonymous telemetry", () => {
 
     expect(result?.note).toHaveLength(500);
     expect(persisted?.note).toHaveLength(500);
+  });
+
+  it("bounds streamed update responses without replacing the cached result or successful ping", async () => {
+    const chunk = new Uint8Array(1024 * 1024).fill(120);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('{"version":"2026.8.25","padding":"'),
+      ...Array<Uint8Array>(32).fill(chunk),
+      encoder.encode('"}'),
+    ][Symbol.iterator]();
+    let canceled = false;
+    let enqueuedBytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = chunks.next();
+        if (next.done) {
+          controller.close();
+        } else {
+          enqueuedBytes += next.value.byteLength;
+          controller.enqueue(next.value);
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ version: "2026.8.24", padding: "x".repeat(chunk.length) }),
+      )
+      .mockResolvedValueOnce(new Response(body));
+    const options = { surface: "gateway" as const, fetchImpl };
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW })).resolves.toEqual({
+      version: "2026.8.24",
+    });
+    await expect(
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 1 }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(canceled).toBe(true);
+    expect(enqueuedBytes).toBeLessThan(32 * chunk.length);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW,
+      latestVersion: "2026.8.24",
+    });
+    await expect(
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 30_001 }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

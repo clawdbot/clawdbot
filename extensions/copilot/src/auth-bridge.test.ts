@@ -1,7 +1,7 @@
 // Copilot tests cover auth bridge plugin behavior.
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCopilotAuth, tokenFingerprint } from "./auth-bridge.js";
 
 function cleanEnv(): NodeJS.ProcessEnv {
@@ -456,20 +456,16 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
 });
 
 describe("resolveCopilotAuth - defaults wiring", () => {
-  let originalEnv: NodeJS.ProcessEnv;
-
   beforeEach(() => {
-    originalEnv = process.env;
-    process.env = { ...originalEnv };
-    delete process.env.GITHUB_TOKEN;
-    delete process.env.OPENCLAW_GITHUB_TOKEN;
-    delete process.env.COPILOT_GITHUB_TOKEN;
-    delete process.env.GH_TOKEN;
-    delete process.env.OPENCLAW_HOME;
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", undefined);
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", undefined);
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    vi.unstubAllEnvs();
   });
 
   it("uses process.env when env is not injected", () => {

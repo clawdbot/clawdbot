@@ -57,7 +57,8 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.entries.*.params` - per-agent override, matched by agent id
+3. `agents.entries.*.models["provider/model"].params` - agent-specific per-model override
+4. `agents.entries.*.params` - agent-wide override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 
@@ -97,6 +98,32 @@ agents:
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
+### Model Studio / DashScope (Qwen)
+
+OpenClaw's direct-provider adapter enables explicit prompt caching by default on
+native or default Model Studio / DashScope OpenAI-compatible routes, using
+`compat.cacheControlFormat: "anthropic"` and the
+existing system, last-tool, and last-conversation cache markers. Explicit model
+compat settings take precedence over detected defaults. Custom proxy endpoints
+receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
+explicitly only when the proxy supports these markers.
+
+The embedded runner's boundary-aware Chat Completions transport does not yet apply
+these markers; detecting the format alone does not enable explicit caching there.
+
+Explicit `cacheRetention` values reach this transport without enabling
+`compat.supportsPromptCacheKey`; leave that flag unset because this route does not
+need OpenAI's `prompt_cache_key` or `prompt_cache_retention` fields. With no explicit
+retention, the transport keeps its `"short"` default. Model Studio uses a five-minute
+explicit cache window, so `"long"` keeps ephemeral markers without requesting a
+one-hour TTL.
+
+To disable OpenClaw's explicit markers, set `cacheRetention: "none"`. The current
+`compat.cacheControlFormat` schema accepts only `"anthropic"`, not a disable value;
+omitting it uses the detected default. Alibaba's automatic implicit caching is
+separate and cannot be disabled. Supported models, minimum prompt lengths, and
+cache billing are described in [Model Studio context caching](https://www.alibabacloud.com/help/en/model-studio/context-cache).
+
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
@@ -126,7 +153,7 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits through upstream `cachedContentTokenCount`, mapped to `cacheRead`.
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
-- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the system prompt - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
+- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the final assembled system prompt, including hook-added instructions - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -136,7 +163,7 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
-Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded Gateway-startup probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe on first CLI execution finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. Concurrent executions share that probe, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
 
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
@@ -159,7 +186,10 @@ If you see unexpected `cacheWrite` spikes after a config or workspace change, ch
 
 ## OpenClaw cache-stability guards
 
+- Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
 - Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
+- Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
 
 ## Tuning patterns

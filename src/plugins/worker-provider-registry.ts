@@ -11,14 +11,16 @@ export function validateWorkerProviderContract(
   provider: WorkerProvider,
   declaredIds: readonly string[],
 ): WorkerProviderValidation {
-  const missingMethod = (["provision", "inspect", "destroy"] as const).find(
+  const missingMethod = (["resolveAllocation", "provision", "inspect", "destroy"] as const).find(
     (method) => typeof provider[method] !== "function",
   );
   if (missingMethod) {
     return { ok: false, message: `worker provider registration missing method: ${missingMethod}` };
   }
-  if (provider.renew !== undefined && typeof provider.renew !== "function") {
-    return { ok: false, message: "worker provider registration renew must be a function" };
+  for (const method of ["renew", "maintain"] as const) {
+    if (provider[method] !== undefined && typeof provider[method] !== "function") {
+      return { ok: false, message: `worker provider registration ${method} must be a function` };
+    }
   }
   if (
     provider.listMachineOptions !== undefined &&
@@ -39,16 +41,18 @@ export function validateWorkerProviderContract(
     };
   }
   const executionModes = provider.supportedExecutionModes;
-  if (
-    executionModes !== undefined &&
-    (!Array.isArray(executionModes) ||
-      executionModes.length !== 1 ||
-      (executionModes[0] !== "worker-turn" && executionModes[0] !== "remote-exec"))
-  ) {
+  const validExecutionModes =
+    Array.isArray(executionModes) &&
+    ((executionModes.length === 1 &&
+      (executionModes[0] === "worker-turn" || executionModes[0] === "remote-exec")) ||
+      (executionModes.length === 2 &&
+        executionModes[0] === "worker-turn" &&
+        executionModes[1] === "remote-exec"));
+  if (executionModes !== undefined && !validExecutionModes) {
     return {
       ok: false,
       message:
-        "worker provider registration supportedExecutionModes must contain exactly one current mode",
+        "worker provider registration supportedExecutionModes must contain one current mode or both current modes in canonical order",
     };
   }
   if (

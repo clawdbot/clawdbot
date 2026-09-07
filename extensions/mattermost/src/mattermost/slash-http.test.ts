@@ -1,6 +1,7 @@
 // Mattermost tests cover slash http plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { PassThrough } from "node:stream";
+import { createServer, IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -35,21 +36,21 @@ function createRequest(params: {
   contentType?: string;
   autoEnd?: boolean;
 }): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = params.method ?? "POST";
-  incoming.headers = {
+  const req = new IncomingMessage(new Socket());
+  req.method = params.method ?? "POST";
+  req.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
     if (params.body) {
-      req.write(params.body);
+      req.push(Buffer.from(params.body));
     }
     if (params.autoEnd !== false) {
-      req.end();
+      req.complete = true;
+      req.push(null);
     }
   });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {
@@ -330,21 +331,65 @@ describe("slash-http", () => {
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
   });
 
-  it("returns 408 when the request body stalls", async () => {
+  it.each([
+    {
+      name: "413 when the upload exceeds the body limit",
+      bodyTimeoutMs: 5_000,
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      body: "x".repeat(64 * 1024 + 1),
+      contentLength: undefined,
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      responseBody: "Payload Too Large",
+    },
+    {
+      name: "408 when the sender stalls mid-upload",
+      bodyTimeoutMs: 50,
+      // Promises more than is ever sent, so the read deadline fires with the request open.
+      body: "x".repeat(16),
+      contentLength: 64 * 1024,
+      statusLine: "HTTP/1.1 408 Request Timeout",
+      responseBody: "Request body timeout",
+    },
+  ])("delivers $name and then closes the connection", async (scenario) => {
     const handler = createSlashCommandHttpHandler({
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       registeredCommands: [createRegisteredCommand()],
-      bodyTimeoutMs: 1,
+      bodyTimeoutMs: scenario.bodyTimeoutMs,
     });
-    const req = createRequest({ autoEnd: false });
-    const response = createResponse();
+    const server = createServer((req, res) => {
+      void handler(req, res);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected the slash-command test server to have a TCP address");
+      }
 
-    await handler(req, response.res);
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${address.port}/slash`,
+        body: scenario.body,
+        contentLength: scenario.contentLength,
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
 
-    expect(response.res.statusCode).toBe(408);
-    expect(response.getBody()).toBe("Request body timeout");
+      expect(result.statusLine).toBe(scenario.statusLine);
+      expect(result.body).toBe(scenario.responseBody);
+      expect(result.closedByServer).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("rejects the startup token when Mattermost has rotated the current command token", async () => {

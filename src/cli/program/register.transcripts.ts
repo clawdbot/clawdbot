@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { normalizeExportText } from "../../transcripts/store-artifacts.js";
 import {
   TranscriptsStore,
   type TranscriptArtifactKind,
@@ -86,11 +87,7 @@ async function showCommand(sessionSelector: string, options: TranscriptsCliOptio
   }
   const storedSummary = await store.readSummary(entry.session);
   const materializedMarkdown =
-    storedSummary.markdown === undefined
-      ? undefined
-      : storedSummary.markdown.endsWith("\n")
-        ? storedSummary.markdown
-        : `${storedSummary.markdown}\n`;
+    storedSummary.markdown === undefined ? undefined : normalizeExportText(storedSummary.markdown);
   // `show` is an explicit export boundary: keep the shipped summary path current.
   await store.materializeSessionArtifacts(entry.session, "summary");
   if (options.json) {

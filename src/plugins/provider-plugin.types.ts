@@ -88,6 +88,7 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
+  ProviderReconcileLocalServiceContext,
 } from "./provider-transport.types.js";
 
 export type ProviderPlugin = {
@@ -321,6 +322,8 @@ export type ProviderPlugin = {
    * the embedded agent runtime.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /** Cheap, idempotent provider repair after local-service health and before each request. */
+  reconcileLocalService?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
   /**
    * Provider-owned native transport turn identity.
    *
@@ -553,11 +556,12 @@ export type ProviderPlugin = {
    */
   loginOAuth?: (callbacks: OAuthLoginCallbacks) => Promise<SessionOAuthCredentials>;
   /**
-   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   * Legacy auth-profile ids that generic auth must ignore and `openclaw doctor` should remove.
    *
    * Use this when a provider plugin replaces an older core-managed profile id
    * and wants cleanup/migration messaging to live with the provider instead of
-   * in hardcoded doctor tables.
+   * in hardcoded doctor tables. A runtime-only external CLI profile remains usable by its exact
+   * provider when it intentionally reuses a retired id.
    */
   deprecatedProfileIds?: string[];
   /**
@@ -602,15 +606,6 @@ export type ProviderPlugin = {
    * Runtime callers must not treat non-secret markers as runnable credentials;
    * they should retry against the active runtime snapshot when available.
    *
-   * This hook is the canonical seam for provider-specific fallback auth
-   * derived from plugin/private config. It may return:
-   * - a runnable literal credential for runtime callers
-   * - a non-secret marker for managed-secret source config, which is still useful
-   *   for discovery/bootstrap callers
-   *
-   * Runtime callers must not treat non-secret markers as runnable credentials;
-   * they should retry against the active runtime snapshot when available.
-   *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
    * config as available.
@@ -618,6 +613,13 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Prepare external availability before synchronous synthetic-auth reads.
+   * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
+   */
+  prepareSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext & { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.
    *

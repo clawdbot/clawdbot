@@ -296,6 +296,7 @@ function activateRuntimeWebToolsResult(
       config: result.resolvedConfig,
       authStores: [],
       authStoreCredentialsRevision: 0,
+      authStoreSnapshotsRevision: 0,
       warnings: result.context.warnings,
       degradedOwners: result.degradedOwners,
       secretOwners: result.secretOwners,

@@ -318,4 +318,74 @@ describe("Codex ordinary MCP elicitation adapter", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("rejects inherited and accessor thread correlation without invoking getters", async () => {
+    const gateway = createAnsweringGateway([]);
+    const bridge = createBridge({ gatewayCall: gateway.call });
+    const inherited = formParams();
+    Object.setPrototypeOf(inherited, { threadId: "thread-1" });
+    delete (inherited as Partial<typeof inherited>).threadId;
+    let getterCalls = 0;
+    const accessor = formParams();
+    Object.defineProperty(accessor, "threadId", {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return "thread-1";
+      },
+    });
+
+    for (const [id, params] of Object.entries({ inherited, accessor })) {
+      await expect(bridge.handleElicitationRequest({ id, params })).resolves.toBeUndefined();
+    }
+    expect(getterCalls).toBe(0);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it("rechecks thread correlation on the detached snapshot", async () => {
+    const gateway = createAnsweringGateway([{ name: ["Ada"] }]);
+    const bridge = createBridge({ gatewayCall: gateway.call });
+    let threadReads = 0;
+    const request = new Proxy(formParams(), {
+      getOwnPropertyDescriptor: (target, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (key !== "threadId" || !descriptor || !("value" in descriptor)) {
+          return descriptor;
+        }
+        threadReads += 1;
+        return { ...descriptor, value: threadReads === 1 ? "thread-1" : "other-thread" };
+      },
+    });
+
+    await expect(
+      bridge.handleElicitationRequest({ id: "changing-thread", params: request }),
+    ).resolves.toBeUndefined();
+    expect(threadReads).toBeGreaterThanOrEqual(2);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it("preserves snapshot rejection and descriptor trap behavior", async () => {
+    const bridge = createBridge({ gatewayCall: createAnsweringGateway([]).call });
+    const request = formParams();
+    Object.defineProperty(request, "threadId", {
+      enumerable: false,
+      value: "thread-1",
+    });
+
+    await expect(
+      bridge.handleElicitationRequest({ id: "non-enumerable", params: request }),
+    ).resolves.toMatchObject({
+      action: "decline",
+      _meta: { message: expect.stringContaining("malformed or over-limit") },
+    });
+
+    const trapped = new Proxy(formParams(), {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("descriptor unavailable");
+      },
+    });
+    await expect(
+      bridge.handleElicitationRequest({ id: "descriptor-trap", params: trapped }),
+    ).rejects.toThrow("descriptor unavailable");
+  });
 });

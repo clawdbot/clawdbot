@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -271,10 +272,14 @@ describe("gateway e2e", () => {
           callerAuthOverride.rateLimit!.maxAttempts = 99;
           callerTailscaleOverride.preserveFunnel = false;
         }
+        const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
         const nextLoggingSource = {
-          ...initialConfig,
-          logging: { level: "debug" },
+          ...sourceBeforeLoggingEdit,
+          logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
         } satisfies OpenClawConfig;
+        const loggingChanges = new Set<string>();
+        collectChangedPaths(sourceBeforeLoggingEdit, nextLoggingSource, "", loggingChanges);
+        expect([...loggingChanges]).toEqual(["logging.level"]);
         await writeConfigFile(nextLoggingSource);
         await expect
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
@@ -309,14 +314,14 @@ describe("gateway e2e", () => {
           const sourceBeforeUnrelatedWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
           const nextUnrelatedSource = {
             ...sourceBeforeUnrelatedWrite,
-            ui: { assistant: { name: "unrelated-managed-write" } },
+            ui: { seamColor: "#123456" },
           } satisfies OpenClawConfig;
           await writeConfigFile(nextUnrelatedSource);
           const persistedAfterUnrelatedWrite = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
           expect(persistedAfterUnrelatedWrite.channels?.whatsapp?.dmPolicy).toBe("disabled");
-          expect(persistedAfterUnrelatedWrite.ui?.assistant?.name).toBe("unrelated-managed-write");
+          expect(persistedAfterUnrelatedWrite.ui?.seamColor).toBe("#123456");
         }
 
         const reconnected = await connectGatewayClient({
@@ -505,9 +510,10 @@ describe("gateway e2e", () => {
         });
         await disconnectGatewayClient(newClient);
 
+        const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
         await writeConfigFile({
-          gateway: { auth: { mode: "token", token: fileToken } },
-          logging: { level: "debug" },
+          ...sourceBeforeLoggingEdit,
+          logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
         });
         const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
           gateway?: { auth?: { token?: unknown } };
@@ -549,9 +555,10 @@ describe("gateway e2e", () => {
       const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
       expect(seededOrigins?.length).toBeGreaterThan(0);
 
+      const sourceBeforeLoggingEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        logging: { level: "debug" },
+        ...sourceBeforeLoggingEdit,
+        logging: { ...sourceBeforeLoggingEdit.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
@@ -559,20 +566,22 @@ describe("gateway e2e", () => {
       expect(getRuntimeConfig().gateway?.controlUi?.allowedOrigins).toEqual(seededOrigins);
 
       expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
+      const sourceBeforeOverrideWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        ui: { assistant: { name: "override-active" } },
-        logging: { level: "debug" },
+        ...sourceBeforeOverrideWrite,
+        ui: { ...sourceBeforeOverrideWrite.ui, seamColor: "#123456" },
+        logging: { ...sourceBeforeOverrideWrite.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
         .toBe("warn");
 
       resetConfigOverrides();
+      const sourceBeforeOverrideReset = (await configIO.readConfigFileSnapshot()).sourceConfig;
       await writeConfigFile({
-        ...initialConfig,
-        ui: { assistant: { name: "override-reset" } },
-        logging: { level: "debug" },
+        ...sourceBeforeOverrideReset,
+        ui: { ...sourceBeforeOverrideReset.ui, seamColor: "#654321" },
+        logging: { ...sourceBeforeOverrideReset.logging, level: "debug" },
       });
       await expect
         .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
@@ -589,82 +598,92 @@ describe("gateway e2e", () => {
     "accepts a gateway agent request over ws and returns a run id",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-gw-mock-home-",
-        minimalGateway: true,
       });
+      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const token = nextGatewayId("test-token");
-      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      try {
+        const token = nextGatewayId("test-token");
+        setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
 
-      const configPath = await createGatewayConfigPath(tempHome);
-      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
+        const configPath = await createGatewayConfigPath(tempHome);
+        const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-            model: { primary: mockProvider.modelRef },
-            models: {
-              [mockProvider.modelRef]: {
-                params: {
-                  transport: "sse",
-                  openaiWsWarmup: false,
+        const cfg = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              model: { primary: mockProvider.modelRef },
+              models: {
+                [mockProvider.modelRef]: {
+                  params: {
+                    transport: "sse",
+                    openaiWsWarmup: false,
+                  },
                 },
               },
             },
+            // The request below runs sessionKey "agent:dev:mock-openai"; the
+            // gateway rejects session keys whose agent id is not declared.
+            entries: { dev: { default: true } },
           },
-          // The request below runs sessionKey "agent:dev:mock-openai"; the
-          // gateway rejects session keys whose agent id is not declared.
-          entries: { dev: { default: true } },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            [mockProvider.providerId]: mockProvider.config,
+          models: {
+            mode: "replace",
+            providers: {
+              [mockProvider.providerId]: mockProvider.config,
+            },
           },
-        },
-        gateway: { auth: { token } },
-      };
+          gateway: { auth: { token } },
+        };
 
-      const { server, client } = await startGatewayWithClient({
-        cfg,
-        configPath,
-        token,
-        clientDisplayName: "vitest-mock-openai",
-      });
+        const { server, client } = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token,
+          clientDisplayName: "vitest-mock-openai",
+        });
 
-      try {
-        const sessionKey = "agent:dev:mock-openai";
+        try {
+          // Agent admission needs the reply runtime published by normal sidecar startup.
+          await server.startupSettled;
+          const sessionKey = "agent:dev:mock-openai";
 
-        const runId = nextGatewayId("run");
-        const payload = await client.request(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${runId}`,
-            message: "Reply with ok.",
-            deliver: false,
-          },
-          { expectFinal: false },
-        );
+          const runId = nextGatewayId("run");
+          const payload = await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${runId}`,
+              message: "Reply with ok.",
+              deliver: false,
+            },
+            { expectFinal: false },
+          );
 
-        expect(payload?.status).toBe("accepted");
-        expect(typeof payload?.runId).toBe("string");
+          expect(payload?.status).toBe("accepted");
+          expect(typeof payload?.runId).toBe("string");
 
-        const abortPayload = await client.request(
-          "sessions.abort",
-          { runId: payload.runId },
-          { timeoutMs: 5_000 },
-        );
-        expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+          const abortPayload = await client.request(
+            "sessions.abort",
+            { runId: payload.runId },
+            { timeoutMs: 5_000 },
+          );
+          expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+        } finally {
+          try {
+            await disconnectGatewayClient(client);
+          } finally {
+            await server.close({ reason: "mock openai test complete" });
+          }
+        }
       } finally {
-        await disconnectGatewayClient(client);
-        await server.close({ reason: "mock openai test complete" });
-        await removeGatewayTempHome(tempHome);
-        restore();
-        envSnapshot.restore();
+        try {
+          await removeGatewayTempHome(tempHome);
+        } finally {
+          restore();
+          envSnapshot.restore();
+        }
       }
     },
   );
@@ -915,11 +934,7 @@ module.exports = {
     "ignores env-driven plugin auto-enable in minimal gateway mode",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const envSnapshot = captureEnv([
-        ...GATEWAY_TEST_ENV_KEYS,
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-        "DISCORD_BOT_TOKEN",
-      ]);
+      const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS, "DISCORD_BOT_TOKEN"]);
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
       const configPath = await createGatewayConfigPath(tempHome);

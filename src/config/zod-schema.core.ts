@@ -3,6 +3,8 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
+import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -116,6 +118,7 @@ export const SsrFPolicyConfigSchema = z
     allowRfc2544BenchmarkRange: z.boolean().optional(),
     allowIpv6UniqueLocalRange: z.boolean().optional(),
     allowedHostnames: z.array(z.string()).optional(),
+    blockedHostnames: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -195,6 +198,24 @@ const SecretsExecProviderSchema = z.union([
 
 const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
 
+// Same exact-host contract as per-secret destination bindings: rejecting schemes,
+// ports, wildcards, and malformed hostnames here keeps invalid entries out of the
+// egress-proxy startup path, which would otherwise throw while starting the Gateway.
+const EgressProxyExactHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((host, ctx) => {
+    try {
+      normalizeExactAllowedHost(host);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Invalid allowed host",
+      });
+    }
+  });
+
 /** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
@@ -209,7 +230,8 @@ export const SecretsConfigSchema = z
     egressProxy: z
       .object({
         enabled: z.boolean().optional(),
-        bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
+        allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+        bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
       })
       .strict()
       .optional(),
@@ -243,6 +265,59 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
+const RoutingPercentileCutoffsSchema = z
+  .object({
+    p50: z.number().optional(),
+    p75: z.number().optional(),
+    p90: z.number().optional(),
+    p99: z.number().optional(),
+  })
+  .strict();
+
+const OpenRouterRoutingSchema = z
+  .object({
+    allow_fallbacks: z.boolean().optional(),
+    require_parameters: z.boolean().optional(),
+    data_collection: z.enum(["deny", "allow"]).optional(),
+    zdr: z.boolean().optional(),
+    enforce_distillable_text: z.boolean().optional(),
+    order: z.array(z.string()).optional(),
+    only: z.array(z.string()).optional(),
+    ignore: z.array(z.string()).optional(),
+    quantizations: z.array(z.string()).optional(),
+    sort: z
+      .union([
+        z.string(),
+        z
+          .object({
+            by: z.string().optional(),
+            partition: z.string().nullable().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
+    max_price: z
+      .object({
+        prompt: z.union([z.number(), z.string()]).optional(),
+        completion: z.union([z.number(), z.string()]).optional(),
+        image: z.union([z.number(), z.string()]).optional(),
+        audio: z.union([z.number(), z.string()]).optional(),
+        request: z.union([z.number(), z.string()]).optional(),
+      })
+      .strict()
+      .optional(),
+    preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+    preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+  } satisfies Record<keyof OpenRouterRouting, z.ZodType>)
+  .strict();
+
+const VercelGatewayRoutingSchema = z
+  .object({
+    only: z.array(z.string()).optional(),
+    order: z.array(z.string()).optional(),
+  } satisfies Record<keyof VercelGatewayRouting, z.ZodType>)
+  .strict();
+
 const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -250,6 +325,7 @@ const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsTemperature: z.boolean().optional(),
+    supportsInstructions: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     codeMode: z.enum(["preferred", "capable"]).optional(),
@@ -272,7 +348,15 @@ const ModelCompatSchema = z
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     toolCallArgumentsEncoding: z.string().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-  })
+    openRouterRouting: OpenRouterRoutingSchema.optional(),
+    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
+    zaiToolStream: z.boolean().optional(),
+    cacheControlFormat: z.literal("anthropic").optional(),
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
+  } satisfies Record<keyof ModelCompatConfig, z.ZodType>)
   .strict()
   .optional();
 type AssertAssignable<_Left extends _Right, _Right> = true;
@@ -610,10 +694,6 @@ export const TypingModeSchema = z.union([
   z.literal("message"),
 ]);
 
-// GroupPolicySchema: controls how group messages are handled
-// Used with .default("allowlist").optional() pattern:
-//   - .optional() allows field omission in input config
-//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);

@@ -36,7 +36,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
             }
             return texts.map(() => [1, 0]);
           },
-          embedQuery: async () => {
+          embed: async () => {
             providerQueryCalls += 1;
             return [1, 0];
           },
@@ -66,7 +66,6 @@ function restoreFtsOnlyStateDir(): void {
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -119,7 +118,7 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
+    params: { provider?: string; purpose?: "status"; vectorEnabled?: boolean } = {},
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
@@ -132,11 +131,10 @@ describe("memory manager FTS-only reindex", () => {
         backend: "builtin",
 
         search: {
-          provider: params.provider ?? "auto",
+          provider: params.provider,
           model: "",
           store,
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
         },
       },
       agents: {
@@ -146,7 +144,7 @@ describe("memory manager FTS-only reindex", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: params.purpose });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -192,6 +190,63 @@ describe("memory manager FTS-only reindex", () => {
     expect(secondStatus.chunks).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
+
+  it("keeps a reopened semantic index valid before discovering the provider model", async () => {
+    providerAvailable = true;
+    const indexed = await createManager({ provider: "openai" });
+    await indexed.sync({ force: true });
+    expect(indexed.status().chunks).toBeGreaterThan(0);
+    await indexed.close();
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+    createEmbeddingProviderMock.mockClear();
+
+    const reopened = await createManager({ provider: "openai", purpose: "status" });
+    expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(reopened.status().custom?.providerState).toEqual({
+      mode: "pending",
+      requestedProvider: "openai",
+    });
+    expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "auto", "local"])(
+    "indexes before the first search when optional provider %s cannot initialize",
+    async (provider) => {
+      providerConstructionError = new Error("Embedding provider setup unavailable");
+      const memoryManager = await createManager({ provider });
+
+      await expect(
+        memoryManager.sync({ reason: "session-startup-catchup", force: true }),
+      ).resolves.toBeUndefined();
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "new-note.md"),
+        "Beta calibration record",
+      );
+      await memoryManager.sync({ reason: "session-delta", force: true });
+      await memoryManager.sync({ reason: "post-compaction", force: true });
+      expect(countChunksContaining("Beta calibration record")).toBeGreaterThan(0);
+      expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+      expect(memoryManager.status()).toMatchObject({
+        provider: "none",
+        custom: { searchMode: "fts-only", indexIdentity: { status: "valid" } },
+      });
+
+      const debug: unknown[] = [];
+      await expect(
+        memoryManager.search("Beta calibration", { onDebug: (value) => debug.push(value) }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/new-note.md",
+          snippet: expect.stringContaining("Beta calibration record"),
+        }),
+      ]);
+      expect(JSON.stringify(debug)).toContain("Embedding provider setup unavailable");
+      expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("returns keyword matches when optional provider construction fails during search bootstrap", async () => {
     providerConstructionError = Object.assign(
@@ -272,6 +327,9 @@ describe("memory manager FTS-only reindex", () => {
     );
     const memoryManager = await createManager({ provider: "openai" });
 
+    await expect(
+      memoryManager.sync({ reason: "session-startup-catchup", force: true }),
+    ).rejects.toThrow('No API key resolved for provider "openai"');
     await expect(memoryManager.search("Alpha topic")).rejects.toThrow(
       'No API key resolved for provider "openai"',
     );
@@ -440,7 +498,7 @@ describe("memory manager FTS-only reindex", () => {
     const secondSearch = memoryManager.search("Alpha topic");
     releaseProviderConstruction();
 
-    await expect(backgroundSync).resolves.toBe(providerConstructionError);
+    await expect(backgroundSync).resolves.toBeUndefined();
     const results = await Promise.all([firstSearch, secondSearch]);
     expect(results).toEqual([
       [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],
@@ -595,6 +653,21 @@ describe("memory manager FTS-only reindex", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "syncs regular memory when USER.md is a symlink",
+    async () => {
+      const linkedUserPath = path.join(workspaceDir, "shared-user.md");
+      await fs.writeFile(linkedUserPath, "Linked user content must not be indexed.");
+      await fs.symlink(linkedUserPath, path.join(workspaceDir, "USER.md"));
+      const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+      await expect(memoryManager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
+
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+      expect(countChunksContaining("Linked user content")).toBe(0);
+    },
+  );
+
   it("reports explicit provider-none probes as FTS-only without resolving providers", async () => {
     const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
 
@@ -620,6 +693,28 @@ describe("memory manager FTS-only reindex", () => {
     expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
     expect(status.vector).toMatchObject({ enabled: false });
     expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
+    const memoryManager = await createManager({ provider: "none" });
+    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    db.prepare(
+      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
+    ).run();
+
+    await memoryManager.sync({ force: true });
+    await memoryManager.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+
+    const reopened = await createManager({ provider: "none", purpose: "status" });
+    expect(reopened.status()).toMatchObject({
+      dirty: false,
+      vector: { enabled: false, index: { state: "empty" } },
+      custom: { indexIdentity: { status: "valid" } },
+    });
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 

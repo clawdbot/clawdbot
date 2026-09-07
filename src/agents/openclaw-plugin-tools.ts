@@ -4,6 +4,7 @@
  * This module builds runtime plugin tools from config/options, delivery context,
  * auth profiles, and the current runtime config snapshot.
  */
+import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMessageActionTurnCapability,
@@ -15,6 +16,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -31,7 +33,6 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -87,6 +88,9 @@ function createPluginToolDelivery(params: {
   ) {
     return undefined;
   }
+  // Capabilities bind the source policy session, even when plugins execute in
+  // a shared or durable session. Keep validation separate from execution identity.
+  const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
   const channelPlugin = activeRegistry.channels.find(
     (entry) => entry.plugin.id === deliveryContext.channel,
   )?.plugin;
@@ -113,7 +117,7 @@ function createPluginToolDelivery(params: {
       token,
       agentId,
       runId,
-      sessionKey,
+      sessionKey: policySessionKey,
       sessionId,
     });
     if (!authorization) {
@@ -197,19 +201,21 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const resolveCurrentRuntimeConfig = () => {
-    // Re-resolve on demand so auth/profile lookups see the active runtime config
-    // while tests can still inject a fixed resolvedConfig.
-    return resolveAgentRuntimeToolConfig(params.resolvedConfig ?? params.options?.config);
-  };
+  const inputConfig = params.resolvedConfig ?? params.options?.config;
+  const availabilityConfig = resolveAgentRuntimeToolConfig(inputConfig);
+  // Bind ownership before reload replaces the source snapshot. Explicit run
+  // overrides stay isolated; runtime-owned contexts follow later publications.
+  const followsRuntimeConfig =
+    inputConfig === undefined || availabilityConfig === getRuntimeConfigSnapshot();
+  const resolveCurrentRuntimeConfig = () =>
+    followsRuntimeConfig ? resolveAgentRuntimeToolConfig() : availabilityConfig;
   const pluginToolInputs = resolveOpenClawPluginToolInputs({
     options: params.options,
     resolvedConfig: params.resolvedConfig,
-    runtimeConfig: resolveCurrentRuntimeConfig(),
+    runtimeConfig: availabilityConfig,
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const availabilityConfig = resolveCurrentRuntimeConfig();
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,
@@ -287,8 +293,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
   const preparedModelRuntime = params.options?.preparedModelRuntime;
-  const runtimeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const runtimeRegistry = requestRegistry ?? getActivePluginRegistry() ?? undefined;
+  // A scoped registry can own prepared plugin facts without a model runtime (headless cron).
+  // Never borrow process-global load facts for an unrelated direct caller.
+  const preparedRegistry = preparedModelRuntime
+    ? preparedModelRuntime.pluginRegistry
+    : requestRegistry;
+  const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
+  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -304,12 +317,12 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
     ...(runtimeRegistry ? { runtimeRegistry } : {}),
-    ...(preparedModelRuntime
+    ...(metadataSnapshot
       ? {
           preparedRuntime: {
-            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
-            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
-            registry: preparedModelRuntime.pluginRegistry,
+            loadContext,
+            metadataSnapshot,
+            registry: preparedRegistry,
           },
         }
       : {}),
@@ -322,7 +335,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       existingToolNames,
       toolAllowlist: params.options?.pluginToolAllowlist,
       toolDenylist: params.options?.pluginToolDenylist,
-      agentSessionKey: params.options?.agentSessionKey,
+      agentSessionKey: pluginToolInputs.context.sessionKey,
     }),
   );
 

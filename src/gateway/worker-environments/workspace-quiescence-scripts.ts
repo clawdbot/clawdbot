@@ -97,6 +97,34 @@ function persistLease(targetPath, lease, verifyCurrent) {
   const temporary = targetPath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
   fs.writeFileSync(temporary, JSON.stringify(lease), { mode: 0o600, flag: "wx" });
   fs.renameSync(temporary, targetPath);
+}
+function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
+  const { DatabaseSync } = require("node:sqlite");
+  const database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL); BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare("DELETE FROM workspace_leases WHERE json_extract(lease_json, '$.expiresAtMs') <= ?")
+      .run(Date.now());
+    const row = database
+      .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+      .get(workspaceKey);
+    const next = run(row ? row.lease_json : null);
+    if (next === null) {
+      database.prepare("DELETE FROM workspace_leases WHERE workspace_key = ?").run(workspaceKey);
+    } else if (next !== undefined) {
+      database
+        .prepare("INSERT INTO workspace_leases (workspace_key, lease_json) VALUES (?, ?) ON CONFLICT(workspace_key) DO UPDATE SET lease_json = excluded.lease_json")
+        .run(workspaceKey, next);
+    }
+    database.exec("COMMIT");
+    return next;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  } finally {
+    database.close();
+  }
 }`;
 
 // Signal sites tolerate ESRCH (gone) without aborting the protocol. EPERM (exists but
@@ -109,23 +137,57 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const root = fs.realpathSync(process.argv[1]);
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
-if (uid === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
 fs.mkdirSync(leaseDirectory, { recursive: true, mode: 0o700 });
 fs.chmodSync(leaseDirectory, 0o700);
 const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
 const nonce = crypto.randomBytes(16).toString("hex");
-const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
 const isolationMode = process.argv[3] || "dedicated";
 if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
 const sharedHost = isolationMode === "shared-host";
-${REMOTE_QUIESCENCE_PS_JS}
+const windowsLeaseDatabasePath = path.join(leaseDirectory, "windows-shared-host.sqlite");
+const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_LEASE_JS}
+if (process.platform === "win32" && sharedHost) {
+  withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      if (!/^[a-f0-9]{32}$/.test(parsed?.nonce || "")) {
+        throw new Error("invalid Windows shared-host workspace quiescence lease");
+      }
+      const candidate = parseLease(raw, parsed.nonce);
+      if (
+        candidate.sharedHost !== true ||
+        candidate.processes.length !== 0 ||
+        candidate.watchdog !== null
+      ) {
+        throw new Error("invalid Windows shared-host workspace quiescence lease");
+      }
+      if (candidate.expiresAtMs > Date.now()) {
+        throw new Error("workspace quiescence lease is already active");
+      }
+    }
+    const lease = {
+      version: 1,
+      nonce,
+      sharedHost: true,
+      processes: [],
+      watchdog: null,
+      expiresAtMs: Date.now() + watchdogTimeoutMs,
+    };
+    return JSON.stringify(lease);
+  });
+  process.stderr.write("workspace quiescence: Windows shared host declared; using manifest fences without process freezing\n");
+  process.stdout.write("quiesced " + nonce + "\n");
+  process.exit(0);
+}
+if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
+const uid = process.getuid();
+if (uid === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
+${REMOTE_QUIESCENCE_PS_JS}
 const frozen = new Map();
 let watchdogReference = null;
 function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
@@ -347,16 +409,35 @@ const nonce = process.argv[2];
 const timeoutMs = Number(process.argv[3] || 12 * 60 * 1000);
 const validationMode = process.argv[4] || "final";
 const isolationMode = process.argv[5] || "dedicated";
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 * 1000) throw new Error("invalid watchdog timeout");
 if (validationMode !== "heartbeat" && validationMode !== "final") throw new Error("invalid workspace quiescence validation mode");
 if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
 const sharedHost = isolationMode === "shared-host";
-const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
-${REMOTE_QUIESCENCE_PS_JS}
+const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
+const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
+const windowsLeaseDatabasePath = path.join(leaseDirectory, "windows-shared-host.sqlite");
+const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_LEASE_JS}
+if (process.platform === "win32" && sharedHost) {
+  withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
+    if (raw === null) throw new Error("workspace quiescence lease is no longer active");
+    const input = parseLease(raw, nonce, {
+      minimumRemainingMs: 5000,
+      errorMessage: "workspace quiescence lease is no longer active",
+    });
+    if (input.sharedHost !== true || input.processes.length !== 0 || input.watchdog !== null) {
+      throw new Error("invalid Windows shared-host workspace quiescence lease");
+    }
+    const renewed = { ...input, expiresAtMs: Date.now() + timeoutMs };
+    return JSON.stringify(renewed);
+  });
+  process.stdout.write("renewed " + nonce + "\n");
+  process.exit(0);
+}
+if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
+const uid = process.getuid();
+${REMOTE_QUIESCENCE_PS_JS}
 const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
   requireWatchdog: true,
   minimumRemainingMs: 5000,
@@ -456,18 +537,32 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
 const root = fs.realpathSync(process.argv[1]);
 const nonce = process.argv[2];
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
-const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
+const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
+const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
+const windowsLeaseDatabasePath = path.join(leaseDirectory, "windows-shared-host.sqlite");
+const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
+${REMOTE_QUIESCENCE_LEASE_JS}
+if (process.platform === "win32") {
+  withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
+    if (raw === null) return;
+    const input = parseLease(raw, nonce);
+    if (input.sharedHost !== true || input.processes.length !== 0 || input.watchdog !== null) {
+      throw new Error("invalid Windows shared-host workspace quiescence lease");
+    }
+    return null;
+  });
+  process.exit(0);
+}
+if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
+${REMOTE_QUIESCENCE_PS_JS}
 let raw;
 try { raw = fs.readFileSync(leasePath, "utf8"); } catch (error) {
   if (error && error.code === "ENOENT") process.exit(0);
   throw error;
 }
-${REMOTE_QUIESCENCE_PS_JS}
-${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(raw, nonce);
 // Thaw before retiring the watchdog: a bounded identity lookup can still fail, and
 // retiring the last resumer first would strand whatever the aborted sweep never reached.

@@ -128,7 +128,7 @@ export async function maybeApplyTtsToPayloadCore(
   });
   const ttsMetadata = getReplyPayloadMetadata(params.payload);
   const explicitTts = ttsMetadata?.ttsExplicit === true;
-  if (autoMode === "off" && !explicitTts) {
+  if (!explicitTts && (autoMode === "off" || ttsMetadata?.commandReply)) {
     return params.payload;
   }
   const activeProvider = resolveTtsProvider(config, prefsPath);

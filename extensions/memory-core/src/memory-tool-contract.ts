@@ -1,6 +1,6 @@
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  resolveMemorySearchConfig,
-  resolveSessionAgentIds,
+  resolveMemorySearchIndexConfig,
   type MemoryPromptSectionBuilder,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -47,7 +47,7 @@ const MemoryGetSchema = {
 type MemorySourceContract = Readonly<{ files: string; search: string }>;
 
 function resolveMemorySourceContract(
-  settings: NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
+  settings: NonNullable<ReturnType<typeof resolveMemorySearchIndexConfig>>,
 ): MemorySourceContract {
   const files = [
     "MEMORY.md, USER.md, Markdown files recursively under memory/",
@@ -68,13 +68,16 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
   if (!cfg) {
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
     sessionKey: options.agentSessionKey,
     config: cfg,
     agentId: options.agentId,
   });
-  const settings = resolveMemorySearchConfig(cfg, agentId);
-  return settings ? { cfg, agentId, sources: resolveMemorySourceContract(settings) } : null;
+  // Tool schemas and guidance need source policy; provider validation belongs to execution.
+  const settings = resolveMemorySearchIndexConfig(cfg, agentId);
+  return settings
+    ? { cfg, agentId, settings, sources: resolveMemorySourceContract(settings) }
+    : null;
 }
 
 const SEARCH_CORPUS_OUTCOME_GUIDANCE =

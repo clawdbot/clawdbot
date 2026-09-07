@@ -1,10 +1,22 @@
 {
   "id": "crabbox",
+  "doctorContract": {
+    "stateMigrations": [{ "id": "crabbox-warm-profile-v2", "doctorOnly": true }]
+  },
   "name": "Crabbox Worker Provider",
   "description": "Cloud worker provider backed by the Crabbox CLI.",
+  "cliCommands": [
+    {
+      "name": "crabbox",
+      "description": "Inspect and recover Crabbox warm images",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onCommands": ["crabbox"]
   },
+  "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
     "workerProviders": ["crabbox"]
   },

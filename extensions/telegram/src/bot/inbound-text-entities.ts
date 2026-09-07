@@ -61,10 +61,9 @@ function longestBacktickRun(text: string): number {
 
 function markdownInlineCodeDelimiters(content: string): [string, string] {
   const delimiter = "`".repeat(longestBacktickRun(content) + 1);
-  if (content.startsWith(" ") || content.endsWith(" ")) {
-    return [`${delimiter} `, ` ${delimiter}`];
-  }
-  return [delimiter, delimiter];
+  // CommonMark normalizes line breaks to spaces and never strips all-space code.
+  const padding = /^[ \r\n`]|[ \r\n`]$/u.test(content) && /[^ \r\n]/u.test(content) ? " " : "";
+  return [`${delimiter}${padding}`, `${padding}${delimiter}`];
 }
 
 function markdownPreAffixes(

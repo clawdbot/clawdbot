@@ -119,7 +119,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
 /** Starts the cron service, atomically repairs abandoned runs, and arms scheduling. */
 export async function start(state: CronServiceState): Promise<void> {
   state.stopped = false;
-  stopForeignReceiptMonitor(state, true);
+  stopForeignReceiptMonitor(state);
   configureForeignReceiptMonitor(state, async () => await reconcileForeignRunReceipts(state));
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
@@ -160,7 +160,7 @@ export async function start(state: CronServiceState): Promise<void> {
       applyRecoveryResult({
         state,
         proposal,
-        result: recoverCronRunProposal(state, proposal),
+        result: recoverCronRunProposal(state, proposal, "startup"),
         interruptedRuns,
         skipJobIds,
       });
@@ -180,6 +180,10 @@ export async function start(state: CronServiceState): Promise<void> {
   if (state.stopped) {
     return;
   }
+  // Publish the interrupted attempt before catch-up can finish its successor.
+  for (const interrupted of interruptedRuns) {
+    emitInterruptedRun(state, interrupted);
+  }
   await runMissedJobs(state, {
     skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
     deferAgentTurnJobs: true,
@@ -194,9 +198,6 @@ export async function start(state: CronServiceState): Promise<void> {
       const maintenance = recomputeUnownedCronSchedules(state, { recomputeExpired: true });
       runPostPersistCronNotifications(state, maintenance.notifications);
       applyCronRuntimeRowsToState(state, maintenance.jobs);
-    }
-    for (const interrupted of interruptedRuns) {
-      emitInterruptedRun(state, interrupted);
     }
     armTimer(state);
     resumeForeignReceiptMonitor(state);
@@ -217,14 +218,15 @@ export function stop(state: CronServiceState) {
   state.stopped = true;
   cancelCronRunAdmissionWaiters(state);
   state.schedulerStarted = false;
-  stopForeignReceiptMonitor(state, true);
+  stopForeignReceiptMonitor(state);
   stopTimer(state);
 }
 
 /** Temporarily stops automatic ticks without running startup recovery on resume. */
 export function pauseScheduling(state: CronServiceState) {
   state.schedulingPaused = true;
-  stopForeignReceiptMonitor(state, false);
+  // Exact already-enrolled receipts must still settle behind a suspension fence;
+  // armTimer independently keeps unrelated scheduled work paused.
   stopTimer(state);
 }
 

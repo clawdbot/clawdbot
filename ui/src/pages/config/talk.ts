@@ -3,9 +3,9 @@
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
 import { html, nothing, type TemplateResult } from "lit";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
-  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -13,6 +13,12 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
+import {
+  renderDeviceTalk,
+  renderVoiceWakeEditor,
+  type VoiceWakeEditorState,
+} from "./talk-device.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
@@ -23,6 +29,9 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  activeVoices?: readonly string[];
+  activeVoiceSelectionPolicy?: "allowlist-default";
+  voicesByModel?: Record<string, readonly string[]>;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
   defaultModel: string | null;
@@ -43,8 +52,11 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
+  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
@@ -54,8 +66,6 @@ type TalkViewProps = {
 };
 
 const TALK_PICKER_UNSET = "";
-
-const TALK_DOCS_URL = "https://docs.openclaw.ai/nodes/talk";
 
 /** Config may name a provider by alias; pickers always speak canonical ids. */
 function findProviderOption(
@@ -122,38 +132,6 @@ export function effectiveTalkValues(
     speakerVoice ??= entry?.speakerVoice ?? null;
   }
   return { model, speakerVoice };
-}
-
-function renderTalkSelectRow(params: {
-  title: string;
-  description?: string;
-  value: string;
-  options: ReadonlyArray<{ value: string; label: string }>;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  return renderSettingsRow({
-    title: params.title,
-    description: params.description,
-    control: html`
-      <select
-        class="settings-select"
-        aria-label=${params.title}
-        ?disabled=${params.disabled}
-        .value=${params.value}
-        @change=${(event: Event) =>
-          params.onChange((event.currentTarget as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) => html`
-            <option value=${option.value} ?selected=${params.value === option.value}>
-              ${option.label}
-            </option>
-          `,
-        )}
-      </select>
-    `,
-  });
 }
 
 function renderStatusRow(props: TalkViewProps) {
@@ -258,8 +236,23 @@ function renderModelRow(props: TalkViewProps) {
 
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
-  const { speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  if (!provider || provider.voices.length === 0) {
+  const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
+  // A sanitized missing model represents the active route. An explicit reset
+  // stays on public provider-default metadata until the config write is acked.
+  const publicModel = props.modelDefaultPending ? provider?.defaultModel : model;
+  const publicVoices = provider?.voicesByModel?.[publicModel ?? ""];
+  const usesActiveRoute =
+    props.modelDefaultPending !== true &&
+    (model === null || (isTalkGptLiveModel(model) && publicVoices === undefined));
+  const voices = usesActiveRoute
+    ? (provider?.activeVoices ?? provider?.voices ?? [])
+    : (publicVoices ?? provider?.voices ?? []);
+  const unsupported =
+    usesActiveRoute &&
+    provider?.activeVoiceSelectionPolicy === "allowlist-default" &&
+    voice !== null &&
+    !voices.includes(voice);
+  if (voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
       description: t("talkPage.voice.description"),
@@ -268,12 +261,21 @@ function renderVoiceRow(props: TalkViewProps) {
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
-    ...provider.voices.map((value) => ({ value, label: value })),
-    ...(voice && !provider.voices.includes(voice) ? [{ value: voice, label: voice }] : []),
+    ...voices.map((value) => ({ value, label: value })),
+    ...(voice && !voices.includes(voice)
+      ? [
+          {
+            value: voice,
+            label: unsupported ? `${voice} (${t("talkPage.voice.unsupported")})` : voice,
+          },
+        ]
+      : []),
   ];
-  return renderTalkSelectRow({
+  return renderSettingsSelectRow({
     title: t("talkPage.voice.title"),
-    description: t("talkPage.voice.description"),
+    description: unsupported
+      ? t("talkPage.voice.unsupportedDefault")
+      : t("talkPage.voice.description"),
     value: voice ?? TALK_PICKER_UNSET,
     options,
     disabled: props.configBusy,
@@ -282,9 +284,8 @@ function renderVoiceRow(props: TalkViewProps) {
 }
 
 /**
- * GPT-Live is the one model family whose auth differs from the rest of the
- * provider (ChatGPT OAuth works, no Platform key needed), so it gets its own
- * explainer row instead of a footnote in the provider description.
+ * The account-issued route has distinct setup and runtime constraints, so it
+ * gets its own explainer row instead of a footnote in the provider description.
  */
 function renderGptLiveRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
@@ -308,9 +309,8 @@ export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
-        <p class="settings-page__intro">
-          ${t("talkPage.intro")} ${renderDocsLink(TALK_DOCS_URL, t("common.learnMore"))}
-        </p>
+        ${renderDeviceTalk(props.nativeDeviceSettings)}
+        ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),

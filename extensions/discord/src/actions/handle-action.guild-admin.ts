@@ -1,4 +1,3 @@
-// Discord plugin module implements handle action.guild admin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -6,6 +5,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
@@ -23,15 +23,7 @@ import {
 
 type Ctx = Pick<
   ChannelMessageActionContext,
-  | "action"
-  | "params"
-  | "cfg"
-  | "accountId"
-  | "requesterSenderId"
-  | "senderIsOwner"
-  | "toolContext"
-  | "mediaLocalRoots"
-  | "mediaReadFile"
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "senderIsOwner" | "toolContext"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -122,6 +114,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -154,6 +147,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -367,7 +361,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots },
+      actionOptions,
     );
   }
 
@@ -424,6 +418,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (action === "thread-reply") {
     const content = readStringParam(actionParams, "message", {
       required: true,
+      trim: false,
     });
     const mediaUrl =
       readStringParam(actionParams, "media", { trim: false }) ??
@@ -444,6 +439,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         content,
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,
+        ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

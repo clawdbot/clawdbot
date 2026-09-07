@@ -1,4 +1,5 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
@@ -13,7 +14,10 @@ import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.ful
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
-import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogSnapshot,
+  PreparedGatewayModelCatalog,
+} from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -24,7 +28,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   agentDir?: string;
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
@@ -33,7 +37,7 @@ type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
@@ -77,7 +81,9 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config: (params?.getConfig ?? getRuntimeConfig)(),
     readOnly: params?.readOnly !== false,
-    ...(params?.refreshFullCatalog ? { refreshFullCatalog: true } : {}),
+    ...(params?.refreshFullCatalog !== undefined
+      ? { refreshFullCatalog: params.refreshFullCatalog }
+      : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const owner = resolvePublishedModelCatalogOwner(candidate);
@@ -144,6 +150,9 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
       authMaterializations: owner.authMaterializations,
+      pluginRegistry: owner.pluginRegistry,
+      isCurrent: owner.isCurrent,
+      observationConfig: owner.observationConfig,
     };
   }
 }
@@ -156,6 +165,9 @@ export async function loadGatewayModelCatalogSnapshot(
     authStore: _authStore,
     metadataSnapshot: _metadataSnapshot,
     authMaterializations: _authMaterializations,
+    pluginRegistry: _pluginRegistry,
+    isCurrent: _isCurrent,
+    observationConfig: _observationConfig,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;
@@ -170,17 +182,24 @@ export async function loadGatewayModelCatalog(
 /** Reads the newest completed published catalog without starting provider discovery. */
 export async function readPreparedGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[] | undefined> {
-  const { getAvailablePreparedModelCatalogSnapshot } =
+): Promise<PreparedGatewayModelCatalog | undefined> {
+  const { getPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
-  return getAvailablePreparedModelCatalogSnapshot({
+  const owner = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config,
     readOnly: true,
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  })?.entries;
+  });
+  if (!owner) {
+    return undefined;
+  }
+  return {
+    entries: (owner.readFullModelCatalog?.() ?? owner.modelCatalog).entries,
+    pluginRegistry: owner.pluginRegistry,
+  };
 }
 
 /** Reads the published owner generation without activating full catalog discovery. */
@@ -206,5 +225,8 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
+    pluginRegistry: owner.pluginRegistry,
+    isCurrent: owner.isCurrent,
+    observationConfig: owner.observationConfig,
   };
 }

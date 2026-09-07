@@ -376,7 +376,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     const firstPayload = {
       text: "Pick one",
       channelData: {
-        askUser: { questionId },
         telegram: { buttons: [[{ text: "One", callback_data: `tgq1:${questionId}:0` }]] },
       },
     };

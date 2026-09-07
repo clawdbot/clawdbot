@@ -102,6 +102,12 @@ describe("install smoke no-push root image transport", () => {
       default: false,
       type: "boolean",
     });
+    expect(
+      workflow.on?.workflow_call?.inputs?.allow_frozen_target_scenario_omissions,
+    ).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     expect(workflow.on?.workflow_call?.inputs?.root_image_transport).toBeUndefined();
     expect(workflow.permissions).toEqual({
       actions: "read",
@@ -122,6 +128,13 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(workflowIdentity.run).not.toContain("EXPECTED_WORKFLOW_SHA");
+    expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
+      repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      path: ".release-harness",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
+    });
 
     const identityResult = spawnSync(
       "bash",
@@ -131,6 +144,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+          GITHUB_OUTPUT: "/dev/null",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
@@ -221,14 +235,25 @@ describe("install smoke no-push root image transport", () => {
       OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
         "${{ inputs.run_bun_global_install_smoke || 'false' }}",
     });
-    expect(manifest.run).toContain(
+    const manifestRun = manifest.run;
+    expect(manifestRun).toBeDefined();
+    if (!manifestRun) {
+      throw new Error("Build install-smoke CI manifest must have a run script");
+    }
+    expect(manifestRun).toContain(
       'dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"',
     );
-    expect(manifest.run).toContain(
+    expect(manifestRun).toContain(
       'run_bun_global_install_smoke="$workflow_bun_global_install_smoke"',
     );
-    expect(manifest.run).not.toContain("event_name");
-    expect(manifest.run).not.toContain("workflow_call");
+    expect(manifestRun).not.toContain("event_name");
+    expect(manifestRun).not.toContain("workflow_call");
+    expect(manifestRun).toContain(
+      "refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*",
+    );
+    expect(
+      manifestRun.indexOf("git fetch --quiet --unshallow --no-tags --filter=blob:none origin"),
+    ).toBeLessThan(manifestRun.indexOf("resolve-fs-safe-native-contract.mjs"));
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");
@@ -364,11 +389,27 @@ describe("install smoke no-push root image transport", () => {
       const requireLocal = step(consumer, "Require local root Dockerfile image");
       expect(requireLocal.if, jobName).toBeUndefined();
       expect(requireLocal.run, jobName).toBe('docker image inspect "$IMAGE_REF" >/dev/null');
+
+      const gatewayNetwork = step(consumer, "Run Docker gateway network e2e");
+      expect(gatewayNetwork.env, jobName).toMatchObject({
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:
+          "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+        OPENCLAW_SELECTED_SHA: "${{ needs.preflight.outputs.target_sha }}",
+        OPENCLAW_TOOLING_SHA: "${{ steps.workflow.outputs.sha }}",
+      });
     }
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text.match(/verify-upload "Root image"/g)).toHaveLength(1);
     expect(text).not.toContain("gh api");
+  });
+
+  it("forwards frozen-target omission authority from the release coordinator", () => {
+    const workflow = readWorkflow(RELEASE_CHECKS);
+    expect(job(workflow, "install_smoke_release_checks").with).toMatchObject({
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+    });
   });
 
   it("binds independent installer producer-consumer pairs to immutable artifact tuples", () => {
@@ -543,7 +584,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.3.14");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.0");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {
@@ -699,14 +740,21 @@ describe("install smoke no-push root image transport", () => {
 
   it("passes package changelog intent only to the candidate packager", () => {
     const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
-    expect(
-      step(
-        job(workflow, "installer_smoke_candidate_payload"),
-        "Package candidate only inside pinned harness",
-      ).env,
-    ).toMatchObject({
+    const packageCandidate = step(
+      job(workflow, "installer_smoke_candidate_payload"),
+      "Package candidate only inside pinned harness",
+    );
+    expect(packageCandidate.env).toMatchObject({
       ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
     });
+    expect(packageCandidate.run).toContain("--output-name candidate.tgz");
+    expect(packageCandidate.run).not.toContain("--pack-json");
+    expect(packageCandidate.run).toContain("scripts/package-openclaw-for-docker.mts");
+    expect(packageCandidate.run).toContain(
+      "grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts",
+    );
+    expect(packageCandidate.run).not.toContain("[[ -f scripts/package-openclaw-for-docker.mts ]]");
+    expect(packageCandidate.run).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(JSON.stringify(job(workflow, "bun_global_install_smoke"))).not.toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG",
     );

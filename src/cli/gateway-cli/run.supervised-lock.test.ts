@@ -6,12 +6,12 @@ import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-rout
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
-const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
-  vi.fn(async () => ({ enabled: false, required: true })),
+const loadGatewayTlsServerRuntimeMock = vi.hoisted(() =>
+  vi.fn(async () => ({ fingerprintSha256: "" })),
 );
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+  loadGatewayTlsServerRuntime: loadGatewayTlsServerRuntimeMock,
 }));
 
 function createLogger() {
@@ -213,7 +213,7 @@ describe("supervised gateway lock recovery", () => {
   );
 
   it("retries non-mutating TLS fingerprint loads until certificate material is ready", async () => {
-    loadGatewayTlsRuntimeMock.mockClear();
+    loadGatewayTlsServerRuntimeMock.mockClear();
     const probeHealth = testing.createConfiguredGatewayHealthProbe({
       gateway: { tls: { enabled: true, autoGenerate: true } },
     });
@@ -221,12 +221,12 @@ describe("supervised gateway lock recovery", () => {
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
 
-    expect(loadGatewayTlsRuntimeMock).toHaveBeenCalledTimes(2);
-    expect(loadGatewayTlsRuntimeMock).toHaveBeenNthCalledWith(1, {
+    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(1, {
       enabled: true,
       autoGenerate: false,
     });
-    expect(loadGatewayTlsRuntimeMock).toHaveBeenNthCalledWith(2, {
+    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(2, {
       enabled: true,
       autoGenerate: false,
     });

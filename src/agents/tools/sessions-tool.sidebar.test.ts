@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createSessionsTool } from "./sessions-tool.js";
 
 describe("sessions tool sidebar settings", () => {
-  it("patches and clears title, icon, category, status, attention, and archive state", async () => {
+  it("patches and clears title, icon, group, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -15,7 +15,7 @@ describe("sessions tool sidebar settings", () => {
       action: "patch",
       label: "Waiting on staging",
       icon: "🦞",
-      category: "P1 issues from beta feedback",
+      group: "P1 issues from beta feedback",
       statusNote: "Blocked: need the staging password",
       attention: "key",
       ttlMinutes: 45,
@@ -25,10 +25,10 @@ describe("sessions tool sidebar settings", () => {
       action: "patch",
       label: "",
       icon: "",
-      category: "",
+      group: "",
       attention: "clear",
     });
-    await tool.execute("clear-null", { action: "patch", category: null });
+    await tool.execute("clear-null", { action: "patch", group: null });
 
     expect(callGateway.mock.calls).toEqual([
       [

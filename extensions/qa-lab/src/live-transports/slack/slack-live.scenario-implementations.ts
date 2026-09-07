@@ -307,6 +307,17 @@ export const slackQaProgressCommentaryVerboseDedupeScenario: SlackQaScenarioImpl
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
       commentary: "standalone",
+      toolProgress: "standalone-redacted",
+    }),
+};
+
+export const slackQaProgressCommentaryVerboseFullScenario: SlackQaScenarioImplementation = {
+  configOverrides: {
+    progress: { commentary: true, toolProgress: false, verboseDefault: "full" },
+  },
+  buildRun: (sutUserId) =>
+    buildSlackProgressCommentaryRun(sutUserId, {
+      commentary: "standalone",
       toolProgress: "standalone",
     }),
 };

@@ -1,20 +1,22 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("shows admitted sessions waiting for a concurrency slot", async () => {
+  it.each([
+    { status: "running", label: "Active run", playState: "running" },
+    { status: "queued", label: "Queued", playState: "paused" },
+  ])("shows a $playState ring for $status work", async ({ status, label, playState }) => {
     const mainKey = "agent:main:main";
     const queuedKey = "agent:main:queued-repair";
     const context = await suite.browser.newContext({
@@ -23,7 +25,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -34,7 +36,7 @@ suite.define(() => {
           sessionRow(mainKey, "Main", 2),
           sessionRow(queuedKey, "Queued repair", 1, {
             hasActiveRun: true,
-            status: "queued",
+            status,
           }),
         ]),
       },
@@ -45,21 +47,30 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
       const row = page.locator(`[data-session-key="${queuedKey}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.getByText("Waiting for a concurrency slot", { exact: true }).waitFor();
-      const queuedIcon = row.locator(".sidebar-child-session__status--queued");
-      await queuedIcon.waitFor();
-      expect(await queuedIcon.getAttribute("aria-label")).toBe("Queued");
-      expect(await row.getByRole("img", { name: "Active run" }).count()).toBe(0);
-      await captureUiProof(page, "queued-concurrency-session.png");
+      expect(await row.getByText("Waiting for a concurrency slot", { exact: true }).count()).toBe(
+        0,
+      );
+      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      const spinner = row.locator(".session-run-spinner");
+      expect(await spinner.count()).toBe(1);
+      expect(await spinner.getAttribute("aria-label")).toBe(label);
+      expect(await row.locator(".session-row-state").getAttribute("aria-label")).toBe(label);
+      expect(await spinner.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+        "session-run-spin",
+      );
+      expect(
+        await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
+      ).toBe(playState);
+      await captureUiProof(suite, page, `${status}-session-ring.png`);
 
       const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsListResponse([
           sessionRow(mainKey, "Main", 2),
           sessionRow(queuedKey, "Queued repair", 1, {
             hasActiveRun: true,
             status: "running",
+            unread: true,
           }),
         ]),
       );
@@ -72,16 +83,20 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listRequests);
-      await row.locator(".session-run-spinner").waitFor();
-      expect(await row.getByText("Waiting for a concurrency slot", { exact: true }).count()).toBe(
-        0,
-      );
-      expect(await queuedIcon.count()).toBe(0);
-      await captureUiProof(page, "queued-concurrency-running.png");
+      await expect
+        .poll(() => row.locator(".session-row-state").getAttribute("aria-label"))
+        .toBe("Active run · Unread");
+      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await spinner.count()).toBe(1);
+      expect(await spinner.getAttribute("aria-label")).toBe("Active run");
+      expect(
+        await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
+      ).toBe("running");
+      await captureUiProof(suite, page, `${status}-session-running.png`);
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "queued-concurrency-session.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, `${status}-session-ring.webm`));
       }
     }
   });

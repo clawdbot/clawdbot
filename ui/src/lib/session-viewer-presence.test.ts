@@ -36,7 +36,9 @@ function createGatewayHarness() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     subscribe: vi.fn((listener: (value: ApplicationGatewaySnapshot) => void) => {
       listeners.add(listener);
       return () => {

@@ -391,6 +391,7 @@ async function runAgentPrompt(
     threadId?: string;
     provider?: string;
     model?: string;
+    taskTracking?: boolean;
     timeoutMs?: number;
     transcriptToolName?: string;
     requireSuccessfulTranscriptToolResult?: boolean;

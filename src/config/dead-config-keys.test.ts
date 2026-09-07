@@ -60,6 +60,7 @@ describe("dead config keys", () => {
     "agents.defaults.heartbeat.includeSystemPromptSection",
     "agents.defaults.heartbeat.skipWhenBusy",
     "agents.defaults.heartbeat.suppressToolErrorWarnings",
+    "messages.suppressToolErrors",
     "agents.entries.test.groupChat.visibleReplies",
     "agents.defaults.envelopeTimestamp",
     "agents.defaults.envelopeElapsed",
@@ -333,12 +334,6 @@ describe("dead config keys", () => {
       { channels: { whatsapp: { ackReaction: { emoji: "x" } } } },
       "channels.whatsapp",
       "ackReaction",
-    ],
-    [
-      "Discord subagent progress",
-      { channels: { discord: { subagentProgress: true } } },
-      "channels.discord",
-      "subagentProgress",
     ],
     [
       "iMessage coalesce",

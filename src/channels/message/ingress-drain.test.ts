@@ -10,6 +10,7 @@ import {
 import {
   createTestIngressQueue,
   type IngressDrainTestPayload as Payload,
+  seedPendingBacklog,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
 
@@ -481,6 +482,7 @@ describe("channel ingress drain", () => {
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
+        expect(pending[0]?.attempts).toBe(1);
         expect(pending[0]?.lastError).toBe("turn-abandoned");
       });
       drain.dispose();
@@ -1119,6 +1121,32 @@ describe("channel ingress drain", () => {
       const again = await queue.enqueue("old", { text: "old" });
       expect(again.kind).toBe("completed");
       drain.dispose();
+    });
+  });
+
+  it("continues draining a backlog above SQLite's bind-variable ceiling", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 1_000 });
+      seedPendingBacklog(stateDir, 33_000);
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+
+      try {
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(Array.from({ length: 64 }, (_, index) => `evt-${index}`));
+      } finally {
+        drain.dispose();
+      }
     });
   });
 });

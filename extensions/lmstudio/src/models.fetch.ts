@@ -1,6 +1,7 @@
 // Lmstudio plugin module implements models.fetch behavior.
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
@@ -62,15 +63,10 @@ type DiscoverLmstudioModelsParams = {
   apiKey: string;
   headers?: Record<string, string>;
   quiet: boolean;
+  discoveryMode?: "strict";
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 };
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
 
 async function fetchLmstudioEndpoint(params: {
   url: string;
@@ -105,7 +101,10 @@ async function fetchLmstudioEndpoint(params: {
   return {
     response,
     release: async () => {
-      await cancelUnreadResponseBody(response);
+      // A capture tee must not delay the guard's bounded dispatcher release.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     },
   };
@@ -198,27 +197,21 @@ export async function discoverLmstudioModels(
     fetchImpl: params.fetchImpl,
   });
   const quiet = params.quiet;
-  if (!fetched.reachable) {
-    if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${String(fetched.error)}`);
+  if (!fetched.reachable || (fetched.status !== undefined && fetched.status >= 400)) {
+    const error =
+      fetched.status === undefined
+        ? fetched.error
+        : new LiveModelCatalogHttpError("lmstudio", fetched.status);
+    if (params.discoveryMode === "strict") {
+      throw error;
     }
-    return [];
-  }
-  if (fetched.status !== undefined && fetched.status >= 400) {
     if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${fetched.status}`);
-    }
-    return [];
-  }
-  const models = fetched.models;
-  if (models.length === 0) {
-    if (!quiet) {
-      log.debug("No LM Studio models found on local instance");
+      log.debug(`Failed to discover LM Studio models: ${String(error)}`);
     }
     return [];
   }
 
-  return models
+  return fetched.models
     .map((entry): ModelDefinitionConfig | null => {
       const base = mapLmstudioWireEntry(entry);
       if (!base) {

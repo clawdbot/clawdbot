@@ -134,8 +134,12 @@ describe("createTelegramBot command menu", () => {
     expect(registered).toStrictEqual([
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
-      ...native.filter((command) => !command.isAlias).map(({ isAlias: _, ...command }) => command),
-      ...native.filter((command) => command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
   });
 
@@ -193,8 +197,12 @@ describe("createTelegramBot command menu", () => {
     }
     expect(registered).toStrictEqual([
       { command: "custom_backup", description: "Git backup" },
-      ...native.filter((command) => !command.isAlias).map(({ isAlias: _, ...command }) => command),
-      ...native.filter((command) => command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
     expect(registered.find((command) => command.command === "status")).toEqual({
       command: nativeStatus.command,

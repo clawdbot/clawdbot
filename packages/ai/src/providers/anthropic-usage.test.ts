@@ -1,20 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   applyAnthropicMessageDeltaUsage,
+  applyAnthropicMessageStartUsage,
   readAnthropicCacheWriteUsage,
   readLastAnthropicIterationUsage,
 } from "./anthropic-usage.js";
-
-function emptyUsage() {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 describe("readAnthropicCacheWriteUsage", () => {
   it("reads independent 5-minute and 1-hour cache-write buckets", () => {
@@ -117,8 +108,46 @@ describe("readLastAnthropicIterationUsage", () => {
 });
 
 describe("applyAnthropicMessageDeltaUsage", () => {
+  it.each([{ cache_read_input_tokens: 128 }, { cache_creation_input_tokens: 128 }])(
+    "settles usage after a zero-placeholder start with one cache counter: %j",
+    (cacheUsage) => {
+      const usage = createZeroUsage();
+      const start = applyAnthropicMessageStartUsage(usage, { input_tokens: 0, output_tokens: 0 });
+
+      applyAnthropicMessageDeltaUsage(
+        usage,
+        { input_tokens: 1635, output_tokens: 2, ...cacheUsage },
+        start,
+      );
+
+      expect(usage).toMatchObject({
+        totalTokens: 1765,
+        contextUsage: { state: "available", promptTokens: 1763, totalTokens: 1765 },
+      });
+    },
+  );
+
+  it.each([
+    {},
+    { cache_read_input_tokens: 128, cache_creation_input_tokens: "malformed" },
+    { cache_read_input_tokens: "malformed", cache_creation_input_tokens: 128 },
+    { cache_read_input_tokens: "malformed" },
+    { cache_creation_input_tokens: "malformed" },
+  ])("keeps context unavailable for missing or malformed cache evidence: %j", (cacheUsage) => {
+    const usage = createZeroUsage();
+    const start = applyAnthropicMessageStartUsage(usage, { input_tokens: 0, output_tokens: 0 });
+
+    applyAnthropicMessageDeltaUsage(
+      usage,
+      { input_tokens: 1635, output_tokens: 2, ...cacheUsage },
+      start,
+    );
+
+    expect(usage).toHaveProperty("contextUsage", { state: "unavailable" });
+  });
+
   it("sums compaction and message iterations for billed usage", () => {
-    const usage = emptyUsage();
+    const usage = createZeroUsage();
 
     applyAnthropicMessageDeltaUsage(
       usage,
@@ -158,7 +187,7 @@ describe("applyAnthropicMessageDeltaUsage", () => {
   });
 
   it("keeps top-level billing when compaction iterations are malformed", () => {
-    const usage = emptyUsage();
+    const usage = createZeroUsage();
 
     applyAnthropicMessageDeltaUsage(
       usage,
@@ -188,5 +217,40 @@ describe("applyAnthropicMessageDeltaUsage", () => {
       totalTokens: 36,
       contextUsage: { state: "unavailable" },
     });
+  });
+
+  it("keeps the message-start snapshot when the delta reports no usage", () => {
+    const usage = createZeroUsage();
+    const messageStartPromptUsage = applyAnthropicMessageStartUsage(usage, {
+      input_tokens: 12,
+      output_tokens: 0,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: 4,
+    });
+
+    applyAnthropicMessageDeltaUsage(usage, undefined, messageStartPromptUsage);
+
+    expect(usage).toMatchObject({
+      input: 12,
+      output: 0,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 19,
+      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
+    });
+  });
+
+  it("still reports unavailable context for an empty delta usage object", () => {
+    const usage = createZeroUsage();
+    const messageStartPromptUsage = applyAnthropicMessageStartUsage(usage, {
+      input_tokens: 12,
+      output_tokens: 0,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: 4,
+    });
+
+    applyAnthropicMessageDeltaUsage(usage, {}, messageStartPromptUsage);
+
+    expect(usage).toMatchObject({ contextUsage: { state: "unavailable" } });
   });
 });

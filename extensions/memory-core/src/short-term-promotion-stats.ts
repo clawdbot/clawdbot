@@ -2,13 +2,13 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isSameMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "./dreaming-shared.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   emptyPhaseSignalStore,
   readPhaseSignalStore,
   readStore,
   resolvePhaseSignalPath,
   resolveStorePath,
-  withShortTermLock,
   writePhaseSignalStore,
 } from "./short-term-promotion-store.js";
 import type {
@@ -236,7 +236,7 @@ async function updatePhaseSignals(
   }
   const nowIso = resolveMemoryCoreTimestamp(resolveMemoryCoreNowMs(params.nowMs));
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),

@@ -1,6 +1,7 @@
 // Memory core host runtime exports bridge memory host runtime-core APIs into the SDK.
 export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
 export { resolveRememberAcrossConversations } from "../../packages/memory-host-sdk/src/host/config-utils.js";
+export { resolveEffectiveCompactionReserveTokens } from "../agents/agent-compaction-constants.js";
 export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/agent-settings.js";
 export {
   asToolParamsRecord,
@@ -15,12 +16,15 @@ export {
   listAgentIds,
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
-  resolveSessionAgentIds,
 } from "../agents/agent-scope.js";
-export { resolveMemorySearchConfig } from "../agents/memory-search.js";
+export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export {
+  resolveMemorySearchConfig,
+  resolveMemorySearchIndexConfig,
+} from "../agents/memory-search.js";
 export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
-export { getRuntimeConfig } from "../config/config.js";
+export { getRuntimeConfig, resolveRuntimeConfigCacheKey } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { resolveCronSession } from "./isolated-agent/session.js";
+import { toPublicCronJob } from "./public-job.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -196,6 +198,75 @@ describe("CronService declarative jobs", () => {
     } finally {
       cron.stop();
     }
+  });
+
+  it("keeps the first creator across declaration convergence and restart", async () => {
+    const { storePath } = await makeStorePath();
+    const writer = createCronService(storePath);
+    await writer.start();
+    let createdId = "";
+    const selections = [
+      {
+        skillId: "00000000-0000-4000-8000-000000000001",
+        revision: "a".repeat(64),
+        name: "s_report_00000000000040008000",
+        ownerProfileId: "profile-ada",
+      },
+    ];
+
+    try {
+      const created = declarativeResult(
+        await writer.add(declaration(), {
+          createdActor: { type: "human", source: "profile", id: "profile-ada" },
+          skillLibrarySelections: selections,
+        }),
+      );
+      createdId = created.id;
+      expect(created.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+      });
+
+      const converged = declarativeResult(
+        await writer.add(declaration({ displayName: "Updated report" }), {
+          createdActor: { type: "human", source: "profile", id: "profile-bob" },
+          skillLibrarySelections: [],
+        }),
+      );
+      expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
+      expect(converged.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+      });
+    } finally {
+      writer.stop();
+    }
+
+    const reader = createCronService(storePath, false);
+    await expect(reader.readJob(createdId)).resolves.toMatchObject({
+      createdActor: { type: "human", id: "profile-ada" },
+      skillLibrarySelections: selections,
+    });
+    const job = (await loadCronStore(storePath)).jobs.find((stored) => stored.id === createdId)!;
+    expect(toPublicCronJob(job)).not.toHaveProperty("skillLibrarySelections");
+    const first = resolveCronSession({
+      cfg: {},
+      sessionKey: "agent:ops:cron:test",
+      agentId: "ops",
+      nowMs: Date.now(),
+      store: {},
+      skillLibrarySelections: job.skillLibrarySelections,
+      forceNew: true,
+    });
+    expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
+    const restarted = resolveCronSession({
+      cfg: {},
+      sessionKey: "agent:ops:cron:test",
+      agentId: "ops",
+      nowMs: Date.now(),
+      store: { "agent:ops:cron:test": first.sessionEntry },
+      skillLibrarySelections: [],
+      forceNew: true,
+    });
+    expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
   });
 
   it("keeps declaration-key uniqueness local to the caller visibility predicate", async () => {

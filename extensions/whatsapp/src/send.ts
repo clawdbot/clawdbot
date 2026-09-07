@@ -1,4 +1,10 @@
 // Whatsapp plugin module implements send behavior.
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
+import {
+  createMessageReceiptFromOutboundResults,
+  createReplyToFanout,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
@@ -151,8 +157,15 @@ export async function sendMessageWhatsApp(
     quotedMessageKey?: WhatsAppQuotedMessageKey;
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
-    onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
-  },
+    onDeliveryResult?: (result: {
+      messageId: string;
+      toJid: string;
+      receipt?: MessageReceipt;
+    }) => Promise<void> | void;
+  } & Pick<
+    ChannelOutboundContext,
+    "replyToIdSource" | "replyToMode" | "formatting" | "onPlatformSendDispatch"
+  >,
 ): Promise<{ messageId: string; toJid: string }> {
   return await sendWhatsAppUploadFile(to, body, options);
 }
@@ -198,7 +211,9 @@ async function sendMessageWhatsAppInActivityScope(
     accountId: resolvedAccountId ?? options.accountId,
   });
   const accountIdForFormatting = resolvedAccountId ?? options.accountId;
+  const requestedLimit = options.formatting?.textLimit ?? Infinity;
   const textLimit = Math.min(
+    requestedLimit > 0 ? requestedLimit : Infinity,
     resolveTextChunkLimit(cfg, "whatsapp", accountIdForFormatting, { fallbackLimit: 4_000 }),
     4_096,
   );
@@ -206,9 +221,9 @@ async function sendMessageWhatsAppInActivityScope(
     text,
     textLimit,
     tableMode,
-    resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
+    options.formatting?.chunkMode ?? resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
   );
-  text = textChunks.shift() ?? "";
+  text = textChunks.shift() ?? text;
   if (!text && !hasMedia) {
     return { messageId: "", toJid: jid };
   }
@@ -280,46 +295,65 @@ async function sendMessageWhatsAppInActivityScope(
     }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
+    const trailingTextChunks = [visibleTextAfterVoice, ...textChunks].filter(
+      (chunk): chunk is string => Boolean(chunk),
+    );
+    const reportProgress = trailingTextChunks.length > 0 ? options.onDeliveryResult : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback ||
-      forceDocumentDelivery ||
-      accountId ||
-      documentFileName ||
-      options.quotedMessageKey
+      options.gifPlayback || forceDocumentDelivery || accountId || documentFileName
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(forceDocumentDelivery ? { asDocument: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
-            ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,
           }
         : undefined;
-    const result = requireWhatsAppAcceptedSendResult(
-      sendOptions
-        ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
-        : await active.sendMessage(to, text, mediaBuffer, mediaType),
-    );
-    acceptedResults.push(result);
-    const messageId = result.messageId;
-    const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
-    const trailingTextChunks = [visibleTextAfterVoice, ...textChunks].filter(
-      (chunk): chunk is string => Boolean(chunk),
-    );
+    const quotedSendOptions = options.quotedMessageKey
+      ? { ...sendOptions, quotedMessageKey: options.quotedMessageKey }
+      : sendOptions;
+    const nextReplyToId = createReplyToFanout({
+      replyToId: options.quotedMessageKey?.id,
+      replyToIdSource: options.replyToIdSource,
+      replyToMode: options.replyToMode,
+    });
+    const sendPart = async (part: string, buffer?: Buffer, mime?: string) => {
+      // This owner chunks rendered Markdown; keep each native send behind the
+      // durable dispatch fence and record its actual quote before reporting progress.
+      await options.onPlatformSendDispatch?.();
+      const replyToId = nextReplyToId();
+      const partOptions = replyToId ? quotedSendOptions : sendOptions;
+      const accepted = requireWhatsAppAcceptedSendResult(
+        partOptions
+          ? await active.sendMessage(to, part, buffer, mime, partOptions)
+          : await active.sendMessage(to, part, buffer, mime),
+      );
+      acceptedResults.push(accepted);
+      const result = {
+        messageId: accepted.messageId,
+        toJid: resolveActualSentRemoteJid(accepted, jid),
+      };
+      return {
+        ...result,
+        ...(reportProgress
+          ? {
+              receipt: createMessageReceiptFromOutboundResults({
+                results: [{ channel: "whatsapp", ...result }],
+                kind: buffer ? "media" : "text",
+                replyToId,
+              }),
+            }
+          : {}),
+      };
+    };
+    const result = await sendPart(text, mediaBuffer, mediaType);
+    const { messageId, toJid: sentRemoteJid } = result;
     if (trailingTextChunks.length > 0) {
       // Persist each accepted part before the next fallible send so recovery
       // cannot replay already-delivered media or text chunks.
-      await options.onDeliveryResult?.({ messageId, toJid: sentRemoteJid });
+      await reportProgress?.(result);
       for (const trailingText of trailingTextChunks) {
-        const trailingResult = requireWhatsAppAcceptedSendResult(
-          sendOptions
-            ? await active.sendMessage(to, trailingText, undefined, undefined, sendOptions)
-            : await active.sendMessage(to, trailingText, undefined, undefined),
-        );
-        acceptedResults.push(trailingResult);
-        await options.onDeliveryResult?.({
-          messageId: trailingResult.messageId,
-          toJid: resolveActualSentRemoteJid(trailingResult, jid),
-        });
+        const trailingResult = await sendPart(trailingText);
+        await reportProgress?.(trailingResult);
       }
     }
     const durationMs = Date.now() - startedAt;

@@ -127,6 +127,8 @@ export function makeDispatchTestContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
   const workerEnvironmentService = overrides.workerEnvironmentService ?? {
+    get: () => undefined,
+    inventoryVersion: () => 0,
     supportsExecutionMode: () => true,
   };
   if (!overrides.workerEnvironmentService) {
@@ -147,6 +149,7 @@ export function makeDispatchTestContext(
     });
   }
   return {
+    getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => ({
       cloudWorkers: {
         profiles: {

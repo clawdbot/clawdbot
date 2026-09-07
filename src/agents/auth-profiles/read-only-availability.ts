@@ -8,8 +8,8 @@ import {
 } from "../../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
+  isBuiltInDefaultSecretProviderRef,
   isValidSecretRef,
-  resolveDefaultSecretProviderAlias,
   SINGLE_VALUE_FILE_REF_ID,
 } from "../../secrets/ref-contract.js";
 import {
@@ -55,9 +55,7 @@ export function resolveSecretRefReadOnlyAvailability(
     return hasSecret(env[value.id]) ? true : undefined;
   }
   const source = cfg.secrets?.providers?.[value.provider];
-  const isImplicitProvider =
-    value.source === "store" && value.provider === resolveDefaultSecretProviderAlias(cfg, "store");
-  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
+  if (source?.source !== value.source && !isBuiltInDefaultSecretProviderRef(cfg, value)) {
     return false;
   }
   if (

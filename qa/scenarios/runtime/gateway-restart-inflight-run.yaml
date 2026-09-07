@@ -208,7 +208,7 @@ flow:
               - call: waitForCondition
                 args:
                   - lambda:
-                      expr: "readGatewayLogs().slice(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
+                      expr: "readGatewayLogs(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 25
         - call: waitForOutboundMessage
@@ -292,7 +292,7 @@ flow:
               expr: "`restart recovery left a terminal artifact: ${JSON.stringify(finalTranscript)}`"
         - set: recoveryLogs
           value:
-            expr: readGatewayLogs().slice(gatewayLogCursor)
+            expr: readGatewayLogs(gatewayLogCursor)
         - set: recoveryDispatches
           value:
             expr: "recoveryLogs.split('dispatching restart-safe recovery').length - 1"
@@ -311,6 +311,6 @@ flow:
             message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
         - call: assertNoGatewayLogSentinels
           args:
-            - sinceIndex:
+            - since:
                 ref: gatewayLogCursor
       detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} deliveryRunIds=${checkpointDeliveryRunIds.join(',')} auditAnchorRunId=${auditAnchorIdentity.runId} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

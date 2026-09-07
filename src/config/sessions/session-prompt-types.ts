@@ -8,6 +8,7 @@ export type SessionSkillPromptRef = {
 };
 
 export type SessionSkillSnapshot = {
+  librarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
   /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
   promptRef?: SessionSkillPromptRef;

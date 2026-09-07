@@ -5,7 +5,6 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import "../styles/sidebar-footer-update.css";
 import {
   formatBuildChipText,
   formatSettingsBuildLabel,
@@ -38,9 +37,11 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}
-          aria-label=${this.updateAttentionDismissed
-            ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
-            : t("aboutPage.artifactDetails")}
+          aria-label=${
+            this.updateAttentionDismissed
+              ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
+              : t("aboutPage.artifactDetails")
+          }
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
@@ -49,11 +50,13 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
             this.onNavigate?.("about");
           }}
           >${text ? html`<span class="sidebar-footer-build__text">${text}</span>` : nothing}
-          ${this.updateAttentionDismissed
-            ? html`<span class="agent-select__badge sidebar-footer-build__update"
-                >${t("updates.sidebar.availableTitle")}</span
-              >`
-            : nothing}</a
+          ${
+            this.updateAttentionDismissed
+              ? html`<span class="agent-select__badge sidebar-footer-build__update"
+                  >${t("updates.sidebar.availableTitle")}</span
+                >`
+              : nothing
+          }</a
         >
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
           ${renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, this.gatewayVersion)}

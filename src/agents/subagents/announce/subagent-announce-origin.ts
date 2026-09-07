@@ -9,10 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../../../channels/plugins/types.public.js";
-import {
-  routeFromConversationRef,
-  routeToDeliveryFields,
-} from "../../../channels/route-projection.js";
+import { deliveryContextFromConversation } from "../../../channels/route-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   stripOutboundTargetKindPrefix,
@@ -120,9 +117,9 @@ function resolveBoundConversationOrigin(params: {
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
   const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
-  const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
+  const boundTarget = deliveryContextFromConversation(conversation);
   const inferredThreadId =
-    boundTarget.threadId ??
+    boundTarget?.threadId ??
     (parentConversationId && parentConversationId !== conversationId
       ? conversationId
       : undefined) ??
@@ -145,7 +142,7 @@ function resolveBoundConversationOrigin(params: {
   return {
     channel: conversation.channel,
     accountId: conversation.accountId,
-    to: boundTarget.to,
+    to: boundTarget?.to,
     threadId: inferredThreadId,
   };
 }

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -99,10 +100,6 @@ async function runCodeModeBridgeRequest(
   throw new ToolInputError("Unsupported tool_search_code bridge method.");
 }
 
-export function appendToolSearchCodeStderrTail(current: string, chunk: string): string {
-  return appendBoundedTextTail(current, chunk, SESSION_TOOL_STDERR_TAIL_BYTES);
-}
-
 export function runCodeModeChild(params: {
   code: string;
   config: ToolSearchConfig;
@@ -121,11 +118,11 @@ export function runCodeModeChild(params: {
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let stderrTail = "";
+    let stderrDroppedBytes = 0;
     let settled = false;
-    let timedOut = false;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
-    const settle = (callback: () => void) => {
+    const settle = (callback: () => void, abortReason?: unknown) => {
       if (settled) {
         return;
       }
@@ -137,19 +134,19 @@ export function runCodeModeChild(params: {
         clearTimeout(exitRejectionTimer);
       }
       params.signal?.removeEventListener("abort", abortFromParent);
+      // Host tool calls share the child lifetime, including fatal exits and final IPC results.
+      bridgeAbortController.abort(abortReason);
       child.kill();
       callback();
     };
     const abortFromParent: () => void = () => {
-      bridgeAbortController.abort(params.signal?.reason);
       child.kill("SIGKILL");
-      settle(() => reject(new Error("tool_search_code aborted")));
+      settle(() => reject(new Error("tool_search_code aborted")), params.signal?.reason);
     };
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-      timedOut = true;
-      bridgeAbortController.abort(new Error("tool_search_code timed out"));
+      const error = new Error("tool_search_code timed out");
       child.kill("SIGKILL");
-      settle(() => reject(new Error("tool_search_code timed out")));
+      settle(() => reject(error), error);
     }, params.config.codeTimeoutMs);
     params.signal?.addEventListener("abort", abortFromParent, { once: true });
     if (params.signal?.aborted) {
@@ -159,7 +156,9 @@ export function runCodeModeChild(params: {
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
-      stderrTail = appendToolSearchCodeStderrTail(stderrTail, chunk);
+      const appended = appendBoundedTextTail(stderrTail, chunk);
+      stderrTail = appended.tail;
+      stderrDroppedBytes += appended.droppedBytes;
     });
     child.stderr?.on("error", (error) => {
       settle(() => reject(error));
@@ -167,29 +166,37 @@ export function runCodeModeChild(params: {
     child.on("error", (error) => {
       settle(() => reject(error));
     });
+    const rejectOnExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const suffix = stderrTail.trim();
+      const preview = sliceUtf16Safe(suffix, -500);
+      const previewDroppedBytes = Buffer.byteLength(suffix) - Buffer.byteLength(preview);
+      const notices = [
+        stderrDroppedBytes > 0
+          ? `${stderrDroppedBytes} UTF-8 bytes of earlier stderr discarded at the ${SESSION_TOOL_STDERR_TAIL_BYTES}-byte retention cap`
+          : "",
+        previewDroppedBytes > 0
+          ? `${previewDroppedBytes} UTF-8 bytes omitted from the trimmed stderr preview`
+          : "",
+      ].filter(Boolean);
+      const detail =
+        preview || notices.length > 0
+          ? `: ${preview}${notices.length > 0 ? ` [${notices.join("; ")}]` : ""}`
+          : "";
+      settle(() =>
+        reject(new Error(`tool_search_code child exited with ${signal ?? code}${detail}`)),
+      );
+    };
     child.on("exit", (code, signal) => {
-      if (settled) {
-        return;
+      // Preserve the existing IPC grace even when stderr closes first or never closes.
+      if (!settled && code === 0 && signal === null) {
+        exitRejectionTimer = setTimeout(() => rejectOnExit(code, signal), 250);
       }
-      const rejectOnExit = () => {
-        const suffix = stderrTail.trim();
-        const detail = suffix ? `: ${sliceUtf16Safe(suffix, -500)}` : "";
-        settle(() =>
-          reject(
-            new Error(
-              timedOut
-                ? "tool_search_code timed out"
-                : `tool_search_code child exited with ${signal ?? code}${detail}`,
-            ),
-          ),
-        );
-      };
-      if (code === 0 && signal === null) {
-        // A clean exit can race the final IPC result.
-        exitRejectionTimer = setTimeout(rejectOnExit, 250);
-        return;
+    });
+    child.on("close", (code, signal) => {
+      // Node owns exit + stdio drain ordering; rendering at exit can miss the final chunk.
+      if (!settled && (code !== 0 || signal !== null)) {
+        rejectOnExit(code, signal);
       }
-      rejectOnExit();
     });
     child.on("message", (message: CodeModeChildMessage) => {
       if (settled || !isRecord(message) || typeof message.type !== "string") {

@@ -25,8 +25,11 @@ export type ClickClackGroupConfig = {
 
 /** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   name?: string;
   enabled?: boolean;
+  responsePrefix?: string;
   baseUrl?: string;
   apiBaseUrl?: string;
   token?: unknown;

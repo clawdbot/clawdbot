@@ -4,16 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
-import {
-  applySkillProposal,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-} from "../../skills/workshop/service.js";
+import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
-import { readSkillProposalRecord } from "../../skills/workshop/store.js";
-import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
-import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
+import type {
+  SkillWorkshopProposalMutationBudget,
+  SkillWorkshopProposalReviewCompletion,
+} from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -21,18 +18,32 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
+import { readSkillWorkshopTestProposalRecord } from "./skill-workshop-tool.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: Parameters<typeof createSkillWorkshopToolImpl>[0]["config"];
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+
+function workshopSkillPath(name: string, ...parts: string[]): string {
+  return path.join(resolveWorkshopSkillsDir({}, "main", testState.env), name, ...parts);
+}
 
 async function proposalArtifactPath(
   proposalId: string,
   relativePath: string,
   options: { stateDir?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
-  const record = await readSkillProposalRecord(proposalId, options.env ? { env: options.env } : {});
+  const record = await readSkillWorkshopTestProposalRecord(
+    proposalId,
+    options.env ? { env: options.env } : {},
+  );
   if (!record) {
     throw new Error(`expected stored proposal ${proposalId}`);
   }
@@ -60,129 +71,6 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
-  it("gives an isolated collection review only read and reconcile", async () => {
-    const workspaceDir = await fs.realpath(await tempDirs.make("openclaw-skill-collection-tool-"));
-    // Drop targets must be Workshop-owned: seed via an applied create proposal, not a raw write.
-    const seeded = await proposeCreateSkill({
-      workspaceDir,
-      env: testState.env,
-      name: "duplicate",
-      description: "Duplicate procedure",
-      content: "# duplicate\n",
-    });
-    await applySkillProposal({
-      workspaceDir,
-      env: testState.env,
-      proposalId: seeded.record.id,
-      expectedRevisionHash: seeded.revisionHash,
-    });
-    const collectionReconcile = { approvedSkillNames: new Set(["duplicate"]) };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      env: testState.env,
-      collectionReconcile,
-    });
-
-    expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
-    expect(JSON.stringify(tool.parameters)).toContain(
-      "Exactly one decision for every current skill, plus optional new write decisions. Skills not created by Skill Workshop are read-only and require keep. write requires description and complete SKILL.md content; drop requires a reason.",
-    );
-    expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
-    await tool.execute("read", { action: "read", skill_name: "duplicate" });
-    await tool.execute("reconcile", {
-      action: "reconcile",
-      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
-    });
-
-    expect(collectionReconcile).toMatchObject({
-      result: { kept: [], written: [], dropped: [{ name: "duplicate", reason: "redundant" }] },
-    });
-    await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
-
-    const foregroundTool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
-    const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
-    expect(restored.details).toMatchObject({ restored: ["duplicate"], removed: [] });
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "duplicate", "SKILL.md"), "utf8"),
-    ).resolves.toContain("Duplicate procedure");
-  });
-
-  it("reserves the one reconciliation before awaiting its commit", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-concurrent-tool-");
-    await writeWorkspaceSkills(workspaceDir, [{ name: "procedure", description: "Procedure" }]);
-    const collectionReconcile = { approvedSkillNames: new Set(["procedure"]) };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      env: testState.env,
-      collectionReconcile,
-    });
-    await tool.execute("read", { action: "read", skill_name: "procedure" });
-    let releaseLock: (() => void) | undefined;
-    let markAcquired: (() => void) | undefined;
-    const acquired = new Promise<void>((resolve) => {
-      markAcquired = resolve;
-    });
-    const heldLock = withSkillCollectionLock(
-      workspaceDir,
-      async () => {
-        markAcquired?.();
-        await new Promise<void>((resolve) => {
-          releaseLock = resolve;
-        });
-      },
-      { env: testState.env },
-    );
-    await acquired;
-
-    const first = tool.execute("first", {
-      action: "reconcile",
-      collection: [{ action: "keep", name: "procedure" }],
-    });
-    await expect(
-      tool.execute("second", {
-        action: "reconcile",
-        collection: [{ action: "drop", name: "procedure", reason: "duplicate" }],
-      }),
-    ).rejects.toThrow("already been reconciled");
-
-    releaseLock?.();
-    await heldLock;
-    await first;
-  });
-
-  it("bounds total collection text returned to the reviewer", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-budget-");
-    await writeWorkspaceSkills(workspaceDir, [
-      {
-        name: "oversized",
-        description: "Oversized procedure",
-        body: "x".repeat(240_001),
-      },
-    ]);
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      config: { skills: { workshop: { maxSkillBytes: 300_000 } } },
-      collectionReconcile: { approvedSkillNames: new Set(["oversized"]) },
-    });
-
-    await expect(tool.execute("read", { action: "read", skill_name: "oversized" })).rejects.toThrow(
-      "review limit",
-    );
-  });
-
-  it("keeps reconcile unavailable to ordinary off and propose sessions", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-policy-");
-    for (const mode of ["off", "propose"] as const) {
-      const tool = createSkillWorkshopTool({
-        workspaceDir,
-        config: { skills: { workshop: { autonomous: { mode } } } },
-      });
-      await expect(
-        tool.execute("reconcile", { action: "reconcile", collection: [] }),
-      ).rejects.toThrow("only an isolated collection review");
-    }
-  });
-
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);
@@ -193,10 +81,10 @@ describe("skill_workshop tool", () => {
       throw new Error("expected lazy skill_workshop description");
     }
 
-    expect(schema).toContain("create = new skill");
     expect(schema).toContain("patch = targeted");
     expect(schema).toContain("read = existing live skill");
-    expect(schema).toContain("update = full-body rewrite");
+    expect(schema).toContain("create = stage a pending proposal");
+    expect(schema).toContain("update = stage a full-body rewrite");
     expect(schema).toContain("revise = existing pending proposal");
     expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
@@ -205,6 +93,10 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
     expect(schema).toContain("artifact_path");
+    expect(schema).toContain("stored proposal record changed");
+    expect(schema).toContain("run interrupted-apply recovery first");
+    expect(schema).toContain("then use only the stored record");
+    expect(schema).not.toContain("action fails if content or support files changed");
     expect(tool.description).toContain(lazyDescription);
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
@@ -248,7 +140,7 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: details.id }).events.map(
+      listSkillProposalEvents({ config: {}, proposalId: details.id }).events.map(
         (event) => event.actor,
       ),
     ).toEqual([
@@ -267,8 +159,8 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("final skill body");
     expect(schema).toContain("not a plan");
     expect(schema).toContain("change description");
-    expect(schema).toContain("preserve all existing content");
-    expect(proposalOnlySchema).toContain("preserve all existing content");
+    expect(schema).toContain("preserve unrelated existing content");
+    expect(proposalOnlySchema).toContain("preserve unrelated existing content");
     expect(schema).toContain("Proposal frontmatter is added automatically");
   });
 
@@ -347,7 +239,7 @@ describe("skill_workshop tool", () => {
     ).resolves.toMatchObject({ details: { proposals: [] } });
   });
 
-  it("durably completes a proposal review and blocks later work", async () => {
+  it("pins the default action enum and blocks work after proposal review completion", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-completion-");
     let completions = 0;
     const progress: Array<{ proposalIds: string[]; remaining: number }> = [];
@@ -360,8 +252,8 @@ describe("skill_workshop tool", () => {
       markProgressStarted = resolve;
     });
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const proposalReviewCompletion = {
-      completed: false,
+    const proposalReviewCompletion: SkillWorkshopProposalReviewCompletion = {
+      phase: "open",
       complete: async () => {
         completions += 1;
       },
@@ -380,7 +272,23 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect", "complete"]);
+    ).toEqual([
+      "create",
+      "prepare_patch",
+      "patch",
+      "update",
+      "read",
+      "revise",
+      "list",
+      "inspect",
+      "evaluate",
+      "apply",
+      "reject",
+      "quarantine",
+      "history",
+      "restore_collection",
+      "complete",
+    ]);
     const create = tool.execute("call-create-before-complete", {
       action: "create",
       name: "Checkpointed Learning",
@@ -460,7 +368,7 @@ describe("skill_workshop tool", () => {
         proposal_content: `# Review Learning ${index}\n\nFollow workflow ${index}.\n`,
       });
     }
-    expect(proposalMutationBudget.completed).toBe(3);
+    expect(proposalMutationBudget.mutatedProposalIds?.size).toBe(3);
     await expect(
       tool.execute("call-create-4", {
         action: "create",
@@ -494,7 +402,7 @@ describe("skill_workshop tool", () => {
       });
     }
 
-    expect(proposalMutationBudget.completed).toBe(1);
+    expect(proposalMutationBudget.mutatedProposalIds).toEqual(new Set([proposalId]));
     expect(proposalMutationBudget.successfulMutations).toBe(3);
   });
 
@@ -562,7 +470,7 @@ describe("skill_workshop tool", () => {
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
-      readSkillProposalRecord((result.details as { id: string }).id),
+      readSkillWorkshopTestProposalRecord((result.details as { id: string }).id),
     ).resolves.toMatchObject({
       origin: {
         agentId: "main",
@@ -576,9 +484,7 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain("Use weather API details.");
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("weather-planner", "SKILL.md"))).rejects.toThrow();
 
     const reviewerOrigin = {
       agentId: "main",
@@ -622,7 +528,7 @@ describe("skill_workshop tool", () => {
       ),
     ).resolves.toContain('version: "v2"');
     await expect(
-      readSkillProposalRecord((result.details as { id: string }).id),
+      readSkillWorkshopTestProposalRecord((result.details as { id: string }).id),
     ).resolves.toMatchObject({ origin: reviewerOrigin });
 
     const listed = await tool.execute("call-3", {
@@ -769,16 +675,13 @@ describe("skill_workshop tool", () => {
       scanState: "clean",
     });
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+      fs.readFile(workshopSkillPath("weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Check weather before outdoor recommendations.");
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+      fs.readFile(workshopSkillPath("weather-planner", "SKILL.md"), "utf8"),
     ).resolves.not.toContain("status: proposal");
     await expect(
-      fs.readFile(
-        path.join(workspaceDir, "skills", "weather-planner", "references", "weather.md"),
-        "utf8",
-      ),
+      fs.readFile(workshopSkillPath("weather-planner", "references", "weather.md"), "utf8"),
     ).resolves.toContain("Use weather API details.");
 
     const update = await tool.execute("call-update", {
@@ -810,7 +713,7 @@ describe("skill_workshop tool", () => {
       proposal_id: (revisedUpdate.details as { id: string }).id,
     });
     const revisedSkill = await fs.readFile(
-      path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"),
+      workshopSkillPath("weather-planner", "SKILL.md"),
       "utf8",
     );
     expect(revisedSkill).toContain("Check weather before outdoor recommendations.");
@@ -839,9 +742,7 @@ describe("skill_workshop tool", () => {
       kind: "create",
       skillKey: "rejected-skill",
     });
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "rejected-skill", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("rejected-skill", "SKILL.md"))).rejects.toThrow();
 
     const quarantined = await tool.execute("call-5", {
       action: "create",
@@ -866,9 +767,7 @@ describe("skill_workshop tool", () => {
       skillKey: "quarantined-skill",
       scanState: "quarantined",
     });
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
-    ).rejects.toThrow();
+    await expect(fs.access(workshopSkillPath("quarantined-skill", "SKILL.md"))).rejects.toThrow();
   });
 
   it.each(["off", "propose", "auto"] as const)(
@@ -917,7 +816,7 @@ describe("skill_workshop tool", () => {
         name: skillName,
         source: "workspace",
         activation: "read",
-        skillFile: path.join(workspaceDir, "skills", skillName, "SKILL.md"),
+        skillFile: workshopSkillPath(skillName, "SKILL.md"),
       });
       const patch = await tool.execute("repair-patch", patchArgs);
       expect(patch.details).toMatchObject({
@@ -925,7 +824,7 @@ describe("skill_workshop tool", () => {
         kind: "update",
       });
 
-      const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+      const skillFile = workshopSkillPath(skillName, "SKILL.md");
       if (mode === "propose") {
         await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
           "Check weather before outdoor recommendations.",
@@ -952,7 +851,7 @@ describe("skill_workshop tool", () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");
     const runId = "repair-alias";
     const skillName = "canonical-skill-key";
-    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    const skillFile = workshopSkillPath(skillName, "SKILL.md");
     const tool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
@@ -990,7 +889,7 @@ describe("skill_workshop tool", () => {
     consumeRunSkillUsage(runId);
   });
 
-  it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
+  it("keeps proposal discovery for the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
     const secondWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-second-");
     const firstTool = createSkillWorkshopTool({
@@ -1021,13 +920,8 @@ describe("skill_workshop tool", () => {
       action: "list",
       status: "pending",
     });
-    expect(
-      (listed.details as { proposals: Array<{ id: string; workspaceMismatch?: true }> }).proposals,
-    ).toEqual([
-      expect.objectContaining({
-        id: (second.details as { id: string }).id,
-        workspaceMismatch: true,
-      }),
+    expect((listed.details as { proposals: Array<{ id: string }> }).proposals).toEqual([
+      expect.objectContaining({ id: (second.details as { id: string }).id }),
       expect.objectContaining({ id: (first.details as { id: string }).id }),
     ]);
     await expect(

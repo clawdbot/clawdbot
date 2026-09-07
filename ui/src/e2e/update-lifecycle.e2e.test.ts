@@ -4,7 +4,9 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -35,19 +37,16 @@ const DEV_UPDATE_SCHEDULE = {
   },
 };
 
-const HANDOFF_STARTED_RESPONSE = {
-  ok: true,
-  handoff: { status: "started" },
-  result: { reason: "managed-service-handoff-started", status: "skipped" },
-} as const;
-
-const HANDOFF_PENDING_SENTINEL = {
-  sentinel: {
-    kind: "update",
-    status: "skipped",
-    stats: { reason: "managed-service-handoff-started" },
-  },
-};
+function createDevRun() {
+  return createUpdateRunFixture({
+    target: { kind: "git", sha: DEV_UPDATE_AVAILABLE.upstreamSha },
+    before: { version: DEV_UPDATE_AVAILABLE.currentVersion, sha: DEV_UPDATE_AVAILABLE.currentSha },
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "staging", status: "in_progress", detail: "Installing the update on the Gateway." },
+    ],
+  });
+}
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
   await page.locator(".sidebar-issues-button").click();
@@ -62,45 +61,30 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "narrates a dev-channel update through to its recorded success (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(`.artifacts/control-ui-e2e/update-lifecycle-${colorScheme}`);
+      const artifactDir = createControlUiE2eArtifactDir(`update-lifecycle-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
+          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
         async ({ page }) => {
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(String(error)));
+          let run = createDevRun();
           const gateway = await installMockGateway(page, {
-            deferredMethods: ["update.run"],
             methodResponses: {
-              "update.run": HANDOFF_STARTED_RESPONSE,
-              "update.status": {
-                sequence: [
-                  HANDOFF_PENDING_SENTINEL,
-                  {
-                    sentinel: {
-                      kind: "update",
-                      status: "ok",
-                      // A git install keeps its version and moves its commit;
-                      // the post-restart finalizer stamps both.
-                      stats: {
-                        after: {
-                          sha: "9f3c21a0000000000000000000000000000000aa",
-                          version: "2026.8.1",
-                        },
-                      },
-                    },
-                  },
-                ],
-              },
+              "update.run": { ok: true, runId: run.runId, handoff: { status: "started" } },
+              "update.runs.get": { run },
+              "update.status": { activeRun: null, lastRun: null },
             },
           });
 
           expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
           await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("update.status");
           await gateway.emitGatewayEvent("update.available", {
             schedule: DEV_UPDATE_SCHEDULE,
             updateAvailable: DEV_UPDATE_AVAILABLE,
@@ -126,20 +110,62 @@ suite.define(() => {
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           await page.screenshot({ path: path.join(artifactDir, "2-installing.png") });
 
-          await gateway.resolveDeferred("update.run", HANDOFF_STARTED_RESPONSE);
-          await gateway.closeLatest(1012, "managed update handoff");
-
-          await page.getByText("The Gateway is restarting", { exact: false }).waitFor();
+          run = {
+            ...run,
+            phase: "restarting",
+            updatedAtMs: run.updatedAtMs + 1,
+            steps: [
+              { step: "staging", status: "completed" },
+              { step: "restarting", status: "in_progress" },
+            ],
+          };
+          await gateway.setMethodResponse("update.runs.get", { run });
+          await gateway.emitGatewayEvent("update.run.changed", {
+            runId: run.runId,
+            phase: run.phase,
+            status: run.status,
+            updatedAtMs: run.updatedAtMs,
+          });
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog
+            .getByText("⬆️ OpenClaw update in progress: restarting.", { exact: true })
+            .waitFor();
+          await gateway.setOnline(false);
+          await dialog.getByText("Gateway restarting…", { exact: true }).waitFor();
+          expect(await dialog.count()).toBe(1);
           await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
 
-          // The replacement Gateway reports the installed revision, so the
-          // operator gets a result instead of a silently reverted banner. The
-          // verified install also reloads this stale document, so the outcome
-          // has to survive that reload to be seen at all.
-          await page
-            .getByText("Gateway updated · now on 9f3c21a.", { exact: true })
-            .waitFor({ timeout: 20_000 });
-          await page.screenshot({ path: path.join(artifactDir, "4-success-toast.png") });
+          // Git installs can keep their package version while changing revision.
+          // The replacement Gateway's record must remain visible until dismissal.
+          run = {
+            ...run,
+            phase: "finished",
+            status: "succeeded",
+            updatedAtMs: run.updatedAtMs + 1,
+            finishedAtMs: Date.now(),
+            after: {
+              version: DEV_UPDATE_AVAILABLE.currentVersion,
+              sha: DEV_UPDATE_AVAILABLE.upstreamSha,
+            },
+            steps: run.steps.map((step) => ({ ...step, status: "completed" as const })),
+            verification: { booted: true, serviceRunning: true, versionMatch: true },
+          };
+          await gateway.setMethodResponse("update.runs.get", { run });
+          await gateway.setMethodResponse("update.status", { activeRun: null, lastRun: run });
+          const reads = (await gateway.getRequests("update.runs.get")).length;
+          await gateway.setGatewayBootId("dev-update-restarted");
+          await gateway.setOnline(true);
+          expect(
+            (await gateway.waitForRequest("update.runs.get", { after: reads })).params,
+          ).toEqual({ runId: run.runId });
+          await dialog
+            .getByText("✅ OpenClaw updated to 9f3c21a0 (from 11111111).", { exact: true })
+            .first()
+            .waitFor();
+          await page.screenshot({ path: path.join(artifactDir, "4-success-report.png") });
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
+          await dialog.getByRole("button", { name: "Close", exact: true }).click();
+          await dialog.waitFor({ state: "detached" });
           expect(pageErrors).toEqual([]);
         },
       );
@@ -149,52 +175,30 @@ suite.define(() => {
   it.each(["light", "dark"] as const)(
     "names the recorded cause when the install fails (%s)",
     async (colorScheme) => {
-      const artifactDir = path.resolve(
-        `.artifacts/control-ui-e2e/update-failure-cause-${colorScheme}`,
-      );
+      const artifactDir = createControlUiE2eArtifactDir(`update-failure-cause-${colorScheme}`);
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
+          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
         async ({ page }) => {
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(String(error)));
+          let run = createDevRun();
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "update.run": HANDOFF_STARTED_RESPONSE,
-              "update.status": {
-                sequence: [
-                  HANDOFF_PENDING_SENTINEL,
-                  {
-                    sentinel: {
-                      kind: "update",
-                      status: "error",
-                      stats: {
-                        reason: "deps-install-failed",
-                        steps: [
-                          { name: "fetch", log: { exitCode: 0, stderrTail: "" } },
-                          {
-                            name: "install",
-                            log: {
-                              exitCode: 1,
-                              stderrTail:
-                                "Progress: resolved 1204\nENOSPC: no space left on device, write",
-                            },
-                          },
-                        ],
-                      },
-                    },
-                  },
-                ],
-              },
+              "update.run": { ok: true, runId: run.runId, handoff: { status: "started" } },
+              "update.runs.get": { run },
+              "update.status": { activeRun: null, lastRun: null },
             },
           });
 
           expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
           await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("update.status");
           await gateway.emitGatewayEvent("update.available", {
             schedule: DEV_UPDATE_SCHEDULE,
             updateAvailable: DEV_UPDATE_AVAILABLE,
@@ -206,16 +210,40 @@ suite.define(() => {
             .getByRole("button", { name: "Update and restart", exact: true })
             .click();
           await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
-          await gateway.closeLatest(1012, "managed update handoff");
+          await gateway.waitForRequest("update.runs.get");
+          await gateway.setOnline(false);
+          run = {
+            ...run,
+            phase: "finished",
+            status: "failed",
+            reason: "deps-install-failed",
+            updatedAtMs: run.updatedAtMs + 1,
+            finishedAtMs: Date.now(),
+            steps: [
+              { step: "fetch", status: "completed" },
+              {
+                step: "install",
+                status: "failed",
+                detail: "ENOSPC: no space left on device, write",
+              },
+            ],
+          };
+          await gateway.setMethodResponse("update.runs.get", { run });
+          await gateway.setMethodResponse("update.status", { activeRun: null, lastRun: run });
+          await gateway.setGatewayBootId("failed-dev-update-restarted");
+          await gateway.setOnline(true);
 
-          // The initiating dialog owns the recorded outcome in place.
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByText(
-              "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
-              { exact: true },
-            )
-            .waitFor({ timeout: 20_000 });
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog
+            .getByText("⚠️ OpenClaw update failed: deps-install-failed.", { exact: true })
+            .first()
+            .waitFor();
+          const failureText = await dialog.textContent();
+          expect(failureText).toContain("Failed: install — ENOSPC: no space left on device, write");
+          expect(failureText).toContain(
+            "Run openclaw triage to diagnose and repair the failed update.",
+          );
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
           await page.waitForTimeout(300);
           await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
           expect(pageErrors).toEqual([]);

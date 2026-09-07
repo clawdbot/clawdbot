@@ -1,7 +1,21 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { isAddressInUseError } from "./gmail-watcher-errors.js";
+
+describe("gmail watcher errors", () => {
+  it("detects address already in use errors", () => {
+    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
+      true,
+    );
+    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
+    expect(isAddressInUseError("some other error")).toBe(false);
+  });
+});
 
 // Tracks spawned children by pid so the killProcessTree mock can emit close on them.
 const spawnRegistry = new Map<number, EventEmitter>();
@@ -61,17 +75,14 @@ function createGmailConfig(account = "me@example.com", renewEveryMinutes?: numbe
 }
 
 function deferredCommandResult() {
-  let resolve!: (result: { code: number; stdout: string; stderr: string }) => void;
-  const promise = new Promise<{ code: number; stdout: string; stderr: string }>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
+  return createDeferred<{ code: number; stdout: string; stderr: string }>();
 }
 
 type MockWatcherChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   pid?: number;
-  stderr: EventEmitter;
+  stdout: PassThrough;
+  stderr: PassThrough;
 };
 
 let nextMockPid = 1234;
@@ -80,9 +91,13 @@ function createMockWatcherChild(spawned = true): MockWatcherChild {
   const child = new EventEmitter();
   const pid = spawned ? nextMockPid++ : undefined;
   const mockedChild = Object.assign(child, {
-    stderr: new EventEmitter(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
     kill: vi.fn(() => {
-      queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+      queueMicrotask(() => {
+        child.emit("exit", null, "SIGTERM");
+        child.emit("close", null, "SIGTERM");
+      });
       return true;
     }),
     ...(pid !== undefined ? { pid } : {}),
@@ -122,16 +137,7 @@ describe("startGmailWatcher", () => {
         queueMicrotask(() => child.emit("close", 0, null));
       }
     });
-    mocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter();
-      return Object.assign(child, {
-        kill: vi.fn(() => {
-          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-          return true;
-        }),
-        killed: false,
-      });
-    });
+    mocks.spawn.mockImplementation(() => createMockWatcherChild(false));
   });
 
   afterEach(async () => {
@@ -142,29 +148,20 @@ describe("startGmailWatcher", () => {
   it("does not let a stale cancelled startup clear newer watcher config", async () => {
     vi.useFakeTimers();
     try {
-      let oldCancelled = false;
+      const oldController = new AbortController();
       const oldWatchStart = deferredCommandResult();
-      const spawnedChildren: Array<
-        EventEmitter & { kill: ReturnType<typeof vi.fn>; killed: boolean }
-      > = [];
+      const spawnedChildren: MockWatcherChild[] = [];
       mocks.runCommandWithTimeout
         .mockImplementationOnce(async () => await oldWatchStart.promise)
         .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
       mocks.spawn.mockImplementation(() => {
-        const child = new EventEmitter();
-        const mockedChild = Object.assign(child, {
-          kill: vi.fn(() => {
-            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-            return true;
-          }),
-          killed: false,
-        });
-        spawnedChildren.push(mockedChild);
-        return mockedChild;
+        const child = createMockWatcherChild(false);
+        spawnedChildren.push(child);
+        return child;
       });
 
       const staleStart = startGmailWatcher(createGmailConfig(), {
-        isCancelled: () => oldCancelled,
+        signal: oldController.signal,
       });
 
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
@@ -174,7 +171,7 @@ describe("startGmailWatcher", () => {
       });
       expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
-      oldCancelled = true;
+      oldController.abort();
       oldWatchStart.resolve({ code: 0, stdout: "", stderr: "" });
       await expect(staleStart).resolves.toEqual({
         started: false,
@@ -211,7 +208,7 @@ describe("startGmailWatcher", () => {
     });
 
     await Promise.resolve();
-    expect(watchStartSignal).toBeDefined();
+    expect(watchStartSignal).toBe(controller.signal);
     controller.abort();
     expect(watchStartSignal?.aborted).toBe(true);
 
@@ -223,7 +220,7 @@ describe("startGmailWatcher", () => {
   });
 
   it("aborts tailscale setup and does not spawn gog serve when cancelled in flight", async () => {
-    let cancelled = false;
+    const controller = new AbortController();
     let tailscaleSignal: AbortSignal | undefined;
     mocks.runCommandWithTimeout.mockImplementation(
       async (_args, options: { signal?: AbortSignal }) =>
@@ -250,18 +247,17 @@ describe("startGmailWatcher", () => {
         },
       } as never,
       {
-        isCancelled: () => cancelled,
+        signal: controller.signal,
       },
     );
 
     await vi.waitFor(() => {
       expect(tailscaleSignal).toBeDefined();
     });
-    cancelled = true;
+    controller.abort();
 
-    await vi.waitFor(() => {
-      expect(tailscaleSignal?.aborted).toBe(true);
-    });
+    expect(tailscaleSignal).toBe(controller.signal);
+    expect(tailscaleSignal?.aborted).toBe(true);
 
     await expect(startPromise).resolves.toEqual({
       started: false,
@@ -272,20 +268,11 @@ describe("startGmailWatcher", () => {
 
   it("kills existing watcher process on re-entry before spawning new one", async () => {
     mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    const spawnedChildren: Array<
-      EventEmitter & { kill: ReturnType<typeof vi.fn>; killed: boolean }
-    > = [];
+    const spawnedChildren: MockWatcherChild[] = [];
     mocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter();
-      const mockedChild = Object.assign(child, {
-        kill: vi.fn(() => {
-          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-          return true;
-        }),
-        killed: false,
-      });
-      spawnedChildren.push(mockedChild);
-      return mockedChild;
+      const child = createMockWatcherChild(false);
+      spawnedChildren.push(child);
+      return child;
     });
 
     // First start
@@ -425,16 +412,7 @@ describe("startGmailWatcher", () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
       // Now spawn a normal child for the second start so re-entry triggers settle
-      mocks.spawn.mockImplementation(() => {
-        const child = new EventEmitter();
-        return Object.assign(child, {
-          kill: vi.fn(() => {
-            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-            return true;
-          }),
-          killed: false,
-        });
-      });
+      mocks.spawn.mockImplementation(() => createMockWatcherChild(false));
 
       // Re-entry starts settle on stubbornChild; advance past the 8 s final
       // timeout (stubbornChild never emits exit), then verify the outcome.
@@ -456,17 +434,11 @@ describe("startGmailWatcher", () => {
     vi.useFakeTimers();
     try {
       mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-      const spawnedChildren: Array<EventEmitter & { kill: ReturnType<typeof vi.fn> }> = [];
+      const spawnedChildren: MockWatcherChild[] = [];
       mocks.spawn.mockImplementation(() => {
-        const child = new EventEmitter();
-        const mockedChild = Object.assign(child, {
-          kill: vi.fn(() => {
-            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-            return true;
-          }),
-        });
-        spawnedChildren.push(mockedChild);
-        return mockedChild;
+        const child = createMockWatcherChild(false);
+        spawnedChildren.push(child);
+        return child;
       });
 
       // First start
@@ -490,16 +462,66 @@ describe("startGmailWatcher", () => {
     }
   });
 
-  it("calls killProcessTree (not proc.kill) when stopping the gog watcher", async () => {
+  it("ignores a retired child's late close while replacement startup is pending", async () => {
+    vi.useFakeTimers();
+    const pendingStart = deferredCommandResult();
+    const children = await startMockWatcher();
+    mocks.killProcessTree.mockImplementation(() => {});
+    mocks.runCommandWithTimeout.mockImplementationOnce(() => pendingStart.promise);
+    const restarting = startGmailWatcher(createGmailConfig("new@example.com"));
+    try {
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+      const retired = expectDefined(children[0], "retired watcher");
+      retired.emit("exit", 1, null);
+      retired.emit("close", 1, null);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(children).toHaveLength(1);
+      expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+      pendingStart.resolve({ code: 0, stdout: "", stderr: "" });
+      await restarting;
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(children).toHaveLength(2);
+      expect(mocks.spawn.mock.calls[1]?.[1]).toContain("new@example.com");
+    } finally {
+      pendingStart.resolve({ code: 0, stdout: "", stderr: "" });
+      await restarting;
+      const stopping = stopGmailWatcher();
+      await vi.advanceTimersByTimeAsync(8_000);
+      await stopping;
+      for (const child of children) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the shutdown grace period when the watcher exits before its descendants", async () => {
+    vi.useFakeTimers();
     mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
     const child = createMockWatcherChild();
     mocks.spawn.mockReturnValueOnce(child);
+    mocks.killProcessTree.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+      });
+    });
 
     await startGmailWatcher(createGmailConfig());
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
-    await stopGmailWatcher();
+    let stopped = false;
+    const stopping = stopGmailWatcher().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(25);
+    await stopping;
 
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
     expect(mocks.killProcessTree).toHaveBeenCalledWith(
       child.pid,
       expect.objectContaining({ graceMs: 3_000 }),
@@ -508,28 +530,88 @@ describe("startGmailWatcher", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it.each(["darwin", "win32"] as const)(
+    "restarts initial and replacement children with inherited pipes on %s",
+    async (platform) => {
+      vi.useFakeTimers();
+      await withMockedPlatform(platform, async () => {
+        const children = await startMockWatcher();
+        // Descendants keep both pipes open after exit, even if tree cleanup fails.
+        mocks.killProcessTree.mockImplementation(() => {});
+        try {
+          for (let index = 0; index < 2; index++) {
+            const child = expectDefined(children[index], "watcher child");
+            let closedStreams = 0;
+            for (const stream of [child.stdout, child.stderr]) {
+              stream.once("close", () => {
+                if (++closedStreams === 2) {
+                  child.emit("close", null, "SIGKILL");
+                }
+              });
+            }
+            child.emit("exit", null, "SIGKILL");
+            await vi.advanceTimersByTimeAsync(6_100);
+            expect(children).toHaveLength(index + 2);
+            expect(child.stdout.destroyed).toBe(true);
+            expect(child.stderr.destroyed).toBe(true);
+            if (platform === "win32") {
+              expect(mocks.killProcessTree).not.toHaveBeenCalled();
+            } else {
+              expect(mocks.killProcessTree).toHaveBeenCalledTimes(index + 1);
+              expect(mocks.killProcessTree).toHaveBeenLastCalledWith(child.pid, {
+                force: true,
+                detached: true,
+              });
+            }
+          }
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(children).toHaveLength(3);
+        } finally {
+          const stopping = stopGmailWatcher();
+          await vi.advanceTimersByTimeAsync(8_000);
+          await stopping;
+          for (const child of children) {
+            child.stdout.destroy();
+            child.stderr.destroy();
+          }
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
+  it("does not taskkill an exited Windows child while inherited pipes drain", async () => {
+    vi.useFakeTimers();
+    await withMockedPlatform("win32", async () => {
+      const children = await startMockWatcher();
+      const child = expectDefined(children[0], "watcher child");
+      Object.assign(child, { exitCode: 1, signalCode: null });
+      child.emit("exit", 1, null);
+      const stopping = stopGmailWatcher();
+      try {
+        await vi.advanceTimersByTimeAsync(8_000);
+        await stopping;
+        expect(mocks.killProcessTree).not.toHaveBeenCalled();
+        expect(child.stdout.destroyed).toBe(true);
+        expect(child.stderr.destroyed).toBe(true);
+        expect(children).toHaveLength(1);
+      } finally {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("swallows stdout and stderr stream errors without crashing", async () => {
     mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    let stdout: EventEmitter | undefined;
-    let stderr: EventEmitter | undefined;
     mocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter();
-      stdout = new EventEmitter();
-      stderr = new EventEmitter();
-      const mockedChild = Object.assign(child, {
-        stdout,
-        stderr,
-        kill: vi.fn(() => {
-          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-          return true;
-        }),
-        killed: false,
-      });
+      const child = createMockWatcherChild(false);
       queueMicrotask(() => {
-        stdout?.emit("error", new Error("stdout read failed"));
-        stderr?.emit("error", new Error("stderr read failed"));
+        child.stdout.emit("error", new Error("stdout read failed"));
+        child.stderr.emit("error", new Error("stderr read failed"));
       });
-      return mockedChild;
+      return child;
     });
 
     await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });

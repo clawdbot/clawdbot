@@ -169,8 +169,15 @@ export function registerDefaultAuthTokenSuite(): void {
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
       );
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
       );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS);
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
@@ -402,8 +409,8 @@ export function registerDefaultAuthTokenSuite(): void {
       const { randomUUID } = await import("node:crypto");
       const os = await import("node:os");
       const path = await import("node:path");
-      // Fresh identity: avoid leaking prior scopes (presence merges lists).
-      const { identity, device } = await createSignedDevice({
+      // Fresh identity avoids inheriting a previously paired device's grant.
+      const { device } = await createSignedDevice({
         token,
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
@@ -418,22 +425,12 @@ export function registerDefaultAuthTokenSuite(): void {
         device,
       });
       expect(connectRes.ok).toBe(true);
-      const helloOk = connectRes.payload as
-        | {
-            snapshot?: {
-              presence?: Array<{ deviceId?: unknown; scopes?: unknown }>;
-            };
-          }
-        | undefined;
-      const presence = helloOk?.snapshot?.presence;
-      expect(Array.isArray(presence)).toBe(true);
-      const mine = presence?.find((entry) => entry.deviceId === identity.deviceId);
-      if (!mine) {
-        throw new Error(`expected presence entry for device ${identity.deviceId}`);
-      }
-      const presenceScopes = Array.isArray(mine?.scopes) ? mine?.scopes : [];
-      expect(presenceScopes).toEqual([]);
-      expect(presenceScopes).not.toContain("operator.admin");
+      expect(readHelloOkAuth(connectRes.payload)).toMatchObject({ role: "operator", scopes: [] });
+      expect(connectRes.payload).toMatchObject({ snapshot: { presence: [] } });
+      const presence = await rpcReq(ws, "system-presence");
+      expect(presence.ok).toBe(false);
+      expect(presence.error?.message).toBe("missing scope: operator.read");
+      expect(presence.payload).toBeUndefined();
 
       await expectStatusMissingScopeButHealthAvailable(ws);
 

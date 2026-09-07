@@ -1,3 +1,5 @@
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+
 const CARD_GAP = 10;
 const VIEWPORT_PADDING = 12;
 
@@ -9,6 +11,7 @@ export class PortaledHovercardController {
   pointerOverCard = false;
   focusInside = false;
   cardFocusInside = false;
+  explicitHold = false;
 
   private closeTimer: number | null = null;
   private exitCleanup: (() => void) | null = null;
@@ -17,6 +20,7 @@ export class PortaledHovercardController {
   private placement: PortaledHovercardPlacement = "vertical";
   private stopPositioning: (() => void) | null = null;
   private trigger: HTMLElement | null = null;
+  private unmountContents: (() => void) | null = null;
 
   constructor(
     private readonly close: () => void,
@@ -24,7 +28,25 @@ export class PortaledHovercardController {
   ) {}
 
   get held(): boolean {
-    return this.pointerInside || this.pointerOverCard || this.focusInside || this.cardFocusInside;
+    return (
+      this.explicitHold ||
+      this.pointerInside ||
+      this.pointerOverCard ||
+      this.focusInside ||
+      this.cardFocusInside
+    );
+  }
+
+  schedulePointerExit(bridgeMs = 220): void {
+    this.pointerInside = false;
+    // Portaled cards can be viewport-clamped diagonally from their trigger, so
+    // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+    this.scheduleClose(bridgeMs);
+  }
+
+  focusables(): HTMLElement[] {
+    // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
+    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
   }
 
   scheduleOpen(delay: number, open: () => void): void {
@@ -69,11 +91,13 @@ export class PortaledHovercardController {
     card: HTMLDivElement,
     placement: PortaledHovercardPlacement,
     observeVisualViewport = true,
+    unmountContents?: () => void,
   ): void {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
     this.placement = placement;
+    this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
       anchor,
       trigger: this.trigger ?? anchor,
@@ -89,11 +113,14 @@ export class PortaledHovercardController {
     this.exitCleanup?.();
     this.exitCleanup = null;
     const card = this.card;
+    const unmountContents = this.unmountContents;
     this.card = null;
+    this.unmountContents = null;
     if (!card) {
       return;
     }
     if (exitDurationMs <= 0 || !card.isConnected) {
+      unmountContents?.();
       card.remove();
       return;
     }
@@ -106,6 +133,7 @@ export class PortaledHovercardController {
         exitTimer = null;
       }
       card.removeEventListener("transitionend", handleTransitionEnd);
+      unmountContents?.();
       card.remove();
       if (this.exitCleanup === finish) {
         this.exitCleanup = null;
@@ -137,6 +165,7 @@ export class PortaledHovercardController {
     this.pointerOverCard = false;
     this.focusInside = false;
     this.cardFocusInside = false;
+    this.explicitHold = false;
     clearPortaledHovercardTrigger(this.trigger);
     this.clearCard(exitDurationMs);
     this.anchor = null;
@@ -171,7 +200,11 @@ function mountPortaledHovercard(params: {
   placement: PortaledHovercardPlacement;
   observeVisualViewport?: boolean;
 }): () => void {
-  document.body.append(params.card);
+  // A modal drawer makes body siblings inert. Keep its card inside the same
+  // dialog, then use the existing menu top layer to escape clipping and stacking.
+  const owner = params.anchor.closest("openclaw-modal-dialog") ?? document.body;
+  owner.append(params.card);
+  promoteToPopoverTopLayer(params.card);
   params.trigger.setAttribute("aria-controls", params.card.id);
   params.trigger.setAttribute("aria-expanded", "true");
   const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);

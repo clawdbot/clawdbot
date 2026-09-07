@@ -1,0 +1,1604 @@
+diff --git a/dist/chunks/chunk.JZGJWX35.js b/dist/chunks/chunk.JZGJWX35.js
+index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..66e09365025b0e593e38d8410c8019d660081e16 100644
+--- a/dist/chunks/chunk.JZGJWX35.js
++++ b/dist/chunks/chunk.JZGJWX35.js
+@@ -29,6 +29,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   constructor() {
+     super(...arguments);
+     this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
++    this.submenuGeneration = 0;
+     this.active = false;
+     this.variant = "default";
+     this.size = "m";
+@@ -40,7 +41,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     this.submenuOpen = false;
+     this.hasSubmenu = false;
+     this.handleSlotChange = () => {
+-      this.hasSubmenu = this.hasSlotController.test("submenu");
++      const hasSubmenu = this.hasSlotController.test("submenu");
++      // Retire the branch before losing the old submenu state and popup.
++      if (!hasSubmenu) void this.closeSubmenu();
++      this.hasSubmenu = hasSubmenu;
+       this.updateHasSubmenuState();
+       if (this.hasSubmenu) {
+         this.setAttribute("aria-haspopup", "menu");
+@@ -67,7 +71,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     /** Handles pointer enter to open the submenu on hover */
+     this.handlePointerEnter = (event) => {
+       if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
+-        this.notifyParentOfOpening();
+         this.submenuOpen = true;
+       }
+     };
+@@ -84,7 +87,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.closeSubmenu();
++    this.submenuGeneration++;
++    void this.closeSubmenu();
++    const submenu = this.submenuElement;
++    if (submenu) {
++      submenu.classList.remove("show", "hide");
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+     this.removeEventListener?.("click", this.handleHostClick);
+     this.removeEventListener?.("pointerenter", this.handlePointerEnter);
+     this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
+@@ -127,11 +138,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     }
+     if (changedProperties.has("submenuOpen")) {
+       this.customStates.set("submenu-open", this.submenuOpen);
+-      if (this.submenuOpen) {
+-        this.openSubmenu();
+-      } else {
+-        this.closeSubmenu();
+-      }
++      const previousAnimation = this.submenuAnimation;
++      this.submenuAnimation = this.updateSubmenuVisibility(previousAnimation);
+     }
+   }
+   /** Update the has-submenu custom state */
+@@ -140,22 +148,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Opens the submenu. */
+   async openSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
+-    this.notifyParentOfOpening();
+-    submenu.showPopover?.();
+-    submenu.hidden = false;
+-    submenu.setAttribute("data-visible", "");
++    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
+     this.submenuOpen = true;
+-    this.setAttribute("aria-expanded", "true");
+-    await animateWithClass(submenu, "show");
+-    setTimeout(() => {
++    await this.updateComplete;
++    return this.submenuAnimation;
++  }
++  /** Reconciles property and public-method requests through one submenu lifecycle. */
++  async updateSubmenuVisibility(previousAnimation) {
++    const submenu = this.submenuElement;
++    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
++    if (!this.hasSubmenu || !submenu || !this.isConnected) {
++      await previousAnimation;
++      return;
++    }
++    const open = this.submenuOpen;
++    const generation = ++this.submenuGeneration;
++    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
++    // Retire the previous class before joining its cleanup. A stale close must never
++    // hide a reopened native popover, and repeated public requests share this promise.
++    submenu.classList.remove("show", "hide");
++    if (open) {
++      this.notifyParentOfOpening();
++      if (!isCurrent()) return;
++      submenu.showPopover?.();
++      submenu.hidden = false;
++      submenu.setAttribute("data-visible", "");
++    }
++    // Opening observers initialize embedded controls before the expanded state changes.
++    this.setAttribute("aria-expanded", String(open));
++    await previousAnimation;
++    await this.updateComplete;
++    if (!isCurrent()) return;
++    // Focus once when opening becomes usable, not again when the animation finishes:
++    // the operator may already have moved focus or returned to the parent by then.
++    if (open) {
+       const items = this.getSubmenuItems();
+-      if (items.length > 0) {
+-        items.forEach((item, index) => item.active = index === 0);
+-        items[0].focus({ preventScroll: true });
+-      }
+-    }, 0);
++      items.forEach((item, index) => item.active = index === 0);
++      items[0]?.focus({ preventScroll: true });
++    }
++    await animateWithClass(submenu, open ? "show" : "hide");
++    if (!isCurrent()) return;
++    if (!open) {
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+   }
+   /** Notifies the parent dropdown that this item is opening its submenu */
+   notifyParentOfOpening() {
+@@ -165,30 +202,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+       detail: { item: this }
+     });
+     this.dispatchEvent(event);
+-    const parent = this.parentElement;
+-    if (parent) {
+-      const siblings = [...parent.children].filter(
+-        (el) => el !== this && el.localName === "wa-dropdown-item" && el.getAttribute("slot") === this.getAttribute("slot") && el.submenuOpen
+-      );
+-      siblings.forEach((sibling) => {
+-        sibling.submenuOpen = false;
+-      });
+-    }
+   }
+   /** Closes the submenu. */
+   async closeSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu) return;
++    // A never-connected item's first update cannot settle; closing it is a public no-op.
++    if (!this.hasSubmenu || !this.submenuElement) return;
+     this.submenuOpen = false;
+-    this.setAttribute("aria-expanded", "false");
+-    if (!submenu.hidden) {
+-      await animateWithClass(submenu, "hide");
+-      if (submenu?.isConnected) {
+-        submenu.hidden = true;
+-        submenu.removeAttribute("data-visible");
+-        submenu.hidePopover?.();
+-      }
+-    }
++    this.dispatchEvent(new Event("submenu-closing"));
++    await this.updateComplete;
++    return this.submenuAnimation;
+   }
+   /** Determines whether the item navigates when selected. Items with submenus never navigate. */
+   isLink() {
+@@ -218,8 +240,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Gets all dropdown items in the submenu. */
+   getSubmenuItems() {
+-    return [...this.children].filter(
+-      (el) => el.localName === "wa-dropdown-item" && el.getAttribute("slot") === "submenu" && !el.hasAttribute("disabled")
++    const slot = this.submenuElement?.querySelector('slot[name="submenu"]');
++    return (slot?.assignedElements({ flatten: true }) ?? []).filter(
++      (el) => el.localName === "wa-dropdown-item" && !el.disabled
+     );
+   }
+   render() {
+@@ -278,7 +301,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+             >
+               <slot name="submenu"></slot>
+             </div>
+-          ` : ""}
++          ` : html`<slot name="submenu" hidden></slot>`}
+     `;
+   }
+ };
+diff --git a/dist/chunks/chunk.KZJTFPDQ.js b/dist/chunks/chunk.KZJTFPDQ.js
+index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..7c076a5462bf77d2e3dc1f73335eaddbbb6054b9 100644
+--- a/dist/chunks/chunk.KZJTFPDQ.js
++++ b/dist/chunks/chunk.KZJTFPDQ.js
+@@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
+ var WaDropdown = class extends WebAwesomeElement {
+   constructor() {
+     super(...arguments);
+-    this.submenuCleanups = /* @__PURE__ */ new Map();
+     this.localize = new LocalizeController(this);
+     this.userTypedQuery = "";
+-    this.openSubmenuStack = [];
++    this.activeSubmenus = [];
+     this.open = false;
+     this.size = "m";
+     this.placement = "bottom-start";
+     this.distance = 0;
+     this.skidding = 0;
+     /** Handles key down events when the menu is open */
+-    this.handleDocumentKeyDown = async (event) => {
++    this.handleDocumentKeyDown = (event) => {
+       const isRtl = this.localize.dir() === "rtl";
+       if (event.key === "Escape" && this.open && isTopDismissible(this)) {
+         const trigger = this.getTrigger();
+@@ -78,22 +77,11 @@ var WaDropdown = class extends WebAwesomeElement {
+         trigger?.focus({ preventScroll: true });
+         return;
+       }
+-      const activeElement = [...activeElements()].find((el) => el.localName === "wa-dropdown-item");
+-      const isFocusedOnItem = activeElement?.localName === "wa-dropdown-item";
++      const focusedItem = [...activeElements()].find((el) => el.localName === "wa-dropdown-item");
+       const currentSubmenuItem = this.getCurrentSubmenuItem();
+-      const isInSubmenu = !!currentSubmenuItem;
+-      let items;
+-      let activeItem;
+-      let activeItemIndex;
+-      if (isInSubmenu) {
+-        items = this.getSubmenuItems(currentSubmenuItem);
+-        activeItem = items.find((item) => item.active || item === activeElement);
+-        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+-      } else {
+-        items = this.getItems();
+-        activeItem = items.find((item) => item.active || item === activeElement);
+-        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+-      }
++      const items = currentSubmenuItem ? this.getSubmenuItems(currentSubmenuItem) : this.getItems();
++      const activeItem = items.find((item) => item === focusedItem) ?? items.find((item) => item.active);
++      const activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+       let itemToSelect;
+       if (event.key === "ArrowUp") {
+         event.preventDefault();
+@@ -113,39 +101,23 @@ var WaDropdown = class extends WebAwesomeElement {
+           itemToSelect = items[0];
+         }
+       }
+-      if (event.key === (isRtl ? "ArrowLeft" : "ArrowRight") && isFocusedOnItem && activeItem) {
++      if (event.key === (isRtl ? "ArrowLeft" : "ArrowRight") && focusedItem && activeItem) {
+         if (activeItem.hasSubmenu) {
+           event.preventDefault();
+           event.stopPropagation();
+           activeItem.submenuOpen = true;
+-          this.addToSubmenuStack(activeItem);
+-          setTimeout(() => {
+-            const submenuItems = this.getSubmenuItems(activeItem);
+-            if (submenuItems.length > 0) {
+-              submenuItems.forEach((item, index) => item.active = index === 0);
+-              submenuItems[0].focus({ preventScroll: true });
+-            }
+-          }, 0);
+           return;
+         }
+       }
+-      if (event.key === (isRtl ? "ArrowRight" : "ArrowLeft") && isInSubmenu) {
++      if (event.key === (isRtl ? "ArrowRight" : "ArrowLeft") && currentSubmenuItem) {
+         event.preventDefault();
+         event.stopPropagation();
+-        const removedItem = this.removeFromSubmenuStack();
+-        if (removedItem) {
+-          removedItem.submenuOpen = false;
+-          setTimeout(() => {
+-            removedItem.focus({ preventScroll: true });
+-            removedItem.active = true;
+-            const parentItems = removedItem.slot === "submenu" ? this.getSubmenuItems(removedItem.parentElement) : this.getItems();
+-            parentItems.forEach((item) => {
+-              if (item !== removedItem) {
+-                item.active = false;
+-              }
+-            });
+-          }, 0);
+-        }
++        // Closing retires ownership synchronously; only this keypress restores focus.
++        void currentSubmenuItem.closeSubmenu();
++        currentSubmenuItem.focus({ preventScroll: true });
++        const parent = this.getCurrentSubmenuItem();
++        const parentItems = parent ? this.getSubmenuItems(parent, true) : this.getItems(true);
++        parentItems.forEach((item) => item.active = item === currentSubmenuItem);
+         return;
+       }
+       if (event.key === "Home" || event.key === "End") {
+@@ -154,7 +126,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
+       }
+       if (event.key === "Tab") {
+-        await this.hideMenu();
++        this.open = false;
+       }
+       if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
+         clearTimeout(this.userTypedTimeout);
+@@ -180,19 +152,11 @@ var WaDropdown = class extends WebAwesomeElement {
+         itemToSelect.scrollIntoView({ block: "nearest" });
+         return;
+       }
+-      if ((event.key === "Enter" || event.key === " " && this.userTypedQuery === "") && isFocusedOnItem && activeItem) {
++      if ((event.key === "Enter" || event.key === " " && this.userTypedQuery === "") && focusedItem && activeItem) {
+         event.preventDefault();
+         event.stopPropagation();
+         if (activeItem.hasSubmenu) {
+           activeItem.submenuOpen = true;
+-          this.addToSubmenuStack(activeItem);
+-          setTimeout(() => {
+-            const submenuItems = this.getSubmenuItems(activeItem);
+-            if (submenuItems.length > 0) {
+-              submenuItems.forEach((item, index) => item.active = index === 0);
+-              submenuItems[0].focus({ preventScroll: true });
+-            }
+-          }, 0);
+         } else {
+           this.makeSelection(activeItem, event);
+         }
+@@ -213,7 +177,8 @@ var WaDropdown = class extends WebAwesomeElement {
+     };
+     /** Handle global mouse movement for safe triangle logic */
+     this.handleGlobalMouseMove = (event) => {
+-      const currentSubmenuItem = this.getCurrentSubmenuItem();
++      const branch = this.activeSubmenus.at(-1);
++      const currentSubmenuItem = branch?.item;
+       if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
+       const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
+       const isRtl = this.localize.dir() === "rtl";
+@@ -231,7 +196,7 @@ var WaDropdown = class extends WebAwesomeElement {
+       );
+       if (!isOverItem && !isOverSubmenu) {
+         setTimeout(() => {
+-          if (!submenuItemHovered && !submenuElementHovered) {
++          if (this.activeSubmenus.includes(branch) && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
+             currentSubmenuItem.submenuOpen = false;
+           }
+         }, 100);
+@@ -241,15 +206,20 @@ var WaDropdown = class extends WebAwesomeElement {
+   handleSizeChange() {
+     warnDeprecatedSize(this.localName, this.size);
+   }
++  connectedCallback() {
++    super.connectedCallback();
++    if (this.hasUpdated && this.open) {
++      void this.updateMenuVisibility(true);
++    }
++  }
+   disconnectedCallback() {
+     super.disconnectedCallback();
++    this.menuTransition?.abort();
++    this.menu?.classList.remove("show", "hide");
++    if (this.popup) this.popup.active = false;
++    openDropdowns.delete(this);
+     clearInterval(this.userTypedTimeout);
+     this.closeAllSubmenus();
+-    this.submenuCleanups.forEach((cleanup) => cleanup());
+-    this.submenuCleanups.clear();
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+     unregisterDismissible(this);
+   }
+   firstUpdated(changedProperties) {
+@@ -266,12 +236,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         return;
+       }
+       this.customStates.set("open", this.open);
+-      if (this.open) {
+-        await this.showMenu();
+-      } else {
+-        this.closeAllSubmenus();
+-        await this.hideMenu();
+-      }
++      await this.updateMenuVisibility(this.open);
+     }
+     if (changedProperties.has("size")) {
+       this.syncItemSizes();
+@@ -300,104 +265,73 @@ var WaDropdown = class extends WebAwesomeElement {
+     );
+     items.forEach((item) => item.size = this.size);
+   }
+-  /** Handles the submenu navigation stack */
+-  addToSubmenuStack(item) {
+-    const index = this.openSubmenuStack.indexOf(item);
+-    if (index !== -1) {
+-      this.openSubmenuStack = this.openSubmenuStack.slice(0, index + 1);
+-    } else {
+-      this.openSubmenuStack.push(item);
+-    }
+-  }
+-  /** Removes the last item from the submenu stack */
+-  removeFromSubmenuStack() {
+-    return this.openSubmenuStack.pop();
+-  }
+-  /** Gets the current active submenu item */
++  /** Gets the current active submenu item. */
+   getCurrentSubmenuItem() {
+-    return this.openSubmenuStack.length > 0 ? this.openSubmenuStack[this.openSubmenuStack.length - 1] : void 0;
++    return this.activeSubmenus.at(-1)?.item;
+   }
+-  /** Closes all submenus in the dropdown. */
+-  closeAllSubmenus() {
+-    const items = this.getItems(true);
+-    items.forEach((item) => {
+-      item.submenuOpen = false;
+-    });
+-    this.openSubmenuStack = [];
+-  }
+-  /** Closes sibling submenus at the same level as the specified item. */
+-  closeSiblingSubmenus(item) {
+-    const parentDropdownItem = item.closest('wa-dropdown-item:not([slot="submenu"])');
+-    let siblingItems;
+-    if (parentDropdownItem) {
+-      siblingItems = this.getSubmenuItems(parentDropdownItem, true);
+-    } else {
+-      siblingItems = this.getItems(true);
+-    }
+-    siblingItems.forEach((siblingItem) => {
+-      if (siblingItem !== item && siblingItem.submenuOpen) {
+-        siblingItem.submenuOpen = false;
+-      }
+-    });
+-    if (!this.openSubmenuStack.includes(item)) {
+-      this.openSubmenuStack.push(item);
++  /** Retires an ancestor branch before its hide animations can complete. */
++  closeAllSubmenus(from = 0) {
++    // Remove ownership first: item close notifications may reenter this owner.
++    for (const { item, cleanup } of this.activeSubmenus.splice(from).reverse()) {
++      cleanup();
++      void item.closeSubmenu();
+     }
+   }
+   /** Get the slotted trigger button, a <wa-button> or <button> element */
+   getTrigger() {
+     return this.querySelector('[slot="trigger"]');
+   }
+-  /** Shows the dropdown menu. This should only be called from within updated(). */
+-  async showMenu() {
+-    const anchor = this.getTrigger();
+-    if (!anchor || !this.popup || !this.menu) return;
+-    const showEvent = new WaShowEvent();
+-    this.dispatchEvent(showEvent);
+-    if (showEvent.defaultPrevented) {
+-      this.open = false;
++  /** Reconciles accepted visibility and its animation from updates or reconnection. */
++  async updateMenuVisibility(open) {
++    if (!this.isConnected || !this.popup || !this.menu || open && !this.getTrigger()) return;
++    const event = open ? new WaShowEvent() : new WaHideEvent({ source: this });
++    this.dispatchEvent(event);
++    if (event.defaultPrevented) {
++      this.open = !open;
+       return;
+     }
+-    if (this.popup.active) {
+-      return;
++    // Membership records accepted open ownership. The popup stays active while hiding,
++    // so its active flag cannot distinguish a canceled hide from a reopen.
++    if (!this.isConnected || this.open !== open || open && openDropdowns.has(this)) return;
++    // One cancellation owner releases document listeners and fences completion on
++    // replacement or disconnection; a veto above leaves that ownership untouched.
++    this.menuTransition?.abort();
++    this.menuTransition = new AbortController();
++    const { signal } = this.menuTransition;
++    const isCurrent = () => !signal.aborted && this.isConnected && this.open === open;
++    if (open) {
++      openDropdowns.forEach((dropdown) => dropdown.open = false);
++      this.popup.active = true;
++      openDropdowns.add(this);
++      registerDismissible(this);
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("pointerdown", this.handleDocumentPointerDown, { signal });
++      document.addEventListener("mousemove", this.handleGlobalMouseMove, { signal });
++    } else {
++      this.closeAllSubmenus();
++      openDropdowns.delete(this);
++      unregisterDismissible(this);
+     }
+-    openDropdowns.forEach((dropdown) => dropdown.open = false);
+-    this.popup.active = true;
+-    this.open = true;
+-    openDropdowns.add(this);
+-    registerDismissible(this);
+     this.syncAriaAttributes();
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.addEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("hide");
+-    await animateWithClass(this.menu, "show");
+-    const items = this.getItems();
+-    if (items.length > 0) {
+-      items.forEach((item, index) => item.active = index === 0);
+-      items[0].focus({ preventScroll: true });
++    // Join canceled animation cleanup before reusing its class. Show and hide share
++    // one CSS animation name, so overlapping helpers cannot own separate animations.
++    this.menu.classList.remove("show", "hide");
++    await this.menuAnimation;
++    if (!isCurrent()) return;
++    this.menuAnimation = animateWithClass(this.menu, open ? "show" : "hide");
++    await this.menuAnimation;
++    if (!isCurrent()) return;
++    if (open) {
++      const items = this.getItems();
++      if (items.length > 0) {
++        items.forEach((item, index) => item.active = index === 0);
++        items[0].focus({ preventScroll: true });
++      }
++      if (isCurrent()) this.dispatchEvent(new WaAfterShowEvent());
++    } else {
++      this.popup.active = false;
++      this.dispatchEvent(new WaAfterHideEvent());
+     }
+-    this.dispatchEvent(new WaAfterShowEvent());
+-  }
+-  /** Hides the dropdown menu. This should only be called from within updated(). */
+-  async hideMenu() {
+-    if (!this.popup || !this.menu) return;
+-    const hideEvent = new WaHideEvent({ source: this });
+-    this.dispatchEvent(hideEvent);
+-    if (hideEvent.defaultPrevented) {
+-      this.open = true;
+-      return;
+-    }
+-    this.open = false;
+-    openDropdowns.delete(this);
+-    unregisterDismissible(this);
+-    this.syncAriaAttributes();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("show");
+-    await animateWithClass(this.menu, "hide");
+-    this.popup.active = this.open;
+-    this.dispatchEvent(new WaAfterHideEvent());
+   }
+   /** Handles clicks on the menu. */
+   handleMenuClick(event) {
+@@ -405,8 +339,6 @@ var WaDropdown = class extends WebAwesomeElement {
+     if (!item || item.disabled) return;
+     if (item.hasSubmenu) {
+       if (!item.submenuOpen) {
+-        this.closeSiblingSubmenus(item);
+-        this.addToSubmenuStack(item);
+         item.submenuOpen = true;
+       }
+       event.stopPropagation();
+@@ -433,60 +365,57 @@ var WaDropdown = class extends WebAwesomeElement {
+   handleTriggerClick() {
+     this.open = !this.open;
+   }
+-  /** Handles submenu opening events */
++  /** Keeps one composed ancestor branch, including forwarded submenu slots. */
+   handleSubmenuOpening(event) {
+-    const openingItem = event.detail.item;
+-    this.closeSiblingSubmenus(openingItem);
+-    this.addToSubmenuStack(openingItem);
+-    this.setupSubmenuPosition(openingItem);
+-    this.processSubmenuItems(openingItem);
++    event.stopPropagation();
++    const path = event.composedPath();
++    const branch = path.slice(0, path.indexOf(this)).filter((el) => el instanceof HTMLElement && el.localName === "wa-dropdown-item").reverse();
++    // A child requested during ancestor teardown cannot own an orphan popover.
++    if (branch.some((item) => !item.submenuOpen)) {
++      void event.detail.item.closeSubmenu();
++      return;
++    }
++    let shared = 0;
++    while (shared < branch.length && this.activeSubmenus[shared]?.item === branch[shared]) shared++;
++    // Repeated ancestor notifications must not discard its still-open descendants.
++    if (shared === branch.length) return;
++    this.closeAllSubmenus(shared);
++    for (const item of branch.slice(shared)) {
++      this.activeSubmenus.push({ item, cleanup: this.setupSubmenuPosition(item) });
++    }
+   }
+-  /** Sets up submenu positioning with autoUpdate */
++  /** Binds positioning and close notifications to this exact open lifetime. */
+   setupSubmenuPosition(item) {
+-    if (!item.submenuElement) return;
+-    this.cleanupSubmenuPosition(item);
++    const controller = new AbortController();
++    const { signal } = controller;
+     const cleanup = autoUpdate(item, item.submenuElement, () => {
+-      this.positionSubmenu(item);
++      this.positionSubmenu(item, () => !signal.aborted);
+       this.updateSafeTriangleCoordinates(item);
+     });
+-    this.submenuCleanups.set(item, cleanup);
++    // Listen on the item itself: a disconnected item's event cannot bubble here.
++    item.addEventListener("submenu-closing", () => {
++      const index = this.activeSubmenus.findIndex((entry) => entry.item === item);
++      if (index !== -1) this.closeAllSubmenus(index);
++    }, { signal });
+     const submenuSlot = item.submenuElement.querySelector('slot[name="submenu"]');
+-    if (submenuSlot) {
+-      submenuSlot.removeEventListener("slotchange", WaDropdown.handleSubmenuSlotChange);
+-      submenuSlot.addEventListener("slotchange", WaDropdown.handleSubmenuSlotChange);
+-      WaDropdown.handleSubmenuSlotChange({ target: submenuSlot });
+-    }
+-  }
+-  static handleSubmenuSlotChange(event) {
+-    const slot = event.target;
+-    if (!slot) return;
+-    const items = slot.assignedElements().filter((el) => el.localName === "wa-dropdown-item");
+-    if (items.length === 0) return;
+-    const hasSubmenuItems = items.some((item) => item.hasSubmenu);
+-    const hasCheckboxItems = items.some((item) => item.type === "checkbox");
+-    items.forEach((item) => {
+-      item.submenuAdjacent = hasSubmenuItems;
+-      item.checkboxAdjacent = hasCheckboxItems;
+-    });
++    submenuSlot?.addEventListener("slotchange", () => this.processSubmenuItems(item), { signal });
++    this.processSubmenuItems(item);
++    return () => {
++      controller.abort();
++      cleanup();
++    };
+   }
+   processSubmenuItems(item) {
+-    if (!item.submenuElement) return;
+-    const submenuItems = this.getSubmenuItems(item, true);
+-    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
+-    submenuItems.forEach((subItem) => {
+-      subItem.submenuAdjacent = hasSubmenuItems;
++    const items = this.getSubmenuItems(item, true);
++    const hasSubmenu = items.some((child) => child.hasSubmenu);
++    const hasCheckbox = items.some((child) => child.type === "checkbox");
++    items.forEach((child) => {
++      child.submenuAdjacent = hasSubmenu;
++      child.checkboxAdjacent = hasCheckbox;
+     });
+   }
+-  /** Cleans up submenu positioning */
+-  cleanupSubmenuPosition(item) {
+-    const cleanup = this.submenuCleanups.get(item);
+-    if (cleanup) {
+-      cleanup();
+-      this.submenuCleanups.delete(item);
+-    }
+-  }
+   /** Positions a submenu relative to its parent item */
+-  positionSubmenu(item) {
++  positionSubmenu(item, isCurrent) {
+     if (!item.submenuElement) return;
+     const isRtl = this.localize.dir() === "rtl";
+     const placement = isRtl ? "left-start" : "right-start";
+@@ -506,6 +435,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         })
+       ]
+     }).then(({ x, y, placement: placement2 }) => {
++      if (!isCurrent()) return;
+       item.submenuElement.setAttribute("data-placement", placement2);
+       Object.assign(item.submenuElement.style, {
+         left: `${x}px`,
+diff --git a/dist/chunks/chunk.L6CIKOFQ.js b/dist/chunks/chunk.L6CIKOFQ.js
+index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
+--- a/dist/chunks/chunk.L6CIKOFQ.js
++++ b/dist/chunks/chunk.L6CIKOFQ.js
+@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+   return el.animate(keyframes, options).finished.catch(() => {
+   });
+ }
+-function animateWithClass(el, className) {
+-  return new Promise((resolve) => {
+-    const controller = new AbortController();
+-    const { signal } = controller;
+-    if (el.classList.contains(className)) {
+-      return;
+-    }
+-    el.classList.add(className);
+-    let resolved = false;
+-    let onEnd = () => {
+-      if (resolved) {
+-        return;
+-      }
+-      resolved = true;
+-      el.classList.remove(className);
+-      resolve();
+-      controller.abort();
+-    };
+-    el.addEventListener("animationend", onEnd, { once: true, signal });
+-    el.addEventListener("animationcancel", onEnd, { once: true, signal });
+-    requestAnimationFrame(() => {
+-      if (!resolved && el.getAnimations().length === 0) {
+-        onEnd();
+-      }
+-    });
+-  });
++async function animateWithClass(el, className) {
++  // Observe pending class removal before reusing the same animation name;
++  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
++  el.getAnimations();
++  el.classList.add(className);
++  // Popup activation is reactive: let its display styles render before sampling.
++  // Native completion also settles animations canceled before animationstart, unlike DOM events.
++  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
++  const animations = el.getAnimations().filter(
++    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
++  );
++  await Promise.allSettled(animations.map((animation) => animation.finished));
++  el.classList.remove(className);
+ }
+ function parseDuration(duration) {
+   duration = duration.toString().toLowerCase();
+diff --git a/dist/components/dropdown/dropdown.d.ts b/dist/components/dropdown/dropdown.d.ts
+index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
+--- a/dist/components/dropdown/dropdown.d.ts
++++ b/dist/components/dropdown/dropdown.d.ts
+@@ -29,11 +29,12 @@ import '../popup/popup.js';
+  */
+ export default class WaDropdown extends WebAwesomeElement {
+     static css: import("lit").CSSResult[];
+-    private submenuCleanups;
+     private readonly localize;
+     private userTypedQuery;
+     private userTypedTimeout;
+-    private openSubmenuStack;
++    private activeSubmenus;
++    private menuTransition?;
++    private menuAnimation?;
+     defaultSlot: HTMLSlotElement;
+     private menu;
+     private popup;
+@@ -51,6 +52,7 @@ export default class WaDropdown extends WebAwesomeElement {
+     distance: number;
+     /** The offset of the dropdown menu along its trigger. */
+     skidding: number;
++    connectedCallback(): void;
+     disconnectedCallback(): void;
+     firstUpdated(changedProperties: PropertyValues<typeof this>): void;
+     updated(changedProperties: PropertyValues<typeof this>): Promise<void>;
+@@ -60,22 +62,14 @@ export default class WaDropdown extends WebAwesomeElement {
+     private getSubmenuItems;
+     /** Syncs item sizes with the dropdown's size property. */
+     private syncItemSizes;
+-    /** Handles the submenu navigation stack */
+-    private addToSubmenuStack;
+-    /** Removes the last item from the submenu stack */
+-    private removeFromSubmenuStack;
+-    /** Gets the current active submenu item */
++    /** Gets the current active submenu item. */
+     private getCurrentSubmenuItem;
+-    /** Closes all submenus in the dropdown. */
++    /** Retires an ancestor branch before its hide animations can complete. */
+     private closeAllSubmenus;
+-    /** Closes sibling submenus at the same level as the specified item. */
+-    private closeSiblingSubmenus;
+     /** Get the slotted trigger button, a <wa-button> or <button> element */
+     private getTrigger;
+-    /** Shows the dropdown menu. This should only be called from within updated(). */
+-    private showMenu;
+-    /** Hides the dropdown menu. This should only be called from within updated(). */
+-    private hideMenu;
++    /** Reconciles accepted visibility and its animation from updates or reconnection. */
++    private updateMenuVisibility;
+     /** Handles key down events when the menu is open */
+     private handleDocumentKeyDown;
+     /** Handles pointer down events when the dropdown is open. */
+@@ -90,10 +84,7 @@ export default class WaDropdown extends WebAwesomeElement {
+     private handleSubmenuOpening;
+     /** Sets up submenu positioning with autoUpdate */
+     private setupSubmenuPosition;
+-    private static handleSubmenuSlotChange;
+     private processSubmenuItems;
+-    /** Cleans up submenu positioning */
+-    private cleanupSubmenuPosition;
+     /** Positions a submenu relative to its parent item */
+     private positionSubmenu;
+     /** Updates the safe triangle coordinates for a submenu */
+diff --git a/dist/components/dropdown-item/dropdown-item.d.ts b/dist/components/dropdown-item/dropdown-item.d.ts
+index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b81d972888 100644
+--- a/dist/components/dropdown-item/dropdown-item.d.ts
++++ b/dist/components/dropdown-item/dropdown-item.d.ts
+@@ -35,6 +35,8 @@ import '../icon/icon.js';
+ export default class WaDropdownItem extends WebAwesomeElement {
+     static css: import("lit").CSSResult;
+     private readonly hasSlotController;
++    private submenuGeneration;
++    private submenuAnimation?;
+     submenuElement: HTMLDivElement;
+     private linkElement;
+     /** @internal The controller will set this property to true when the item is active. */
+@@ -91,6 +93,8 @@ export default class WaDropdownItem extends WebAwesomeElement {
+     private updateHasSubmenuState;
+     /** Opens the submenu. */
+     openSubmenu(): Promise<void>;
++    /** Reconciles property and public-method requests through one submenu lifecycle. */
++    private updateSubmenuVisibility;
+     /** Notifies the parent dropdown that this item is opening its submenu */
+     private notifyParentOfOpening;
+     /** Closes the submenu. */
+diff --git a/dist/internal/animate.d.ts b/dist/internal/animate.d.ts
+index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
+--- a/dist/internal/animate.d.ts
++++ b/dist/internal/animate.d.ts
+@@ -1,9 +1,6 @@
+ /** Same as `el.animate()`, except returns a promise that doesn't throw an error when the animation is canceled. */
+ export declare function animate(el: Element, keyframes: Keyframe[], options?: KeyframeAnimationOptions): Promise<void | Animation>;
+-/**
+- * Applies a class to the specified element to animate it. The class is removed after the animation finishes and then
+- * the promise resolves. If a timeout is provided, the class will be removed and the animation will
+- */
++/** Applies an animation class and removes it after its finite CSS animations finish or are canceled. */
+ export declare function animateWithClass(el: Element, className: string): Promise<void>;
+ /** Parses a CSS duration and returns the number of milliseconds. */
+ export declare function parseDuration(duration: number | string): number;
+diff --git a/dist-cdn/chunks/chunk.63RYV7SI.js b/dist-cdn/chunks/chunk.63RYV7SI.js
+index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..93d65f3128c2a4acb30c51ac3899b8d809f7ab33 100644
+--- a/dist-cdn/chunks/chunk.63RYV7SI.js
++++ b/dist-cdn/chunks/chunk.63RYV7SI.js
+@@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
+ var WaDropdown = class extends WebAwesomeElement {
+   constructor() {
+     super(...arguments);
+-    this.submenuCleanups = /* @__PURE__ */ new Map();
+     this.localize = new LocalizeController(this);
+     this.userTypedQuery = "";
+-    this.openSubmenuStack = [];
++    this.activeSubmenus = [];
+     this.open = false;
+     this.size = "m";
+     this.placement = "bottom-start";
+     this.distance = 0;
+     this.skidding = 0;
+     /** Handles key down events when the menu is open */
+-    this.handleDocumentKeyDown = async (event) => {
++    this.handleDocumentKeyDown = (event) => {
+       const isRtl = this.localize.dir() === "rtl";
+       if (event.key === "Escape" && this.open && isTopDismissible(this)) {
+         const trigger = this.getTrigger();
+@@ -88,22 +87,11 @@ var WaDropdown = class extends WebAwesomeElement {
+         trigger?.focus({ preventScroll: true });
+         return;
+       }
+-      const activeElement = [...activeElements()].find((el) => el.localName === "wa-dropdown-item");
+-      const isFocusedOnItem = activeElement?.localName === "wa-dropdown-item";
++      const focusedItem = [...activeElements()].find((el) => el.localName === "wa-dropdown-item");
+       const currentSubmenuItem = this.getCurrentSubmenuItem();
+-      const isInSubmenu = !!currentSubmenuItem;
+-      let items;
+-      let activeItem;
+-      let activeItemIndex;
+-      if (isInSubmenu) {
+-        items = this.getSubmenuItems(currentSubmenuItem);
+-        activeItem = items.find((item) => item.active || item === activeElement);
+-        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+-      } else {
+-        items = this.getItems();
+-        activeItem = items.find((item) => item.active || item === activeElement);
+-        activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+-      }
++      const items = currentSubmenuItem ? this.getSubmenuItems(currentSubmenuItem) : this.getItems();
++      const activeItem = items.find((item) => item === focusedItem) ?? items.find((item) => item.active);
++      const activeItemIndex = activeItem ? items.indexOf(activeItem) : -1;
+       let itemToSelect;
+       if (event.key === "ArrowUp") {
+         event.preventDefault();
+@@ -123,39 +111,23 @@ var WaDropdown = class extends WebAwesomeElement {
+           itemToSelect = items[0];
+         }
+       }
+-      if (event.key === (isRtl ? "ArrowLeft" : "ArrowRight") && isFocusedOnItem && activeItem) {
++      if (event.key === (isRtl ? "ArrowLeft" : "ArrowRight") && focusedItem && activeItem) {
+         if (activeItem.hasSubmenu) {
+           event.preventDefault();
+           event.stopPropagation();
+           activeItem.submenuOpen = true;
+-          this.addToSubmenuStack(activeItem);
+-          setTimeout(() => {
+-            const submenuItems = this.getSubmenuItems(activeItem);
+-            if (submenuItems.length > 0) {
+-              submenuItems.forEach((item, index) => item.active = index === 0);
+-              submenuItems[0].focus({ preventScroll: true });
+-            }
+-          }, 0);
+           return;
+         }
+       }
+-      if (event.key === (isRtl ? "ArrowRight" : "ArrowLeft") && isInSubmenu) {
++      if (event.key === (isRtl ? "ArrowRight" : "ArrowLeft") && currentSubmenuItem) {
+         event.preventDefault();
+         event.stopPropagation();
+-        const removedItem = this.removeFromSubmenuStack();
+-        if (removedItem) {
+-          removedItem.submenuOpen = false;
+-          setTimeout(() => {
+-            removedItem.focus({ preventScroll: true });
+-            removedItem.active = true;
+-            const parentItems = removedItem.slot === "submenu" ? this.getSubmenuItems(removedItem.parentElement) : this.getItems();
+-            parentItems.forEach((item) => {
+-              if (item !== removedItem) {
+-                item.active = false;
+-              }
+-            });
+-          }, 0);
+-        }
++        // Closing retires ownership synchronously; only this keypress restores focus.
++        void currentSubmenuItem.closeSubmenu();
++        currentSubmenuItem.focus({ preventScroll: true });
++        const parent = this.getCurrentSubmenuItem();
++        const parentItems = parent ? this.getSubmenuItems(parent, true) : this.getItems(true);
++        parentItems.forEach((item) => item.active = item === currentSubmenuItem);
+         return;
+       }
+       if (event.key === "Home" || event.key === "End") {
+@@ -164,7 +136,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
+       }
+       if (event.key === "Tab") {
+-        await this.hideMenu();
++        this.open = false;
+       }
+       if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
+         clearTimeout(this.userTypedTimeout);
+@@ -190,19 +162,11 @@ var WaDropdown = class extends WebAwesomeElement {
+         itemToSelect.scrollIntoView({ block: "nearest" });
+         return;
+       }
+-      if ((event.key === "Enter" || event.key === " " && this.userTypedQuery === "") && isFocusedOnItem && activeItem) {
++      if ((event.key === "Enter" || event.key === " " && this.userTypedQuery === "") && focusedItem && activeItem) {
+         event.preventDefault();
+         event.stopPropagation();
+         if (activeItem.hasSubmenu) {
+           activeItem.submenuOpen = true;
+-          this.addToSubmenuStack(activeItem);
+-          setTimeout(() => {
+-            const submenuItems = this.getSubmenuItems(activeItem);
+-            if (submenuItems.length > 0) {
+-              submenuItems.forEach((item, index) => item.active = index === 0);
+-              submenuItems[0].focus({ preventScroll: true });
+-            }
+-          }, 0);
+         } else {
+           this.makeSelection(activeItem, event);
+         }
+@@ -223,7 +187,8 @@ var WaDropdown = class extends WebAwesomeElement {
+     };
+     /** Handle global mouse movement for safe triangle logic */
+     this.handleGlobalMouseMove = (event) => {
+-      const currentSubmenuItem = this.getCurrentSubmenuItem();
++      const branch = this.activeSubmenus.at(-1);
++      const currentSubmenuItem = branch?.item;
+       if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
+       const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
+       const isRtl = this.localize.dir() === "rtl";
+@@ -241,7 +206,7 @@ var WaDropdown = class extends WebAwesomeElement {
+       );
+       if (!isOverItem && !isOverSubmenu) {
+         setTimeout(() => {
+-          if (!submenuItemHovered && !submenuElementHovered) {
++          if (this.activeSubmenus.includes(branch) && !currentSubmenuItem.matches(":hover") && !currentSubmenuItem.submenuElement.matches(":hover")) {
+             currentSubmenuItem.submenuOpen = false;
+           }
+         }, 100);
+@@ -251,15 +216,20 @@ var WaDropdown = class extends WebAwesomeElement {
+   handleSizeChange() {
+     warnDeprecatedSize(this.localName, this.size);
+   }
++  connectedCallback() {
++    super.connectedCallback();
++    if (this.hasUpdated && this.open) {
++      void this.updateMenuVisibility(true);
++    }
++  }
+   disconnectedCallback() {
+     super.disconnectedCallback();
++    this.menuTransition?.abort();
++    this.menu?.classList.remove("show", "hide");
++    if (this.popup) this.popup.active = false;
++    openDropdowns.delete(this);
+     clearInterval(this.userTypedTimeout);
+     this.closeAllSubmenus();
+-    this.submenuCleanups.forEach((cleanup) => cleanup());
+-    this.submenuCleanups.clear();
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+     unregisterDismissible(this);
+   }
+   firstUpdated(changedProperties) {
+@@ -276,12 +246,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         return;
+       }
+       this.customStates.set("open", this.open);
+-      if (this.open) {
+-        await this.showMenu();
+-      } else {
+-        this.closeAllSubmenus();
+-        await this.hideMenu();
+-      }
++      await this.updateMenuVisibility(this.open);
+     }
+     if (changedProperties.has("size")) {
+       this.syncItemSizes();
+@@ -310,104 +275,73 @@ var WaDropdown = class extends WebAwesomeElement {
+     );
+     items.forEach((item) => item.size = this.size);
+   }
+-  /** Handles the submenu navigation stack */
+-  addToSubmenuStack(item) {
+-    const index = this.openSubmenuStack.indexOf(item);
+-    if (index !== -1) {
+-      this.openSubmenuStack = this.openSubmenuStack.slice(0, index + 1);
+-    } else {
+-      this.openSubmenuStack.push(item);
+-    }
+-  }
+-  /** Removes the last item from the submenu stack */
+-  removeFromSubmenuStack() {
+-    return this.openSubmenuStack.pop();
+-  }
+-  /** Gets the current active submenu item */
++  /** Gets the current active submenu item. */
+   getCurrentSubmenuItem() {
+-    return this.openSubmenuStack.length > 0 ? this.openSubmenuStack[this.openSubmenuStack.length - 1] : void 0;
++    return this.activeSubmenus.at(-1)?.item;
+   }
+-  /** Closes all submenus in the dropdown. */
+-  closeAllSubmenus() {
+-    const items = this.getItems(true);
+-    items.forEach((item) => {
+-      item.submenuOpen = false;
+-    });
+-    this.openSubmenuStack = [];
+-  }
+-  /** Closes sibling submenus at the same level as the specified item. */
+-  closeSiblingSubmenus(item) {
+-    const parentDropdownItem = item.closest('wa-dropdown-item:not([slot="submenu"])');
+-    let siblingItems;
+-    if (parentDropdownItem) {
+-      siblingItems = this.getSubmenuItems(parentDropdownItem, true);
+-    } else {
+-      siblingItems = this.getItems(true);
+-    }
+-    siblingItems.forEach((siblingItem) => {
+-      if (siblingItem !== item && siblingItem.submenuOpen) {
+-        siblingItem.submenuOpen = false;
+-      }
+-    });
+-    if (!this.openSubmenuStack.includes(item)) {
+-      this.openSubmenuStack.push(item);
++  /** Retires an ancestor branch before its hide animations can complete. */
++  closeAllSubmenus(from = 0) {
++    // Remove ownership first: item close notifications may reenter this owner.
++    for (const { item, cleanup } of this.activeSubmenus.splice(from).reverse()) {
++      cleanup();
++      void item.closeSubmenu();
+     }
+   }
+   /** Get the slotted trigger button, a <wa-button> or <button> element */
+   getTrigger() {
+     return this.querySelector('[slot="trigger"]');
+   }
+-  /** Shows the dropdown menu. This should only be called from within updated(). */
+-  async showMenu() {
+-    const anchor = this.getTrigger();
+-    if (!anchor || !this.popup || !this.menu) return;
+-    const showEvent = new WaShowEvent();
+-    this.dispatchEvent(showEvent);
+-    if (showEvent.defaultPrevented) {
+-      this.open = false;
++  /** Reconciles accepted visibility and its animation from updates or reconnection. */
++  async updateMenuVisibility(open) {
++    if (!this.isConnected || !this.popup || !this.menu || open && !this.getTrigger()) return;
++    const event = open ? new WaShowEvent() : new WaHideEvent({ source: this });
++    this.dispatchEvent(event);
++    if (event.defaultPrevented) {
++      this.open = !open;
+       return;
+     }
+-    if (this.popup.active) {
+-      return;
++    // Membership records accepted open ownership. The popup stays active while hiding,
++    // so its active flag cannot distinguish a canceled hide from a reopen.
++    if (!this.isConnected || this.open !== open || open && openDropdowns.has(this)) return;
++    // One cancellation owner releases document listeners and fences completion on
++    // replacement or disconnection; a veto above leaves that ownership untouched.
++    this.menuTransition?.abort();
++    this.menuTransition = new AbortController();
++    const { signal } = this.menuTransition;
++    const isCurrent = () => !signal.aborted && this.isConnected && this.open === open;
++    if (open) {
++      openDropdowns.forEach((dropdown) => dropdown.open = false);
++      this.popup.active = true;
++      openDropdowns.add(this);
++      registerDismissible(this);
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("pointerdown", this.handleDocumentPointerDown, { signal });
++      document.addEventListener("mousemove", this.handleGlobalMouseMove, { signal });
++    } else {
++      this.closeAllSubmenus();
++      openDropdowns.delete(this);
++      unregisterDismissible(this);
+     }
+-    openDropdowns.forEach((dropdown) => dropdown.open = false);
+-    this.popup.active = true;
+-    this.open = true;
+-    openDropdowns.add(this);
+-    registerDismissible(this);
+     this.syncAriaAttributes();
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.addEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("hide");
+-    await animateWithClass(this.menu, "show");
+-    const items = this.getItems();
+-    if (items.length > 0) {
+-      items.forEach((item, index) => item.active = index === 0);
+-      items[0].focus({ preventScroll: true });
++    // Join canceled animation cleanup before reusing its class. Show and hide share
++    // one CSS animation name, so overlapping helpers cannot own separate animations.
++    this.menu.classList.remove("show", "hide");
++    await this.menuAnimation;
++    if (!isCurrent()) return;
++    this.menuAnimation = animateWithClass(this.menu, open ? "show" : "hide");
++    await this.menuAnimation;
++    if (!isCurrent()) return;
++    if (open) {
++      const items = this.getItems();
++      if (items.length > 0) {
++        items.forEach((item, index) => item.active = index === 0);
++        items[0].focus({ preventScroll: true });
++      }
++      if (isCurrent()) this.dispatchEvent(new WaAfterShowEvent());
++    } else {
++      this.popup.active = false;
++      this.dispatchEvent(new WaAfterHideEvent());
+     }
+-    this.dispatchEvent(new WaAfterShowEvent());
+-  }
+-  /** Hides the dropdown menu. This should only be called from within updated(). */
+-  async hideMenu() {
+-    if (!this.popup || !this.menu) return;
+-    const hideEvent = new WaHideEvent({ source: this });
+-    this.dispatchEvent(hideEvent);
+-    if (hideEvent.defaultPrevented) {
+-      this.open = true;
+-      return;
+-    }
+-    this.open = false;
+-    openDropdowns.delete(this);
+-    unregisterDismissible(this);
+-    this.syncAriaAttributes();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("show");
+-    await animateWithClass(this.menu, "hide");
+-    this.popup.active = this.open;
+-    this.dispatchEvent(new WaAfterHideEvent());
+   }
+   /** Handles clicks on the menu. */
+   handleMenuClick(event) {
+@@ -415,8 +349,6 @@ var WaDropdown = class extends WebAwesomeElement {
+     if (!item || item.disabled) return;
+     if (item.hasSubmenu) {
+       if (!item.submenuOpen) {
+-        this.closeSiblingSubmenus(item);
+-        this.addToSubmenuStack(item);
+         item.submenuOpen = true;
+       }
+       event.stopPropagation();
+@@ -443,60 +375,57 @@ var WaDropdown = class extends WebAwesomeElement {
+   handleTriggerClick() {
+     this.open = !this.open;
+   }
+-  /** Handles submenu opening events */
++  /** Keeps one composed ancestor branch, including forwarded submenu slots. */
+   handleSubmenuOpening(event) {
+-    const openingItem = event.detail.item;
+-    this.closeSiblingSubmenus(openingItem);
+-    this.addToSubmenuStack(openingItem);
+-    this.setupSubmenuPosition(openingItem);
+-    this.processSubmenuItems(openingItem);
++    event.stopPropagation();
++    const path = event.composedPath();
++    const branch = path.slice(0, path.indexOf(this)).filter((el) => el instanceof HTMLElement && el.localName === "wa-dropdown-item").reverse();
++    // A child requested during ancestor teardown cannot own an orphan popover.
++    if (branch.some((item) => !item.submenuOpen)) {
++      void event.detail.item.closeSubmenu();
++      return;
++    }
++    let shared = 0;
++    while (shared < branch.length && this.activeSubmenus[shared]?.item === branch[shared]) shared++;
++    // Repeated ancestor notifications must not discard its still-open descendants.
++    if (shared === branch.length) return;
++    this.closeAllSubmenus(shared);
++    for (const item of branch.slice(shared)) {
++      this.activeSubmenus.push({ item, cleanup: this.setupSubmenuPosition(item) });
++    }
+   }
+-  /** Sets up submenu positioning with autoUpdate */
++  /** Binds positioning and close notifications to this exact open lifetime. */
+   setupSubmenuPosition(item) {
+-    if (!item.submenuElement) return;
+-    this.cleanupSubmenuPosition(item);
++    const controller = new AbortController();
++    const { signal } = controller;
+     const cleanup = autoUpdate(item, item.submenuElement, () => {
+-      this.positionSubmenu(item);
++      this.positionSubmenu(item, () => !signal.aborted);
+       this.updateSafeTriangleCoordinates(item);
+     });
+-    this.submenuCleanups.set(item, cleanup);
++    // Listen on the item itself: a disconnected item's event cannot bubble here.
++    item.addEventListener("submenu-closing", () => {
++      const index = this.activeSubmenus.findIndex((entry) => entry.item === item);
++      if (index !== -1) this.closeAllSubmenus(index);
++    }, { signal });
+     const submenuSlot = item.submenuElement.querySelector('slot[name="submenu"]');
+-    if (submenuSlot) {
+-      submenuSlot.removeEventListener("slotchange", WaDropdown.handleSubmenuSlotChange);
+-      submenuSlot.addEventListener("slotchange", WaDropdown.handleSubmenuSlotChange);
+-      WaDropdown.handleSubmenuSlotChange({ target: submenuSlot });
+-    }
+-  }
+-  static handleSubmenuSlotChange(event) {
+-    const slot = event.target;
+-    if (!slot) return;
+-    const items = slot.assignedElements().filter((el) => el.localName === "wa-dropdown-item");
+-    if (items.length === 0) return;
+-    const hasSubmenuItems = items.some((item) => item.hasSubmenu);
+-    const hasCheckboxItems = items.some((item) => item.type === "checkbox");
+-    items.forEach((item) => {
+-      item.submenuAdjacent = hasSubmenuItems;
+-      item.checkboxAdjacent = hasCheckboxItems;
+-    });
++    submenuSlot?.addEventListener("slotchange", () => this.processSubmenuItems(item), { signal });
++    this.processSubmenuItems(item);
++    return () => {
++      controller.abort();
++      cleanup();
++    };
+   }
+   processSubmenuItems(item) {
+-    if (!item.submenuElement) return;
+-    const submenuItems = this.getSubmenuItems(item, true);
+-    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
+-    submenuItems.forEach((subItem) => {
+-      subItem.submenuAdjacent = hasSubmenuItems;
++    const items = this.getSubmenuItems(item, true);
++    const hasSubmenu = items.some((child) => child.hasSubmenu);
++    const hasCheckbox = items.some((child) => child.type === "checkbox");
++    items.forEach((child) => {
++      child.submenuAdjacent = hasSubmenu;
++      child.checkboxAdjacent = hasCheckbox;
+     });
+   }
+-  /** Cleans up submenu positioning */
+-  cleanupSubmenuPosition(item) {
+-    const cleanup = this.submenuCleanups.get(item);
+-    if (cleanup) {
+-      cleanup();
+-      this.submenuCleanups.delete(item);
+-    }
+-  }
+   /** Positions a submenu relative to its parent item */
+-  positionSubmenu(item) {
++  positionSubmenu(item, isCurrent) {
+     if (!item.submenuElement) return;
+     const isRtl = this.localize.dir() === "rtl";
+     const placement = isRtl ? "left-start" : "right-start";
+@@ -516,6 +445,7 @@ var WaDropdown = class extends WebAwesomeElement {
+         })
+       ]
+     }).then(({ x: x2, y, placement: placement2 }) => {
++      if (!isCurrent()) return;
+       item.submenuElement.setAttribute("data-placement", placement2);
+       Object.assign(item.submenuElement.style, {
+         left: `${x2}px`,
+diff --git a/dist-cdn/chunks/chunk.L6CIKOFQ.js b/dist-cdn/chunks/chunk.L6CIKOFQ.js
+index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
+--- a/dist-cdn/chunks/chunk.L6CIKOFQ.js
++++ b/dist-cdn/chunks/chunk.L6CIKOFQ.js
+@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+   return el.animate(keyframes, options).finished.catch(() => {
+   });
+ }
+-function animateWithClass(el, className) {
+-  return new Promise((resolve) => {
+-    const controller = new AbortController();
+-    const { signal } = controller;
+-    if (el.classList.contains(className)) {
+-      return;
+-    }
+-    el.classList.add(className);
+-    let resolved = false;
+-    let onEnd = () => {
+-      if (resolved) {
+-        return;
+-      }
+-      resolved = true;
+-      el.classList.remove(className);
+-      resolve();
+-      controller.abort();
+-    };
+-    el.addEventListener("animationend", onEnd, { once: true, signal });
+-    el.addEventListener("animationcancel", onEnd, { once: true, signal });
+-    requestAnimationFrame(() => {
+-      if (!resolved && el.getAnimations().length === 0) {
+-        onEnd();
+-      }
+-    });
+-  });
++async function animateWithClass(el, className) {
++  // Observe pending class removal before reusing the same animation name;
++  // otherwise an immediate show/hide can reuse the completed CSSAnimation.
++  el.getAnimations();
++  el.classList.add(className);
++  // Popup activation is reactive: let its display styles render before sampling.
++  // Native completion also settles animations canceled before animationstart, unlike DOM events.
++  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
++  const animations = el.getAnimations().filter(
++    (animation) => animation instanceof CSSAnimation && animation.effect?.getComputedTiming().endTime !== Infinity
++  );
++  await Promise.allSettled(animations.map((animation) => animation.finished));
++  el.classList.remove(className);
+ }
+ function parseDuration(duration) {
+   duration = duration.toString().toLowerCase();
+diff --git a/dist-cdn/chunks/chunk.W2C46OQX.js b/dist-cdn/chunks/chunk.W2C46OQX.js
+index da164574ce537b386894e751d6e9727cc9249d08..4625393889d6d1b92bddc212b8ba407843f70136 100644
+--- a/dist-cdn/chunks/chunk.W2C46OQX.js
++++ b/dist-cdn/chunks/chunk.W2C46OQX.js
+@@ -36,6 +36,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   constructor() {
+     super(...arguments);
+     this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
++    this.submenuGeneration = 0;
+     this.active = false;
+     this.variant = "default";
+     this.size = "m";
+@@ -47,7 +48,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     this.submenuOpen = false;
+     this.hasSubmenu = false;
+     this.handleSlotChange = () => {
+-      this.hasSubmenu = this.hasSlotController.test("submenu");
++      const hasSubmenu = this.hasSlotController.test("submenu");
++      // Retire the branch before losing the old submenu state and popup.
++      if (!hasSubmenu) void this.closeSubmenu();
++      this.hasSubmenu = hasSubmenu;
+       this.updateHasSubmenuState();
+       if (this.hasSubmenu) {
+         this.setAttribute("aria-haspopup", "menu");
+@@ -74,7 +78,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     /** Handles pointer enter to open the submenu on hover */
+     this.handlePointerEnter = (event) => {
+       if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
+-        this.notifyParentOfOpening();
+         this.submenuOpen = true;
+       }
+     };
+@@ -91,7 +94,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.closeSubmenu();
++    this.submenuGeneration++;
++    void this.closeSubmenu();
++    const submenu = this.submenuElement;
++    if (submenu) {
++      submenu.classList.remove("show", "hide");
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+     this.removeEventListener?.("click", this.handleHostClick);
+     this.removeEventListener?.("pointerenter", this.handlePointerEnter);
+     this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
+@@ -134,11 +145,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
+     }
+     if (changedProperties.has("submenuOpen")) {
+       this.customStates.set("submenu-open", this.submenuOpen);
+-      if (this.submenuOpen) {
+-        this.openSubmenu();
+-      } else {
+-        this.closeSubmenu();
+-      }
++      const previousAnimation = this.submenuAnimation;
++      this.submenuAnimation = this.updateSubmenuVisibility(previousAnimation);
+     }
+   }
+   /** Update the has-submenu custom state */
+@@ -147,22 +155,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Opens the submenu. */
+   async openSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
+-    this.notifyParentOfOpening();
+-    submenu.showPopover?.();
+-    submenu.hidden = false;
+-    submenu.setAttribute("data-visible", "");
++    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
+     this.submenuOpen = true;
+-    this.setAttribute("aria-expanded", "true");
+-    await animateWithClass(submenu, "show");
+-    setTimeout(() => {
++    await this.updateComplete;
++    return this.submenuAnimation;
++  }
++  /** Reconciles property and public-method requests through one submenu lifecycle. */
++  async updateSubmenuVisibility(previousAnimation) {
++    const submenu = this.submenuElement;
++    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
++    if (!this.hasSubmenu || !submenu || !this.isConnected) {
++      await previousAnimation;
++      return;
++    }
++    const open = this.submenuOpen;
++    const generation = ++this.submenuGeneration;
++    const isCurrent = () => generation === this.submenuGeneration && this.isConnected && this.submenuOpen === open;
++    // Retire the previous class before joining its cleanup. A stale close must never
++    // hide a reopened native popover, and repeated public requests share this promise.
++    submenu.classList.remove("show", "hide");
++    if (open) {
++      this.notifyParentOfOpening();
++      if (!isCurrent()) return;
++      submenu.showPopover?.();
++      submenu.hidden = false;
++      submenu.setAttribute("data-visible", "");
++    }
++    // Opening observers initialize embedded controls before the expanded state changes.
++    this.setAttribute("aria-expanded", String(open));
++    await previousAnimation;
++    await this.updateComplete;
++    if (!isCurrent()) return;
++    // Focus once when opening becomes usable, not again when the animation finishes:
++    // the operator may already have moved focus or returned to the parent by then.
++    if (open) {
+       const items = this.getSubmenuItems();
+-      if (items.length > 0) {
+-        items.forEach((item, index) => item.active = index === 0);
+-        items[0].focus({ preventScroll: true });
+-      }
+-    }, 0);
++      items.forEach((item, index) => item.active = index === 0);
++      items[0]?.focus({ preventScroll: true });
++    }
++    await animateWithClass(submenu, open ? "show" : "hide");
++    if (!isCurrent()) return;
++    if (!open) {
++      submenu.hidden = true;
++      submenu.removeAttribute("data-visible");
++      submenu.hidePopover?.();
++    }
+   }
+   /** Notifies the parent dropdown that this item is opening its submenu */
+   notifyParentOfOpening() {
+@@ -172,30 +209,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+       detail: { item: this }
+     });
+     this.dispatchEvent(event);
+-    const parent = this.parentElement;
+-    if (parent) {
+-      const siblings = [...parent.children].filter(
+-        (el) => el !== this && el.localName === "wa-dropdown-item" && el.getAttribute("slot") === this.getAttribute("slot") && el.submenuOpen
+-      );
+-      siblings.forEach((sibling) => {
+-        sibling.submenuOpen = false;
+-      });
+-    }
+   }
+   /** Closes the submenu. */
+   async closeSubmenu() {
+-    const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu) return;
++    // A never-connected item's first update cannot settle; closing it is a public no-op.
++    if (!this.hasSubmenu || !this.submenuElement) return;
+     this.submenuOpen = false;
+-    this.setAttribute("aria-expanded", "false");
+-    if (!submenu.hidden) {
+-      await animateWithClass(submenu, "hide");
+-      if (submenu?.isConnected) {
+-        submenu.hidden = true;
+-        submenu.removeAttribute("data-visible");
+-        submenu.hidePopover?.();
+-      }
+-    }
++    this.dispatchEvent(new Event("submenu-closing"));
++    await this.updateComplete;
++    return this.submenuAnimation;
+   }
+   /** Determines whether the item navigates when selected. Items with submenus never navigate. */
+   isLink() {
+@@ -225,8 +247,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
+   }
+   /** Gets all dropdown items in the submenu. */
+   getSubmenuItems() {
+-    return [...this.children].filter(
+-      (el) => el.localName === "wa-dropdown-item" && el.getAttribute("slot") === "submenu" && !el.hasAttribute("disabled")
++    const slot = this.submenuElement?.querySelector('slot[name="submenu"]');
++    return (slot?.assignedElements({ flatten: true }) ?? []).filter(
++      (el) => el.localName === "wa-dropdown-item" && !el.disabled
+     );
+   }
+   render() {
+@@ -285,7 +308,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+             >
+               <slot name="submenu"></slot>
+             </div>
+-          ` : ""}
++          ` : html`<slot name="submenu" hidden></slot>`}
+     `;
+   }
+ };
+diff --git a/dist-cdn/components/dropdown/dropdown.d.ts b/dist-cdn/components/dropdown/dropdown.d.ts
+index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
+--- a/dist-cdn/components/dropdown/dropdown.d.ts
++++ b/dist-cdn/components/dropdown/dropdown.d.ts
+@@ -29,11 +29,12 @@ import '../popup/popup.js';
+  */
+ export default class WaDropdown extends WebAwesomeElement {
+     static css: import("lit").CSSResult[];
+-    private submenuCleanups;
+     private readonly localize;
+     private userTypedQuery;
+     private userTypedTimeout;
+-    private openSubmenuStack;
++    private activeSubmenus;
++    private menuTransition?;
++    private menuAnimation?;
+     defaultSlot: HTMLSlotElement;
+     private menu;
+     private popup;
+@@ -51,6 +52,7 @@ export default class WaDropdown extends WebAwesomeElement {
+     distance: number;
+     /** The offset of the dropdown menu along its trigger. */
+     skidding: number;
++    connectedCallback(): void;
+     disconnectedCallback(): void;
+     firstUpdated(changedProperties: PropertyValues<typeof this>): void;
+     updated(changedProperties: PropertyValues<typeof this>): Promise<void>;
+@@ -60,22 +62,14 @@ export default class WaDropdown extends WebAwesomeElement {
+     private getSubmenuItems;
+     /** Syncs item sizes with the dropdown's size property. */
+     private syncItemSizes;
+-    /** Handles the submenu navigation stack */
+-    private addToSubmenuStack;
+-    /** Removes the last item from the submenu stack */
+-    private removeFromSubmenuStack;
+-    /** Gets the current active submenu item */
++    /** Gets the current active submenu item. */
+     private getCurrentSubmenuItem;
+-    /** Closes all submenus in the dropdown. */
++    /** Retires an ancestor branch before its hide animations can complete. */
+     private closeAllSubmenus;
+-    /** Closes sibling submenus at the same level as the specified item. */
+-    private closeSiblingSubmenus;
+     /** Get the slotted trigger button, a <wa-button> or <button> element */
+     private getTrigger;
+-    /** Shows the dropdown menu. This should only be called from within updated(). */
+-    private showMenu;
+-    /** Hides the dropdown menu. This should only be called from within updated(). */
+-    private hideMenu;
++    /** Reconciles accepted visibility and its animation from updates or reconnection. */
++    private updateMenuVisibility;
+     /** Handles key down events when the menu is open */
+     private handleDocumentKeyDown;
+     /** Handles pointer down events when the dropdown is open. */
+@@ -90,10 +84,7 @@ export default class WaDropdown extends WebAwesomeElement {
+     private handleSubmenuOpening;
+     /** Sets up submenu positioning with autoUpdate */
+     private setupSubmenuPosition;
+-    private static handleSubmenuSlotChange;
+     private processSubmenuItems;
+-    /** Cleans up submenu positioning */
+-    private cleanupSubmenuPosition;
+     /** Positions a submenu relative to its parent item */
+     private positionSubmenu;
+     /** Updates the safe triangle coordinates for a submenu */
+diff --git a/dist-cdn/components/dropdown-item/dropdown-item.d.ts b/dist-cdn/components/dropdown-item/dropdown-item.d.ts
+index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b81d972888 100644
+--- a/dist-cdn/components/dropdown-item/dropdown-item.d.ts
++++ b/dist-cdn/components/dropdown-item/dropdown-item.d.ts
+@@ -35,6 +35,8 @@ import '../icon/icon.js';
+ export default class WaDropdownItem extends WebAwesomeElement {
+     static css: import("lit").CSSResult;
+     private readonly hasSlotController;
++    private submenuGeneration;
++    private submenuAnimation?;
+     submenuElement: HTMLDivElement;
+     private linkElement;
+     /** @internal The controller will set this property to true when the item is active. */
+@@ -91,6 +93,8 @@ export default class WaDropdownItem extends WebAwesomeElement {
+     private updateHasSubmenuState;
+     /** Opens the submenu. */
+     openSubmenu(): Promise<void>;
++    /** Reconciles property and public-method requests through one submenu lifecycle. */
++    private updateSubmenuVisibility;
+     /** Notifies the parent dropdown that this item is opening its submenu */
+     private notifyParentOfOpening;
+     /** Closes the submenu. */
+diff --git a/dist-cdn/internal/animate.d.ts b/dist-cdn/internal/animate.d.ts
+index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
+--- a/dist-cdn/internal/animate.d.ts
++++ b/dist-cdn/internal/animate.d.ts
+@@ -1,9 +1,6 @@
+ /** Same as `el.animate()`, except returns a promise that doesn't throw an error when the animation is canceled. */
+ export declare function animate(el: Element, keyframes: Keyframe[], options?: KeyframeAnimationOptions): Promise<void | Animation>;
+-/**
+- * Applies a class to the specified element to animate it. The class is removed after the animation finishes and then
+- * the promise resolves. If a timeout is provided, the class will be removed and the animation will
+- */
++/** Applies an animation class and removes it after its finite CSS animations finish or are canceled. */
+ export declare function animateWithClass(el: Element, className: string): Promise<void>;
+ /** Parses a CSS duration and returns the number of milliseconds. */
+ export declare function parseDuration(duration: number | string): number;

@@ -17,19 +17,10 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authReady = false;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
-  private readonly loader = new AuthenticatedAvatarRouteLoader(
-    () => {
-      if (this.isConnected) {
-        this.requestUpdate();
-      }
-    },
-    { cacheNotFound: true, retryUnavailable: true },
-  );
-
-  override disconnectedCallback() {
-    this.loader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
+    cacheNotFound: true,
+    retryUnavailable: true,
+  });
 
   override render() {
     return this.loader.withActiveRoutes(() => this.renderContent());
@@ -42,7 +33,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
         ? this.loader.resolve(routeUrl, this.authTokens)
         : null;
     if (!blobUrl) {
-      return icons.folder;
+      return html`<span class="workspace-icon-fallback" aria-hidden="true">${icons.folder}</span>`;
     }
     // <img> never executes script, which is what keeps SVG project icons safe
     // to paint; the route's sandbox policy covers direct navigation to them.

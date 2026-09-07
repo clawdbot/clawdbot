@@ -1,3 +1,4 @@
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
 // Microsoft Foundry image provider routes MAI image deployments to the MAI API.
@@ -223,7 +224,7 @@ function buildEditFormData(params: {
   form.set("prompt", params.req.prompt);
   form.set(
     "image",
-    new Blob([new Uint8Array(params.image.buffer)], {
+    new Blob([bufferToBlobPart(params.image.buffer)], {
       type: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
     }),
     imageSourceUploadFileName({

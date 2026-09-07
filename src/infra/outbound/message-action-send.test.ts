@@ -1,5 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+import { ensureOutboundSessionEntry } from "./outbound-session.js";
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -70,7 +72,10 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
-    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -101,9 +106,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaychat",
           target: "user-123",
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -123,7 +128,7 @@ describe("runMessageAction plugin dispatch", () => {
           media: "buffer://message-send/attachment",
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
           contentType: "text/plain",
         },
@@ -132,7 +137,96 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
     });
 
-    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+    it("stages workspace-reader media before gateway dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat sandbox media test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-sandbox-media",
+      });
+      const workspaceReadFile = vi.fn(async () => Buffer.from("remote chart"));
+      mocks.loadWebMedia.mockImplementation(async (mediaUrl, maxBytesOrOptions) => {
+        const options =
+          typeof maxBytesOrOptions === "object" && maxBytesOrOptions !== null
+            ? maxBytesOrOptions
+            : undefined;
+        const readFile = options?.readFile;
+        if (!readFile) {
+          throw new Error("expected gateway staging media reader");
+        }
+        return {
+          buffer: await readFile(mediaUrl),
+          contentType: "text/plain",
+          fileName: "chart.txt",
+          kind: "document",
+        };
+      });
+
+      await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          path: "/sandbox/chart.txt",
+          filePath: "/sandbox/chart.txt",
+          fileUrl: "/sandbox/chart.txt",
+          attachments: [
+            {
+              type: "file",
+              path: "/sandbox/chart.txt",
+              fileUrl: "/sandbox/chart.txt",
+              name: "chart.txt",
+              mimeType: "text/plain",
+            },
+          ],
+        },
+        sandboxRoot: "/host-mirror",
+        sandboxContainerWorkdir: "/sandbox",
+        workspaceMediaAccess: {
+          localRoots: ["/host-mirror", "/sandbox"],
+          readFile: workspaceReadFile,
+          workspaceDir: "/host-mirror",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      const messageParams = readRecordField(gatewayParams, "params", "gateway message params");
+      const stagedPath = String(messageParams.media);
+      expect(stagedPath).not.toBe("/sandbox/chart.txt");
+      expect(messageParams.mediaUrl).toBe(stagedPath);
+      expect(messageParams.mediaUrls).toEqual([stagedPath]);
+      expect(messageParams.attachments).toEqual([
+        {
+          type: "file",
+          path: stagedPath,
+          name: "chart.txt",
+          mimeType: "text/plain",
+        },
+      ]);
+      expect(messageParams).not.toHaveProperty("path");
+      expect(messageParams).not.toHaveProperty("filePath");
+      expect(messageParams).not.toHaveProperty("fileUrl");
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("remote chart");
+      expect(workspaceReadFile).toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
       const gatewayDeliveryPlugin: ChannelPlugin = {
         id: "gatewaydeliver",
         meta: {
@@ -175,9 +269,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaydeliver",
           target: "user-123",
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -191,7 +285,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
           contentType: "text/plain",
         },
@@ -537,6 +631,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
       const presentation = {
         blocks: [
           {
@@ -598,6 +693,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
         dryRun: false,
       });
@@ -615,6 +711,9 @@ describe("runMessageAction plugin dispatch", () => {
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
         "execute send payload",
+      );
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSessionKey }),
       );
     });
 

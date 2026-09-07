@@ -7,6 +7,7 @@ import type {
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { portalHandlers } from "./portals.js";
 
@@ -47,6 +48,7 @@ describe("portal gateway methods", () => {
     let portals: PortalSummary[] = [];
     const service: GatewayPortalService = {
       list: () => portals,
+      listWorkerPortals: () => [],
       open: vi.fn(async () => {
         portals = [portal];
         return portal;
@@ -54,6 +56,7 @@ describe("portal gateway methods", () => {
       close: vi.fn(async () => {
         portals = [];
       }),
+      closeWorkerPortals: vi.fn(async () => {}),
       closeAll: vi.fn(async () => {}),
     };
     const { invoke, broadcast } = harness(service);
@@ -100,8 +103,10 @@ describe("portal gateway methods", () => {
   it("returns portal credentials only to write-capable operators", async () => {
     const service: GatewayPortalService = {
       list: () => [portal],
+      listWorkerPortals: () => [],
       open: vi.fn(),
       close: vi.fn(),
+      closeWorkerPortals: vi.fn(),
       closeAll: vi.fn(),
     };
 
@@ -129,8 +134,10 @@ describe("portal gateway methods", () => {
   it("rejects malformed requests before service access and reports absent transports", async () => {
     const service: GatewayPortalService = {
       list: vi.fn(() => []),
+      listWorkerPortals: vi.fn(() => []),
       open: vi.fn(),
       close: vi.fn(),
+      closeWorkerPortals: vi.fn(),
       closeAll: vi.fn(),
     };
     const invalid = await harness(service).invoke("portal.open", { port: 0 });
@@ -152,10 +159,12 @@ describe("portal gateway methods", () => {
   it("returns Error messages without the Error prefix", async () => {
     const service: GatewayPortalService = {
       list: () => [],
+      listWorkerPortals: () => [],
       open: vi.fn(async () => {
         throw new Error("portal bind failed");
       }),
       close: vi.fn(async () => {}),
+      closeWorkerPortals: vi.fn(async () => {}),
       closeAll: vi.fn(async () => {}),
     };
 
@@ -184,7 +193,7 @@ describe("portal gateway methods", () => {
         } as never,
       };
     };
-    const clients = new Set([
+    const clients = new GatewayClientRegistry([
       client("pairing", "operator", ["operator.pairing"]),
       client("node", "node", ["operator.read"]),
       client("read", "operator", ["operator.read"]),

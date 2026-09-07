@@ -1,6 +1,7 @@
 // Msteams plugin module implements monitor handler behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
+import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
@@ -153,6 +154,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       // agent can react. Poll votes are intercepted in monitor.ts's
       // app.on("card.action") handler which returns the InvokeResponse to Teams.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
+        if (await maybeHandleMSTeamsApprovalCardSubmit({ context: ctx, deps })) {
+          return;
+        }
         const text = serializeMSTeamsAdaptiveCardActionValue(ctx.activity?.value);
         if (text) {
           return await handleTeamsMessage(
@@ -181,7 +185,12 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       await next();
     };
     try {
-      const result = await handleTeamsMessage(context as MSTeamsTurnContext, turnAdoptionLifecycle);
+      const ctx = context as MSTeamsTurnContext;
+      if (await maybeHandleMSTeamsApprovalCardSubmit({ context: ctx, deps })) {
+        await runNext();
+        return undefined;
+      }
+      const result = await handleTeamsMessage(ctx, turnAdoptionLifecycle);
       await runNext();
       return result;
     } catch (err) {

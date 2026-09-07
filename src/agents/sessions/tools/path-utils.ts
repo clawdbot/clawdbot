@@ -3,9 +3,10 @@
  *
  * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
  */
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
+import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -55,22 +56,40 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-/** Equivalent spellings worth probing after an exact read path misses. */
-export function getReadPathVariants(filePath: string): string[] {
+/** Resolve local file paths using the filesystem that owns literal @ names. */
+export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
+  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
+}
+
+function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {
   const variants = new Set<string>();
-  const asciiSpace = normalizeUnicodeSpaces(filePath);
+  const fileName = basename(filePath);
+  const parentPrefix = filePath.slice(0, filePath.length - fileName.length);
+  // The caller may already have authorized the parent directory. Only vary the
+  // basename so a fallback cannot escape that validated boundary.
+  const asciiSpace = normalizeUnicodeSpaces(fileName);
   for (const spaced of [asciiSpace, tryMacOSScreenshotPath(asciiSpace)]) {
     const straightQuotes = spaced.replace(/[\u2018\u2019]/g, "'");
     const curlyQuotes = spaced.replace(/['\u2018]/g, "\u2019");
     for (const quoted of [straightQuotes, curlyQuotes]) {
-      variants.add(quoted.normalize("NFC"));
+      variants.add(`${parentPrefix}${quoted.normalize("NFC")}`);
       // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
       // makes one file look ambiguous. Other platforms can store both distinctly.
-      if (process.platform !== "darwin") {
-        variants.add(quoted.normalize("NFD"));
+      if (includeNfd) {
+        variants.add(`${parentPrefix}${quoted.normalize("NFD")}`);
       }
     }
   }
   variants.delete(filePath);
   return [...variants];
+}
+
+/** Equivalent filename spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  return collectReadPathVariants(filePath, process.platform !== "darwin");
+}
+
+/** Every spelling an exact read or its fallback probes can accept. */
+export function getReadQueuePaths(filePath: string): string[] {
+  return [filePath, ...collectReadPathVariants(filePath, true)];
 }

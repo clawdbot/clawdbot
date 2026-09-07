@@ -1,0 +1,1 @@
+semmle-extractor-options: "${testdir}/packages/net-policy/src/client-mts.mts" "${testdir}/packages/net-policy/src/client-mts.test.mts"

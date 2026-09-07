@@ -16,7 +16,7 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 - **Sections are typography, not chrome.** Grouping comes from whitespace + a small uppercase heading — never a card header.
 - **Embedded surfaces keep the rhythm.** A container that hosts sections without `.settings-page`'s centered column (tab panels, split layouts) takes `.settings-stack`; never re-space sections with page-local margin rules.
 - **Exactly one level of elevation.** A group never contains another card, callout, or bordered box. Nested detail uses `.settings-subrows` (indented rows), a stacked row, or a drill-in nav row.
-- **Row anatomy:** left is title (`--control-ui-text-md`, weight 500) over an optional one-line description (muted, sm). Right is exactly one control: toggle, select, segmented, button, plain value, or chevron (nav). Wide editors use the `stacked` variant.
+- **Row anatomy:** left is title (`--control-ui-text-md`, weight 500) over an optional one-line description (muted, sm). Right is exactly one control: toggle, select, segmented, button, plain value, or chevron (nav). Wide editors use `stacked`; controls that move inline only above the narrow-layout breakpoint use `stackedOnNarrow`.
 - **Lists are rows too.** An entity list (plugin, device, session) is a group whose rows carry an action cluster in the control slot — same anatomy as a toggle row.
 
 ## Rules

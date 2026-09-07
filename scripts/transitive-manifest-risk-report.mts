@@ -8,6 +8,7 @@ import process from "node:process";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { classifyDependencySpec } from "./lib/dependency-spec-policy.mts";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mts";
 import {
@@ -16,13 +17,6 @@ import {
 } from "./pre-commit/pnpm-audit-prod.mjs";
 
 const INSTALL_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
-const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const EXACT_NPM_ALIAS_PATTERN =
-  /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
-const PINNED_GITHUB_TARBALL_PATTERN =
-  /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
-const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
 /** Maximum npm packument response size accepted by the risk scanner. */
@@ -47,25 +41,6 @@ type ManifestFindingsOptions = PackageVersion &
     minimumReleaseAgeMinutes: number | null;
     minimumReleaseAgeExclude?: string[];
   };
-
-function isAllowedPinnedSpec(spec: unknown) {
-  if (typeof spec !== "string") {
-    return false;
-  }
-  if (EXACT_SEMVER_PATTERN.test(spec) || EXACT_NPM_ALIAS_PATTERN.test(spec)) {
-    return true;
-  }
-  if (spec === "workspace:*" || spec.startsWith("file:") || spec.startsWith("link:")) {
-    return true;
-  }
-  if (/^(?:git\+|github:|gitlab:|bitbucket:)/u.test(spec)) {
-    return PINNED_GIT_PATTERN.test(spec);
-  }
-  if (PINNED_GITHUB_TARBALL_PATTERN.test(spec)) {
-    return true;
-  }
-  return false;
-}
 
 function encodePackageName(name: string) {
   return encodeURIComponent(name).replace(/^%40/u, "@");
@@ -189,7 +164,8 @@ function collectManifestFindings({
   for (const section of ["dependencies", "optionalDependencies"] as const) {
     const dependencies = asRecord(manifest[section]);
     for (const [dependencyName, spec] of Object.entries(dependencies)) {
-      if (!isAllowedPinnedSpec(spec)) {
+      const classification = classifyDependencySpec(spec);
+      if (!classification.allowedPinned) {
         findings.push({
           type: "floating-transitive-spec",
           packageName,
@@ -197,7 +173,7 @@ function collectManifestFindings({
           dependency: { name: dependencyName, spec, section },
         });
       }
-      if (typeof spec === "string" && EXOTIC_SPEC_PATTERN.test(spec)) {
+      if (classification.exotic && typeof spec === "string") {
         findings.push({
           type: "exotic-source",
           packageName,
@@ -305,7 +281,7 @@ export async function createTransitiveManifestRiskReport({
   const workspaceExcludedFindings: ManifestFinding[] = [];
   const metadataFailures: Array<PackageVersion & { error: string }> = [];
   for (const { packageName, version } of packageVersions) {
-    if (EXOTIC_SPEC_PATTERN.test(version)) {
+    if (classifyDependencySpec(version).exotic) {
       findings.push({
         type: "exotic-source",
         packageName,

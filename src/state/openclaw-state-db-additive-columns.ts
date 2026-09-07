@@ -24,6 +24,11 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
   {
+    columnName: "repository_workspace_id",
+    dataType: "TEXT",
+    tableName: "worker_workspace_pending_results",
+  },
+  {
     columnName: "abandon_source",
     dataType: "INTEGER",
     tableName: "worker_session_placement_moves",
@@ -37,13 +42,10 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
   { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
   { columnName: "worktree", dataType: "INTEGER", tableName: "session_groups" },
-  { columnName: "workspace_dir", dataType: "TEXT", tableName: "installed_plugin_index" },
   { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
-  {
-    columnName: "claim_released_time",
-    dataType: "INTEGER",
-    tableName: "skill_workshop_proposals",
-  },
+  { columnName: "device_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
+  { columnName: "user_profile_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
+  { columnName: "preferences_json", dataType: "TEXT", tableName: "web_push_subscriptions" },
 ] as const satisfies readonly LazyAdditiveStateColumnDefinition[];
 
 function isFirstUseAdditiveStateColumn({
@@ -52,10 +54,15 @@ function isFirstUseAdditiveStateColumn({
 }: LazyAdditiveStateColumnDefinition): boolean {
   return (
     (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
-    (tableName === "skill_workshop_proposals" && columnName === "claim_released_time") ||
+    (tableName === "worker_workspace_pending_results" &&
+      columnName === "repository_workspace_id") ||
     (tableName === "worker_session_placement_moves" &&
       (columnName === "abandon_source" || columnName === "target_machine_class")) ||
-    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree"))
+    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
+    (tableName === "web_push_subscriptions" &&
+      (columnName === "device_id" ||
+        columnName === "user_profile_id" ||
+        columnName === "preferences_json"))
   );
 }
 

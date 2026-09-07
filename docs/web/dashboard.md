@@ -60,6 +60,31 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - **Identity-bearing modes**: Tailscale Serve satisfies Control UI/WebSocket auth via identity headers when `gateway.auth.allowTailscale: true`; a non-loopback identity-aware reverse proxy satisfies `gateway.auth.mode: "trusted-proxy"`. Neither needs a pasted shared secret for the WebSocket.
 - **Not localhost**: use Tailscale Serve, a non-loopback shared-secret bind, a non-loopback identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`, or an SSH tunnel. HTTP APIs still use shared-secret auth unless you intentionally run private-ingress `gateway.auth.mode: "none"` or trusted-proxy HTTP auth. See [Web surfaces](/web).
 
+## Automatic browser handoff
+
+An identity-aware HTTPS host can provide automatic login for direct dashboard links while
+keeping the Gateway's existing token and device authentication. After an initial connection
+fails because authentication is missing, the Control UI makes one same-origin request to
+`GET /.well-known/openclaw/browser-bootstrap` (under the Control UI base path, if configured).
+Existing credentials are tried first. Explicit credentials, remote Gateway selections,
+pairing failures, and rejected credentials do not trigger this recovery.
+
+This endpoint belongs to the deployment's authenticated proxy or handoff service. OpenClaw
+does not expose an unauthenticated credential issuer. The service must independently verify
+the browser's identity and authorization before using the host's `openclaw dashboard --json`
+handoff. Return only its single-use browser credential:
+
+```json
+{ "bootstrapToken": "<single-use-browser-bootstrap>", "bootstrapProfile": "owner" }
+```
+
+Use `Content-Type: application/json` and `Cache-Control: no-store`, reject cross-origin
+requests, and never return the shared Gateway token. The UI rejects redirects, responses
+larger than 8 KiB, and tokens longer than 4096 printable ASCII characters. The request has
+a 45-second deadline and is cancelled if the connection changes or the page stops.
+Successful recovery preserves the current dashboard route. If no endpoint is configured or
+the host declines the request, the existing login instructions remain available.
+
 ## Open in Telegram
 
 Telegram bots can open the dashboard as a Telegram Mini App with `/dashboard`.
@@ -87,10 +112,11 @@ Non-goals for v1:
 - Confirm the gateway is reachable: local `openclaw status`; remote, SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host` then open `http://127.0.0.1:18789/`.
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints; that retry reuses the token's cached approved scopes (explicit `deviceToken`/`scopes` callers keep their requested scope set). If auth still fails after that retry, resolve token drift manually.
 - For `AUTH_SCOPE_MISMATCH`, the device token was recognized but does not carry the requested scopes; re-pair or approve the new scope set instead of rotating the shared gateway token.
+- For **Proxy authentication required** or `AUTH_IDENTITY_HEADER_REQUIRED`, open the configured proxy/SSO dashboard URL and sign in there. Ask the Gateway administrator to check identity-header forwarding on WebSocket upgrades and account access. A Gateway token cannot override trusted-proxy mode; see [Trusted proxy troubleshooting](/gateway/trusted-proxy-auth#control-ui-says-proxy-authentication-required).
 - Outside that retry path, the Control UI prefers a pending bootstrap token so a fresh host-issued handoff can create or upgrade the browser credential. Without a pending bootstrap, explicit shared token/password take precedence over the stored device token.
 - On the async Tailscale Serve path, failed attempts for the same `{scope, ip}` are serialized before the failed-auth limiter records them, so a second concurrent bad retry can already show `retry later`.
 - For token drift repair steps, see [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
-- Retrieve or supply the shared secret from the gateway host:
+- For shared-secret authentication, retrieve or supply the configured secret from the gateway host:
   - Token: run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host
   - Password: resolve the configured `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD`
   - SecretRef-managed token: run `openclaw gateway auth-token --show`; if resolution fails, repair the external secret provider and rerun it

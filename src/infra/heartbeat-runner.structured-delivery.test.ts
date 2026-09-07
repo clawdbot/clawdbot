@@ -1,11 +1,21 @@
 // Covers structured heartbeat delivery, text-only dedupe, and recovery ownership.
-import { describe, expect, it, vi } from "vitest";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -13,11 +23,21 @@ import {
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
+import { resetSystemEventsForTest } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
 
 describe("runHeartbeatOnce structured heartbeat delivery", () => {
   const TELEGRAM_GROUP = "-1001234567890";
+
+  afterEach(() => {
+    resetGlobalHookRunner();
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
+    resetHeartbeatEventsForTest();
+    resetSystemEventsForTest();
+  });
 
   function createConfig(tmpDir: string, storePath: string): OpenClawConfig {
     return {
@@ -56,9 +76,11 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
     cfg: OpenClawConfig,
     replySpy: HeartbeatDeps["getReplyFromConfig"],
     sendTelegram: ReturnType<typeof vi.fn>,
+    overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {},
   ) {
     return runHeartbeatOnce({
       cfg,
+      ...overrides,
       deps: {
         telegram: sendTelegram as unknown,
         getQueueSize: () => 0,
@@ -67,6 +89,103 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
       },
     });
   }
+
+  it.each([
+    { failure: "target-none", reason: "target-none" },
+    { failure: "alerts-disabled", reason: "alerts-disabled" },
+    { failure: "readiness", reason: "channel-offline" },
+    { failure: "readiness-throws", reason: "readiness unavailable" },
+    { failure: "hook-cancelled", reason: "message_sending_hook" },
+    { failure: "send-failed", reason: "transport unavailable" },
+  ])(
+    "records a generated alert when $failure prevents confirmed delivery",
+    async ({ failure, reason }) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig(tmpDir, storePath);
+        cfg.agents!.defaults!.heartbeat!.target = failure === "target-none" ? "none" : "telegram";
+        if (failure === "alerts-disabled") {
+          cfg.channels = {
+            ...cfg.channels,
+            defaults: { heartbeatVisibility: { showAlerts: false } },
+          };
+        }
+        const registry = createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: {
+              ...heartbeatRunnerTelegramPlugin,
+              heartbeat: {
+                checkReady: async () => {
+                  if (failure === "readiness-throws") {
+                    throw new Error(reason);
+                  }
+                  return { ok: failure !== "readiness", reason };
+                },
+              },
+            },
+          },
+        ]);
+        setActivePluginRegistry(registry);
+        if (failure === "hook-cancelled") {
+          addTestHook({
+            registry,
+            pluginId: "heartbeat-test-suppression",
+            hookName: "message_sending",
+            handler: () => ({ cancel: true }),
+          });
+          initializeGlobalHookRunner(registry);
+        }
+        const sessionKey = await seedTelegramSession(storePath, cfg);
+        replySpy.mockResolvedValue(
+          createHeartbeatToolResponsePayload({
+            outcome: "needs_attention",
+            notify: true,
+            summary: "Build is blocked.",
+            notificationText: "Build needs credentials.",
+            reason: "Deployment check",
+            priority: "high",
+          }),
+        );
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+        if (failure === "send-failed") {
+          sendTelegram.mockRejectedValue(new Error(reason));
+        }
+
+        const result = await runHeartbeat(cfg, replySpy, sendTelegram, {
+          source: "manual",
+          reason: "operator check",
+        });
+
+        expect(replySpy).toHaveBeenCalledOnce();
+        if (failure.startsWith("readiness")) {
+          expect.soft(result).toMatchObject({
+            status: "skipped",
+            reason: "channel-not-ready",
+            retryAtMs: expect.any(Number),
+          });
+          expect.soft(isRetryableHeartbeatSkipReason("channel-not-ready")).toBe(true);
+        }
+        closeOpenClawAgentDatabasesForTest();
+        const stored = claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId: "user-run",
+        });
+        expect(stored).toMatchObject({
+          outcome: "blocked",
+          priority: "high",
+          wakeSource: "manual",
+          wakeReason: "operator check",
+        });
+        expect(stored?.summary).toContain("Build needs credentials.");
+        expect(stored?.responseReason).toContain(reason);
+        expect(stored?.responseReason).toContain("notify:true");
+        closeOpenClawAgentDatabasesForTest();
+      });
+    },
+  );
 
   it("delivers presentation-only heartbeat replies with their button fallback", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -144,6 +263,10 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         lastHeartbeatSentAt: previousSentAt,
       });
       replySpy.mockImplementation(async () => {
+        const entry = readSessionStoreForTest<SessionEntry>(storePath)[sessionKey];
+        if (!entry) {
+          throw new Error("Expected heartbeat execution session");
+        }
         await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({
@@ -151,20 +274,32 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
               kind: "transport-only",
               createdAt: 0,
               intentId: "structured-heartbeat-intent",
+              deliveries: [{ id: "structured-delivery", state: "prepared" }],
             },
           }),
           { preserveActivity: true },
         );
-        return {
-          presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve deployment", value: "approve" }],
-              },
-            ],
+        return setReplyPayloadMetadata(
+          {
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Approve deployment", value: "approve" }],
+                },
+              ],
+            },
+          } satisfies ReplyPayload,
+          {
+            pendingFinalDeliveryCompletion: {
+              deliveryId: "structured-delivery",
+              intentId: "structured-heartbeat-intent",
+              sessionId: entry.sessionId,
+              sessionKey,
+              storePath,
+            },
           },
-        };
+        );
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "presentation-1" });
 

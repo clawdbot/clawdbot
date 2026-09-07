@@ -1,9 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
   type SessionCapability,
   type SessionPatch,
+  type SessionPatchResult,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
@@ -24,9 +24,7 @@ type ChatCommandSettingsContext = {
   defaultAgentId?: string;
   agentId?: string;
 };
-type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
-
-const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
+const pendingChatPickerPatches = new WeakMap<SessionCapability, Map<string, Promise<boolean>>>();
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -64,25 +62,24 @@ function resolveChatPickerPatchKey(
   return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
 }
 
-function getPendingPatch(
-  store: PendingPatchStore,
+export function getPendingChatPickerPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   agentId?: string,
 ): Promise<boolean> | undefined {
   const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return store.get(host.sessions)?.get(patchKey);
+  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey);
 }
 
-function trackLatestPatch(
-  store: PendingPatchStore,
+function trackPendingChatSettingsPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
   agentId?: string,
 ): void {
-  const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  store.set(host.sessions, pendingBySession);
+  const pendingBySession =
+    pendingChatPickerPatches.get(host.sessions) ?? new Map<string, Promise<boolean>>();
+  pendingChatPickerPatches.set(host.sessions, pendingBySession);
   const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
   pendingBySession.set(patchKey, patchPromise);
   void patchPromise.finally(() => {
@@ -92,45 +89,25 @@ function trackLatestPatch(
   });
 }
 
-export function getPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
-}
-
-function trackPendingChatSettingsPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-  agentId?: string,
-): void {
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
-}
-
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<
-    SessionPatch,
-    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolOverrides"
-  >,
+  patch: SessionPatch,
   options: {
     agentId?: string;
-    deferModelOverride?: boolean;
+    expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
-): Promise<SessionsPatchResult | null> {
+): Promise<SessionPatchResult | null> {
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
-    // Model-dependent settings and sends share this canonical per-session tail.
+    // Run-affecting settings and sends share this canonical per-session tail.
     // The capability captures this route before waiting, so a reconnect cannot
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
-      deferModelOverride: options.deferModelOverride,
+      expectedSessionId: options.expectedSessionId,
       ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
@@ -172,9 +149,8 @@ export async function patchChatCommandSessionSettings(
   sessionKey: string,
   patch: SessionPatch,
   options: {
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(

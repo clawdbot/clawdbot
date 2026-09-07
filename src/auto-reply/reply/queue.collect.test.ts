@@ -31,6 +31,7 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 
 type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
@@ -320,19 +321,26 @@ describe("followup queue collect routing", () => {
       `test-collect-same-to-${Date.now()}`,
     );
 
-    enqueueRoutedRuns(
-      key,
-      settings,
-      { originatingChannel: "slack", originatingTo: "channel:A", originatingChatType: "channel" },
-      "one",
-      "two",
-    );
+    const receipts: ReplyOperationRunState[] = [{}, {}];
+    for (const [index, receipt] of receipts.entries()) {
+      const run = createRun({
+        prompt: String(index + 1),
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingChatType: "channel",
+      });
+      run.replyOperationRunStates = [receipt];
+      enqueueFollowupRun(key, run, settings);
+    }
 
     await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
     expect(calls[0]?.originatingChatType).toBe("channel");
+    expect(calls[0]?.replyOperationRunStates).toEqual(receipts);
+    expect(calls[0]?.replyOperationRunStates?.[0]).toBe(receipts[0]);
+    expect(calls[0]?.replyOperationRunStates?.[1]).toBe(receipts[1]);
   });
 
   it("collects Slack top-level messages when reply anchors are disabled", async () => {
@@ -438,6 +446,24 @@ describe("followup queue collect routing", () => {
       expect(calls.map((call) => call.messageId)).toEqual(["101.001", "101.002"]);
     },
   );
+
+  it("keeps history-policy peers separate when delivery targets coincide", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      "history-route-peers",
+      {},
+      2,
+    );
+    for (const peerId of ["peer", "direct:peer"]) {
+      enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
+    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls.map((call) => call.run.conversationRoutePeerId)).toEqual(["peer", "direct:peer"]);
+    expect(calls.map((call) => call.prompt)).toEqual(
+      ["peer", "direct:peer"].map(
+        (peerId) => `[Queued messages while agent was busy]\n\n---\nQueued #1\n${peerId}`,
+      ),
+    );
+  });
 
   it("collects distinct messages inside the same routed thread", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
@@ -649,6 +675,86 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).not.toContain("channel A content");
     expect(calls[1]?.originatingTo).toBe("channel:B");
   });
+
+  it.each([
+    { disposition: "deliver", elided: false },
+    { disposition: "drop", elided: false },
+    { disposition: "deliver", elided: true },
+    { disposition: "drop", elided: true },
+  ] as const)(
+    "keeps the WebChat $disposition owner on overflow summaries (elided: $elided)",
+    async ({ disposition, elided }) => {
+      const key = `test-webchat-overflow-delivery-${disposition}-${elided}-${Date.now()}`;
+      const settings = createQueueSettings({ cap: 1 });
+      const delivered: string[] = [];
+      const sourceDisposition =
+        disposition === "deliver"
+          ? {
+              kind: "deliver" as const,
+              deliver: async (batch: { payloads: Array<{ text?: string }> }) => {
+                delivered.push(batch.payloads[0]?.text ?? "");
+              },
+            }
+          : { kind: "drop" as const, reason: "source-unavailable" as const };
+      const dropped = createRun({
+        prompt: "overflowed WebChat message",
+        originatingChannel: "webchat",
+        originatingChatType: "direct",
+      });
+      dropped.queuedFollowupReplyDisposition = sourceDisposition;
+      enqueueFollowupRun(key, dropped, settings);
+      if (elided) {
+        enqueueTestRun(
+          key,
+          {
+            prompt: "separate overflow route",
+            originatingChannel: "webchat",
+            originatingChatType: "group",
+          },
+          settings,
+        );
+      }
+      enqueueTestRun(
+        key,
+        {
+          prompt: "live WebChat message",
+          originatingChannel: "webchat",
+          originatingChatType: elided ? "group" : "direct",
+        },
+        settings,
+      );
+
+      const expectedCalls = elided ? 3 : 2;
+      const { calls, done } = createDrainRecorder(expectedCalls);
+      const unrelatedDispatcher = vi.fn();
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (run.prompt.includes("overflowed WebChat message")) {
+          const owner = run.queuedFollowupReplyDisposition;
+          if (owner?.kind === "deliver") {
+            await owner.deliver({
+              kind: "queued-followup",
+              runId: "overflow-summary-run",
+              originatingChannel: "webchat",
+              payloads: [{ text: "overflow summary reached its owner" }],
+            });
+          } else if (owner?.kind !== "drop") {
+            unrelatedDispatcher();
+          }
+        }
+        if (calls.length >= expectedCalls) {
+          done.resolve();
+        }
+      });
+      await done.promise;
+
+      expect(calls[0]?.queuedFollowupReplyDisposition).toBe(sourceDisposition);
+      expect(unrelatedDispatcher).not.toHaveBeenCalled();
+      expect(delivered).toEqual(
+        disposition === "deliver" ? ["overflow summary reached its owner"] : [],
+      );
+    },
+  );
 
   it("does not attribute elided private drops to a public summary", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
@@ -3171,12 +3277,18 @@ describe("followup queue collect routing", () => {
     const secondCorrelation = { begin: vi.fn() };
     const createRecorder = (text: string, mediaPath: string) =>
       createUserTurnTranscriptRecorder({
-        input: { text, media: [{ path: mediaPath, contentType: "image/png" }] },
+        input: {
+          text,
+          media: [{ path: mediaPath, contentType: "image/png" }],
+          mentions: [
+            { profileId: "ada", start: text.indexOf("@Ada"), end: text.indexOf("@Ada") + 4 },
+          ],
+        },
         target: createTestUserTurnTranscriptTarget(),
         updateMode: "none",
       });
-    const firstRecorder = createRecorder("first transcript", "/tmp/first.png");
-    const secondRecorder = createRecorder("second transcript", "/tmp/second.png");
+    const firstRecorder = createRecorder("first transcript @Ada", "/tmp/first.png");
+    const secondRecorder = createRecorder("second transcript 🦞 @Ada", "/tmp/second.png");
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     for (const [prompt, recorder, onComplete, deliveryCorrelation] of [
@@ -3218,6 +3330,16 @@ describe("followup queue collect routing", () => {
     const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
     expect(message?.content).toContain("first transcript");
     expect(message?.content).toContain("second transcript");
+    const mentions = message?.["__openclaw"]?.humanMentions;
+    expect(mentions).toHaveLength(2);
+    expect(
+      mentions?.map((mention) =>
+        typeof message?.content === "string"
+          ? message.content.slice(mention.start, mention.end)
+          : undefined,
+      ),
+    ).toEqual(["@Ada", "@Ada"]);
+    expect(mentions?.[1]?.start).toBeGreaterThan(mentions?.[0]?.end ?? 0);
     expect(
       (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
         "__openclaw"

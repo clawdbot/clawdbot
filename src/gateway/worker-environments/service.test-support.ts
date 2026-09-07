@@ -6,6 +6,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
+  WorkerNodeEnrollment,
   WorkerProvider,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -56,7 +57,15 @@ export const DESKTOP: WorkerDesktopEndpoint = {
   ],
 };
 export const BUNDLE_HASH = "a".repeat(64);
-export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
+export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
+  url: `https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/${"b".repeat(64)}`,
+  token: "t".repeat(43),
+  sha256: "b".repeat(64),
+  bytes: 1,
+  openclawVersion: "2026.8.1",
+  enabledPluginIds: ["runtime-plugin"],
+};
+export const BUNDLE_ARTIFACT: Extract<WorkerInstallationArtifact, { install: "bundle" }> = {
   install: "bundle",
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.7.2",
@@ -142,8 +151,9 @@ export function setupWorkerEnvironmentServiceSuite() {
   });
 
   afterEach(async () => {
-    await testState.service?.stop();
+    // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
+    await testState.service?.stop();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
@@ -156,6 +166,19 @@ export function getDevelopmentProfile() {
   );
 }
 
+export async function reopenWorkerEnvironmentStore() {
+  await testState.service?.stop();
+  testState.service = undefined;
+  closeOpenClawStateDatabaseForTest();
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function createService(
   provider: WorkerProvider,
   serviceOptions: Partial<
@@ -165,18 +188,27 @@ export function createService(
       | "bootstrapCallTimeoutMs"
       | "executeInference"
       | "executeSessionTool"
+      | "executeComputer"
       | "providerCallTimeoutMs"
+      | "projectNamespace"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "prepareNodeBootstrap"
+      | "prepareNodeRuntime"
+      | "closeNodeRuntime"
       | "prepareNodeEnrollment"
+      | "closeNodeEnrollment"
       | "retireNodeEnrollment"
       | "stopNodeEnrollmentWaits"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "maintainProviders"
+      | "logger"
       | "now"
       | "nodeTunnelManager"
       | "nodeDesktopCarrier"
+      | "nodePortalCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -211,6 +243,7 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
   return {
     id: "fake",
     supportedExecutionModes: ["remote-exec"],
+    resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},
@@ -503,9 +536,11 @@ export function placementHarness(
   identity.credentialHash = credentialHash;
   const placementStore = {
     readWorkerTurnClaim: vi.fn(() => claim),
+    readWorkerTurnLiveAckCursor: vi.fn(() => 0),
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });

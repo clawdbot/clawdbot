@@ -20,7 +20,6 @@ export type QuestionClientResolutionOwner = {
 };
 
 const resolutionOwnersByClient = new WeakMap<QuestionClient, Set<QuestionClientResolutionOwner>>();
-const pendingQuestionLists = new WeakMap<QuestionClient, Promise<unknown>>();
 
 export function registerQuestionClientOwner(
   client: QuestionClient,
@@ -81,20 +80,5 @@ export function requestQuestionGateway(
     expiresAtMs === undefined
       ? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
       : Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, Math.max(0, expiresAtMs - Date.now()));
-  if (method !== "question.list" || expiresAtMs !== undefined) {
-    return client.request(method, params, { timeoutMs });
-  }
-  const active = pendingQuestionLists.get(client);
-  if (active) {
-    return active;
-  }
-  // The list is a client-wide snapshot. Pane and sidebar projections hydrate
-  // independently from one read; settlement clears it so retries remain fresh.
-  const request = client.request(method, params, { timeoutMs }).finally(() => {
-    if (pendingQuestionLists.get(client) === request) {
-      pendingQuestionLists.delete(client);
-    }
-  });
-  pendingQuestionLists.set(client, request);
-  return request;
+  return client.request(method, params, { timeoutMs });
 }

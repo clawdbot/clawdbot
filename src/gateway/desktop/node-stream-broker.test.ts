@@ -1,13 +1,36 @@
 import http from "node:http";
 import net from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const logPaths = createSuiteLogPathTracker("node-stream-broker-diagnostics-");
+const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
+
+beforeAll(async () => logPaths.setup());
+beforeEach(() =>
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPaths.nextPath() }),
+);
+afterAll(async () => logPaths.cleanup());
 
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  try {
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+    await flushLogger();
+    for (const capture of logCaptures) {
+      await capture.flush();
+    }
+  } finally {
+    for (const capture of logCaptures.splice(0)) {
+      capture.cleanup();
+    }
+    resetLogger();
+    vi.useRealTimers();
+  }
 });
 
 async function startBrokerServer(params: {
@@ -67,6 +90,85 @@ async function expectUnauthorized(url: string): Promise<void> {
 }
 
 describe("node desktop stream tickets", () => {
+  it.each(
+    (["desktop", "portal"] as const).flatMap((kind) =>
+      (["consumer-destroy", "peer-close", "peer-terminate"] as const).map((closeMode) => ({
+        kind,
+        closeMode,
+      })),
+    ),
+  )(
+    "keeps idle $kind streams alive through remote backpressure and records $closeMode",
+    async ({ kind, closeMode }) => {
+      const logCapture = createDiagnosticLogRecordCapture();
+      logCaptures.push(logCapture);
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      const binding = { nodeId: "node-1", ...session };
+      const minted = kind === "desktop" ? broker.mint(binding) : broker.mintPortal(binding);
+      const ws = await connectAndSend(
+        `${baseUrl}${minted.attachPath}`,
+        kind === "desktop" ? { auth: "vnc-password" } : { ok: true },
+      );
+      const { stream } = await minted.attached;
+      const pings: Buffer[] = [];
+      const streamBytes: Buffer[] = [];
+      ws.on("ping", (data) => pings.push(data));
+      stream.on("data", (data) => streamBytes.push(data));
+
+      vi.advanceTimersByTime(25_000);
+      await expect.poll(() => pings.length).toBe(1);
+      expect(streamBytes).toEqual([]);
+
+      // A paused remote peer cannot process pings or send automatic pongs.
+      ws.pause();
+      vi.advanceTimersByTime(50_000);
+      ws.resume();
+      await expect.poll(() => pings.length).toBe(3);
+      ws.send(Buffer.from("resumed stream bytes"), { binary: true });
+      await expect.poll(() => Buffer.concat(streamBytes).toString()).toBe("resumed stream bytes");
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      const closed = new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+      const streamClosed = new Promise<void>((resolve) => {
+        stream.once("close", () => resolve());
+      });
+      if (closeMode === "peer-close") {
+        ws.close(1012, `peer restart\n${minted.attachPath}`);
+      } else if (closeMode === "peer-terminate") {
+        ws.terminate();
+      } else {
+        stream.destroy();
+      }
+      await Promise.all([closed, streamClosed]);
+      await logCapture.flush();
+      const records = logCapture.records.filter(
+        (record) => record.message === "node stream closed",
+      );
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        streamKind: kind,
+        nodeId: "node-1",
+        connId: "conn-1",
+        trigger: "websocket-close",
+        closeCode: closeMode === "peer-close" ? 1012 : 1006,
+      });
+      expect(records[0]?.attributes?.closeReason).toBeUndefined();
+      const serialized = JSON.stringify(logCapture.records);
+      expect(serialized).not.toContain("peer restart");
+      expect(serialized).not.toContain(minted.ticket);
+      expect(serialized).not.toContain(minted.attachPath);
+      expect(serialized).not.toContain("resumed stream bytes");
+      vi.advanceTimersByTime(25_000);
+      expect(pings).toHaveLength(3);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("is single-use and resolves one ticket-bound binary stream", async () => {
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };
@@ -204,6 +306,8 @@ describe("node desktop stream tickets", () => {
   });
 
   it("keeps a redeemed ticket cancellable while metadata is pending", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };
     const baseUrl = await startBrokerServer({ broker, session });
@@ -222,6 +326,16 @@ describe("node desktop stream tickets", () => {
 
     await expect(minted.attached).rejects.toThrow("cancelled");
     await expect(closed).resolves.toBeUndefined();
+    await expect
+      .poll(async () => {
+        await logCapture.flush();
+        return logCapture.records.filter((record) => record.message === "node stream closed");
+      })
+      .toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      trigger: "attach-rejected",
+      closeCode: 1008,
+    });
   });
 
   it("rejects when the raw upgrade socket closes during pairing authorization", async () => {
@@ -269,5 +383,56 @@ describe("node desktop stream tickets", () => {
 
     await expect(minted.attached).rejects.toThrow("authorization");
     releaseCheck();
+  });
+});
+
+describe("node portal stream tickets", () => {
+  it("pairs a ready portal stream and keeps desktop and portal tickets isolated", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+
+    await expectUnauthorized(
+      `${baseUrl}${minted.attachPath.replace("/node-portal/", "/node-desktop/")}`,
+    );
+    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, { ok: true });
+    const attached = await minted.attached;
+    const response = new Promise<Buffer>((resolve) => {
+      attached.stream.once("data", resolve);
+    });
+    ws.send(Buffer.from("HTTP/1.1 200 OK\r\n\r\n"), { binary: true });
+
+    await expect(response).resolves.toEqual(Buffer.from("HTTP/1.1 200 OK\r\n\r\n"));
+    attached.stream.destroy();
+    await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
+  });
+
+  it("rejects unexpected portal readiness metadata", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+
+    await connectAndSend(`${baseUrl}${minted.attachPath}`, { ok: true, auth: "vnc-password" });
+
+    await expect(minted.attached).rejects.toThrow("invalid node portal attach metadata");
+  });
+
+  it("rejects immediately when the node closes before the target is ready", async () => {
+    const broker = createNodeDesktopStreamBroker();
+    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+    const baseUrl = await startBrokerServer({ broker, session });
+    const minted = broker.mintPortal({ nodeId: "node-1", ...session });
+    const ws = new WebSocket(`${baseUrl}${minted.attachPath}`);
+    cleanups.push(async () => ws.terminate());
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", resolve);
+      ws.once("error", reject);
+    });
+
+    ws.close();
+
+    await expect(minted.attached).rejects.toThrow("node portal stream closed before attach");
   });
 });

@@ -1,5 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
+  ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -12,11 +14,28 @@ import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  uiSessionEventMatches,
-} from "./sessions/session-key.ts";
+import { uiSessionEventMatches } from "./sessions/session-key.ts";
+
+export function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
+): SessionCatalogPullRequestSummary | undefined {
+  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
+  const current =
+    pullRequests.find(({ state }) => state === "open") ??
+    pullRequests.find(({ state }) => state === "draft") ??
+    pullRequests.find(({ state }) => state === "merged") ??
+    pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
+}
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
@@ -39,20 +58,12 @@ export type SessionPullRequestSnapshotStore = {
     owner: object,
     sessionKey: string,
   ) => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
-  refresh: (sessionKey: string) => void;
+  refresh: (sessionKey: string) => boolean;
   get: (sessionKey: string) => ControlUiSessionPullRequestSnapshot | undefined;
   subscribe: (listener: () => void) => () => void;
 };
 
 const stores = new WeakMap<ApplicationGateway, SessionPullRequestSnapshotStore>();
-
-export function scopedSessionPullRequestKey(sessionKey: string, agentId?: string): string {
-  const key = sessionKey.trim();
-  if (!key || parseAgentSessionKey(key) || !agentId?.trim()) {
-    return key;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${key}`;
-}
 
 function readChangedSessions(
   payload: unknown,
@@ -453,11 +464,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     refresh: (sessionKey) => {
       const key = sessionKey.trim();
       if (!key || !watchedKeys().includes(key)) {
-        return;
+        return false;
       }
       pendingRefreshKeys.add(key);
       retry.reset();
       scheduleSync();
+      return true;
     },
     get: (sessionKey) => snapshots.get(sessionKey),
     subscribe: (listener) => {

@@ -112,6 +112,46 @@ describe("sendCronAnnouncePayloadStrict", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("reports the first recipient result before later delivery work settles", async () => {
+    let releaseDelivery = () => {};
+    const pendingDelivery = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    let reportFirstResult = () => {};
+    const firstResult = new Promise<void>((resolve) => {
+      reportFirstResult = resolve;
+    });
+    const delivered = { channel: "telegram" as const, messageId: "delivered-first" };
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onDeliveryResult?: (result: typeof delivered) => Promise<void> | void }) => {
+        await params.onDeliveryResult?.(delivered);
+        reportFirstResult();
+        await pendingDelivery;
+        return [delivered];
+      },
+    );
+    const onDeliveryAttempt = vi.fn();
+    const delivery = sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123" },
+      payload: { text: "Automation failed" },
+      abortSignal: new AbortController().signal,
+      onDeliveryAttempt,
+    });
+
+    await firstResult;
+    try {
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      releaseDelivery();
+      await delivery;
+    }
+    expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
   it.each([
     { reason: "no_visible_result", recipientReached: false },
     { reason: "no_visible_payload", recipientReached: false },

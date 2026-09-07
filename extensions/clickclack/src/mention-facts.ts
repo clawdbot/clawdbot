@@ -60,7 +60,7 @@ function resolveMentionHandles(body: string): string[] {
  * - Checks the message body against shared and account-local mention patterns.
  * - If botHandle is provided and the message body contains its ClickClack
  *   `@handle`, treat it as a mention.
- * - Plain display names do not count unless explicitly configured as a pattern.
+ * - Shared patterns default to the routed agent's identity name when none are configured.
  */
 export function resolveClickClackMentionFacts(params: {
   isDirect: boolean;

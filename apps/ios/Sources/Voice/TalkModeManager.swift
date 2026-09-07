@@ -695,7 +695,7 @@ final class TalkModeManager: NSObject {
         let micOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestMicrophonePermission()
+            await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         }
         GatewayDiagnostics.log(
             "talk.timeline microphone permission ok=\(micOk) "
@@ -734,13 +734,13 @@ final class TalkModeManager: NSObject {
         let speechOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestSpeechPermission()
+            await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         }
         guard speechOk else {
             self.logger.warning("start blocked: speech permission denied")
             self.stopNativeCaptureAndDiscardTranscript()
             deactivateAudioSession()
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
@@ -1278,7 +1278,7 @@ final class TalkModeManager: NSObject {
     {
         guard !self.allowSimulatorCapture else { return }
 
-        let micOk = await Self.requestMicrophonePermission()
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard micOk else {
             self.setStatus(
@@ -1290,10 +1290,10 @@ final class TalkModeManager: NSObject {
             ])
         }
 
-        let speechOk = await Self.requestSpeechPermission()
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard speechOk else {
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
@@ -2963,7 +2963,7 @@ final class TalkModeManager: NSObject {
         do {
             let started = Date()
             let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedVoice = resolveVoiceAlias(requestedVoice)
+            let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
             if requestedVoice?.isEmpty == false, resolvedVoice == nil {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
@@ -3285,7 +3285,9 @@ final class TalkModeManager: NSObject {
     private func applyDirective(_ directive: TalkDirective?) {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let usesGatewayVoiceIds = self.runtimeRoute.usesGatewayTalkSpeak
-        let resolvedVoice = usesGatewayVoiceIds ? requestedVoice : resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = usesGatewayVoiceIds
+            ? requestedVoice
+            : TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if !usesGatewayVoiceIds, requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
@@ -3632,7 +3634,7 @@ final class TalkModeManager: NSObject {
         speechGeneration: Int) async -> IncrementalSpeechContext
     {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
@@ -3965,19 +3967,6 @@ private struct IncrementalSpeechBuffer {
 }
 
 extension TalkModeManager {
-    func resolveVoiceAlias(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] {
-            return mapped
-        }
-        if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return trimmed
-        }
-        return Self.isLikelyVoiceId(trimmed) ? trimmed : nil
-    }
-
     func resolveVoiceId(
         preferred: String?,
         apiKey: String,
@@ -3987,10 +3976,10 @@ extension TalkModeManager {
         if !trimmed.isEmpty {
             // Config / directives can provide a raw ElevenLabs voiceId (not an alias).
             // Accept it directly to avoid unnecessary listVoices calls (and accidental fallback selection).
-            if Self.isLikelyVoiceId(trimmed) {
+            if TalkVoiceAliases.isLikelyID(trimmed) {
                 return trimmed
             }
-            if let resolved = resolveVoiceAlias(trimmed) {
+            if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
             self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
@@ -4021,11 +4010,6 @@ extension TalkModeManager {
             self.logger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    static func isLikelyVoiceId(_ value: String) -> Bool {
-        guard value.count >= 10 else { return false }
-        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
     private static func normalizedTalkApiKey(_ raw: String?) -> String? {
@@ -4652,6 +4636,7 @@ extension TalkModeManager {
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         try session.setCategory(.playAndRecord, mode: mode, options: options)
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
@@ -4849,7 +4834,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
     }
 
     func _test_prepareLiveRealtimeVoiceSession(
@@ -4867,7 +4853,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
         self.realtimeSession = TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: self.mainSessionKey,

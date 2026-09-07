@@ -5,6 +5,7 @@ fn main() {
         "build_info",
         "check_for_updates",
         "connect_discovered_gateway",
+        "connect_remote_gateway",
         "discover_gateways",
         "gateway_action",
         "install_cli",

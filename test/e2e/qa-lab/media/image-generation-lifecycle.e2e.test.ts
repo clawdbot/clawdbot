@@ -7,11 +7,13 @@ import {
   createQaBusState,
   createQaChannelTransport,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
   startQaMockOpenAiServer,
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -163,9 +165,7 @@ async function waitForToolOutput(baseUrl: string, needle: string) {
   return matched as MockOpenAiRequestSnapshot;
 }
 
-async function readImageTasks(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): Promise<GatewayTask[]> {
+async function readImageTasks(gateway: QaGatewayChild): Promise<GatewayTask[]> {
   const payload = (await gateway.call("tasks.list", { limit: 100 })) as {
     tasks?: GatewayTask[];
   };
@@ -194,7 +194,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     }
   });
 
-  it("deduplicates running and recently completed requests around one completion", async () => {
+  it("deduplicates requests and labels internal completion provenance", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
@@ -206,7 +206,9 @@ describe("image generation task lifecycle through QA-channel", () => {
     const imageProvider = await startControlledImageProvider();
     cleanups.push(() => imageProvider.stop());
 
-    const gateway = await startQaGatewayChild({
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -218,7 +220,6 @@ describe("image generation task lifecycle through QA-channel", () => {
       controlUiEnabled: false,
       mutateConfig: (config) => configureImageProvider(config, imageProvider.baseUrl),
     });
-    cleanups.push(() => gateway.stop());
     await transport.waitReady({ gateway });
 
     const sendExactRequest = () =>
@@ -296,6 +297,22 @@ describe("image generation task lifecycle through QA-channel", () => {
       },
       { interval: 50, timeout: 30_000 },
     );
+
+    const completionReentry = await vi.waitFor(
+      async () => {
+        const request = (await readMockRequests(mock.baseUrl)).find(
+          (request) =>
+            request.allInputText.includes("[Inter-session message]") &&
+            request.allInputText.includes("sourceTool=image_generate"),
+        );
+        if (!request) {
+          throw new Error("image completion did not re-enter the agent session");
+        }
+        return request;
+      },
+      { interval: 50, timeout: 30_000 },
+    );
+    expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 
     await sendExactRequest();
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");

@@ -1,5 +1,6 @@
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type {
   SessionBranch,
   SessionsBranchesListResult,
@@ -24,10 +25,17 @@ import type {
   SessionResetOptions,
 } from "./session-capability.ts";
 
-/** Gateway rosters omit recency so Chat and Settings agree; the cap bounds list work. */
+/** Gateway rosters omit recency so Chat and Settings agree, and carry the shared
+ *  sidebar page size: a roster smaller than the store empties whole categories
+ *  whose newest session falls outside the page, so the remainder is reachable
+ *  through the list's Load more control rather than lost. */
 export const DEFAULT_SESSION_LIST_QUERY = {
-  limit: 50,
+  limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
+
+/** Starting page size for the Sessions page's explicit, user-editable limit
+ *  field, kept separate from the roster page so tuning one never moves the other. */
+export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
 
 const SESSION_LIST_PARAMS = {
   includeGlobal: true,
@@ -99,11 +107,17 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const ownerId = options.ownerId?.trim();
+  if (options.ownerFirst === true) {
+    params.ownerFirst = true;
+  }
   if (options.involvingMe === true) {
     params.involvingMe = true;
   }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
+  }
+  if (options.hasBoard !== undefined) {
+    params.hasBoard = options.hasBoard;
   }
   if (agentId) {
     params.agentId = agentId;
@@ -121,6 +135,17 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
     params.offset = Math.floor(options.offset);
   }
   return params;
+}
+
+export function normalizeManagedSessionListQuery(
+  options: SessionListOptions,
+): Readonly<Record<string, unknown>> & { readonly limit: number } {
+  const { offset: _offset, append: _append, ...queryOptions } = options;
+  const limit =
+    typeof options.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_SESSION_LIST_QUERY.limit;
+  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
 }
 
 export async function requestSessionList(
@@ -142,12 +167,19 @@ export function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
-  options: { agentId?: string | null; expectedSessionId?: string | null } = {},
+  options: {
+    agentId?: string | null;
+    expectedSessionId?: string | null;
+    expectedMarkedUnreadAt?: number | null;
+  } = {},
 ): Promise<SessionsPatchResult> {
   const expectedSessionId = options.expectedSessionId?.trim();
   const params = {
     ...buildSessionRequestParams(key, options.agentId),
     ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...(options.expectedMarkedUnreadAt !== undefined
+      ? { expectedMarkedUnreadAt: options.expectedMarkedUnreadAt }
+      : {}),
     ...patch,
   };
   return patch.archived === true
@@ -160,17 +192,16 @@ export function requestSessionDelete(
   key: string,
   options: SessionDeleteOptions = {},
 ): Promise<SessionsDeleteResult> {
-  return client.request<SessionsDeleteResult>("sessions.delete", {
-    ...buildSessionRequestParams(key, options.agentId),
-    deleteTranscript: options.deleteTranscript ?? true,
-    ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-    ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-  });
-}
-
-export function confirmsSessionDeletion(response: SessionsDeleteResult): boolean {
-  // A successful RPC may be a lifecycle no-op; only confirmed deletion removes state.
-  return response.deleted;
+  return client.request<SessionsDeleteResult>(
+    "sessions.delete",
+    {
+      ...buildSessionRequestParams(key, options.agentId),
+      deleteTranscript: options.deleteTranscript ?? true,
+      ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
+      ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
+    },
+    SESSION_ARCHIVE_REQUEST_OPTIONS,
+  );
 }
 
 export function requestSessionReset(

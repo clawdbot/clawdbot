@@ -20,16 +20,18 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import type {
+  NormalizeReplyOutcome as PayloadNormalizationOutcome,
+  NormalizeReplySkipReason,
+} from "./normalize-reply-skip-reason.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "channel_transform";
+export type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
-export type NormalizeReplyOutcome<T = ReplyPayload> =
-  | { kind: "deliver"; payload: T }
-  | { kind: "suppress"; reason: NormalizeReplySkipReason };
+export type NormalizeReplyOutcome<T = ReplyPayload> = PayloadNormalizationOutcome<T>;
 
 const channelReplyTransformOwners = new WeakMap<
   (payload: ReplyPayload) => ReplyPayload | null,
@@ -57,6 +59,7 @@ type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -129,8 +132,11 @@ export function normalizeReplyPayloadOutcome(
 
   if (text) {
     text = payload.isError
-      ? renderUserFacingText(text, { errorContext: true })
-      : sanitizeUserFacingText(text);
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
   }
   if (!hasContent(text)) {
     return suppress("empty");

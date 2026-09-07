@@ -15,17 +15,17 @@ import {
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
-import { resolveConversationBindingRecord } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { claimSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { logVerbose } from "../../globals.js";
-import {
-  isPluginOwnedSessionBindingRecord,
-  toPluginConversationBinding,
-} from "../../plugins/conversation-binding.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { resolveCommandTurnContext } from "../command-turn-context.js";
+import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
@@ -41,7 +41,7 @@ import {
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -95,16 +95,14 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   // through the binding contract instead of reusing the hook projection.
   const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
   const pluginOwnedBindingRecord = pluginBindingConversation
-    ? resolveConversationBindingRecord({
+    ? getSessionBindingService().resolveByConversation({
         channel: pluginBindingConversation.channel,
         accountId: pluginBindingConversation.accountId,
         conversationId: pluginBindingConversation.conversationId,
         parentConversationId: pluginBindingConversation.parentConversationId,
       })
     : null;
-  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
-    ? toPluginConversationBinding(pluginOwnedBindingRecord)
-    : null;
+  const pluginOwnedBinding = toPluginConversationBinding(pluginOwnedBindingRecord);
   const pluginBindingSessionKey = normalizeOptionalString(
     pluginOwnedBindingRecord?.targetSessionKey,
   );
@@ -377,6 +375,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         }
       : result;
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+  const activeRunSafeCommandTurn =
+    explicitCommandTurnCtx &&
+    isActiveRunSafeCommandTurn({
+      commandTurn: resolveCommandTurnContext(ctx),
+      cfg,
+      provider: ctx.Provider ?? ctx.Surface,
+    });
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
   const noVisibleReplyFallbackDirected = isDirectedSourceReplyTurn(ctx, cfg, chatType === "direct");
@@ -414,7 +419,27 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     };
   }
 
-  const inboundDedupeClaim = claimInboundDedupe(ctx);
+  const inboundDedupeClaim = claimInboundDedupe(ctx, {
+    reclaimPendingInput: () => {
+      const sourceRunId = normalizeOptionalString(ctx.MessageSid);
+      return Boolean(
+        params.replyOptions?.userTurnTranscriptRecorder?.getPendingInputMessage?.() &&
+        !params.replyOptions.userTurnTranscriptRecorder.hasPersisted() &&
+        sourceRunId &&
+        sessionStoreEntry.sessionKey &&
+        sessionStoreEntry.entry?.sessionId &&
+        claimSessionPendingInputDedupeRecovery(
+          {
+            agentId: sessionStoreEntry.agentId ?? sessionAgentId,
+            storePath: sessionStoreEntry.storePath,
+            sessionKey: sessionStoreEntry.sessionKey,
+            sessionId: sessionStoreEntry.entry.sessionId,
+          },
+          sourceRunId,
+        ),
+      );
+    },
+  });
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return {
@@ -425,16 +450,19 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       }),
     };
   }
-  const commitInboundDedupeIfClaimed = () => {
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
-  };
-  const releaseInboundDedupeIfClaimed = () => {
-    if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
-    }
-  };
+  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAbandoned = lifecycle.onAbandoned;
+    lifecycle.onAbandoned = () => {
+      // Release before ingress retries, including abandonment before commit.
+      if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
+        inboundDedupeClaim.release();
+      }
+      onAbandoned?.();
+    };
+  }
   const finishReplyOperationBusyDispatch = (opts?: {
     dedupeDisposition?: "commit" | "release";
     recordAgentDispatchCompleted?: boolean;
@@ -474,7 +502,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           isError: true,
         })
       : false;
-    if (state.turnAdoptionState && !state.turnAdoptionState.adopted) {
+    if (
+      state.turnAdoptionState &&
+      !state.turnAdoptionState.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
       releaseInboundDedupeIfClaimed();
     } else {
       commitInboundDedupeIfClaimed();
@@ -540,6 +572,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     commentaryPayloadsEnabled,
     attachSourceReplyDeliveryMode,
     explicitCommandTurnCtx,
+    activeRunSafeCommandTurn,
     shouldDeliverPluginBindingReply,
     inboundDedupeClaim,
     commitInboundDedupeIfClaimed,

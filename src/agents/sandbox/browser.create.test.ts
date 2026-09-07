@@ -22,6 +22,8 @@ import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 let BROWSER_BRIDGES: Map<string, unknown>;
 let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
+let capturedDockerCreateEnvEntries: string[] | undefined;
+let testWorkspaceDir: string;
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -164,8 +166,9 @@ function computeTestBrowserHash(params: {
   workspaceDir?: string;
   agentWorkspaceDir?: string;
   dockerEnvPolicyEpoch?: string;
+  readOnlyWorkspaceSkillMounts?: string[];
 }): string {
-  const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
+  const workspaceDir = params.workspaceDir ?? testWorkspaceDir;
   const agentWorkspaceDir = params.agentWorkspaceDir ?? workspaceDir;
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
@@ -189,7 +192,7 @@ function computeTestBrowserHash(params: {
     agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     createArgsEpoch: params.createArgsEpoch,
-    readOnlyWorkspaceSkillMounts: [],
+    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts ?? [],
   });
 }
 
@@ -208,6 +211,18 @@ function requireDockerCreateArgs(): string[] {
     throw new Error("expected docker create args");
   }
   return createArgs;
+}
+
+function snapshotDockerCreateEnvEntries(args: string[]): string[] | undefined {
+  const envFile = collectDockerFlagValues(args, "--env-file")[0];
+  return envFile ? readFileSync(envFile, "utf8").split("\n").filter(Boolean) : undefined;
+}
+
+function requireDockerCreateEnvEntries(): string[] {
+  if (!capturedDockerCreateEnvEntries) {
+    throw new Error("expected the docker create environment file to exist during create");
+  }
+  return capturedDockerCreateEnvEntries;
 }
 
 function requireValue<T>(value: T | null | undefined, label: string): T {
@@ -235,6 +250,7 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   beforeEach(() => {
+    testWorkspaceDir = tempDirs.make("openclaw-browser-workspace-");
     vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
     dockerMocks.dockerContainerState.mockClear();
@@ -247,11 +263,15 @@ describe("ensureSandboxBrowser create args", () => {
     bridgeMocks.startBrowserBridgeServer.mockClear();
     bridgeMocks.stopBrowserBridgeServer.mockClear();
     runtimeMocks.log.mockClear();
+    capturedDockerCreateEnvEntries = undefined;
 
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: `${SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH}\n`, stderr: "", code: 0 };
+      }
+      if (args[0] === "create") {
+        capturedDockerCreateEnvEntries = snapshotDockerCreateEnvEntries(args);
       }
       return { stdout: "", stderr: "", code: 0 };
     });
@@ -293,8 +313,8 @@ describe("ensureSandboxBrowser create args", () => {
     await expect(
       ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg: buildConfig(false),
       }),
     ).rejects.toThrow(
@@ -316,25 +336,45 @@ describe("ensureSandboxBrowser create args", () => {
     expect(label).toBe(SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH);
   });
 
-  it("publishes noVNC on loopback and injects noVNC password env", async () => {
+  it("delivers configured browser and generated CDP/noVNC environment without exposing values in Docker argv", async () => {
     // noVNC password stays in the container environment; external access uses a
     // short-lived observer token so URLs do not carry the password.
+    const configuredSentinel = "synthetic-browser-transport-value";
+    const cfg = buildConfig(true);
+    cfg.docker.env = { ...cfg.docker.env, BROWSER_TRANSPORT_SENTINEL: configuredSentinel };
     const result = await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg: buildConfig(true),
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
+      cfg,
     });
 
     const createArgs = requireDockerCreateArgs();
 
+    expect(createArgs.some((arg) => arg.includes(configuredSentinel))).toBe(false);
     expect(createArgs).toContain("127.0.0.1::6080");
-    const envEntries = collectDockerFlagValues(createArgs, "-e");
+    expect(collectDockerFlagValues(createArgs, "--env-file")).toHaveLength(1);
+    expect(createArgs).not.toContain("-e");
+    expect(createArgs).not.toContain("--env");
+    const envEntries = requireDockerCreateEnvEntries();
+    expect(envEntries).toContain(`BROWSER_TRANSPORT_SENTINEL=${configuredSentinel}`);
     expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
     expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
+    const authEntry = envEntries.find((entry) =>
+      entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="),
+    );
+    expect(authEntry).toMatch(/^OPENCLAW_BROWSER_CDP_AUTH_TOKEN=[0-9a-f]{48}$/);
+    const noVncPassword = requireValue(passwordEntry, "noVNC password env").slice(
+      "OPENCLAW_BROWSER_NOVNC_PASSWORD=".length,
+    );
+    const cdpAuthToken = requireValue(authEntry, "CDP auth env").slice(
+      "OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length,
+    );
+    expect(createArgs.some((arg) => arg.includes(noVncPassword))).toBe(false);
+    expect(createArgs.some((arg) => arg.includes(cdpAuthToken))).toBe(false);
     expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
   });
@@ -342,8 +382,8 @@ describe("ensureSandboxBrowser create args", () => {
   it("creates browser containers with Docker init and the shared args epoch", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
@@ -373,7 +413,11 @@ describe("ensureSandboxBrowser create args", () => {
           throw new Error("docker name conflict");
         }
         created = true;
-        cdpAuthToken = collectDockerFlagValues(args, "-e")
+        const envEntries = requireValue(
+          snapshotDockerCreateEnvEntries(args),
+          "docker create environment file",
+        );
+        cdpAuthToken = envEntries
           .find((entry) => entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="))
           ?.slice("OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length);
         configHash = collectDockerFlagValues(args, "--label")
@@ -385,8 +429,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     const params = {
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     };
     await expect(
@@ -430,8 +474,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg,
     });
 
@@ -471,8 +515,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg,
     });
 
@@ -489,13 +533,12 @@ describe("ensureSandboxBrowser create args", () => {
   it("does not inject noVNC password env when noVNC is disabled", async () => {
     const result = await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    const envEntries = requireDockerCreateEnvEntries();
     expect(
       envEntries.filter((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD=")),
     ).toStrictEqual([]);
@@ -538,34 +581,48 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
-  it("includes the explicit env policy epoch in the browser config hash when needed", async () => {
-    const cfg = buildConfig(false);
-    cfg.docker.env = {
-      LANG: "C.UTF-8",
-      GEMINI_API_KEY: "dummy-gemini",
-    };
-    const scopeKey = "session-1";
-    const workspaceDir = "/tmp/workspace";
-    const agentWorkspaceDir = "/tmp/workspace";
-    const expectedHash = computeTestBrowserHash({
-      cfg,
-      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
-      workspaceDir,
-      agentWorkspaceDir,
-      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
-    });
+  it.each([false, true])(
+    "includes the explicit env policy epoch in the browser config hash with skill mount=%s",
+    async (withSkillMount) => {
+      const cfg = buildConfig(false);
+      cfg.docker.env = {
+        LANG: "C.UTF-8",
+        GEMINI_API_KEY: "dummy-gemini",
+      };
+      const scopeKey = "session-1";
+      const workspaceDir = testWorkspaceDir;
+      const agentWorkspaceDir = workspaceDir;
+      if (withSkillMount) {
+        mkdirSync(path.join(workspaceDir, "skills"));
+      }
+      const hashInputs = {
+        cfg,
+        dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+        workspaceDir,
+        agentWorkspaceDir,
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+        readOnlyWorkspaceSkillMounts: withSkillMount
+          ? [`${path.join(workspaceDir, "skills")}:/workspace/skills:ro`]
+          : [],
+      };
+      const expectedHash = computeTestBrowserHash(hashInputs);
+      expect(expectedHash).not.toBe(
+        computeTestBrowserHash({ ...hashInputs, dockerEnvPolicyEpoch: undefined }),
+      );
 
-    await ensureTestSandboxBrowser({
-      scopeKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      cfg,
-    });
+      await ensureTestSandboxBrowser({
+        scopeKey,
+        workspaceDir,
+        agentWorkspaceDir,
+        cfg,
+      });
 
-    const createArgs = requireDockerCreateArgs();
-    expect(createArgs).toContain(`openclaw.configHash=${expectedHash}`);
-    expect(collectDockerFlagValues(createArgs, "--env")).toContain("GEMINI_API_KEY=dummy-gemini");
-  });
+      const createArgs = requireDockerCreateArgs();
+      expect(createArgs).toContain(`openclaw.configHash=${expectedHash}`);
+      expect(requireDockerCreateEnvEntries()).toContain("GEMINI_API_KEY=dummy-gemini");
+      expect(createArgs.some((arg) => arg.includes("dummy-gemini"))).toBe(false);
+    },
+  );
 
   it("fails before creating a browser container when Docker daemon is unavailable", async () => {
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
@@ -586,8 +643,8 @@ describe("ensureSandboxBrowser create args", () => {
     await expect(
       ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg: buildConfig(false),
       }),
     ).rejects.toThrow("Docker daemon is not available");
@@ -598,8 +655,8 @@ describe("ensureSandboxBrowser create args", () => {
   it("passes the browser SSRF policy to the sandbox bridge", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
@@ -661,8 +718,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
       ssrfPolicy: { allowedHostnames: ["example.com"] },
     });
@@ -724,8 +781,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
       evaluateEnabled: false,
     });
@@ -734,44 +791,34 @@ describe("ensureSandboxBrowser create args", () => {
     expect(latestBridgeResolved().evaluateEnabled).toBe(false);
   });
 
-  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "none";
+  it.each([
+    { workspaceAccess: "none", flags: "z", rejectedFlags: "ro,z" },
+    { workspaceAccess: "ro", flags: "ro,z", rejectedFlags: "z" },
+    { workspaceAccess: "rw", flags: "z", rejectedFlags: "ro,z" },
+  ] as const)(
+    "uses the main workspace mount permissions for workspaceAccess=$workspaceAccess",
+    async ({ workspaceAccess, flags, rejectedFlags }) => {
+      const cfg = buildConfig(false);
+      cfg.workspaceAccess = workspaceAccess;
 
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
+      await ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
+        cfg,
+      });
 
-    const createArgs = requireDockerCreateArgs();
-
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro,z");
-  });
-
-  it("keeps the main workspace writable when workspaceAccess is rw", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "rw";
-
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
-
-    const createArgs = requireDockerCreateArgs();
-
-    expect(createArgs).toContain("/tmp/workspace:/workspace:z");
-    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
-  });
+      const createArgs = requireDockerCreateArgs();
+      expect(createArgs).toContain(`${testWorkspaceDir}:/workspace:${flags}`);
+      expect(createArgs).not.toContain(`${testWorkspaceDir}:/workspace:${rejectedFlags}`);
+    },
+  );
 
   it("stamps the mount format version label on browser containers", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
@@ -805,8 +852,8 @@ describe("ensureSandboxBrowser create args", () => {
     await expect(
       ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg,
       }),
     ).rejects.toThrow("hung container has been forcefully removed");
@@ -840,8 +887,8 @@ describe("ensureSandboxBrowser create args", () => {
       await expect(
         ensureTestSandboxBrowser({
           scopeKey: "session:test",
-          workspaceDir: "/tmp/workspace",
-          agentWorkspaceDir: "/tmp/workspace",
+          workspaceDir: testWorkspaceDir,
+          agentWorkspaceDir: testWorkspaceDir,
           cfg,
         }),
       ).rejects.toThrow(
@@ -899,8 +946,8 @@ describe("ensureSandboxBrowser create args", () => {
     try {
       const startup = ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg,
       });
       const startupResult = startup.then(
@@ -937,13 +984,12 @@ describe("ensureSandboxBrowser create args", () => {
   it("requires auth for the sandbox CDP relay without auto-derived source ranges", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    const envEntries = requireDockerCreateEnvEntries();
     const authEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="),
     );
@@ -967,13 +1013,12 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg,
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    const envEntries = requireDockerCreateEnvEntries();
     expect(envEntries).toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=10.0.0.0/24");
   });
 
@@ -983,8 +1028,8 @@ describe("ensureSandboxBrowser create args", () => {
 
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
@@ -1009,8 +1054,8 @@ describe("ensureSandboxBrowser create args", () => {
     await expect(
       ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg: buildConfig(false),
       }),
     ).rejects.toThrow("bridge cleanup failed");
@@ -1022,8 +1067,8 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.execDocker.mockClear();
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
       cfg: buildConfig(false),
     });
 
@@ -1041,8 +1086,8 @@ describe("ensureSandboxBrowser create args", () => {
     await expect(
       ensureTestSandboxBrowser({
         scopeKey: "session:test",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
+        agentWorkspaceDir: testWorkspaceDir,
         cfg,
       }),
     ).rejects.toThrow(

@@ -7,10 +7,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
-import "../components/login-gate.ts";
-import "../components/openclaw-mascot.ts";
-import { renderLazyElementState } from "../components/lazy-view-error.ts";
-import { installNativeTitleGuard } from "../components/tooltip.ts";
+import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
+import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -18,7 +17,6 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
-import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import {
@@ -27,10 +25,15 @@ import {
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   LazyCustomElementRequestController,
+  LOGIN_GATE_ELEMENT,
   type OptionalCustomElement,
+  QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { isDesktopPanelAvailable } from "./panel-availability.ts";
+import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -45,20 +48,6 @@ function routeLocationHref(location: RouteLocation): string {
 
 function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is RouteNotFound {
   return "type" in result && result.type === "notFound";
-}
-
-function renderConnectingSplash(status?: string) {
-  return html`
-    <main
-      class="connect-splash"
-      role="status"
-      aria-live="polite"
-      aria-label=${status ?? t("common.loading")}
-    >
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
-      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
-    </main>
-  `;
 }
 
 export class OpenClawApp extends OpenClawLightDomElement {
@@ -82,6 +71,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
   private focusDashboardAbort: AbortController | null = null;
+  private readonly loginGateLoader = new LazyCustomElementRequestController(this);
   private readonly lazyCustomElements = new LazyCustomElementRequestController(this, () =>
     this.closeDocument(this.context?.basePath ?? ""),
   );
@@ -112,14 +102,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
         (config, notify) => config.subscribe(notify),
       )
       .watch(
-        () => (this.terminalOnly ? this.context?.agentSelection : undefined),
+        () => this.context?.agentSelection,
         (selection, notify) => selection.subscribe(notify),
       )
       .watch(
         () => (this.terminalOnly ? this.context?.theme : undefined),
         (theme, notify) => theme.subscribe(notify),
       )
-      .effect(() => this.ownerDocument, installNativeTitleGuard);
+      .effect(() => this.ownerDocument, installTitleTooltips);
   }
 
   override connectedCallback() {
@@ -139,6 +129,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (this.runtime.documentMode?.kind === "approval") {
       this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);
+    }
+    if (this.runtime.documentMode?.kind === "question") {
+      this.requestLazyDocument(QUESTION_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
@@ -163,6 +156,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
     this.lazyCustomElements.abandon();
+    this.loginGateLoader.abandon();
     this.runtime?.stop();
     this.runtime = undefined;
     this.loginGatewaySource = null;
@@ -214,6 +208,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginShowGatewayPassword = false;
   }
 
+  private updateLoginGatewayUrl(value: string) {
+    const credentials = resolveGatewayCredentialsForUrlEdit(this.loginGatewayUrl, value, {
+      token: this.loginToken,
+      password: this.loginPassword,
+    });
+    this.loginGatewayUrl = value;
+    this.loginToken = credentials.token;
+    this.loginPassword = credentials.password;
+  }
+
   private closeDocument(basePath: string): void {
     if (globalThis.history.length > 1) {
       globalThis.history.back();
@@ -223,6 +227,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private renderFocusEscape(label: string) {
+    if (isNativeWebChromeHost()) {
+      return nothing;
+    }
     return html`<button
       class="btn btn--ghost"
       type="button"
@@ -262,6 +269,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`<openclaw-approval-page .approvalId=${approvalId ?? ""}></openclaw-approval-page>`;
   }
 
+  private renderQuestionDocument(runtime: ApplicationRuntime) {
+    const lazyState = this.lazyCustomElements.visibleState;
+    if (lazyState?.element === QUESTION_PAGE_ELEMENT) {
+      return this.renderLazyDocumentState(QUESTION_PAGE_ELEMENT);
+    }
+    const questionId =
+      runtime.documentMode?.kind === "question" ? runtime.documentMode.questionId : "";
+    return html`<openclaw-question-page .questionId=${questionId ?? ""}></openclaw-question-page>`;
+  }
+
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
     const basePath = this.context?.basePath ?? "";
     const expected = buildControlUiFocusPath(
@@ -296,8 +313,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
       if (controller.signal.aborted || this.focusDashboardAbort !== controller) {
         return;
       }
-      if (isRouteNotFound(result)) {
+      if (isRouteNotFound(result) || result.kind === "missing-session") {
         this.focusDashboardRoute = { kind: "not-found" };
+        return;
+      }
+      if (result.kind === "route-error") {
+        this.focusDashboardRoute = { kind: "error", message: result.message };
         return;
       }
       if (result.kind === "ambiguous") {
@@ -373,9 +394,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <section class="card board-document__state">
           <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
           <p>
-            ${route.data.candidates.length > 1
-              ? t("chat.sessionRoute.multipleMatches", { shortId: route.data.shortId })
-              : t("chat.sessionRoute.additionalMatches")}
+            ${
+              route.data.candidates.length > 1
+                ? t("chat.sessionRoute.multipleMatches", { shortId: route.data.shortId })
+                : t("chat.sessionRoute.additionalMatches")
+            }
           </p>
           ${route.data.candidates.map(
             (candidate) => html`<p>
@@ -383,9 +406,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
               <small>${candidate.agentId} · ${candidate.idPrefix}</small>
             </p>`,
           )}
-          ${route.data.truncated
-            ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
-            : nothing}
+          ${
+            route.data.truncated
+              ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+              : nothing
+          }
           ${this.renderFocusEscape(t("dashboardDocument.close"))}
         </section>
       </main>`;
@@ -394,11 +419,20 @@ export class OpenClawApp extends OpenClawLightDomElement {
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
         .sessionKey=${route.data.sessionKey}
-        .onDocumentClose=${() => this.closeDocument(this.context?.basePath ?? "")}
+        .preparedSession=${
+          route.data.agentId
+            ? { sessionKey: route.data.sessionKey, agentId: route.data.agentId }
+            : null
+        }
+        .onDocumentClose=${
+          isNativeWebChromeHost() ? null : () => this.closeDocument(this.context?.basePath ?? "")
+        }
       ></openclaw-board-document>
-      ${!gatewayConnected && gatewaySnapshot.lastError === null
-        ? renderConnectingSplash(gatewayStartupStatus)
-        : nothing}
+      ${
+        !gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing
+      }
       ${gatewayConnected ? this.renderLazyDocumentState(DASHBOARD_DOCUMENT_ELEMENT) : nothing}
     `;
   }
@@ -409,10 +443,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (!context || !runtime) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    const gatewaySnapshot = context.gateway.snapshot;
-    const gatewayConnected = gatewaySnapshot.phase === "connected";
-    const gatewayStartupStatus =
-      gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined;
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`
           <openclaw-gateway-url-confirmation
@@ -430,6 +460,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
+    return html`<openclaw-tooltip-provider>
+      ${this.renderDocument(context, runtime)} ${gatewayUrlConfirmation}
+    </openclaw-tooltip-provider>`;
+  }
+
+  private renderDocument(context: ApplicationContext<RouteId>, runtime: ApplicationRuntime) {
+    const gatewaySnapshot = context.gateway.snapshot;
+    const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const gatewayStartupStatus =
+      gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined;
     if (runtime.focusLocation?.status === "unsupported") {
       return html`<main class="connect-splash" role="alert">
         <div class="stack">
@@ -458,18 +498,22 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .themeMode=${context.theme.resolvedMode}
           fullscreen
         ></openclaw-terminal-panel>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${
+          !gatewayConnected && gatewaySnapshot.lastError === null
+            ? renderConnectingSplash(gatewayStartupStatus)
+            : nothing
+        }
         ${terminalAvailable ? this.renderLazyDocumentState(TERMINAL_PANEL_ELEMENT) : nothing}
-        ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="terminal-view-unavailable">
-              <div class="stack">
-                <span>${t("terminal.unavailable")}</span>
-                ${this.renderFocusEscape(t("common.back"))}
-              </div>
-            </div>`
-          : nothing}
+        ${
+          !terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
+            ? html`<div class="terminal-view-unavailable">
+                <div class="stack">
+                  <span>${t("terminal.unavailable")}</span>
+                  ${this.renderFocusEscape(t("common.back"))}
+                </div>
+              </div>`
+            : nothing
+        }
       `;
     }
     // Desktop documents share the panel's connection owner but none of its
@@ -484,23 +528,27 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${desktopAvailable}
           .documentMode=${true}
-          .documentSource=${source}
-          .documentSession=${session}
+          .requestedSource=${source}
+          .sessionKey=${session}
           .documentControl=${focusTarget.control}
           .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${
+          !gatewayConnected && gatewaySnapshot.lastError === null
+            ? renderConnectingSplash(gatewayStartupStatus)
+            : nothing
+        }
         ${desktopAvailable ? this.renderLazyDocumentState(DESKTOP_PANEL_ELEMENT) : nothing}
-        ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
-          ? html`<div class="desktop-view-unavailable">
-              <div class="stack">
-                <span>${t("desktop.unavailable")}</span>
-                ${this.renderFocusEscape(t("common.back"))}
-              </div>
-            </div>`
-          : nothing}
+        ${
+          !desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
+            ? html`<div class="desktop-view-unavailable">
+                <div class="stack">
+                  <span>${t("desktop.unavailable")}</span>
+                  ${this.renderFocusEscape(t("common.back"))}
+                </div>
+              </div>`
+            : nothing
+        }
       `;
     }
     if (focusTarget?.kind === "dashboard") {
@@ -516,83 +564,93 @@ export class OpenClawApp extends OpenClawLightDomElement {
       (gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     if (initialConnectPending) {
-      return html`
-        <openclaw-tooltip-provider>
-          ${renderConnectingSplash(gatewayStartupStatus)} ${gatewayUrlConfirmation}
-        </openclaw-tooltip-provider>
-      `;
+      return renderConnectingSplash(gatewayStartupStatus);
     }
     const shellOwnsRecovery =
       gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
+    if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
+      const loadState = this.loginGateLoader.visibleState;
+      // Normal admission needs no login renderer. Keep failures visible and retryable
+      // if this optional chunk cannot load after a connection failure.
+      if (!loadState) {
+        this.loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
+      }
+      return loadState?.status === "error"
+        ? renderLazyViewError({
+            error: loadState.error,
+            stale: loadState.stale,
+            onRetry: () => this.loginGateLoader.retry(),
+          })
+        : renderConnectingSplash();
+    }
     if (showLoginGate) {
       return html`
-        <openclaw-tooltip-provider>
-          <openclaw-login-gate
-            .props=${{
-              resourceBasePath: context.resourceBasePath,
-              connected: gatewayConnected,
-              lastError: gatewaySnapshot.lastError,
-              lastErrorCode: gatewaySnapshot.lastErrorCode,
-              hasToken: Boolean(this.loginToken.trim()),
-              hasPassword: Boolean(this.loginPassword.trim()),
-              gatewayUrl: this.loginGatewayUrl,
-              token: this.loginToken,
-              password: this.loginPassword,
-              showGatewayToken: this.loginShowGatewayToken,
-              showGatewayPassword: this.loginShowGatewayPassword,
-              onGatewayUrlChange: (value: string) => {
-                this.loginGatewayUrl = value;
-              },
-              onTokenChange: (value: string) => {
-                this.loginToken = value;
-              },
-              onPasswordChange: (value: string) => {
-                this.loginPassword = value;
-              },
-              onToggleGatewayToken: () => {
-                this.loginShowGatewayToken = !this.loginShowGatewayToken;
-              },
-              onToggleGatewayPassword: () => {
-                this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
-              },
-              onConnect: () => {
-                this.loginGatePinned = true;
-                context.gateway.connect({
-                  gatewayUrl: this.loginGatewayUrl,
-                  token: this.loginToken,
-                  password: this.loginPassword,
-                });
-              },
-            }}
-          ></openclaw-login-gate>
-          ${gatewayUrlConfirmation}
-        </openclaw-tooltip-provider>
+        <openclaw-login-gate
+          .props=${{
+            resourceBasePath: context.resourceBasePath,
+            connected: gatewayConnected,
+            lastError: gatewaySnapshot.lastError,
+            lastErrorCode: gatewaySnapshot.lastErrorCode,
+            lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
+            hasToken: Boolean(this.loginToken.trim()),
+            hasPassword: Boolean(this.loginPassword.trim()),
+            gatewayUrl: this.loginGatewayUrl,
+            token: this.loginToken,
+            password: this.loginPassword,
+            showGatewayToken: this.loginShowGatewayToken,
+            showGatewayPassword: this.loginShowGatewayPassword,
+            onGatewayUrlChange: (value: string) => {
+              this.updateLoginGatewayUrl(value);
+            },
+            onTokenChange: (value: string) => {
+              this.loginToken = value;
+            },
+            onPasswordChange: (value: string) => {
+              this.loginPassword = value;
+            },
+            onToggleGatewayToken: () => {
+              this.loginShowGatewayToken = !this.loginShowGatewayToken;
+            },
+            onToggleGatewayPassword: () => {
+              this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
+            },
+            onConnect: () => {
+              this.loginGatePinned = true;
+              context.gateway.connect({
+                gatewayUrl: this.loginGatewayUrl,
+                token: this.loginToken,
+                password: this.loginPassword,
+              });
+            },
+          }}
+        ></openclaw-login-gate>
       `;
     }
     if (runtime.documentMode?.kind === "approval") {
-      return html`
-        <openclaw-tooltip-provider>
-          ${gatewayUrlConfirmation} ${this.renderApprovalDocument(runtime)}
-        </openclaw-tooltip-provider>
-      `;
+      return this.pendingGatewayUrl ? nothing : this.renderApprovalDocument(runtime);
+    }
+    if (runtime.documentMode?.kind === "question") {
+      return this.renderQuestionDocument(runtime);
     }
     return html`
-      <openclaw-tooltip-provider>
-        <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
-          <openclaw-session-progress-hovercard-provider
-            .client=${gatewaySnapshot.client}
-            .context=${context}
-            .gateway=${context.gateway}
-          >
-            ${gatewayUrlConfirmation}
-            <openclaw-app-shell
-              .runtime=${runtime}
-              .onboarding=${this.onboarding}
-            ></openclaw-app-shell>
-          </openclaw-session-progress-hovercard-provider>
-        </openclaw-github-link-hovercard-provider>
-      </openclaw-tooltip-provider>
+      <openclaw-github-link-hovercard-provider
+        .client=${gatewaySnapshot.client}
+        .agentId=${
+          context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId ?? undefined
+        }
+      >
+        <openclaw-session-progress-hovercard-provider
+          .client=${gatewaySnapshot.client}
+          .context=${context}
+          .gateway=${context.gateway}
+        >
+          <openclaw-app-shell
+            .runtime=${runtime}
+            .onboarding=${this.onboarding}
+          ></openclaw-app-shell>
+        </openclaw-session-progress-hovercard-provider>
+      </openclaw-github-link-hovercard-provider>
     `;
   }
 }

@@ -15,14 +15,12 @@ import {
 
 // --- Module mocks (must precede dynamic import) ---
 const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
-  vi.fn(
-    async (_mediaUrl: string, _options?: unknown): Promise<WebMediaResult> => ({
-      buffer: Buffer.from("fake-image"),
-      contentType: "image/png",
-      kind: "image",
-      fileName: "screenshot.png",
-    }),
-  ),
+  vi.fn(async (_mediaUrl: string, _options?: unknown): Promise<WebMediaResult> => ({
+    buffer: Buffer.from("fake-image"),
+    contentType: "image/png",
+    kind: "image",
+    fileName: "screenshot.png",
+  })),
 );
 const cleanupUploadTimeout = vi.hoisted(() => vi.fn());
 const uploadTimeoutControllers = vi.hoisted(() => [] as AbortController[]);
@@ -100,8 +98,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   };
 });
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
   const mockedLoadOutboundMediaFromUrl =
     loadOutboundMediaFromUrlMock as unknown as typeof actual.loadOutboundMediaFromUrl;
   return {
@@ -212,6 +212,13 @@ function createUploadTestClient(slackApiUrl = "https://slack.com/api/"): UploadT
   } as unknown as UploadTestClient;
 }
 
+function slackPlatformError(code: string): Error {
+  return Object.assign(new Error(`An API error occurred: ${code}`), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error: code },
+  });
+}
+
 type UploadOverrides = Omit<Partial<Parameters<typeof sendMessageSlack>[2]>, "cfg" | "client">;
 type UploadParams = UploadOverrides & { mediaUrl: string; target?: string; message?: string };
 
@@ -314,6 +321,70 @@ describe("sendMessageSlack file upload with user IDs", () => {
       }
     },
   );
+
+  it("marks account_inactive from files.getUploadURLExternal as a permanent non-dispatch", async () => {
+    const rejection = slackPlatformError("account_inactive");
+    const onPlatformSendDispatch = vi.fn();
+    client.files.getUploadURLExternal.mockRejectedValueOnce(rejection);
+
+    const caught = await sendUpload(client, {
+      mediaUrl: "/tmp/account-inactive.png",
+      onPlatformSendDispatch,
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(caught).toMatchObject({ retryable: false, cause: rejection });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+  });
+
+  it("keeps a definitive completeUploadExternal rejection ambiguous", async () => {
+    // Dispatch is recorded before this call, so even a code that reads as a final
+    // verdict cannot prove the file was never shared; it must not become a
+    // non-dispatch assertion. Pairs with the pre-dispatch getUploadURLExternal case.
+    const rejection = slackPlatformError("messages_tab_disabled");
+    const onPlatformSendDispatch = vi.fn();
+    client.files.completeUploadExternal.mockRejectedValueOnce(rejection);
+
+    const caught = await sendUpload(client, {
+      mediaUrl: "/tmp/messages-tab-disabled.png",
+      onPlatformSendDispatch,
+    }).catch((error: unknown) => error);
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(caught).toBe(rejection);
+    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
+
+  it("keeps getUploadURLExternal network failures ambiguous", async () => {
+    const rejection = Object.assign(new Error("read ECONNRESET"), {
+      code: "slack_webapi_request_error",
+    });
+    client.files.getUploadURLExternal.mockRejectedValueOnce(rejection);
+
+    const caught = await sendUpload(client, {
+      mediaUrl: "/tmp/network-failure.png",
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBe(rejection);
+    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
+
+  it("keeps completeUploadExternal HTTP failures ambiguous", async () => {
+    const rejection = Object.assign(new Error("Slack HTTP 500"), {
+      code: "slack_webapi_http_error",
+      statusCode: 500,
+    });
+    client.files.completeUploadExternal.mockRejectedValueOnce(rejection);
+
+    const caught = await sendUpload(client, {
+      mediaUrl: "/tmp/http-failure.png",
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBe(rejection);
+    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
 
   it("disables image optimization for forced-media uploads", async () => {
     await sendUpload(client, {
@@ -579,6 +650,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
         vi.stubEnv("no_proxy", "127.0.0.1,localhost");
         const alternateClient = createUploadTestClient(`${baseUrl}/api/`);
+        const onDeliveryResult = vi.fn();
         mockUploadDestination(alternateClient, `${baseUrl}/upload/v1/capability`);
         fetchWithSsrFGuard.mockImplementationOnce(async (params) => {
           const mockedFetch = globalThis.fetch;
@@ -590,9 +662,30 @@ describe("sendMessageSlack file upload with user IDs", () => {
           }
         });
 
-        await sendUpload(alternateClient, { mediaUrl: "/tmp/alternate-root.png" });
+        const result = await sendUpload(alternateClient, {
+          mediaUrl: "/tmp/alternate-root.png",
+          message: "a".repeat(8_500),
+          threadTs: "171.222",
+          onDeliveryResult,
+        });
 
         expectCompletedUpload({ client: alternateClient, expected: { channel_id: "C123CHAN" } });
+        expect(alternateClient.chat.postMessage).toHaveBeenCalledOnce();
+        expect(
+          onDeliveryResult.mock.calls.map(([delivery]) => delivery.receipt.parts[0]?.kind),
+        ).toEqual(["media", "text"]);
+        expect(
+          result.receipt.parts.map(({ platformMessageId, kind, index, threadId }) => ({
+            platformMessageId,
+            kind,
+            index,
+            threadId,
+          })),
+        ).toEqual([
+          { platformMessageId: "F001", kind: "media", index: 0, threadId: "171.222" },
+          { platformMessageId: "171234.567", kind: "text", index: 1, threadId: "171.222" },
+        ]);
+        expect(result.receipt.threadId).toBe("171.222");
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
         expect(uploadTimeoutControllers).toHaveLength(0);
       },

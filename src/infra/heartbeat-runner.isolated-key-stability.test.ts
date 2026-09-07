@@ -1,6 +1,7 @@
 // Covers heartbeat system-event isolation by stable session keys.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -26,11 +27,7 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-type HeartbeatReplyContext = {
-  Body?: string;
-  Provider?: string;
-  SessionKey?: string;
-};
+type HeartbeatReplyContext = Pick<MsgContext, "Body" | "InternalTurnSource" | "SessionKey">;
 
 function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
   return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
@@ -294,7 +291,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       const secondCtx = replyCall(replySpy, 1);
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(firstCtx.Provider).toBe("cron-event");
+      expect(firstCtx.InternalTurnSource).toBe("cron");
       expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
       expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
@@ -360,7 +357,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       expect(result.status).toBe("ran");
       const calledCtx = replyCall(replySpy);
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
-      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.InternalTurnSource).toBe("exec");
     });
   });
 

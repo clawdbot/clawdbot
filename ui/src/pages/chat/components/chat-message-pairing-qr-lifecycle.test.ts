@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
+  projectMessageMedia,
   releaseChatMediaResourceSubscriber,
   schedulePairingQrExpiryRefresh,
 } from "./chat-message-media.ts";
@@ -54,23 +55,27 @@ describe("pairing QR expiry resource lifecycle", () => {
     const refresh = observeSubscriber(vi.fn());
     const resolvedMessage = typeof message === "function" ? message() : message;
 
-    schedulePairingQrExpiryRefresh(messageKey, resolvedMessage, refresh);
+    schedulePairingQrExpiryRefresh(
+      messageKey,
+      projectMessageMedia(resolvedMessage, []).nextPairingQrExpiresAt,
+      refresh,
+    );
 
     expect(vi.getTimerCount()).toBe(0);
     expect(observeChatMediaResource<void>("pairing-qr", messageKey).subscribers.size).toBe(0);
 
     // Reattach the probe so normal subscriber cleanup also removes its resource.
-    schedulePairingQrExpiryRefresh(messageKey, pairingQrMessage(Date.now() + 1_000), refresh);
+    schedulePairingQrExpiryRefresh(messageKey, Date.now() + 1_000, refresh);
   });
 
   it("removes the last subscription when a previously active QR loses its expiry", async () => {
     const messageKey = crypto.randomUUID();
     const refresh = observeSubscriber(vi.fn());
 
-    schedulePairingQrExpiryRefresh(messageKey, pairingQrMessage(Date.now() + 1_000), refresh);
+    schedulePairingQrExpiryRefresh(messageKey, Date.now() + 1_000, refresh);
     const resource = observeChatMediaResource<void>("pairing-qr", messageKey);
 
-    schedulePairingQrExpiryRefresh(messageKey, { content: [] }, refresh);
+    schedulePairingQrExpiryRefresh(messageKey, undefined, refresh);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(isChatMediaResourceCurrent(resource)).toBe(false);
@@ -83,16 +88,16 @@ describe("pairing QR expiry resource lifecycle", () => {
     const messageKey = crypto.randomUUID();
     const first = observeSubscriber(vi.fn());
     const second = observeSubscriber(vi.fn());
-    const message = pairingQrMessage(Date.now() + 1_000);
+    const expiresAt = Date.now() + 1_000;
     const independentResource = observeChatMediaResource<void>(
       "assistant-attachment",
       crypto.randomUUID(),
       first,
     );
 
-    schedulePairingQrExpiryRefresh(messageKey, message, first);
-    schedulePairingQrExpiryRefresh(messageKey, message, second);
-    schedulePairingQrExpiryRefresh(messageKey, { content: [] }, first);
+    schedulePairingQrExpiryRefresh(messageKey, expiresAt, first);
+    schedulePairingQrExpiryRefresh(messageKey, expiresAt, second);
+    schedulePairingQrExpiryRefresh(messageKey, undefined, first);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(first).not.toHaveBeenCalled();

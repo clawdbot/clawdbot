@@ -44,20 +44,6 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 }
 
 describe("check-deadcode-exports", () => {
-  it("requests every unused-export issue class from Knip", () => {
-    const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
-      "utf8",
-    );
-    expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
-    expect(script).toContain('"config/knip.config.ts", "--production"');
-    expect(script).toContain('"config/knip.all-exports.config.ts"');
-    expect(script).toContain('"config/knip.scripts-exports.config.ts"');
-    expect(script).toContain(
-      'args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"]',
-    );
-  });
-
   it("excludes test support only from the production scan", () => {
     expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
@@ -124,13 +110,18 @@ describe("check-deadcode-exports", () => {
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
+        "scripts/check-openclaw-package-tarball.mts!",
         "scripts/check-live-cache.ts!",
+        "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "src/plugin-sdk/api-baseline.ts!",
       ]),
     );
     expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
+    expect(
+      scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
+    ).toEqual(["exports"]);
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty("src/**");
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
@@ -168,6 +159,12 @@ describe("check-deadcode-exports", () => {
 
   it("tracks production script consumers of plugin exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
+  });
+
+  it("tracks the workflow-invoked producer verifier as an executable root", () => {
+    expect(knipConfig.workspaces["."].entry).toContain(
+      "scripts/verify-full-release-producer-job.mjs!",
+    );
   });
 
   it("runs exhaustive dead-code hygiene against production and full-tree configs", () => {
@@ -241,9 +238,6 @@ describe("check-deadcode-exports", () => {
       ]),
     );
     expect(knipConfig.workspaces["extensions/diffs"].entry).toContain("src/viewer-client.ts!");
-    expect(knipConfig.workspaces["extensions/matrix"].entry).toContain(
-      "src/plugin-entry.runtime.js!",
-    );
     expect(knipConfig.workspaces["extensions/mxc"].entry).toContain("src/mxc-spawn-launcher.mjs!");
     expect(knipConfig.workspaces["extensions/qa-lab"].entry).toContain("src/ci-smoke-plan.ts!");
   });

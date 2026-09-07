@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "../../../../packages/ai/src/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -8,13 +8,16 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createModelFallbackConfig } from "../../test-helpers/model-fallback-config-fixture.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
@@ -22,9 +25,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(),
 }));
 
-vi.mock("../../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
-}));
+vi.mock("../../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
@@ -75,7 +76,6 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     attemptedThinking: new Set(["off"]),
     fallbackConfigured: true,
     pluginHarnessOwnsTransport: false,
-    canRestartForLiveSwitch: false,
     authProfileId: "anthropic:p1",
     authProfileStore: {
       version: 1,
@@ -98,17 +98,17 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     },
     runtimeAuthRetry: false,
     maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    resolveAuthProfileFailureReason: () => null,
     emptyErrorRetries: 3,
     overloadProfileRotations: 0,
-    overloadProfileRotationLimit: 1,
-    sameModelIdleTimeoutRetries: 0,
     previousRetryFailoverReason: null,
-    maybeMarkAuthProfileFailure,
-    maybeRetrySameModelRateLimit: vi.fn(async () => false),
-    maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
-    advanceAuthProfile,
-    advanceRateLimitAuthProfile: vi.fn(async () => true),
+    failover: {
+      resolveAuthProfileFailureReason: () => null,
+      overloadProfileRotationLimit: 1,
+      maybeMarkAuthProfileFailure,
+      transientRetryCount: 0,
+      advanceAuthProfile,
+      advanceRateLimitAuthProfile: vi.fn(async () => true),
+    },
     traceAttempts,
     suspendForFailure: vi.fn(),
     suspensionSessionId: "session:credential-enoent",
@@ -149,8 +149,7 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
   fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
   fixture.input.emptyErrorRetries = 0;
   fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-  fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
-  fixture.input.advanceRateLimitAuthProfile = vi.fn(async () => true);
+  fixture.input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
   return fixture;
 }
 
@@ -193,7 +192,9 @@ function makeTerminalStreamFailureInput(options?: {
   fixture.input.fallbackConfigured = options?.fallbackConfigured !== false;
   fixture.input.authProfileId = undefined;
   fixture.input.emptyErrorRetries = 0;
-  fixture.input.advanceAuthProfile = vi.fn(async () => options?.profileAvailable !== false);
+  fixture.input.failover.advanceAuthProfile = vi.fn(
+    async () => options?.profileAvailable !== false,
+  );
   return fixture;
 }
 
@@ -256,6 +257,32 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("surfaces storage failure without replaying the run or rotating credentials", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.attemptAssistant = buildEmbeddedRunnerAssistant({
+      provider: "mock",
+      model: "model",
+      stopReason: "error",
+      errorMessage: "database is locked",
+    });
+    fixture.input.emptyErrorRetries = 0;
+    expect(await handleEmbeddedAssistantFailure(fixture.input)).toMatchObject({
+      action: "proceed",
+      assistantProfileFailureReason: null,
+      emptyErrorRetries: 0,
+      authRetryPending: false,
+      lastRetryFailoverReason: null,
+    });
+    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([]);
+  });
+  beforeEach(() => {
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
+  });
+
   it.each(["auth", "auth_permanent"] as const)(
     "carries %s profile failures into terminal resolution",
     async (reason) => {
@@ -273,7 +300,10 @@ describe("handleEmbeddedAssistantFailure", () => {
         activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
         fallbackConfigured: false,
         authProfileId: undefined,
-        resolveAuthProfileFailureReason: vi.fn(() => reason),
+        failover: {
+          ...fixture.input.failover,
+          resolveAuthProfileFailureReason: vi.fn(() => reason),
+        },
       });
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -302,17 +332,14 @@ describe("handleEmbeddedAssistantFailure", () => {
     fixture.input.model = modelId;
     fixture.input.activeErrorContext = { provider, model: modelId };
     fixture.input.authProfileId = undefined;
-    fixture.input.providerOwner = { id: "openrouter" };
-    fixture.input.resolveAuthProfileFailureReason = vi.fn((reason) =>
+    fixture.input.providerOwner = {
+      id: "openrouter",
+      classifyFailoverReason: ({ errorMessage: classifiedError }) =>
+        classifiedError === errorMessage ? "billing" : undefined,
+    };
+    fixture.input.failover.resolveAuthProfileFailureReason = vi.fn((reason) =>
       reason === "billing" ? "billing" : null,
     );
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ provider: classifiedProvider, context }) =>
-        classifiedProvider === "openrouter" && context.errorMessage === errorMessage
-          ? "billing"
-          : undefined,
-    );
-
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome).toMatchObject({
@@ -330,6 +357,42 @@ describe("handleEmbeddedAssistantFailure", () => {
     ]);
   });
 
+  it("uses the prepared OpenAI owner for structured Responses failures", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      stopReason: "error",
+      errorMessage: "server_error: provider failed",
+      errorCode: "server_error",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.provider = "openai";
+    fixture.input.providerOwner = {
+      id: "openai",
+      classifyFailoverReason: ({ code }) =>
+        code?.toUpperCase() === "SERVER_ERROR" ? "server_error" : undefined,
+    };
+    fixture.input.modelId = "gpt-5.6-luna";
+    fixture.input.model = "gpt-5.6-luna";
+    fixture.input.activeErrorContext = { provider: "openai", model: "gpt-5.6-luna" };
+    fixture.input.authProfileId = undefined;
+    fixture.input.failover.advanceAuthProfile = vi.fn(async () => false);
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "server_error",
+      status: 500,
+    });
+  });
+
   it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
     "does not rotate profiles or models after replay-unsafe failure %s",
     async (errorCode) => {
@@ -340,7 +403,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       }
       fixture.input.attemptAssistant.errorCode = errorCode;
       fixture.input.attemptAssistant.errorMessage = "reasoning is required";
-      fixture.input.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
+      fixture.input.failover.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
 
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -362,7 +425,7 @@ describe("handleEmbeddedAssistantFailure", () => {
         action: "retry",
         lastRetryFailoverReason: "timeout",
       });
-      expect(fixture.input.advanceAuthProfile).toHaveBeenCalledOnce();
+      expect(fixture.input.failover.advanceAuthProfile).toHaveBeenCalledOnce();
       expect(fixture.traceAttempts).toEqual([
         {
           provider,
@@ -378,16 +441,9 @@ describe("handleEmbeddedAssistantFailure", () => {
   it("recovers a real loopback Mistral partial EOF through embedded model fallback", async () => {
     const { assistant, partialText } = await streamIncompleteMistralResponseOverLoopback();
     const classification = classifyAssistantFailoverReason(assistant);
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "mistral/mistral-large-latest",
-            fallbacks: ["google/mock-2"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const config = createModelFallbackConfig("mistral/mistral-large-latest", [
+      "google/mock-2",
+    ]) satisfies OpenClawConfig;
     const calls: string[] = [];
     let embeddedFailure: { reason: string; rawError?: string } | undefined;
     let embeddedTrace: AssistantFailureInput["traceAttempts"] = [];
@@ -558,9 +614,8 @@ describe("handleEmbeddedAssistantFailure", () => {
 
     expect(outcome.action).toBe("proceed");
     expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
-    expect(fixture.input.maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
 
@@ -582,6 +637,53 @@ describe("handleEmbeddedAssistantFailure", () => {
     ]);
   });
 
+  it.each([
+    {
+      phase: "prompt",
+      providerStarted: false,
+      expectedTimeout: { timeoutPhase: "provider", providerStarted: false },
+    },
+    {
+      phase: "compaction",
+      providerStarted: true,
+      expectedTimeout: { providerStarted: true },
+    },
+  ] as const)(
+    "preserves canonical provider-start attribution through $phase idle-timeout fallback",
+    async ({ phase, providerStarted, expectedTimeout }) => {
+      const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
+      fixture.input.attempt.terminal = { kind: "timeout", phase, source: "idle" };
+      fixture.input.attempt.promptTimeoutOutcome = { providerStarted };
+      fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: fixture.input.attempt,
+        assistant: fixture.input.currentAttemptAssistant,
+      });
+      fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+      fixture.input.failover.advanceAuthProfile = vi.fn(async () => false);
+
+      expect(fixture.input.terminalState.outcome).toMatchObject({
+        status: "timeout",
+        reason: "hard_timeout",
+        ...expectedTimeout,
+      });
+
+      const failure = await handleEmbeddedAssistantFailure(fixture.input).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(FailoverError);
+      expect(fixture.input.failover.advanceAuthProfile).toHaveBeenCalledOnce();
+      const lifecycleFields = resolveAgentRunErrorLifecycleFields(failure, undefined);
+      expect(lifecycleFields).toEqual({ stopReason: "timeout", ...expectedTimeout });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: "error",
+          data: lifecycleFields,
+        }).reason,
+      ).toBe("hard_timeout");
+    },
+  );
+
   it.each(["HTTP 429 Too Many Requests", INCOMPLETE_TERMINAL_STREAM_MESSAGE])(
     "does not route a caller timeout with %s through failover",
     async (errorMessage) => {
@@ -602,57 +704,16 @@ describe("handleEmbeddedAssistantFailure", () => {
       fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
       fixture.input.emptyErrorRetries = 0;
       fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-      fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
 
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
       expect(outcome.action).toBe("proceed");
       expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
-      expect(fixture.input.maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(fixture.input.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
       expect(fixture.traceAttempts).toEqual([]);
     },
   );
-
-  it("records a same-model rate-limit retry without a profile-rotation trace", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "error",
-      errorMessage: "HTTP 429 Too Many Requests",
-      content: [{ type: "text", text: "rate limited" }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-    fixture.input.emptyErrorRetries = 0;
-    fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValueOnce("rate_limit");
-
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
-
-    expect(outcome).toMatchObject({
-      action: "retry",
-      preserveSameModelRateLimitRetryCount: true,
-    });
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.traceAttempts).toEqual([
-      {
-        provider: "anthropic",
-        model: "mock-1",
-        result: "same_model_rate_limit",
-        reason: "rate_limit",
-        stage: "assistant",
-      },
-    ]);
-  });
 
   it("retries a replay-safe reasoning-only assistant error before failover", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
@@ -681,17 +742,14 @@ describe("handleEmbeddedAssistantFailure", () => {
     fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
     fixture.input.emptyErrorRetries = 0;
     fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-    fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome).toMatchObject({
       action: "retry",
       emptyErrorRetries: 1,
-      preserveSameModelRateLimitRetryCount: true,
     });
     expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
-    expect(fixture.input.maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
@@ -700,16 +758,10 @@ describe("handleEmbeddedAssistantFailure", () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
     try {
-      const config = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/mock-0",
-              fallbacks: ["anthropic/mock-1", "groq/mock-2"],
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
+      const config = createModelFallbackConfig("openai/mock-0", [
+        "anthropic/mock-1",
+        "groq/mock-2",
+      ]) satisfies OpenClawConfig;
       const calls: string[] = [];
       const run = async (provider: string, model: string) => {
         calls.push(`${provider}/${model}`);

@@ -1,20 +1,28 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
+import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import {
+  createConfiguredGatewayLocalProbe,
+  type ConfiguredGatewayLocalProbe,
+} from "../../gateway/local-http-probe.js";
+import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
-import { probeGateway } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
+import { sleep } from "../../utils.js";
 import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
@@ -26,10 +34,71 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
+  gatewayBootId?: string;
+  gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
 };
+
+export type GatewayHttpReadiness = {
+  healthz: number | null;
+  readyz: number | null;
+};
+
+/** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */
+export async function waitForGatewayHttpReadiness(params: {
+  attempts: number;
+  config?: OpenClawConfig;
+  deadlineAt: number;
+  delayMs: number;
+  port: number;
+  signal?: AbortSignal;
+}): Promise<GatewayHttpReadiness> {
+  params.signal?.throwIfAborted();
+  const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
+  let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
+  for (let attempt = 0; attempt < params.attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
+    const remainingMs = params.deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      return latest;
+    }
+    const [healthz, readyz] = await Promise.all([
+      probe
+        .requestHttp({
+          host: "127.0.0.1",
+          pathname: "/healthz",
+          port: params.port,
+          timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
+        })
+        .then((result) => result?.statusCode ?? null),
+      probe
+        .requestHttp({
+          host: "127.0.0.1",
+          pathname: "/readyz",
+          port: params.port,
+          timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
+        })
+        .then((result) => result?.statusCode ?? null),
+    ]);
+    params.signal?.throwIfAborted();
+    latest = { healthz, readyz };
+    if (healthz === 200 && readyz === 200) {
+      return latest;
+    }
+    if (attempt + 1 < params.attempts) {
+      const remainingDelayMs = params.deadlineAt - Date.now();
+      if (remainingDelayMs <= 0) {
+        return latest;
+      }
+      await sleep(Math.min(params.delayMs, remainingDelayMs), params.signal);
+    }
+  }
+  return latest;
+}
 
 function formatGatewayRestartProbeError(error: unknown): string {
   return truncateUtf16Safe(
@@ -38,14 +107,8 @@ function formatGatewayRestartProbeError(error: unknown): string {
   );
 }
 
-function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
-  if (code !== 1008) {
-    return false;
-  }
+function isGatewayAuthRejection(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
-  if (!normalized) {
-    return false;
-  }
   const pairingFailure = classifyGatewayConnectFailure({ reason: normalized });
   if (
     pairingFailure.kind === "pairing-required" &&
@@ -154,59 +217,90 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
 
 export async function confirmGatewayReachable(params: {
   port: number;
-  includeHealthDetails?: boolean;
   auth?: GatewayRestartProbeAuth;
+  config?: OpenClawConfig;
+  configuredProbe?: ConfiguredGatewayLocalProbe;
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
+  signal?: AbortSignal;
 }): Promise<GatewayReachability> {
-  const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = normalizeOptionalString(
-    params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
-  );
+  params.signal?.throwIfAborted();
+  const result: GatewayReachability = {
+    reachable: false,
+    gatewayVersion: null,
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    channelProbeErrors: [],
+  };
   try {
-    const probe = await probeGateway({
-      url: `ws://127.0.0.1:${params.port}`,
-      auth: token || password ? { token, password } : undefined,
+    const context = params.config
+      ? { config: params.config, auth: params.auth }
+      : await resolveGatewayRestartProbeContext(params.env);
+    const auth = params.auth ?? context.auth;
+    const configuredProbe =
+      params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
+    const target = await configuredProbe.resolveWebSocketTarget(params.port);
+    if (!target) {
+      return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
+    }
+    const authNone = context.config.gateway?.auth?.mode === "none";
+    // Readiness is first-party local control. CLI shared auth preserves read scopes;
+    // auth-none uses the existing loopback backend contract without pairing a device.
+    params.signal?.throwIfAborted();
+    const health = await callGateway({
+      config: context.config,
+      localPortOverride: params.port,
+      token: auth?.token,
+      password: auth?.password,
+      skipImplicitAuth: true,
+      tlsFingerprint: target.tlsFingerprint,
+      method: "health",
+      scopes: [READ_SCOPE],
+      clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+      mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+      requireLocalBackendSharedAuth: authNone,
+      deviceIdentity: null,
+      sharedStateMode: "read-only",
       timeoutMs: 3_000,
-      includeDetails: params.includeHealthDetails === true,
-      env: params.env,
+      ...(params.signal ? { signal: params.signal } : {}),
+      onHelloOk: (hello) => {
+        result.gatewayVersion = hello.server.version;
+        result.gatewayBootId = hello.server.bootId;
+        result.gatewayBuildId = hello.server.buildId ?? null;
+      },
     });
-    const reachedGateway =
-      probe.ok ||
-      looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-      (params.allowDeviceIdentityRequired === true &&
-        probe.close?.code === 1008 &&
-        normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-      (probe.connectLatencyMs != null &&
-        probe.server?.version != null &&
-        probe.auth.capability === "connected_no_operator_scope");
-    return {
-      reachable: reachedGateway,
-      gatewayVersion: probe.server?.version ?? null,
-      activatedPluginErrors: readActivatedPluginErrors(probe.health),
-      channelProbeErrors: readChannelProbeErrors(probe.health),
-      ...(!reachedGateway && probe.error
-        ? { probeError: formatGatewayRestartProbeError(probe.error) }
-        : {}),
-    };
+    result.reachable = true;
+    result.activatedPluginErrors = readActivatedPluginErrors(health);
+    result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
-    return {
-      reachable: false,
-      gatewayVersion: null,
-      activatedPluginErrors: [],
-      channelProbeErrors: [],
-      probeError: formatGatewayRestartProbeError(error),
-    };
+    params.signal?.throwIfAborted();
+    // Only a correlated Gateway rejection proves protocol reachability. Bare socket
+    // closes (including foreign listeners) must never satisfy restart health.
+    result.reachable =
+      result.gatewayVersion === null &&
+      isGatewayProtocolResponseError(error) &&
+      (isGatewayAuthRejection(error.message) ||
+        (params.allowDeviceIdentityRequired === true &&
+          error.message === "device identity required"));
+    if (result.reachable) {
+      result.gatewayBuildId ??= null;
+    } else {
+      result.probeError = formatGatewayRestartProbeError(error);
+    }
   }
+  params.signal?.throwIfAborted();
+  return result;
 }
 
-export async function resolveGatewayRestartProbeAuth(
+export type GatewayRestartProbeContext = {
+  auth: GatewayRestartProbeAuth | undefined;
+  config: OpenClawConfig;
+};
+
+export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
-): Promise<GatewayRestartProbeAuth | undefined> {
-  const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(env ?? undefined),
-  } as NodeJS.ProcessEnv;
+): Promise<GatewayRestartProbeContext> {
+  const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
     env: mergedEnv,
     observe: false,
@@ -220,12 +314,14 @@ export async function resolveGatewayRestartProbeAuth(
     mode: "local",
     env: mergedEnv,
   });
-  return resolved.auth;
+  return { auth: resolved.auth, config: cfg };
 }
 
 export async function inspectGatewayPortHealth(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
+  config?: OpenClawConfig;
+  configuredProbe?: ConfiguredGatewayLocalProbe;
   expectedListenerPid?: number;
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
@@ -253,6 +349,8 @@ export async function inspectGatewayPortHealth(params: {
   const { reachable, probeError } = await confirmGatewayReachable({
     port: params.port,
     auth: params.auth,
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
     env: process.env,
     allowDeviceIdentityRequired: listenerOwnershipVerified,
   });

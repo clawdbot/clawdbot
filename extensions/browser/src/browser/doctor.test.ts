@@ -1,6 +1,13 @@
 // Browser tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
+import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
 import { buildBrowserDoctorReport } from "./doctor.js";
+
+const outdatedExtensionVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+const equivalentExtensionVersion =
+  chromeExtensionManifest.version.split(".").length < 4
+    ? `${chromeExtensionManifest.version}.0`
+    : chromeExtensionManifest.version.replace(/\.0$/, "");
 
 function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
   const ids: string[] = [];
@@ -46,6 +53,7 @@ describe("buildBrowserDoctorReport", () => {
     const websocketCheck = report.checks.find((check) => check.id === "cdp-websocket");
     expect(websocketCheck?.status).toBe("info");
     expect(websocketCheck?.summary).toBe("Browser is launchable but not running");
+    expect(report.checks.find((check) => check.id === "extension-version")).toBeUndefined();
   });
 
   it("fails when Chrome MCP attach is not ready", () => {
@@ -77,6 +85,7 @@ describe("buildBrowserDoctorReport", () => {
     expect(report.ok).toBe(false);
     const attachCheck = report.checks.find((check) => check.id === "attach-target");
     expect(attachCheck?.status).toBe("fail");
+    expect(report.checks.find((check) => check.id === "extension-version")).toBeUndefined();
   });
 
   it("keeps managed launch warnings non-fatal", () => {
@@ -241,5 +250,49 @@ describe("buildBrowserDoctorReport", () => {
       status: "warn",
       summary: "unavailable: SystemInfo domain unavailable",
     });
+  });
+
+  it.each([
+    ["outdated", outdatedExtensionVersion, "warn"],
+    ["current", chromeExtensionManifest.version, "pass"],
+    ["equivalent missing version component", equivalentExtensionVersion, "pass"],
+    ["maximum valid version", "65535.65535.65535.65535", "warn"],
+    ["unavailable", undefined, "info"],
+    ["terminal-control input", "2.0.0\u001b[31m", "info"],
+    ["oversized version component", "65536.0", "info"],
+    ["nonzero leading zero", "02.0.0", "info"],
+    ["all-zero version", "0.0.0.0", "info"],
+    ["too many version components", "2.0.0.0.0", "info"],
+  ] as const)("classifies %s extension version evidence", (_label, extensionVersion, severity) => {
+    const report = buildBrowserDoctorReport({
+      status: {
+        enabled: true,
+        profile: "chrome",
+        driver: "extension",
+        transport: "extension",
+        running: true,
+        pid: null,
+        cdpPort: 18792,
+        chosenBrowser: null,
+        userDataDir: null,
+        color: "#00AA00",
+        headless: false,
+        attachOnly: true,
+      },
+      extensionVersion,
+    });
+
+    const versionCheck = report.checks.find((check) => check.id === "extension-version");
+    expect(versionCheck?.status).toBe(severity);
+    if (severity === "warn") {
+      expect(versionCheck?.summary).toContain(
+        `running ${extensionVersion}; bundled ${chromeExtensionManifest.version}`,
+      );
+      expect(versionCheck?.fixHint).toMatch(/reload/i);
+    } else {
+      expect(versionCheck?.fixHint).toBeUndefined();
+      expect(versionCheck?.summary).not.toContain("\u001b");
+    }
+    expect(report.ok).toBe(true);
   });
 });

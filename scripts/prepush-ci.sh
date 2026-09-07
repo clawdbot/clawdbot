@@ -14,63 +14,36 @@ run_step() {
   "$@"
 }
 
-run_protocol_ci_mirror() {
-  local targets=(
-    "dist/protocol.schema.json"
-    "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"
-  )
-  local before after
-  before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
-
-  run_step pnpm protocol:gen
-  run_step pnpm protocol:check:swift
-
-  after="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
-  if [[ "$before" != "$after" ]]; then
-    echo "Protocol generation changed tracked outputs beyond the pre-run worktree." >&2
-    echo "Refresh generated protocol files and include the updated outputs before pushing." >&2
-    git --no-pager diff -- "${targets[@]}"
-    return 1
-  fi
+changed_paths_need_apple_build() {
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { detectChangedScope } from "./scripts/ci-changed-scope.mjs";
+    const scope = detectChangedScope(readFileSync(0, "utf8").split("\n"));
+    process.exit(scope.runMacos || scope.runIosBuild ? 0 : 1);
+  '
 }
 
 has_native_swift_changes() {
-  local native_paths=(
-    apps/macos
-    apps/macos-mlx-tts
-    apps/ios
-    apps/shared/OpenClawKit
-    apps/swabble
-    config/swiftformat
-    config/swiftlint.yml
-    scripts/check-swift-tools.sh
-    scripts/format-swift.sh
-    scripts/install-swift-tools.sh
-    scripts/install-xcodegen.sh
-    scripts/ios-write-swift-filelist.mjs
-    scripts/ios-write-swift-filelist.mts
-    scripts/lint-swift.sh
-  )
-
   if git rev-parse --verify --quiet origin/main >/dev/null; then
-    if git diff --name-only --relative origin/main...HEAD -- "${native_paths[@]}" | rg -q .; then
+    if git diff --name-only --relative origin/main...HEAD | changed_paths_need_apple_build; then
       return 0
     fi
   fi
 
   if git rev-parse --verify --quiet HEAD^ >/dev/null; then
-    git diff --name-only --relative HEAD^..HEAD -- "${native_paths[@]}" | rg -q .
+    git diff --name-only --relative HEAD^..HEAD | changed_paths_need_apple_build
     return $?
   fi
 
-  git show --name-only --relative --pretty='' HEAD -- "${native_paths[@]}" | rg -q .
+  git show --name-only --relative --pretty='' HEAD | changed_paths_need_apple_build
 }
 
 run_linux_ci_mirror() {
   run_step pnpm check
   run_step pnpm build:strict-smoke
   run_step pnpm lint:ui:no-raw-window-open
-  run_protocol_ci_mirror
+  run_step pnpm protocol:gen
+  run_step pnpm protocol:check:swift
   run_step pnpm plugins:assets:build
   run_step node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
   run_step env CI=true node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
@@ -99,8 +72,11 @@ run_macos_ci_mirror() {
 
   run_step pnpm lint:swift
   run_step pnpm format:swift
+  run_step node scripts/prepare-apple-mermaid.mjs
   run_step swift build --package-path apps/macos --configuration release
-  run_step swift test --package-path apps/macos --parallel
+  echo "Native tests were NOT run: use the disposable macos-swift GitHub CI job for this exact commit." >&2
+  echo "Local lint/build passed; prepush cannot certify the native suite on an operator desktop." >&2
+  return 1
 }
 
 main() {

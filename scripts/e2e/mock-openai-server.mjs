@@ -183,8 +183,12 @@ function readResponseEntry(value, label) {
     if (value.fail.mode === "drop" && value.fail.status !== undefined) {
       throw new Error(`${label} fail cannot combine status and drop`);
     }
+    const message = value.fail.message ?? "mantis injected fault";
+    if (typeof message !== "string" || !message.trim() || message.length > 2_000) {
+      throw new Error(`${label} fail message is invalid`);
+    }
     return {
-      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status },
+      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status, message },
       chunkDelayMs,
     };
   }
@@ -276,7 +280,7 @@ function writeInjectedFailure(res, fail) {
     res.destroy();
     return;
   }
-  writeJson(res, fail.status, { error: { message: "mantis injected fault" } });
+  writeJson(res, fail.status, { error: { message: fail.message } });
 }
 
 function splitResponseText(text) {
@@ -294,6 +298,7 @@ function responseEvents(text, deltas = [text]) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -318,6 +323,7 @@ function responseEvents(text, deltas = [text]) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -414,6 +420,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -438,6 +445,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -497,7 +505,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"],
+      command: "sleep 3 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -909,7 +917,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"] },
+            { command: "sleep 3 && echo openclaw-draft-proof" },
           );
           return;
         }

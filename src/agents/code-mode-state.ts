@@ -3,27 +3,26 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Snapshot } from "quickjs-wasi";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import type { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import {
-  enforceSnapshotPayloadLimits,
-  type CodeModeConfig,
-  type CodeModeSettlementMode,
-  type PendingBridgeRequest,
-  type SettledBridgeRequest,
+import type {
+  CodeModeConfig,
+  CodeModeSettlementMode,
+  PendingBridgeRequest,
+  SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
-  trackedDispatches: number;
-  repairProvenance: "clean" | "eligible" | "invalid";
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
@@ -39,21 +38,22 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
-  output: unknown[];
-  // Retain all output for cumulative limits, but never replay blocks already returned to the model.
-  deliveredOutputCount: number;
+  output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   bridgeDispatch: CodeModeBridgeDispatchState;
+  owner: CodeModeRunOwner;
 };
+
+export type CodeModeRunOwner = ReturnType<typeof createCodeModeRunOwner>;
 
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
@@ -61,17 +61,76 @@ const BRIDGE_CLOSED_MESSAGE = "Code Mode tool canceled, expired, or owner lost; 
 
 export const activeRuns = new Map<string, CodeModeRunState>();
 export const resumingRunIds = new Set<string>();
+const liveRunOwners = new Set<CodeModeRunOwner>();
 let activeRunReservations = 0;
 let nextPendingBridgeSettlementSequence = 0;
 let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
-export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false, trackedDispatches: 0, repairProvenance: "clean" };
+/** Catalog ownership spans worker legs and snapshots; parking never closes the cell. */
+export function createCodeModeRunOwner(ctx: ToolSearchToolContext) {
+  const runId = `cm_${randomUUID()}`;
+  const closed = new AbortController();
+  const signal = ctx.abortSignal
+    ? AbortSignal.any([closed.signal, ctx.abortSignal])
+    : closed.signal;
+  const disposers = ctx.catalogRef
+    ? (ctx.catalogRef.onDispose ??= new Set<() => void>())
+    : undefined;
+  let releaseCall = () => {};
+  const close = (reason?: unknown) => {
+    if (closed.signal.aborted) {
+      return;
+    }
+    releaseCall();
+    signal.removeEventListener("abort", onLifetimeAbort);
+    disposers?.delete(close);
+    liveRunOwners.delete(owner);
+    const parked = activeRuns.get(runId);
+    if (parked?.owner === owner) {
+      activeRuns.delete(runId);
+      cancelPendingBridgeStates(parked.pending);
+    }
+    closed.abort(reason);
+    scheduleActiveRunExpiry();
+  };
+  const onLifetimeAbort = () => close(signal.reason);
+  const owner = {
+    runId,
+    signal,
+    close,
+    bindCall(callSignal?: AbortSignal): AbortSignal {
+      releaseCall();
+      if (signal.aborted) {
+        return signal;
+      }
+      const combined = callSignal ? AbortSignal.any([signal, callSignal]) : signal;
+      const release = () => combined.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        // A completed observer cannot cancel a later wait on this same cell.
+        if (releaseCall === release) {
+          close(combined.reason);
+        }
+      };
+      releaseCall = release;
+      combined.addEventListener("abort", onAbort, { once: true });
+      if (combined.aborted) {
+        onAbort();
+      }
+      // Pending work follows the cell, not an observer replaced by a later wait.
+      return signal;
+    },
+  };
+  liveRunOwners.add(owner);
+  disposers?.add(close);
+  signal.addEventListener("abort", onLifetimeAbort, { once: true });
+  if (!ctx.catalogRef?.current || signal.aborted) {
+    close(signal.reason);
+  }
+  return owner;
 }
 
-/** Read the monotonic host-only repair classification for one Code Mode run. */
-export function isCodeModeBridgeRepairEligible(state: CodeModeBridgeDispatchState): boolean {
-  return state.repairProvenance === "eligible";
+export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
+  return { started: false };
 }
 
 // One unreferenced timer owns parked snapshots even when no later exec or wait
@@ -121,25 +180,19 @@ export function removeExpiredRuns(now = Date.now()): void {
 
 export function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
-  cancelPendingBridgeStates(state?.pending ?? []);
   activeRuns.delete(runId);
+  state?.owner.close();
+  cancelPendingBridgeStates(state?.pending ?? []);
   resumingRunIds.delete(runId);
   scheduleActiveRunExpiry();
 }
 
-/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+/** Cancel every cell before its Gateway-owned runtimes disappear. */
 export function disposeAllCodeModeRuns(): void {
-  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  liveRunOwners.forEach((owner) => owner.close());
   activeRuns.clear();
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
-}
-
-/** Advance the snapshot frontier before exposing output to a wait observer. */
-export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
-  const output = state.output.slice(state.deliveredOutputCount);
-  state.deliveredOutputCount = state.output.length;
-  return output;
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -222,8 +275,13 @@ function enforceActiveRunLimit(): void {
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     enforceActiveRunLimit();
-  } else if (!activeRuns.delete(ownedRunId)) {
-    throw new ToolInputError("code mode run is unavailable or expired.");
+  } else {
+    const state = activeRuns.get(ownedRunId);
+    if (!state) {
+      throw new ToolInputError("code mode run is unavailable or expired.");
+    }
+    activeRuns.delete(ownedRunId);
+    scheduleActiveRunExpiry();
   }
   // Resume transfers an existing slot without exposing a free capacity window
   // to concurrent exec calls or rejecting its own run at the global limit.
@@ -238,127 +296,79 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   };
 }
 
-export function snapshotState(params: {
-  pendingRequests: PendingBridgeRequest[];
-  snapshotBytes: Uint8Array;
-  parentToolCallId: string;
-  codeModeReplayId: string;
-  ctx: ToolSearchToolContext;
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  output: unknown[];
-  deadlineMs: number;
-  deliveredOutputCount?: number;
-  reservedActiveRunSlot?: boolean;
-  replaySafe: boolean;
-  settlementMode: CodeModeSettlementMode;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}) {
-  enforceSnapshotStateLimits(params);
-  const runId = `cm_${randomUUID()}`;
-  const pending = createPendingBridgeStates({
-    ...params,
-    activeRunId: runId,
-    codeModeRunId: params.codeModeReplayId,
-  });
-  try {
-    return storeSnapshotState({
-      ...params,
-      runId,
-      replayId: params.codeModeReplayId,
-      pending,
-      replaySafe:
-        params.replaySafe &&
-        pendingBridgeRequestsReplaySafe(
-          params.pendingRequests,
-          params.runtime,
-          params.catalogProjection,
-        ),
-    });
-  } catch (error) {
-    cancelPendingBridgeStates(pending);
-    throw error;
-  }
-}
-
 export function pendingBridgeRequestsReplaySafe(
   pending: readonly PendingBridgeRequest[],
   runtime: ToolSearchRuntime,
   catalogProjection: CodeModeCatalogProjection,
 ): boolean {
-  return pending.every((request) => {
-    if (
-      request.method === "search" ||
-      request.method === "describe" ||
-      request.method === "yield" ||
-      request.method === "agentSpawn" ||
-      request.method === "agentWait" ||
-      request.method === "skillsList" ||
-      request.method === "skillsRead" ||
-      request.method === "sleep"
-    ) {
-      return true;
-    }
-    if (request.method !== "callValue") {
-      return false;
-    }
-    const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-    if (typeof callableName !== "string") {
-      return false;
-    }
-    const binding = catalogProjection.byCallableName.get(callableName);
-    return binding ? runtime.isReplaySafeExactId(binding.id) : false;
-  });
+  return pending.every((request) =>
+    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
+  );
 }
 
-function enforceSnapshotStateLimits(params: {
-  snapshotBytes: Uint8Array;
-  config: CodeModeConfig;
-  reservedActiveRunSlot?: boolean;
-}) {
-  if (!params.reservedActiveRunSlot) {
-    enforceActiveRunLimit();
+function isPendingBridgeRequestReplaySafe(
+  request: PendingBridgeRequest,
+  runtime: ToolSearchRuntime,
+  catalogProjection: CodeModeCatalogProjection,
+): boolean {
+  if (
+    request.method === "search" ||
+    request.method === "describe" ||
+    request.method === "yield" ||
+    request.method === "agentSpawn" ||
+    request.method === "agentWait" ||
+    request.method === "skillsList" ||
+    request.method === "skillsRead" ||
+    request.method === "sleep"
+  ) {
+    return true;
   }
-  enforceSnapshotPayloadLimits(params);
+  if (request.method === "nodes") {
+    return request.args[0] === "list" || request.args[0] === "get";
+  }
+  if (request.method !== "callValue") {
+    return false;
+  }
+  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
+  if (typeof callableName !== "string") {
+    return false;
+  }
+  const binding = catalogProjection.byCallableName.get(callableName);
+  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
-export function createPendingBridgeStates(params: {
-  pendingRequests: PendingBridgeRequest[];
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  parentToolCallId: string;
-  codeModeRunId: string;
-  deadlineMs: number;
-  activeRunId?: string;
-  ctx: ToolSearchToolContext;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}): PendingBridgeState[] {
-  return params.pendingRequests.map((request) => {
+export function createPendingBridgeStates(
+  pendingRequests: PendingBridgeRequest[],
+  params: {
+    config: CodeModeConfig;
+    runtime: ToolSearchRuntime;
+    catalogProjection: CodeModeCatalogProjection;
+    namespaceRuntime: CodeModeNamespaceRuntime;
+    parentToolCallId: string;
+    codeModeRunId: string;
+    remainingMs: number;
+    activeRunId?: string;
+    ctx: ToolSearchToolContext;
+    signal: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+    bridgeDispatch: CodeModeBridgeDispatchState;
+  },
+): PendingBridgeState[] {
+  // Pending siblings retain dispatch context, never the original request batch.
+  return pendingRequests.map((request) => {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
-    const signal = AbortSignal.any(
-      [params.signal, params.ctx.abortSignal, abortController.signal].filter(
-        (candidate): candidate is AbortSignal => candidate !== undefined,
-      ),
-    );
-    const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
-    const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
-    const tracksDispatch = request.method !== "sleep";
-    if (tracksDispatch) {
+    const signal = abortController.signal;
+    // Relay only while pending: closing a finished cell must not cancel an
+    // external operation whose result was already delivered to its guest.
+    const onAbort = () => abortController.abort(params.signal.reason);
+    params.signal.addEventListener("abort", onAbort, { once: true });
+    if (params.signal.aborted) {
+      onAbort();
+    }
+    if (request.method !== "sleep") {
       params.bridgeDispatch.started = true;
-      params.bridgeDispatch.trackedDispatches += 1;
-      if (params.bridgeDispatch.trackedDispatches > 1) {
-        params.bridgeDispatch.repairProvenance = "invalid";
-      }
     }
     const bridgeCall = runBridgeRequest({
       runtime: params.runtime,
@@ -367,31 +377,26 @@ export function createPendingBridgeStates(params: {
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeRunId,
       maxOutputBytes: params.config.maxOutputBytes,
-      remainingMs: Math.max(1, params.deadlineMs - Date.now()),
+      remainingMs: Math.max(1, params.remainingMs),
       ctx: params.ctx,
       request,
       signal,
       onUpdate: params.onUpdate,
     });
-    const completion = raceWithAbortSignal(bridgeCall, signal, yieldRunSignal).catch(
-      (): SettledBridgeRequest => ({
-        id: request.id,
-        ok: false,
-        error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
-      }),
-    );
+    const completion = raceWithAbortSignal(bridgeCall, signal).catch((): SettledBridgeRequest => ({
+      id: request.id,
+      ok: false,
+      error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
+    }));
     const state: PendingBridgeState = {
       ...request,
       promise: completion.then((settled) => {
-        const trustedNoStart = tracksDispatch && consumeTrustedToolNoStartError(settled);
-        if (tracksDispatch && params.bridgeDispatch.repairProvenance !== "invalid") {
-          params.bridgeDispatch.repairProvenance =
-            params.bridgeDispatch.trackedDispatches === 1 && trustedNoStart
-              ? "eligible"
-              : "invalid";
-        }
+        params.signal.removeEventListener("abort", onAbort);
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
+        // Only the response is needed until guest replay; live calls keep their own request.
+        state.args = [];
+        state.cancel = undefined;
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {
@@ -414,22 +419,26 @@ export function createPendingBridgeStates(params: {
 }
 
 export function storeSnapshotState(params: {
-  runId: string;
+  owner: CodeModeRunOwner;
   replayId: string;
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
-  output: unknown[];
-  deliveredOutputCount?: number;
+  output: CodeModeOutputState;
   bridgeDispatch: CodeModeBridgeDispatchState;
 }) {
+  const runId = params.owner.runId;
+  if (params.owner.signal.aborted) {
+    cancelPendingBridgeStates(params.pending);
+    return codeModeAbortedResult(params);
+  }
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
   if (expiresAt === undefined) {
@@ -444,35 +453,61 @@ export function storeSnapshotState(params: {
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
       )
     : undefined;
-  activeRuns.set(params.runId, {
-    runId: params.runId,
+  const state: CodeModeRunState = {
+    runId,
     replayId: params.replayId,
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshotBytes: params.snapshotBytes,
+    snapshot: params.snapshot,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
-    deliveredOutputCount: params.output.length,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
     catalogProjection: params.catalogProjection,
     namespaceRuntime: params.namespaceRuntime,
     bridgeDispatch: params.bridgeDispatch,
-  });
-  scheduleActiveRunExpiry();
-  return {
-    status: "waiting" as const,
-    runId: params.runId,
-    reason: codeModeWaitingReason(params.pending),
-    pendingToolCalls: pendingToolCalls(params.pending),
-    replaySafe: params.replaySafe,
-    output: params.output.slice(params.deliveredOutputCount ?? 0),
-    telemetry: telemetry(params.runtime),
+    owner: params.owner,
   };
+  const result = params.output.takeResult(
+    {
+      status: "waiting" as const,
+      runId,
+      reason: codeModeWaitingReason(params.pending),
+      pendingToolCalls: pendingToolCalls(params.pending),
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    {},
+    params.runtime.hasNetworkContent(),
+  );
+  // A result that cannot expose its continuation must not leave an unreachable parked cell.
+  activeRuns.set(runId, state);
+  scheduleActiveRunExpiry();
+  return result;
+}
+
+export function codeModeAbortedResult(params: {
+  bridgeDispatch: CodeModeBridgeDispatchState;
+  output: CodeModeOutputState;
+  replaySafe: boolean;
+  runtime: ToolSearchRuntime;
+}) {
+  return params.output.takeResult(
+    {
+      status: "failed" as const,
+      code: "aborted" as const,
+      failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
+      bridgeDispatchStarted: params.bridgeDispatch.started,
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    { error: "code mode execution aborted" },
+    params.runtime.hasNetworkContent(),
+  );
 }
 
 export function codeModeWaitingReason(

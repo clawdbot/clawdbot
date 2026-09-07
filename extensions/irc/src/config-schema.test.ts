@@ -63,6 +63,22 @@ describe("irc config schema", () => {
     expect(config.accounts?.work?.configWrites).toBe(true);
   });
 
+  it("accepts healthMonitor at channel and account level", () => {
+    const config = expectValidConfig(
+      parseIrcConfig({
+        healthMonitor: { enabled: false },
+        accounts: {
+          work: {
+            healthMonitor: { enabled: true },
+          },
+        },
+      }),
+    );
+
+    expect(config.healthMonitor?.enabled).toBe(false);
+    expect(config.accounts?.work?.healthMonitor?.enabled).toBe(true);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidConfig(
       parseIrcConfig({
@@ -146,6 +162,29 @@ describe("irc config schema", () => {
           register: true,
           registerEmail: "bot@example.com",
         },
+      }),
+    );
+  });
+});
+
+describe("retired IRC mentionPatterns", () => {
+  it("rejects the retired key at root and account scope", () => {
+    expectInvalidConfig(
+      parseIrcConfig({ host: "irc.libera.chat", mentionPatterns: ["\\bopenclaw\\b"] }),
+    );
+    expectInvalidConfig(
+      parseIrcConfig({
+        host: "irc.libera.chat",
+        accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
+      }),
+    );
+  });
+
+  it("still accepts the same config once the retired key is gone", () => {
+    expectValidConfig(
+      parseIrcConfig({
+        host: "irc.libera.chat",
+        accounts: { work: { nick: "openclaw-ops" } },
       }),
     );
   });

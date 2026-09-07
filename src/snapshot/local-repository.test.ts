@@ -9,7 +9,7 @@ import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
 import {
@@ -1320,16 +1320,16 @@ describe("local SQLite snapshot repository", () => {
         linkedArtifactPath = path.resolve(String(target));
       }
     });
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       if (
         linkedArtifactPath &&
         !failedInspection &&
-        path.resolve(String(filePath)) === linkedArtifactPath
+        path.resolve(String(args[0])) === linkedArtifactPath
       ) {
         failedInspection = true;
         throw Object.assign(new Error("post-link inspection failed"), { code: "EIO" });
       }
-      return await originalLstat(filePath);
+      return await originalLstat(...args);
     });
 
     await withRestoredSpies([lstatSpy, linkSpy], async () => {

@@ -8,10 +8,9 @@ import {
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogEntrySnapshot,
 } from "openclaw/plugin-sdk/session-catalog";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
-import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
 import { CatalogParamsError } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
@@ -204,11 +203,13 @@ export async function finalizeNodeAdoptedSession(params: {
           throw changedError();
         }
         if (current.initializing !== true) {
-          return { archivedAt: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         }
         const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
         return {
           archivedAt: undefined,
+          archivedBy: undefined,
+          archiveReason: undefined,
           pluginExtensions: {
             ...entry.pluginExtensions,
             codex: { ...codex, sessionCatalog: params.marker },
@@ -270,7 +271,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
       agentId: params.agentId,
       recoverMatchingInitialEntry: true,
-      ...(params.record.name?.trim() ? { label: params.record.name.trim() } : {}),
+      displayName: params.record.name ?? undefined,
       ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
       initialEntry: {
         agentHarnessId: "codex",
@@ -285,6 +286,8 @@ export async function createOrReuseNodeAdoptedSession(params: {
         const storePath = resolveStorePath(params.config.session?.store, {
           agentId: entry.agentId,
         });
+        const { importCodexThreadHistoryToTranscript } =
+          await import("./app-server/transcript-mirror.js");
         await importCodexThreadHistoryToTranscript({
           thread: params.history.thread,
           throughTurnId: params.history.throughTurnId,

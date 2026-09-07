@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { parsePlatform, verifyDockerAttestations } from "./verify-docker-attestations.mjs";
@@ -19,7 +20,7 @@ const VARIANTS = Object.freeze([
   { aliasKey: "browser", suffix: "-browser" },
 ]);
 
-/** @typedef {{ imageTagSuffix?: string; images: string[]; version: string }} DockerPromotionParams */
+/** @typedef {{ imageTagSuffix?: string; images: string[]; includeBrowser?: boolean; version: string }} DockerPromotionParams */
 /**
  * @typedef {object} DockerExecOptions
  * @property {"utf8"} encoding
@@ -49,7 +50,12 @@ const VARIANTS = Object.freeze([
  *
  * @param {DockerPromotionParams} params
  */
-export function createDockerChannelPromotionPlan({ version, imageTagSuffix = "", images }) {
+export function createDockerChannelPromotionPlan({
+  version,
+  imageTagSuffix = "",
+  images,
+  includeBrowser = true,
+}) {
   if (images.length === 0) {
     throw new Error("At least one --image is required.");
   }
@@ -61,7 +67,7 @@ export function createDockerChannelPromotionPlan({ version, imageTagSuffix = "",
   for (const image of images) {
     for (const { aliasKey, suffix } of VARIANTS) {
       const aliases = policy.movingAliases[aliasKey];
-      if (aliases.length === 0) {
+      if (aliases.length === 0 || (!includeBrowser && aliasKey === "browser")) {
         continue;
       }
       promotions.push({
@@ -104,27 +110,6 @@ function inspectManifestDigest(imageRef, execFileSyncImpl) {
   return digest;
 }
 
-function formatCommandError(error) {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-  const output = [error.message];
-  for (const field of ["stderr", "stdout"]) {
-    const value = error[field];
-    if (typeof value === "string") {
-      output.push(value);
-    } else if (Buffer.isBuffer(value)) {
-      output.push(value.toString("utf8"));
-    }
-  }
-  return output.join("\n");
-}
-
-function isMissingManifestError(error) {
-  const message = formatCommandError(error);
-  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(message);
-}
-
 function formatPlatform(platform) {
   const suffix = platform.variant ? `/${platform.variant}` : "";
   return `${platform.os}/${platform.architecture}${suffix}`;
@@ -150,7 +135,7 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
         execFileSyncImpl,
       );
     } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error)) {
+      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
         return null;
       }
       throw error;
@@ -221,15 +206,11 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
-export function promoteDockerChannel({ version, imageTagSuffix = "", images }, options = {}) {
+export function promoteDockerChannel(params, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const verifyAttestationsImpl = options.verifyAttestationsImpl ?? verifyDockerAttestations;
-  const plan = createDockerChannelPromotionPlan({
-    version,
-    imageTagSuffix,
-    images,
-  });
+  const plan = createDockerChannelPromotionPlan(params);
 
   // Resolve every version-specific source before the first alias write. A missing
   // release variant must not leave the channel partially promoted.

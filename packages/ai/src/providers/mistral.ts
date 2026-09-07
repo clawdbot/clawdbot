@@ -1,6 +1,5 @@
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { randomUUID } from "node:crypto";
-import { HTTPClient, Mistral, type Fetcher } from "@mistralai/mistralai";
+import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
   ChatCompletionStreamRequest,
   ChatCompletionStreamRequestMessage,
@@ -8,11 +7,16 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
+  assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpResponse,
   transportAbortError,
@@ -23,7 +27,6 @@ import type {
   Message,
   Model,
   SimpleStreamOptions,
-  StopReason,
   StreamFunction,
   StreamOptions,
   TextContent,
@@ -38,11 +41,12 @@ import {
   parseStreamingJson,
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -138,7 +142,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output = createOutput(model);
+    const output = createAssistantOutput(model);
 
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider);
@@ -160,14 +164,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           reportedResponse = response;
         }
       });
+      // Use the public chat subclient so standalone bundles omit unrelated Mistral APIs.
       // Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
-      const mistral = new Mistral({
+      const chat = new Chat({
         apiKey,
         serverURL: model.baseUrl,
-        // Bound the streamed Mistral response body at 16 MiB so a hostile or
-        // malfunctioning endpoint cannot exhaust memory. The HTTPClient is the
-        // SDK's public fetch and response-hook boundary for every chat.stream attempt.
+        // Keep bounded fetch and response hooks on every streaming attempt.
         httpClient,
+        retryConfig: { strategy: "none" },
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -186,7 +190,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       if (resolveMistralPromptCacheKey(options) && options?.sessionId) {
         headers["x-affinity"] ||= options.sessionId;
       }
-      const mistralStream = await mistral.chat.stream(payload, {
+      const mistralStream = await chat.stream(payload, {
         headers,
         signal: options?.signal,
       });
@@ -199,23 +203,22 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         });
       }
       stream.push({ type: "start", partial: output });
-      await consumeChatStream(model, output, stream, mistralStream);
+      await consumeChatStream(model, output, stream, mistralStream, options?.signal);
 
       if (options?.signal?.aborted) {
         throw transportAbortError(options.signal);
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error("An unknown error occurred");
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const terminal = assignTransportErrorDetails(output, error, options?.signal);
       // Failed or canceled generations must never retain partially repaired tool calls.
       output.content = output.content.filter((block) => block.type !== "toolCall");
-      const terminal = projectProviderError(error, options?.signal);
-      Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
@@ -256,26 +259,6 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
         : undefined,
   } satisfies MistralOptions);
 };
-
-function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
 
 function createMistralToolCallIdNormalizer(): (id: string) => string {
   const idMap = new Map<string, string>();
@@ -399,6 +382,7 @@ async function consumeChatStream(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   mistralStream: AsyncIterable<CompletionEvent>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
   let terminalFinishReason: string | undefined;
@@ -589,10 +573,16 @@ async function consumeChatStream(
   };
 
   for await (const event of mistralStream) {
+    notifyLlmRequestActivity(signal);
     const chunk = event.data;
     // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
     // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
     output.responseId ||= chunk.id;
+    // Retain the provider-returned model when it differs from the requested id so
+    // routed responses are not misattributed, matching the OpenAI sibling stream.
+    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+      output.responseModel ||= chunk.model;
+    }
 
     if (chunk.usage) {
       const promptTokens = chunk.usage.promptTokens || 0;
@@ -614,7 +604,13 @@ async function consumeChatStream(
 
     if (choice.finishReason) {
       terminalFinishReason = choice.finishReason;
-      output.stopReason = mapChatStopReason(choice.finishReason);
+      const { stopReason, errorMessage } = mapOpenAIStopReason(
+        choice.finishReason === "model_length" ? "length" : choice.finishReason,
+      );
+      output.stopReason = stopReason;
+      if (errorMessage) {
+        output.errorMessage = errorMessage;
+      }
     }
 
     const delta = choice.delta;
@@ -654,7 +650,7 @@ async function consumeChatStream(
             output.content.push(currentBlock);
             stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
           }
-          currentBlock.thinking += thinkingDelta;
+          appendAssistantThinking(currentBlock, thinkingDelta);
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),
@@ -1013,22 +1009,4 @@ function mapToolChoice(
   };
 }
 
-function mapChatStopReason(reason: string | null): StopReason {
-  if (reason === null) {
-    return "stop";
-  }
-  switch (reason) {
-    case "stop":
-      return "stop";
-    case "length":
-    case "model_length":
-      return "length";
-    case "tool_calls":
-      return "toolUse";
-    case "error":
-      return "error";
-    default:
-      return "stop";
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

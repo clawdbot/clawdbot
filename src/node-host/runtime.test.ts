@@ -1,9 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
-import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import type { SkillBinsProvider } from "./invoke.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
@@ -13,11 +19,6 @@ const mocks = vi.hoisted(() => {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
     initializeWorkerSupervisor: vi.fn(async () => undefined),
-    resolveContainerEngine: vi.fn(async (_options?: { env?: NodeJS.ProcessEnv }) => ({
-      id: "docker" as const,
-      command: "docker",
-      target: "e".repeat(64),
-    })),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async (_chunk: string) => undefined),
@@ -48,10 +49,6 @@ vi.mock("./node-invoke-progress.js", () => ({
     stop: vi.fn(),
     flush: vi.fn(async () => undefined),
   })),
-}));
-
-vi.mock("./node-worker-container-engine.js", () => ({
-  resolveNodeWorkerContainerEngine: mocks.resolveContainerEngine,
 }));
 
 vi.mock("./node-worker-supervisor.js", () => ({
@@ -97,17 +94,170 @@ beforeEach(() => {
   mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
-async function startRuntime() {
+function createNodeHostClient(request: () => Promise<unknown>): NodeHostClient {
+  return {
+    async request<T>() {
+      return (await request()) as T;
+    },
+  };
+}
+
+async function startRuntime(
+  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
+) {
   const prepared = await prepareNodeHostRuntime({
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
     enableWorkerRuns: true,
   });
-  return prepared.start({
-    client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
+  return prepared.start({ client });
+}
+
+type SkillBinsResponse = { bins: string[] };
+type SkillBinsFixture = {
+  requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>>;
+  observed: Map<string, SkillBinTrustEntry[]>;
+  expected: SkillBinTrustEntry[];
+  response: SkillBinsResponse;
+  invoke: (id: string) => Promise<void>;
+  expire: () => void;
+  disconnect: () => void;
+};
+
+async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
+  await withEnvAsync({ PATH: path.dirname(process.execPath) }, async () => {
+    const requests: SkillBinsFixture["requests"] = [];
+    const observed = new Map<string, SkillBinTrustEntry[]>();
+    const invokes: Promise<void>[] = [];
+    const name = path.basename(process.execPath);
+    const response = { bins: [name] };
+    const now = Date.now;
+    let elapsed = 0;
+    const runtime = await startRuntime(
+      createNodeHostClient(() => {
+        const request = createDeferred<SkillBinsResponse>();
+        requests.push(request);
+        return request.promise;
+      }),
+    );
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
+      const request = args[0] as typeof frame;
+      const provider = args[2] as SkillBinsProvider;
+      observed.set(request.id, await provider.current());
+    });
+    try {
+      await run({
+        requests,
+        observed,
+        expected: [{ name, resolvedPath: fs.realpathSync(process.execPath) }],
+        response,
+        invoke: (id) => {
+          const pending = runtime.invoke({ ...frame, id, command: "system.run" });
+          invokes.push(pending);
+          return pending;
+        },
+        expire: () => {
+          elapsed += 90_001;
+        },
+        disconnect: () => runtime.cancelAll(),
+      });
+    } finally {
+      runtime.cancelAll();
+      for (const request of requests) {
+        request.resolve({ bins: [] });
+      }
+      await Promise.allSettled(invokes);
+      try {
+        await runtime.close();
+      } finally {
+        mocks.handleInvoke.mockReset();
+        clock.mockRestore();
+      }
+    }
   });
 }
+
+async function primeSkillBins(fixture: SkillBinsFixture) {
+  const pending = fixture.invoke("prime");
+  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+  expectDefined(fixture.requests[0], "initial skill refresh").resolve(fixture.response);
+  await pending;
+  expect(fixture.observed.get("prime")).toEqual(fixture.expected);
+  fixture.expire();
+}
+
+describe("node-host skill-bin cache", () => {
+  it.each(["cold", "expired"])(
+    "shares a %s refresh and returns resolved binaries",
+    async (phase) => {
+      await withSkillBinsRuntime(async (fixture) => {
+        if (phase === "expired") {
+          await primeSkillBins(fixture);
+        }
+        const requestCount = fixture.requests.length + 1;
+        const first = fixture.invoke("first");
+        const second = fixture.invoke("second");
+        await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+        expectDefined(fixture.requests[requestCount - 1], "shared skill refresh").resolve(
+          fixture.response,
+        );
+        await Promise.all([first, second]);
+        await fixture.invoke("warm");
+        for (const id of ["first", "second", "warm"]) {
+          expect(fixture.observed.get(id)).toEqual(fixture.expected);
+        }
+        expect(fixture.requests).toHaveLength(requestCount);
+      });
+    },
+  );
+
+  it.each(["cold", "expired"])("shares a failed %s refresh and permits retry", async (phase) => {
+    await withSkillBinsRuntime(async (fixture) => {
+      if (phase === "expired") {
+        await primeSkillBins(fixture);
+      }
+      const requestCount = fixture.requests.length + 1;
+      const first = fixture.invoke("first");
+      const second = fixture.invoke("second");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
+      expectDefined(fixture.requests[requestCount - 1], "failed skill refresh").reject(
+        new Error("Gateway unavailable"),
+      );
+      await Promise.all([first, second]);
+      for (const id of ["first", "second"]) {
+        expect(fixture.observed.get(id)).toEqual(phase === "expired" ? fixture.expected : []);
+      }
+      const retry = fixture.invoke("retry");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount + 1));
+      expectDefined(fixture.requests[requestCount], "retried skill refresh").resolve(
+        fixture.response,
+      );
+      await retry;
+      expect(fixture.observed.get("retry")).toEqual(fixture.expected);
+    });
+  });
+
+  it("keeps pending old-connection results out of the replacement cache", async () => {
+    await withSkillBinsRuntime(async (fixture) => {
+      const old = fixture.invoke("old");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      fixture.disconnect();
+      const replacement = fixture.invoke("replacement");
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
+      expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
+      await old;
+      expect(fixture.observed.has("replacement")).toBe(false);
+      expectDefined(fixture.requests[1], "replacement connection refresh").resolve({ bins: [] });
+      await replacement;
+      await fixture.invoke("replacement-warm");
+      expect(fixture.observed.get("replacement")).toEqual([]);
+      expect(fixture.observed.get("replacement-warm")).toEqual([]);
+      expect(fixture.requests).toHaveLength(2);
+    });
+  });
+});
 
 function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
   let io: OpenClawPluginNodeHostCommandIo | undefined;
@@ -139,150 +289,16 @@ function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
   };
 }
 
-describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      forceWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-  });
-
-  it("keeps local consent separate from connection metadata", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(prepared.manifest).not.toHaveProperty("workerRuns");
-    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-  });
-
-  it("disables container-isolated hosting and records why when no engine is usable", async () => {
-    const reason =
-      "Container-isolated node workers require Docker or Podman; install and start an engine.";
-    mocks.resolveContainerEngine.mockRejectedValueOnce(new Error(reason));
-
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toBe(reason);
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-    });
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      platform: "win32",
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
-    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-    });
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("resolves the container engine once and passes its exact identity to the supervisor", async () => {
-    mocks.initializeWorkerSupervisor.mockImplementationOnce(async () => {
-      const options = vi.mocked(createNodeWorkerSupervisor).mock.calls[0]?.[0];
-      options?.onCapacityChanged?.({ total: 3, available: 0 });
-      options?.onCapacityChanged?.({ total: 3, available: 3 });
-    });
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: {
-            enabled: true,
-            isolation: "container",
-            containerImage: "registry.example/openclaw-worker:22",
-          },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
-    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
-    const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-      onRunnerCapacityChanged,
-    });
-    expect(createNodeWorkerSupervisor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        containerEngine: { id: "docker", command: "docker", target: "e".repeat(64) },
-        containerImage: "registry.example/openclaw-worker:22",
-      }),
-    );
-    expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
-    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(onRunnerCapacityChanged).toHaveBeenCalledExactlyOnceWith({ total: 3, available: 3 });
-    await runtime.close();
-  });
-
-  it("fails closed when container launch reconciliation cannot establish safe ownership", async () => {
-    mocks.initializeWorkerSupervisor.mockRejectedValueOnce(new Error("orphan sweep failed"));
-
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toContain("orphan sweep failed");
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-      onRunnerCapacityChanged,
-    });
-    expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
-    await runtime.close();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
-});
-
 describe("node-host invocation cancellation", () => {
+  it("does not admit a queued invocation after its connection is retired", async () => {
+    const runtime = await startRuntime();
+    const pending = runtime.invoke({ ...frame, command: "system.run" });
+    runtime.cancelAll();
+    await pending;
+    expect(mocks.handleInvoke).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it("cancels ordinary node invocations", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();

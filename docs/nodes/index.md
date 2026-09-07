@@ -7,11 +7,10 @@ read_when:
   - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
+doc-schema-version: 1
 ---
 
 A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
-
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
@@ -53,6 +52,19 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
+
+Headless node hosts report the hardware model on macOS and Linux.
+
+Connected CLI node hosts and the macOS app report CPU count, load averages,
+memory, and home-volume disk capacity every 60 seconds, starting on connection.
+The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
+`node.describe`. When received, it saves the snapshot on the paired node
+record, so offline nodes keep showing last-known stats with the original
+`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
+and `openclaw nodes describe` show a compact stats summary with a last-known age
+for offline nodes. Windows omits load averages, and unavailable disk capacity is
+omitted. See
+[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order
 
@@ -169,7 +181,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -185,7 +197,7 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `node_host_config` SQLite row alongside the client instance ID and Gateway connection metadata).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `nodeHost.config` SQLite machine-state value alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Node-hosted MCP servers
@@ -280,7 +292,7 @@ operators can ignore skills from every paired node with
 
 The headless node keeps three separate state records in shared SQLite:
 
-- `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
+- `~/.openclaw/state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/state/openclaw.sqlite` (`device_auth_tokens`): paired device auth tokens keyed by cryptographic device ID and role.
 
@@ -366,13 +378,22 @@ By default, selecting a row opens the normal Chat pane and reads its persisted t
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
-The relay does not provide the full OpenClaw harness continuation and archive ownership contracts. **Continue** and **Archive** are therefore unavailable for remote rows. On the Gateway computer, stored and idle
-rows can start a distinct model-locked Chat branch. Either can be archived only
-after the operator confirms that no other Codex client is using it; a stored
-row's live activity remains unknown. Active rows cannot branch or archive.
+The terminal relay is separate from paired-node Chat continuation. A connected
+node that advertises and permits both catalog commands plus
+`codex.cli.session.resume` can continue a stored or idle interactive thread for
+an operator with `operator.admin`. The Chat mirrors bounded visible history;
+later messages run native Codex CLI resume against the exact thread on that
+node and return the final text, without a streaming App Server harness bridge.
+Nodes without the required commands remain readable without Chat continuation.
+Paired-node **Archive** is unavailable.
+
+On the Gateway computer, stored and idle rows can start a distinct model-locked
+Chat branch. Either can be archived only after the operator confirms that no
+other Codex client is using it; a stored row's live activity remains unknown.
+Active rows cannot branch or archive.
 
 See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
-pagination, local continuation, and the metadata security boundary.
+pagination, local and paired-node continuation, and the metadata security boundary.
 
 ### Claude sessions and transcripts
 
@@ -452,7 +473,8 @@ node does not advertise this command yet, so its rows remain view-only.
 
 ### Host OpenClaw sessions
 
-A headless node host can separately opt into full OpenClaw session hosting:
+The macOS menu bar app and the headless node host can opt into full OpenClaw
+session hosting with the same node-local setting:
 
 ```json5
 {
@@ -462,27 +484,44 @@ A headless node host can separately opt into full OpenClaw session hosting:
 }
 ```
 
-Restart the node host after enabling this setting. On the first session dispatch
-for a Gateway build, the node downloads one sealed worker artifact from that
-paired Gateway, verifies its exact content hash, and publishes it atomically
-under the Gateway-namespaced node-host bundle root. The artifact already
-contains its complete JavaScript dependency closure; the node does not install
-packages or execute lifecycle scripts. Later turns reuse the immutable artifact
-while its receipt still matches the Gateway's current build.
+<Warning>
+Only enable session hosting on a machine you trust as shared Gateway infrastructure. Hosting consent applies to the device, not to an individual person's ownership of it. Existing session authorization still controls who may dispatch work.
+</Warning>
+
+Restart the app or node host after enabling this setting. The macOS app owns
+one paired node identity and uses the shared node runtime for session hosting;
+do not start a second CLI node for the same Mac. Its native camera, screen, and
+desktop capabilities remain on that identity. If the shared runtime cannot
+start, native capabilities remain available, but session hosting is unavailable.
+
+When a session first needs the current worker build, the Gateway sends its sealed
+worker artifact to the paired host. The node verifies the exact content hash,
+publishes the artifact atomically, and prewarms it when supported by the execution mode.
+The artifact contains its complete JavaScript dependency closure; the node does
+not install packages or execute lifecycle scripts. Installation belongs to the
+session request and receives its cancellation signal. Reconnect maintenance does
+not install or prewarm a worker build.
+
+Once installed, persistent nodes retain one current worker artifact per Gateway
+namespace, even with no sessions. Older builds remain only while a live or
+recoverable placement needs them; normal maintenance removes unreferenced builds.
+Each new dispatch still validates the installed artifact and reuses it when valid,
+avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
+installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
 write-scoped operator selects a Gateway project or folder and then either a
-specific paired device or **Any available node**. OpenClaw creates a
+specific paired device or **Auto**. OpenClaw creates a
 session-owned managed worktree on the Gateway, dispatches it with the exact
 `deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
-metadata. If the retained artifact is missing or fails validation, Devices shows
-a **worker missing** warning; start a new session on that device to reinstall the
-current bundle. This status is observational and reconnect-scoped: launch still
+metadata. If the current artifact is missing or fails validation, Devices shows
+a **worker missing** warning; an explicit new session installs the current bundle.
+This status is observational and reconnect-scoped: launch still
 requires the exact durable receipt and current node authority.
 
 Node hosts must support the current private worker-supervisor dialect before
@@ -513,7 +552,12 @@ visible but disabled with an actionable reason. Enable hosting with
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
-Choose **Any available node** to let the Gateway select an eligible paired,
+While node inventory refreshes, or if that refresh fails, the picker keeps known
+devices visible but disables remote selection and Start until fresh inventory
+arrives. Local remains selectable; cached worker slots never authorize a new
+remote session.
+
+Choose **Auto** to let the Gateway select an eligible paired,
 connected session host. For OpenClaw worker turns, it selects the host with the
 most available worker slots and breaks ties by device ID. Runtimes that do not
 consume worker slots choose the eligible host with the lowest device ID instead.
@@ -661,6 +705,40 @@ The Control UI can drag files into an open paired-node terminal. The native node
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
 
+### Agent file transfers
+
+The [File Transfer plugin](/plugins/reference/file-transfer) provides independently
+selectable directory-listing, fetch, and write tools. Allowing one tool does not
+make the others available; node-command and path policies still apply.
+
+Every successful file fetch saves the bytes in the Gateway's file-transfer media
+store and returns both `localPath` and `mediaId`, including for inlined text and
+images. Fetched files keep a sanitized filename stem in saved copies and forwarded
+attachments. The detected media type selects the extension: `train.py` classified
+as plain text becomes `train.txt`. Saved copies include a unique suffix to keep
+repeated fetches distinct.
+
+When node writing is available, pass that `mediaId` as `sourceMediaId` to
+reuse the saved bytes. `sourceMediaId` does not accept a local path or an ID from
+another media store. For inline bytes, use `contentBase64` instead.
+
+Directory tools return at most 8192 UTF-8 bytes of model-visible text, including
+the external-content wrapper. `dir_list` shows complete names, directory flags,
+and sizes. To continue a text-limited listing, pass the **text's** `nextPageToken`
+as `pageToken` with the same node and path; it resumes immediately after the last
+displayed entry. The default request remains 200 entries, with a ceiling of 5000.
+Full returned metadata and the original page token remain in structured details.
+
+`dir_fetch` saves the whole tree and shows its local `rootDir`, total `fileCount`,
+and a bounded prefix of complete `relPath` and size records. Combine `rootDir`
+with a listed `relPath` for local follow-up operations. Omitted files remain
+saved under that root and can be inspected with available local file or directory
+capabilities; fetching has no pagination. Full manifest and attachment metadata
+remain in structured details. If a path exceeds the text budget or would be
+rewritten by security sanitization, the text reports the omission rather than
+showing a partial or altered path. A listing that cannot display its first entry
+explicitly reports that pagination cannot advance.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -717,7 +795,7 @@ plugin defaults.
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/configuration-reference#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
+Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.commands.allow` opt-in.
 
@@ -733,7 +811,13 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     nodes: {
       // Auto-approve first-time node pairing from trusted networks (CIDR list).
       // Disabled when unset. Only applies to first-time role:node requests
-      // with no requested scopes; does not auto-approve upgrades.
+      // with no requested scopes; does not auto-approve upgrades. This
+      // approves the device only: the node's command/capability surface still
+      // needs `openclaw nodes approve <requestId>` (see `openclaw nodes
+      // pending`), because device pairing alone must not grant commands.
+      // Silent same-host pairing behaves the same way. SSH-verified pairing
+      // and node-profile setup codes approve the initial surface, since both
+      // record explicit machine-ownership or admin consent.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
         // SSH-verified auto-approval (default: enabled). Approves first-time
@@ -765,7 +849,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
 }
 ```
 
-Use exact node command names. `commands.deny` removes a command even when a platform default or `commands.allow` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
+Use exact node command names. `commands.deny` removes a command even when a platform default or `commands.allow` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/config-gateway#gateway) for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 
@@ -934,7 +1018,7 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
-- The exec path prepares a canonical `systemRunPlan` before approval. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
+- The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.commands.allow`.
 - A `system.run` request supports `cwd`, an `env` map, `timeoutMs`, and `needsScreenRecording` — these are fields of the request payload carried on the exec path (see above), not `nodes invoke` CLI flags.
@@ -947,7 +1031,9 @@ Notes:
 
 ## Exec node binding
 
-When multiple nodes are available, you can bind exec to a specific node. This sets the default node for `exec host=node` (and can be overridden per agent).
+With no node target set, `exec host=node` selects the sole paired, connected node that supports `system.run`. Other paired devices do not make the selection ambiguous. If multiple executable nodes are connected, choose a target per call or bind exec to a specific node; the active Canvas target does not select the exec host. A bound or explicit target that is offline or cannot execute commands is rejected rather than redirected to another node.
+
+A binding sets the default node for `exec host=node` and can be overridden per agent.
 
 Global default:
 
@@ -962,7 +1048,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Unset to allow any node:
+Unset the binding to use the sole eligible node, or choose a target per call when multiple eligible nodes are connected:
 
 ```bash
 openclaw config unset tools.exec.node
@@ -989,7 +1075,7 @@ Notes:
 - Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).
-- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
+- On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to require the companion app exec host, with no local fallback. `OPENCLAW_NODE_EXEC_FALLBACK` does not change current routing.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode

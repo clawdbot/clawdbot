@@ -1,9 +1,10 @@
 // Configure wizard model/auth selection and gateway auth config helpers.
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -32,18 +33,6 @@ type ProviderChoiceModelPrompt = {
   message?: string;
   loadCatalog?: boolean;
 };
-
-/** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
-function sanitizeTokenValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
-}
 
 async function resolveProviderChoiceModelPrompt(params: {
   authChoice: string;
@@ -164,30 +153,28 @@ function resolveConfiguredProviderFromAuthChange(params: {
   );
 }
 
-/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
+/** Preserve unrelated auth policy; replace mode-owned credentials and proxy settings. */
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
   token?: SecretInput;
   password?: string;
-  trustedProxy?: {
-    userHeader: string;
-    requiredHeaders?: string[];
-    allowUsers?: string[];
-  };
+  trustedProxy?: GatewayAuthConfig["trustedProxy"];
 }): GatewayAuthConfig | undefined {
-  const allowTailscale = params.existing?.allowTailscale;
-  const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") {
-    base.allowTailscale = allowTailscale;
-  }
+  const base: GatewayAuthConfig = { ...params.existing };
+  delete base.token;
+  delete base.password;
+  delete base.trustedProxy;
 
   if (params.mode === "token") {
     if (isSecretRef(params.token)) {
       return { ...base, mode: "token", token: params.token };
     }
     // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
-    const token = sanitizeTokenValue(params.token) ?? randomToken();
+    const token =
+      typeof params.token === "string" && !isInvalidGatewayToken(params.token)
+        ? params.token.trim()
+        : randomToken();
     return { ...base, mode: "token", token };
   }
   if (params.mode === "password") {
@@ -218,9 +205,6 @@ export async function promptAuthConfig(
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
       prompter,
-      store: ensureAuthProfileStore(target.agentDir, {
-        allowKeychainPrompt: false,
-      }),
       includeSkip: true,
       config: next,
     });
@@ -234,7 +218,13 @@ export async function promptAuthConfig(
           });
 
     if (authChoice === "custom-api-key") {
-      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next, target });
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: next,
+        target,
+        setAsPrimary: !resolveAgentEffectiveModelPrimary(next, target.agentId),
+      });
       next = customResult.config;
       break;
     }
@@ -276,17 +266,13 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
-    if (applied.agentModelOverride) {
-      const targeted = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
-      next = {
-        ...targeted,
-        agents: {
-          ...targeted.agents,
-          ...(beforeAuthConfig.agents?.defaults === undefined
-            ? { defaults: undefined }
-            : { defaults: beforeAuthConfig.agents.defaults }),
-        },
-      };
+    // Auth recommendations initialize an unset primary; reauth must not replace
+    // the target's explicit or inherited model.
+    if (
+      applied.agentModelOverride &&
+      !resolveAgentEffectiveModelPrimary(beforeAuthConfig, target.agentId)
+    ) {
+      next = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
     }
     preferredProvider = resolveConfiguredProviderFromAuthChange({
       before: beforeAuthConfig,

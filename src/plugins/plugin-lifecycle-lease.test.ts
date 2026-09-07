@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -35,14 +36,6 @@ async function withLeaseChildren<T>(fn: (children: Set<LeaseChild>) => Promise<T
   } finally {
     await Promise.all(Array.from(children, terminateLeaseChild));
   }
-}
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function runLeaseChild(
@@ -115,78 +108,46 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
-  it("serializes lifecycle work sharing one state directory", async () => {
+  it.each([
+    ["one state directory", false],
+    ["an explicit database path across different state directories", true],
+  ])("serializes lifecycle work sharing %s", async (_label, explicitPath) => {
     await withOpenClawTestState({ label: "plugin-lifecycle-lease" }, async (state) => {
-      const firstEntered = deferred();
-      const releaseFirst = deferred();
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
       const events: string[] = [];
+      const leaseOptions = (caller: string) => ({
+        env: explicitPath ? { ...state.env, OPENCLAW_STATE_DIR: state.path(caller) } : state.env,
+        ...(explicitPath ? { path: state.path("shared-plugin-lifecycle.sqlite") } : {}),
+        leaseMs: 1_000,
+        waitMs: 3_000,
+      });
 
-      const first = withPluginLifecycleLease(
-        { env: state.env, leaseMs: 1_000, waitMs: 3_000 },
-        async () => {
+      vi.useFakeTimers();
+      try {
+        const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
           events.push("first-enter");
           firstEntered.resolve();
           await releaseFirst.promise;
           events.push("first-exit");
-        },
-      );
-      await firstEntered.promise;
-
-      const second = withPluginLifecycleLease(
-        { env: state.env, leaseMs: 1_000, waitMs: 3_000 },
-        async () => {
+        });
+        await firstEntered.promise;
+        const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
           events.push("second-enter");
-        },
-      );
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-      expect(events).toEqual(["first-enter"]);
-
-      releaseFirst.resolve();
-      await Promise.all([first, second]);
-      expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
-    });
-  });
-
-  it("uses an explicit shared database path instead of each caller's default state", async () => {
-    await withOpenClawTestState({ label: "plugin-lifecycle-explicit-path" }, async (state) => {
-      const databasePath = state.path("shared-plugin-lifecycle.sqlite");
-      const firstEntered = deferred();
-      const releaseFirst = deferred();
-      const events: string[] = [];
-      const first = withPluginLifecycleLease(
-        {
-          env: { ...state.env, OPENCLAW_STATE_DIR: state.path("state-a") },
-          path: databasePath,
-          leaseMs: 1_000,
-          waitMs: 3_000,
-        },
-        async () => {
-          events.push("first-enter");
-          firstEntered.resolve();
-          await releaseFirst.promise;
-        },
-      );
-      await firstEntered.promise;
-      const second = withPluginLifecycleLease(
-        {
-          env: { ...state.env, OPENCLAW_STATE_DIR: state.path("state-b") },
-          path: databasePath,
-          leaseMs: 1_000,
-          waitMs: 3_000,
-        },
-        async () => {
-          events.push("second-enter");
-        },
-      );
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-      expect(events).toEqual(["first-enter"]);
-      releaseFirst.resolve();
-      await Promise.all([first, second]);
-      expect(events).toEqual(["first-enter", "second-enter"]);
+        });
+        try {
+          await vi.advanceTimersByTimeAsync(100);
+          expect(events).toEqual(["first-enter"]);
+        } finally {
+          releaseFirst.resolve();
+          // Drive the pending acquisition retry after the first owner releases.
+          await vi.advanceTimersByTimeAsync(250);
+          await Promise.all([first, second]);
+        }
+        expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

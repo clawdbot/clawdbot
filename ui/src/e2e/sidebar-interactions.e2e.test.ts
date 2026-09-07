@@ -1,5 +1,17 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import {
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
+  createControlUiMockGatewayInitScript,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+  type MockGatewayRequest,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
@@ -9,6 +21,155 @@ import {
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
 
 suite.define(() => {
+  it("opens every new-session plus as a native link without creating sessions", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const agentId = "research";
+    const group = "Client & ops / α";
+    const catalogId = "cli-tools";
+    const basePath = "/operator";
+    const scenario: ControlUiMockGatewayScenario = {
+      basePath,
+      defaultAgentId: agentId,
+      sessionKey: `agent:${agentId}:main`,
+      sessionGroups: [group],
+      featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: catalogId,
+              label: "CLI tools",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                startTerminal: true,
+              },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    };
+    // The opener and real browser-created tabs must receive the same Gateway fixture.
+    await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+      route.fulfill({ json: createControlUiMockBootstrapConfig(scenario) }),
+    );
+    await context.addInitScript({ content: createControlUiMockGatewayInitScript(scenario) });
+    const page = await context.newPage();
+    const sessionCreates = (target: Page) =>
+      target.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              findRequests: (method: string) => MockGatewayRequest[];
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        return gateway.findRequests("sessions.create");
+      });
+
+    try {
+      await page.goto(
+        controlUiSessionUrl(`${suite.server.baseUrl}operator/`, `agent:${agentId}:main`),
+      );
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const draft = "Keep this unsent conversation draft";
+      await composer.fill(draft);
+      const originalUrl = page.url();
+      await captureSidebarUiProof(suite, page, "new-session-links-source.png");
+
+      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
+        [
+          { selector: ".sidebar-brand__new-thread", params: { agent: agentId } },
+          {
+            selector: ".sidebar-session-toolbar .sidebar-new-session",
+            params: { agent: agentId },
+          },
+          {
+            selector: `[data-session-section="category:${group}"] .sidebar-new-session`,
+            section: `category:${group}`,
+            params: { agent: agentId, group },
+          },
+          {
+            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+            section: `catalog:${catalogId}`,
+            params: { agent: agentId, catalog: catalogId },
+          },
+          { selector: ".shell-chrome-controls__new-thread", params: { agent: agentId } },
+        ];
+      for (const [index, action] of actions.entries()) {
+        if (index === actions.length - 1) {
+          await page.locator(".sidebar-brand__collapse").click();
+        }
+        if (action.section) {
+          await page
+            .locator(`[data-session-section="${action.section}"] .sidebar-recent-sessions__head`)
+            .hover();
+        }
+        const link = page.locator(action.selector);
+        await link.hover();
+        const expectedUrl = new URL(`${basePath}/new`, suite.server.baseUrl);
+        expectedUrl.search = new URLSearchParams(action.params).toString();
+        expect(await link.getAttribute("href")).toBe(
+          `${expectedUrl.pathname}${expectedUrl.search}`,
+        );
+        expect(
+          await link.evaluate((element) => {
+            const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+            (element.querySelector("svg") ?? element).dispatchEvent(event);
+            return event.defaultPrevented;
+          }),
+        ).toBe(false);
+
+        // Native tab gestures do not retain an opener, so observe the browser context.
+        const [popup] = await Promise.all([
+          context.waitForEvent("page"),
+          index % 2 === 0
+            ? link.click({ modifiers: ["ControlOrMeta"] })
+            : link.click({ button: "middle" }),
+        ]);
+        try {
+          await waitForControlUiRoute(popup, {
+            routeId: "new-session",
+            pathname: expectedUrl.pathname,
+            search: expectedUrl.search,
+          });
+          await popup.locator(".new-session-page__message").waitFor({ state: "visible" });
+          expect(popup.url()).toBe(expectedUrl.href);
+          expect(await sessionCreates(popup)).toEqual([]);
+          expect(page.url()).toBe(originalUrl);
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await sessionCreates(page)).toEqual([]);
+          if ("group" in action.params) {
+            await captureSidebarUiProof(suite, popup, "new-session-links-group-tab.png");
+          }
+        } finally {
+          await popup.close();
+        }
+      }
+
+      await page.locator(".shell-chrome-controls__new-thread").click();
+      await waitForControlUiRoute(page, {
+        routeId: "new-session",
+        pathname: `${basePath}/new`,
+        search: `?agent=${agentId}`,
+      });
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      expect(context.pages()).toHaveLength(1);
+      expect(await sessionCreates(page)).toEqual([]);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   async function openCapabilitiesPrompt(reducedMotion: "no-preference" | "reduce") {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -20,40 +181,97 @@ suite.define(() => {
     await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const sidebar = page.locator("openclaw-app-sidebar");
-    await sidebar.locator(".sidebar-agent-card__main").click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-      .click();
+    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
+    const observedCue = await page.evaluateHandle(() => {
+      const state = {
+        active: false,
+        background: "",
+        boxShadow: "",
+        duration: "",
+        focused: false,
+        name: "",
+        value: "",
+      };
+      const observer = new MutationObserver(() => {
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
+          return;
+        }
+        const style = getComputedStyle(input);
+        Object.assign(state, {
+          active: true,
+          background: style.backgroundColor,
+          boxShadow: style.boxShadow,
+          duration: style.animationDuration,
+          focused: textarea === document.activeElement,
+          name: style.animationName,
+          value: textarea.value,
+        });
+        observer.disconnect();
+      });
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        subtree: true,
+      });
+      return { state, disconnect: () => observer.disconnect() };
+    });
 
-    const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-    await expect.poll(() => textarea.inputValue()).toBe("What can you do?");
-    await expect
-      .poll(() => textarea.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-    const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-    await expect
-      .poll(() => input.getAttribute("class"))
-      .toContain("agent-chat__input--prefill-attention");
-    return { context, input, page };
+    try {
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
+        .click();
+
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+      let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
+      await expect
+        .poll(async () => {
+          const state = await observedCue.evaluate((cue) => cue.state);
+          cueStyle = {
+            background: state.background,
+            boxShadow: state.boxShadow,
+            duration: state.duration,
+            name: state.name,
+          };
+          return { active: state.active, focused: state.focused, value: state.value };
+        })
+        .toEqual({ active: true, focused: true, value: "What can you do?" });
+      await expect
+        .poll(() =>
+          textarea.evaluate((element: HTMLTextAreaElement) => ({
+            focused: element === document.activeElement,
+            value: element.value,
+          })),
+        )
+        .toEqual({ focused: true, value: "What can you do?" });
+      return { context, cueStyle, input, page };
+    } finally {
+      await observedCue.evaluate((cue) => cue.disconnect());
+      await observedCue.dispose();
+    }
   }
 
   it("focuses and highlights the composer from the agent capabilities action", async () => {
-    const { context, input, page } = await openCapabilitiesPrompt("no-preference");
+    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("no-preference");
 
     try {
-      await expect
-        .poll(() => input.evaluate((element) => getComputedStyle(element).animationName))
-        .toBe("chat-composer-prefill-attention");
-      const highlightedBackground = await input.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      );
-      await captureSidebarUiProof(page, "capabilities-composer-focus.png");
+      expect(cueStyle).toMatchObject({
+        duration: "0.6s",
+        name: "chat-composer-prefill-attention",
+      });
+      await captureSidebarUiProof(suite, page, "capabilities-composer-focus.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
       expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        highlightedBackground,
+        cueStyle.background,
       );
     } finally {
       await suite.closeBrowserContext(context);
@@ -61,29 +279,17 @@ suite.define(() => {
   });
 
   it("keeps a static composer cue when reduced motion is requested", async () => {
-    const { context, input, page } = await openCapabilitiesPrompt("reduce");
+    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("reduce");
 
     try {
-      await expect
-        .poll(() =>
-          input.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return { animationName: style.animationName, boxShadow: style.boxShadow };
-          }),
-        )
-        .toEqual(expect.objectContaining({ animationName: "none" }));
-      await expect
-        .poll(() => input.evaluate((element) => getComputedStyle(element).boxShadow))
-        .not.toBe("none");
-      const highlightedBackground = await input.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      );
-      await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
+      expect(cueStyle.name).toBe("none");
+      expect(cueStyle.boxShadow).not.toBe("none");
+      await captureSidebarUiProof(suite, page, "capabilities-composer-reduced-motion.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
       expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        highlightedBackground,
+        cueStyle.background,
       );
     } finally {
       await suite.closeBrowserContext(context);
@@ -227,7 +433,7 @@ suite.define(() => {
           agentsList,
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },
@@ -327,7 +533,7 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await captureSidebarUiProof(page, "agent-menu-without-new-session-rows.png");
+      await captureSidebarUiProof(suite, page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -365,7 +571,7 @@ suite.define(() => {
           agentsList,
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },
@@ -383,7 +589,7 @@ suite.define(() => {
       await expect
         .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
         .toBe(1);
-      await captureSidebarUiProof(page, "workspace-agent-avatar.png");
+      await captureSidebarUiProof(suite, page, "workspace-agent-avatar.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

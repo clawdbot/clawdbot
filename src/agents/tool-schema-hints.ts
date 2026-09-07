@@ -16,6 +16,12 @@ const MAX_COMPACT_UNION_TYPES = 5;
 const MAX_COMPACT_ENUM_VALUES = 8;
 const MAX_COMPACT_ENUM_CHARS = 96;
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const NUMERIC_INPUT_BOUNDS = [
+  ["minimum", ">="],
+  ["maximum", "<="],
+  ["exclusiveMinimum", ">"],
+  ["exclusiveMaximum", "<"],
+] as const;
 const UNSUPPORTED_SHAPE_KEYWORDS = [
   "$ref",
   "$dynamicRef",
@@ -41,17 +47,20 @@ type CompactSchemaLimits = {
   maxChars: number;
   maxDepth: number;
   maxProperties: number;
+  numericInputConstraints: boolean;
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_INPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_INPUT_DEPTH,
   maxProperties: MAX_COMPACT_INPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: true,
 };
 const OUTPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_OUTPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_OUTPUT_DEPTH,
   maxProperties: MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: false,
 };
 
 const UNKNOWN_HINT: SchemaHint = { text: "unknown", complete: false };
@@ -271,27 +280,28 @@ function compactObjectHint(
     schema.additionalProperties === true ||
     isRecord(schema.additionalProperties);
   let complete = !structurallyIncomplete && schema.additionalProperties === false;
-  const parts: string[] = [];
+  let body = "";
   for (const key of keys) {
     const name = IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
     const propertyHint = compactSchemaType(properties[key], depth, limits);
     complete &&= propertyHint.complete;
     const part = `${name}${required.has(key) ? "" : "?"}: ${propertyHint.text}`;
-    const next = `{ ${[...parts, part].join("; ")} }`;
-    if (next.length > limits.maxChars) {
+    const next = body ? `${body}; ${part}` : part;
+    // The budget includes both braces and their inner spaces.
+    if (next.length + 4 > limits.maxChars) {
       omitted = true;
       complete = false;
       break;
     }
-    parts.push(part);
+    body = next;
   }
-  if (parts.length === 0) {
+  if (!body) {
     return keys.length === 0 && !omitted
       ? { text: "{}", complete }
       : { text: "{ ... }", complete: false };
   }
   return {
-    text: `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`,
+    text: `{ ${body}${omitted ? "; ..." : ""} }`,
     complete,
   };
 }
@@ -353,7 +363,24 @@ function compactSchemaType(
     return finish(completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | ")));
   }
   if (type === "integer" || type === "number") {
-    return finish(completeHint("number"));
+    if (!limits.numericInputConstraints) {
+      return finish(completeHint("number"));
+    }
+    // Inputs need valid argument ranges; output hints retain their existing shapes.
+    const constraints = type === "integer" ? ["integer"] : [];
+    for (const [key, operator] of NUMERIC_INPUT_BOUNDS) {
+      const bound = schema[key];
+      if (bound === undefined) {
+        continue;
+      }
+      if (typeof bound !== "number" || !Number.isFinite(bound)) {
+        return UNKNOWN_HINT;
+      }
+      constraints.push(`${operator} ${bound}`);
+    }
+    return finish(
+      completeHint(`number${constraints.length > 0 ? ` /* ${constraints.join(", ")} */` : ""}`),
+    );
   }
   if (type === "array") {
     const itemHint = compactSchemaType(schema.items, depth + 1, limits);

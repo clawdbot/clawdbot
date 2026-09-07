@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
+import * as processRegistration from "./transport-process-registration.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -17,6 +18,7 @@ describe("Codex app-server websocket transport", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     for (const client of clients) {
       client.close();
@@ -46,6 +48,9 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("can speak JSON-RPC over websocket transport", async () => {
+    const localRegistration = vi
+      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
+      .mockRejectedValue(new Error("local inspection unavailable"));
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     servers.push(server);
     const authHeaders: Array<string | undefined> = [];
@@ -74,7 +79,7 @@ describe("Codex app-server websocket transport", () => {
     if (!address || typeof address === "string") {
       throw new Error("expected websocket test server port");
     }
-    const client = CodexAppServerClient.start({
+    const client = await CodexAppServerClient.start({
       transport: "websocket",
       url: `ws://127.0.0.1:${address.port}`,
       authToken: "secret",
@@ -84,6 +89,7 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
+    expect(localRegistration).not.toHaveBeenCalled();
   });
 
   it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
@@ -100,7 +106,7 @@ describe("Codex app-server websocket transport", () => {
     });
     server.once("connection", (socket) => {
       socket.once("ping", () => resolvePing?.());
-      resolveConnected?.();
+      socket.once("message", () => resolveConnected?.());
     });
     await new Promise<void>((resolve) => {
       server.once("listening", resolve);
@@ -118,10 +124,8 @@ describe("Codex app-server websocket transport", () => {
       headers: {},
     });
     transports.push(transport);
+    transport.stdin.write("{}\n");
     await connected;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
@@ -144,7 +148,7 @@ describe("Codex app-server websocket transport", () => {
     });
     server.once("connection", (socket) => {
       socket.once("ping", () => resolvePing?.());
-      resolveConnected?.();
+      socket.once("message", () => resolveConnected?.());
     });
     await new Promise<void>((resolve) => {
       server.once("listening", resolve);
@@ -165,10 +169,8 @@ describe("Codex app-server websocket transport", () => {
     const exited = new Promise<unknown>((resolve) => {
       transport.once("exit", (code) => resolve(code));
     });
+    transport.stdin.write("{}\n");
     await connected;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
@@ -289,11 +291,21 @@ describe("Codex app-server websocket transport", () => {
   }, 5_000);
 
   it("can speak JSON-RPC over the canonical unix control socket", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-unix-"));
+    const localRegistration = vi
+      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
+      .mockRejectedValue(new Error("local inspection unavailable"));
+    // macOS socket paths must fit sockaddr_un even when the runner nests TMPDIR.
+    const tempRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+    const tempDir = await mkdtemp(path.join(tempRoot, "openclaw-codex-unix-"));
     tempDirs.push(tempDir);
     const socketPath = path.join(tempDir, "app-server.sock");
     const httpServer = http.createServer();
     httpServers.push(httpServer);
+    // Bind before ws forwards HTTP errors, so a listen failure rejects this test.
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(socketPath, resolve);
+    });
     const server = new WebSocketServer({ server: httpServer });
     servers.push(server);
     const upgradeExtensions: Array<string | undefined> = [];
@@ -315,12 +327,8 @@ describe("Codex app-server websocket transport", () => {
         }
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      httpServer.once("error", reject);
-      httpServer.listen(socketPath, resolve);
-    });
 
-    const client = CodexAppServerClient.start({
+    const client = await CodexAppServerClient.start({
       transport: "unix",
       homeScope: "user",
       url: `unix://${socketPath}`,
@@ -330,6 +338,7 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
     expect(upgradeExtensions).toEqual([undefined]);
+    expect(localRegistration).not.toHaveBeenCalled();
   });
 });
 

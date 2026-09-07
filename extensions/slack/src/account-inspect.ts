@@ -4,6 +4,7 @@ import {
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
@@ -16,7 +17,6 @@ import {
   resolveDefaultSlackAccountId,
   type SlackTokenSource,
 } from "./accounts.js";
-import type { SlackAccountConfig } from "./runtime-api.js";
 
 export type SlackCredentialStatus = "available" | "configured_unavailable" | "missing";
 
@@ -94,10 +94,10 @@ export function inspectSlackAccount(params: {
   const mode = merged.mode ?? "socket";
   const identity = merged.postAs ?? "bot";
   const isHttpMode = mode === "http";
-  const isRelayMode = mode === "relay";
+  const isSocketMode = mode === "socket";
 
   const configBot = inspectSlackToken(merged.botToken);
-  const configApp = inspectSlackToken(merged.appToken);
+  const configApp = inspectSlackToken(isSocketMode ? merged.appToken : undefined);
   const configSigningSecret = inspectSlackToken(merged.signingSecret);
   const configUser = inspectSlackToken(merged.userToken);
 
@@ -105,7 +105,7 @@ export function inspectSlackAccount(params: {
     ? normalizeSecretInputString(params.envBotToken ?? process.env.SLACK_BOT_TOKEN)
     : undefined;
   const envApp =
-    allowEnv && !isRelayMode
+    allowEnv && isSocketMode
       ? normalizeSecretInputString(params.envAppToken ?? process.env.SLACK_APP_TOKEN)
       : undefined;
   const envUser = allowEnv

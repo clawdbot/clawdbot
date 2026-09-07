@@ -6,12 +6,13 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -33,8 +34,8 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,
@@ -85,8 +86,8 @@ export function collectGatewayConfigFindings(
         : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
           ? false
           : tokenConfigured || passwordConfigured;
-  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
-  const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const hasGatewayAuth = hasSharedSecret || auth.mode === "trusted-proxy";
+  const hasLoopbackAuth = hasGatewayAuth || (auth.allowTailscale && tailscaleMode === "serve");
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
   const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
@@ -115,7 +116,7 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (bind !== "loopback" && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -150,7 +151,7 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (bind === "loopback" && controlUiEnabled && !hasLoopbackAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
@@ -281,9 +282,34 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  const token =
-    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  if (auth.mode === "token" && token && token.length < 24) {
+  const configToken = cfg.gateway?.auth?.token;
+  const tokenOverride = options.gatewayAuthOverride?.token;
+  let tokenInput = auth.token ?? tokenOverride ?? configToken;
+  if (tokenOverride === undefined && plan.localToken.refPath) {
+    // An unavailable reference cannot lend its ambient fallback to strength checks.
+    const pendingRef =
+      hasUnresolvedConfigPath(cfg, plan.localToken.refPath) ||
+      resolveConfigSecretRef({
+        config: cfg,
+        path: plan.localToken.refPath,
+        value: configToken,
+        defaults: cfg.secrets?.defaults,
+      });
+    tokenInput = pendingRef ? undefined : configToken;
+  }
+  const token = typeof tokenInput === "string" ? tokenInput.trim() : null;
+  const placeholderToken = auth.mode === "token" && isInvalidGatewayToken(tokenInput);
+  if (placeholderToken) {
+    findings.push({
+      checkId: "gateway.token_placeholder_value",
+      severity: "critical",
+      title: "Gateway token is a blank or undefined/null placeholder",
+      detail: "The selected Gateway token is a known non-secret value. Gateway startup rejects it.",
+      remediation:
+        "Run `openclaw doctor --fix --generate-gateway-token` for an inline token; otherwise rotate its external secret source. Restart the Gateway afterward.",
+    });
+  }
+  if (auth.mode === "token" && !placeholderToken && token && token.length < 24) {
     findings.push({
       checkId: "gateway.token_too_short",
       severity: "warn",
@@ -293,7 +319,6 @@ export function collectGatewayConfigFindings(
   }
 
   if (auth.mode === "trusted-proxy") {
-    const trustedProxiesLocal = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
 
     findings.push({
@@ -308,10 +333,11 @@ export function collectGatewayConfigFindings(
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
         "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
         "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true and gateway.trustedProxies includes their loopback source; enable only for a deliberate same-host trust boundary. " +
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
-    if (trustedProxiesLocal.length === 0) {
+    if (trustedProxies.length === 0) {
       findings.push({
         checkId: "gateway.trusted_proxy_no_proxies",
         severity: "critical",
@@ -354,9 +380,9 @@ export function collectGatewayConfigFindings(
       findings.push({
         checkId: "gateway.trusted_proxy_device_auto_approve",
         severity: "warn",
-        title: "Trusted-proxy browser device auto-approval enabled",
+        title: "Trusted-proxy operator device auto-approval enabled",
         detail:
-          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new browser and native UI operator device pairing entirely to the reverse-proxy identity.",
         remediation:
           "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
       });
@@ -371,9 +397,9 @@ export function collectGatewayConfigFindings(
           severity: "critical",
           title: "Trusted-proxy device auto-approval allows full admin",
           detail:
-            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new operator device with full admin; requests without scopes receive full admin automatically.",
           remediation:
-            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+            "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
         });
       }
     }

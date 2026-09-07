@@ -888,6 +888,30 @@ describe("tool_result_persist hook", () => {
 });
 
 describe("before_message_write hook", () => {
+  it("refreshes skipped write hooks when reusing a session manager", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-reuse-",
+      id: "before-write-reuse",
+      body: `export default { id: "before-write-reuse", register(api) {
+  api.on("before_message_write", (event) => ({
+    message: { ...event.message, content: "hooked" },
+  }));
+} };`,
+    });
+    const sm = SessionManager.inMemory();
+    for (const skipBeforeMessageWriteHooks of [true, false, true]) {
+      guardSessionManager(sm, { skipBeforeMessageWriteHooks });
+      sm.appendMessage({ role: "user", content: "original", timestamp: Date.now() });
+    }
+    expect(
+      sm
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
+        ),
+    ).toEqual(["original", "hooked", "original"]);
+  });
+
   it("continues persistence when a before_message_write hook throws", () => {
     initializeTempPlugin({
       tmpPrefix: "openclaw-before-write-",

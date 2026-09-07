@@ -7,18 +7,18 @@ import {
   WorkerAdmissionResponseFrameSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
-  WorkerGitHubPublishResponseFrameSchema,
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerPortalResponseFrameSchema,
   WorkerSessionsSendResponseFrameSchema,
   WorkerSessionsSpawnResponseFrameSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
@@ -28,8 +28,8 @@ import {
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
-  validateWorkerGitHubPublishParams,
   validateWorkerLiveEventParams,
+  validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
@@ -283,19 +283,16 @@ describe("worker protocol schemas", () => {
       sessionKey: "agent:main:dashboard:child",
       message: "report status",
     };
-    const publish = { toolCallId: "call-publish", title: "Publish the fix" };
+    const portal = { toolCallId: "call-portal", action: "open", port: 3000, path: "/app" };
     expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
     expect(validateWorkerSessionsSendParams(send)).toBe(true);
-    expect(validateWorkerGitHubPublishParams(publish)).toBe(true);
+    expect(validateWorkerPortalParams(portal)).toBe(true);
     expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
     expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
-    expect(validateWorkerGitHubPublishParams({ ...publish, token: "secret" })).toBe(false);
-    expect(validateWorkerGitHubPublishParams({ ...publish, repository: "openclaw/openclaw" })).toBe(
-      false,
-    );
-    expect(validateWorkerGitHubPublishParams({ ...publish, branch: "main" })).toBe(false);
-    expect(validateWorkerGitHubPublishParams({ ...publish, title: "Fix\rInject" })).toBe(false);
-    expect(validateWorkerGitHubPublishParams({ ...publish, commitMessage: "Inject" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, token: "secret" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, action: "unknown" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, port: 0 })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, path: "app" })).toBe(false);
     const escaped = "\0";
     const requestBytes = (method: string, requestParams: object) =>
       Buffer.byteLength(
@@ -348,14 +345,21 @@ describe("worker protocol schemas", () => {
     );
     expect(validateWorkerSessionsSendParams(impossibleSend)).toBe(false);
 
-    const maximalPublish = {
+    const maximalPortal = {
       toolCallId: escaped.repeat(256),
+      action: "open",
+      port: 65_535,
       title: escaped.repeat(256),
-      body: escaped.repeat(8 * 1024),
+      description: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+      path: `/${escaped.repeat(1_023)}`,
+      id: escaped.repeat(256),
     };
-    expect(validateWorkerGitHubPublishParams(maximalPublish)).toBe(true);
-    expect(requestBytes("worker.github.publish", maximalPublish)).toBeLessThanOrEqual(
+    expect(validateWorkerPortalParams(maximalPortal)).toBe(true);
+    expect(requestBytes("worker.portal", maximalPortal)).toBeLessThanOrEqual(
       WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerPortalParams({ ...maximalPortal, description: impossibleText })).toBe(
+      false,
     );
     expect(
       validateWorkerSessionsSpawnParams({
@@ -364,7 +368,7 @@ describe("worker protocol schemas", () => {
       }),
     ).toBe(false);
     expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_PORTAL_PROTOCOL_FEATURE);
 
     const response = {
       type: "res" as const,
@@ -374,7 +378,7 @@ describe("worker protocol schemas", () => {
     };
     expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
     expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
-    expect(Value.Check(WorkerGitHubPublishResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerPortalResponseFrameSchema, response)).toBe(true);
     expect(
       Value.Check(WorkerSessionsSendResponseFrameSchema, {
         ...response,

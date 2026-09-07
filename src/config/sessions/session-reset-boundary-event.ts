@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
-export type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+
+export type SessionResetBoundaryRequest =
+  | { context: "clear"; reason: Extract<SessionResetBoundaryReason, "new" | "reset"> }
+  | {
+      context: "preserve-tail";
+      reason: Extract<SessionResetBoundaryReason, "reset" | "idle" | "daily" | "cron-stale">;
+    };
 
 type SessionResetBoundaryEvent = {
   type: "reset";
@@ -62,10 +69,11 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   return [...kept, ...entries.slice(boundaryIndex + 1)];
 }
 
-export function buildSessionResetBoundaryEvent(params: {
-  events: readonly unknown[];
-  reason: SessionResetBoundaryReason;
-}): SessionResetBoundaryEvent {
+export function buildSessionResetBoundaryEvent(
+  params: {
+    events: readonly unknown[];
+  } & SessionResetBoundaryRequest,
+): SessionResetBoundaryEvent {
   const entries = params.events.filter(
     (event) =>
       event !== null &&
@@ -74,9 +82,10 @@ export function buildSessionResetBoundaryEvent(params: {
       (event as { type?: unknown }).type !== "session",
   );
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
-  const keptEntries = selectRecentUserAssistantReplayRecords(
-    projectLatestBoundaryWindow(activeEntries),
-  );
+  const keptEntries =
+    params.context === "preserve-tail"
+      ? selectRecentUserAssistantReplayRecords(projectLatestBoundaryWindow(activeEntries))
+      : [];
   const firstKeptEntryId = recordId(keptEntries[0]);
   return {
     type: "reset",

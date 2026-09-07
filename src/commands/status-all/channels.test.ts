@@ -73,12 +73,20 @@ describe("buildChannelsTable", () => {
     mocks.missingOfficialExternalChannels.clear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
       account: {
         tokenStatus: "configured_unavailable",
         tokenSource: "secretref",
       },
       enabled: true,
       configured: true,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+        tokenSource: "secretref",
+      },
     });
   });
 
@@ -109,6 +117,32 @@ describe("buildChannelsTable", () => {
     expect(detailRow?.Notes).toContain("credential available in gateway runtime");
   });
 
+  it("warns when an inspector cannot report configuration state", async () => {
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
+      account: { enabled: true },
+      enabled: true,
+      configured: undefined,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        stateReason: "configuration status unavailable",
+      },
+    });
+
+    const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
+    expect(table.rows).toEqual([
+      {
+        id: "discord",
+        label: "Discord",
+        enabled: true,
+        state: "warn",
+        detail: "configuration status unavailable",
+      },
+    ]);
+    expect(table.details).toEqual([]);
+  });
+
   it("summarizes channels without selecting an owner from an explicit multi-agent roster", async () => {
     const config = {
       agents: {
@@ -135,18 +169,37 @@ describe("buildChannelsTable", () => {
     expect(row?.detail).toContain("unavailable");
   });
 
-  it("does not warn on SecretRef credentials when credential resolution was skipped", async () => {
+  it("renders a resolved credential as OK on fast-path scans without live channel status", async () => {
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
+      account: {
+        token: "8905123456:AAF-example-bDTs",
+        tokenSource: "config",
+        tokenStatus: "available",
+      },
+      enabled: true,
+      configured: true,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        token: "8905123456:AAF-example-bDTs",
+        tokenSource: "config",
+        tokenStatus: "available",
+      },
+    });
+
+    // Fast-path call shape: no live channel status, no setup fallback plugins.
     const table = await buildChannelsTable(
       { channels: { discord: { enabled: true } } },
-      { credentialResolutionSkipped: true },
+      { includeSetupFallbackPlugins: false, liveChannelStatus: null },
     );
 
     const row = table.rows.find((entry) => entry.id === "discord");
     expect(row?.state).toBe("ok");
-    expect(row?.detail).toBe("configured");
+    expect(row?.detail).toContain("token config");
     const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("UNKNOWN");
-    expect(detailRow?.Notes).toContain("credential not checked");
+    expect(detailRow?.Status).toBe("OK");
   });
 
   it("formats human phone identity while preserving raw account ids", async () => {
@@ -172,12 +225,20 @@ describe("buildChannelsTable", () => {
     };
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([phonePlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "resolved",
       account: {
         name: "+12133734253",
         allowFrom: ["+442079460018", "bot-token"],
       },
       enabled: true,
       configured: true,
+      snapshot: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        name: "+12133734253",
+        allowFrom: ["+442079460018", "bot-token"],
+      },
     });
 
     const table = await buildChannelsTable({ channels: { signal: { enabled: true } } });

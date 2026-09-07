@@ -1,3 +1,4 @@
+import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 
@@ -61,6 +62,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
+  const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
   return {
     role,
     timestamp,
@@ -70,6 +72,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
+      ...(transcriptPosition ? { transcriptPosition } : {}),
       truncated: true,
       reason: "oversized",
     },

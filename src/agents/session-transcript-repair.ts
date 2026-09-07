@@ -210,25 +210,7 @@ type ToolUseResultPairingOptions = {
   preserveUnframedToolResults?: boolean;
 };
 
-export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
-      out.push(msg);
-      continue;
-    }
-    if (!("details" in msg)) {
-      out.push(msg);
-      continue;
-    }
-    const sanitized = { ...msg };
-    Reflect.deleteProperty(sanitized, "details");
-    touched = true;
-    out.push(sanitized);
-  }
-  return touched ? out : messages;
-}
+export { stripToolResultDetails } from "../shared/model-context-message.js";
 
 function collectFollowingToolResults(
   messages: AgentMessage[],
@@ -461,6 +443,7 @@ export function sanitizeToolUseResultPairingForModel(
 type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
+  discarded: AgentMessage[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
@@ -489,17 +472,22 @@ export function repairToolUseResultPairing(
   const { frames } = pairing;
   const droppedDuplicateCount = pairing.droppedDuplicateCount;
   let droppedOrphanCount = pairing.droppedOrphanCount;
+  const discarded: Array<{ message: AgentMessage; index: number }> = pairing.droppedResults.map(
+    ({ message, index }) => ({ message, index }),
+  );
 
   const out: AgentMessage[] = [];
   let cursor = 0;
   const pushUnframedRange = (endIndex: number) => {
     for (; cursor < endIndex; cursor += 1) {
+      const sourceIndex = cursor;
       const message = messages[cursor];
       if (!message || typeof message !== "object") {
         continue;
       }
       if (message.role === "toolResult" && !preserveUnframed) {
         droppedOrphanCount += 1;
+        discarded.push({ message, index: sourceIndex });
         continue;
       }
       out.push(message);
@@ -529,6 +517,15 @@ export function repairToolUseResultPairing(
         added.push(missing);
         out.push(missing);
       }
+    } else {
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.sourceResult) {
+          discarded.push({
+            message: occurrence.sourceResult,
+            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
+          });
+        }
+      }
     }
     out.push(...frame.remainder);
   }
@@ -536,9 +533,11 @@ export function repairToolUseResultPairing(
 
   const changed =
     out.length !== messages.length || out.some((message, index) => message !== messages[index]);
+  discarded.sort((left, right) => left.index - right.index);
   return {
     messages: changed ? out : messages,
     added,
+    discarded: discarded.map(({ message }) => message),
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changed,

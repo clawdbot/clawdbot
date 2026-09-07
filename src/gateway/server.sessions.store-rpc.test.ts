@@ -650,14 +650,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
   expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
-  // Retained history stays in the same SQLite transcript behind the reset boundary.
   const resetTranscript = await loadTranscriptRows({
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     storePath,
   });
-  expect(resetTranscript).toHaveLength(4);
   expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  expect(resetTranscript.at(-1)).not.toHaveProperty("firstKeptEntryId");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

@@ -1,75 +1,73 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  getAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+  rotateAgentRunRegistryLifecycleGeneration,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import * as secretsRuntimeState from "../../secrets/runtime-state.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { QuestionManager } from "../question-manager.js";
+import {
+  abortChatRunById,
+  registerChatAbortController,
+  type ChatAbortControllerEntry,
+} from "../chat-abort.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { createChatRunState } from "../server-chat-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
-import { createQuestionHandlers } from "./question.js";
-import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import {
+  adminRequestClient,
+  broadcast,
+  callQuestionRpc as call,
+  installQuestionTestHooks,
+  manager,
+  reloadSecrets,
+  requesterAuthority,
+  requestParams,
+  requestSecretQuestion,
+  secretRequestParams,
+  secretRequestQuestion,
+  storeWriteService,
+} from "./question.test-support.js";
+import type { GatewayClient } from "./types.js";
 
-let manager: QuestionManager;
-let broadcast: ReturnType<typeof vi.fn>;
-let handlers: ReturnType<typeof createQuestionHandlers>;
+installQuestionTestHooks();
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.setSystemTime(1_000);
-  manager = new QuestionManager();
-  broadcast = vi.fn();
-  handlers = createQuestionHandlers(manager);
-});
-
-afterEach(() => {
-  manager.reset();
-  vi.useRealTimers();
-});
-
-async function call(
-  method: string,
-  params: Record<string, unknown>,
-  options?: { client?: GatewayClient; cfg?: OpenClawConfig },
-) {
-  const calls: Parameters<RespondFn>[] = [];
-  const respond: RespondFn = (...args) => calls.push(args);
-  await handlers[method]?.({
-    req: { type: "req", id: "request-1", method, params },
-    params,
-    respond,
-    client: options?.client ?? null,
-    isWebchatConnect: () => false,
-    context: {
-      broadcast,
-      getRuntimeConfig: () => options?.cfg ?? {},
-    } as unknown as GatewayRequestHandlerOptions["context"],
-  });
-  const response = calls[0];
-  if (!response) {
-    throw new Error(`expected ${method} response`);
-  }
-  return response;
-}
-
-const requestParams = {
-  questions: [
-    {
-      questionId: "destination",
-      header: "Destination",
-      question: "Where next?",
-      options: [],
-      multiSelect: false,
-      isOther: true,
-      isSecret: false,
+function mockReferencedStoreSnapshot() {
+  vi.spyOn(secretsRuntimeState, "getActiveSecretsRuntimeSnapshotState").mockReturnValue({
+    sourceConfig: {
+      models: {
+        providers: {
+          test: {
+            baseUrl: "https://provider.example.test",
+            models: [],
+            apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+          },
+        },
+      },
     },
-  ],
-  agentId: "main",
-  sessionKey: "agent:main:main",
-  runId: "run-main",
-  timeoutMs: 100,
-};
+    config: {},
+    authStores: [],
+    authStoreCredentialsRevision: 0,
+    authStoreSnapshotsRevision: 0,
+    warnings: [],
+    webTools: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+  });
+}
 
 describe("question gateway methods", () => {
   it("conceals foreign session questions for role-none readers while preserving global prompts", async () => {
@@ -82,7 +80,7 @@ describe("question gateway methods", () => {
           sessionId: "question-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
       manager.request({ ...requestParams, id: "foreign-question" });
@@ -144,7 +142,7 @@ describe("question gateway methods", () => {
             sessionId: "question-session",
             updatedAt: 1,
             visibility: "shared",
-            createdActor: { type: "human", id: owner.id },
+            createdActor: { type: "human", source: "profile", id: owner.id },
           },
         );
         manager.request({ ...requestParams, id: "foreign-question" });
@@ -201,7 +199,7 @@ describe("question gateway methods", () => {
           sessionId: "question-session",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         },
       );
       const cfg: OpenClawConfig = {
@@ -250,7 +248,11 @@ describe("question gateway methods", () => {
       const viewerClient = makeQuestionClient(viewer, "question-viewer");
       const guestClient = makeQuestionClient(guest, "question-guest");
       const gatewayBroadcaster = createGatewayBroadcaster({
-        clients: new Set([ownerClient.client, viewerClient.client, guestClient.client]),
+        clients: new GatewayClientRegistry([
+          ownerClient.client,
+          viewerClient.client,
+          guestClient.client,
+        ]),
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
           canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
       });
@@ -341,6 +343,30 @@ describe("question gateway methods", () => {
     });
   });
 
+  it("returns committed resolution receipts only to opted-in question waiters", async () => {
+    const requested = await call("question.request", requestParams);
+    const id = (requested[1] as { id: string }).id;
+    const legacy = call("question.waitAnswer", { id });
+    const tracked = call("question.waitAnswer", { id, includeResolutionId: true });
+    const answers = { answers: { destination: ["Home"] } };
+    const resolutionId = "plain-text-submission";
+
+    expect(await call("question.resolve", { id, answers, resolutionId })).toEqual([
+      true,
+      { status: "answered", answers },
+      undefined,
+    ]);
+    expect(await legacy).toEqual([true, { status: "answered", answers }, undefined]);
+    expect(await tracked).toEqual([true, { status: "answered", answers, resolutionId }, undefined]);
+    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
+      id,
+      status: "answered",
+      answers,
+    });
+    expect((await call("question.get", { id }))[1]).toEqual({ question: manager.get(id) });
+    expect(manager.get(id)).not.toHaveProperty("resolutionId");
+  });
+
   it("rejects duplicate ids and one-option questions at the request boundary", async () => {
     const duplicate = await call("question.request", {
       questions: [requestParams.questions[0], requestParams.questions[0]],
@@ -387,6 +413,505 @@ describe("question gateway methods", () => {
     expect((duplicateLabels[2] as { message: string }).message).toContain(
       "question 'destination' has duplicate option label",
     );
+  });
+
+  it.each([
+    {
+      behavior: "bindings without the secret-input marker",
+      questions: [{ ...secretRequestParams.questions[0], isSecret: false }],
+    },
+    {
+      behavior: "secret requests mixed with another question",
+      questions: [secretRequestParams.questions[0], requestParams.questions[0]],
+    },
+    {
+      behavior: "secret requests with answer options",
+      questions: [
+        {
+          ...secretRequestParams.questions[0],
+          options: [{ label: "First" }, { label: "Second" }],
+        },
+      ],
+    },
+    {
+      behavior: "secret requests allowing multiple selections",
+      questions: [{ ...secretRequestParams.questions[0], multiSelect: true }],
+    },
+    {
+      behavior: "invalid secret store entry names",
+      questions: [
+        {
+          ...secretRequestParams.questions[0],
+          secretStore: { ...secretRequestQuestion.secretStore, name: "lowercase" },
+        },
+      ],
+    },
+    {
+      behavior: "invalid secret store entry kinds",
+      questions: [
+        {
+          ...secretRequestParams.questions[0],
+          secretStore: { ...secretRequestQuestion.secretStore, kind: "password" },
+        },
+      ],
+    },
+    {
+      behavior: "more than 128 proposed allowed hosts",
+      questions: [
+        {
+          ...secretRequestParams.questions[0],
+          secretStore: {
+            ...secretRequestQuestion.secretStore,
+            allowedHosts: Array.from({ length: 129 }, (_, index) => `${index}.example.test`),
+          },
+        },
+      ],
+    },
+    {
+      behavior: "allowed hosts proposed for environment entries",
+      questions: [
+        {
+          ...secretRequestParams.questions[0],
+          secretStore: { ...secretRequestQuestion.secretStore, kind: "env" },
+        },
+      ],
+    },
+  ])("rejects $behavior before opening a pending secret question", async ({ questions }) => {
+    const response = await call(
+      "question.request",
+      { ...requestParams, questions },
+      { client: adminRequestClient },
+    );
+
+    expect(response).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    expect(manager.list()).toEqual([]);
+  });
+
+  it.each([
+    { behavior: "a connect-less client", client: null },
+    {
+      behavior: "a questions-scoped client",
+      client: {
+        connect: { scopes: ["operator.questions"] },
+      } as GatewayClient,
+    },
+  ])(
+    "refuses to mint store-bound questions for $behavior so questions scope cannot reach store writes",
+    async ({ client }) => {
+      const response = await call(
+        "question.request",
+        secretRequestParams,
+        client ? { client } : undefined,
+      );
+
+      expect(response).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining("operator.admin") },
+      ]);
+      expect(manager.list()).toEqual([]);
+    },
+  );
+
+  it.each(["release", "replacement", "rotation", "abort"] as const)(
+    "fences a pending credential on exact requester %s while preserving ordinary questions",
+    async (closure) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const id = await requestSecretQuestion();
+        const ordinary = await call("question.request", requestParams);
+        const ordinaryId = (ordinary[1] as { id: string }).id;
+        const waiting = manager.waitAnswer(id);
+        let successor: AgentRunDelegatedAuthority | undefined;
+        if (closure === "release") {
+          releaseAgentRunDelegatedAuthority(requesterAuthority);
+        } else if (closure === "replacement") {
+          successor = claimAgentRunDelegatedAuthority({
+            instanceId: "successor-instance",
+            runId: requestParams.runId,
+          });
+        } else if (closure === "rotation") {
+          rotateAgentRunRegistryLifecycleGeneration();
+        } else {
+          const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+          const registration = registerChatAbortController({
+            chatAbortControllers,
+            runId: requestParams.runId,
+            sessionId: "question-session",
+            sessionKey: requestParams.sessionKey,
+            timeoutMs: 60_000,
+            operationalRunInstance: requesterAuthority.operationalRunInstance,
+          });
+          registration.bindAgentRunDelegatedAuthority(requesterAuthority);
+          // Projection cleanup is not an abort; exercise the owner that revokes
+          // the exact claim before notifying the run's abort listeners.
+          try {
+            expect(
+              abortChatRunById(
+                {
+                  chatAbortControllers,
+                  chatRunState: createChatRunState(),
+                  removeChatRun: () => undefined,
+                  agentRunSeq: new Map(),
+                  broadcast: vi.fn(),
+                  nodeSendToSession: vi.fn(),
+                },
+                { runId: requestParams.runId, sessionKey: requestParams.sessionKey },
+              ),
+            ).toEqual({ aborted: true });
+          } finally {
+            registration.cleanup();
+          }
+        }
+        try {
+          if (closure !== "abort") {
+            expect(getAgentRunContext(requestParams.runId)).toBeDefined();
+          }
+          const resolved = await call("question.resolve", {
+            id,
+            answers: { answers: { secret_value: ["test-secret-stale-requester"] } },
+          });
+          expect(resolved).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+          expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+          expect(reloadSecrets).not.toHaveBeenCalled();
+          expect(manager.get(id)?.status).toBe("cancelled");
+          await expect(waiting).resolves.toEqual({ status: "cancelled" });
+          expect(broadcast).toHaveBeenCalledWith("question.resolved", { id, status: "cancelled" });
+          expect(
+            (
+              await call("question.resolve", {
+                id: ordinaryId,
+                answers: { answers: { destination: ["Home"] } },
+              })
+            )[0],
+          ).toBe(true);
+          if (successor) {
+            const successorClient = {
+              ...adminRequestClient,
+              internal: {
+                agentRuntimeIdentity: {
+                  ...adminRequestClient.internal!.agentRuntimeIdentity!,
+                  operationalRunInstance: successor.operationalRunInstance,
+                  delegatedAuthority: { kind: "local", ...successor },
+                },
+              },
+            } as GatewayClient;
+            const replacement = await call("question.request", secretRequestParams, {
+              client: successorClient,
+            });
+            const replacementId = (replacement[1] as { id: string }).id;
+            expect(
+              (
+                await call("question.resolve", {
+                  id: replacementId,
+                  answers: { answers: { secret_value: ["test-secret-current-requester"] } },
+                })
+              )[0],
+            ).toBe(true);
+            expect(
+              readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+            ).toEqual({
+              ok: true,
+              value: "test-secret-current-requester",
+            });
+          }
+        } finally {
+          if (successor) {
+            releaseAgentRunDelegatedAuthority(successor);
+          }
+        }
+      });
+    },
+  );
+
+  it("requires admitted authority, not an admin's supplied run metadata", async () => {
+    expect(
+      await call("question.request", secretRequestParams, {
+        client: { connect: { scopes: ["operator.admin"] } } as GatewayClient,
+      }),
+    ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    expect(manager.list()).toEqual([]);
+  });
+
+  it("uses admitted requester provenance instead of caller-supplied correlation fields", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const response = await call(
+        "question.request",
+        {
+          questions: secretRequestParams.questions,
+          agentId: "other",
+          sessionKey: "agent:other:other",
+          runId: "other-run",
+        },
+        { client: adminRequestClient },
+      );
+      expect(response[0]).toBe(true);
+      expect(manager.get((response[1] as { id: string }).id)).toMatchObject({
+        agentId: requestParams.agentId,
+        sessionKey: requestParams.sessionKey,
+        runId: requestParams.runId,
+      });
+    });
+  });
+
+  it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const id = await requestSecretQuestion();
+      const value = "test-secret-value-gateway-diversion-123";
+      const client = {
+        connect: { client: { displayName: "Trusted Operator" } },
+      } as GatewayClient;
+
+      const resolved = await call(
+        "question.resolve",
+        { id, answers: { answers: { secret_value: [value] } }, resolvedBy: "control-ui" },
+        { client },
+      );
+      const safeAnswers = { answers: { secret_value: ["stored"] } };
+
+      expect(resolved).toEqual([true, { status: "answered", answers: safeAnswers }, undefined]);
+      expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        {
+          name: "SERVICE_API_KEY",
+          kind: "secret",
+          allowedHosts: ["api.example.test"],
+          updatedBy: "Trusted Operator",
+        },
+      ]);
+      expect(manager.get(id)).toMatchObject({ status: "answered", answers: safeAnswers });
+      expect(await call("question.waitAnswer", { id })).toEqual([
+        true,
+        { status: "answered", answers: safeAnswers },
+        undefined,
+      ]);
+      expect(broadcast).toHaveBeenCalledWith("question.resolved", {
+        id,
+        status: "answered",
+        answers: safeAnswers,
+      });
+      expect(JSON.stringify([resolved, manager.get(id), broadcast.mock.calls])).not.toContain(
+        value,
+      );
+      expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
+    });
+  });
+
+  it("uses operator-edited hosts and keeps invalid store submissions pending for retry", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const id = await requestSecretQuestion();
+      const value = "test-secret-value-retry-123";
+      const answers = { answers: { secret_value: [value] } };
+
+      const invalid = await call("question.resolve", {
+        id,
+        answers,
+        secretStoreAllowedHosts: ["*.example.test"],
+      });
+      expect(invalid).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining("wildcard") },
+      ]);
+      expect(manager.get(id)?.status).toBe("pending");
+      expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
+
+      const retried = await call("question.resolve", {
+        id,
+        answers,
+        secretStoreAllowedHosts: ["replacement.example.test"],
+      });
+      expect(retried[0]).toBe(true);
+      expect(listSecretStoreEntries({ scope: { kind: "team" } })[0]).toMatchObject({
+        allowedHosts: ["replacement.example.test"],
+      });
+    });
+  });
+
+  it.each([
+    { behavior: "no submitted value", answers: { secret_value: [] } },
+    {
+      behavior: "multiple submitted values",
+      answers: { secret_value: ["test-secret-value-first", "test-secret-value-second"] },
+    },
+    {
+      behavior: "an unrelated submitted answer",
+      answers: { secret_value: ["test-secret-value-only"], destination: ["Home"] },
+    },
+  ])("keeps a secret question pending when there is $behavior", async ({ answers }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const id = await requestSecretQuestion();
+
+      expect(await call("question.resolve", { id, answers: { answers } })).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST" },
+      ]);
+      expect(manager.get(id)?.status).toBe("pending");
+      expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    });
+  });
+
+  it("rejects masked env requests while preserving ordinary question host validation and cancellation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      expect(
+        await call(
+          "question.request",
+          {
+            ...secretRequestParams,
+            questions: [
+              { ...secretRequestQuestion, secretStore: { name: "SERVICE_URL", kind: "env" } },
+            ],
+          },
+          { client: adminRequestClient },
+        ),
+      ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+      expect(manager.list()).toEqual([]);
+      expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+      const ordinaryResponse = await call("question.request", requestParams);
+      const ordinaryId = (ordinaryResponse[1] as { id: string }).id;
+      expect(
+        await call("question.resolve", {
+          id: ordinaryId,
+          answers: { answers: { destination: ["Home"] } },
+          secretStoreAllowedHosts: ["example.test"],
+        }),
+      ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+      expect(manager.get(ordinaryId)?.status).toBe("pending");
+      const id = await requestSecretQuestion();
+      expect(await call("question.resolve", { id, cancel: true })).toEqual([
+        true,
+        { status: "cancelled" },
+        undefined,
+      ]);
+    });
+  });
+
+  it("cold-refreshes configured SecretRefs after a store-bound question is answered", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      mockReferencedStoreSnapshot();
+      const id = await requestSecretQuestion();
+
+      expect(
+        (
+          await call("question.resolve", {
+            id,
+            answers: { answers: { secret_value: ["test-secret-value-cold-refresh-123"] } },
+          })
+        )[0],
+      ).toBe(true);
+      expect(reloadSecrets).toHaveBeenCalledWith({
+        forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+        joinInFlight: false,
+      });
+    });
+  });
+
+  it.each(["second answer", "cancel", "expiry"] as const)(
+    "settles the SQLite commit before deferred refresh can race with %s",
+    async (racer) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        mockReferencedStoreSnapshot();
+        const reload = createDeferred<{ warningCount: number }>();
+        reloadSecrets.mockReturnValue(reload.promise);
+        const id = await requestSecretQuestion();
+        const firstValue = "test-secret-committed-first";
+        const pending = call("question.resolve", {
+          id,
+          answers: { answers: { secret_value: [firstValue] } },
+        });
+        const competitors: Array<ReturnType<typeof call>> = [];
+        if (racer === "second answer") {
+          competitors.push(
+            call("question.resolve", {
+              id,
+              answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
+            }),
+          );
+        } else if (racer === "cancel") {
+          competitors.push(call("question.resolve", { id, cancel: true }));
+        } else {
+          await vi.advanceTimersByTimeAsync(secretRequestParams.timeoutMs);
+        }
+        try {
+          expect(
+            readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+          ).toEqual({ ok: true, value: firstValue });
+          expect(manager.get(id)?.status).toBe("answered");
+          expect(reloadSecrets).toHaveBeenCalledTimes(1);
+        } finally {
+          reload.resolve({ warningCount: 0 });
+          await Promise.all([pending, ...competitors]);
+        }
+        expect((await pending)[0]).toBe(true);
+        for (const competitor of competitors) {
+          expect((await competitor)[0]).toBe(false);
+        }
+        expect(await manager.waitAnswer(id)).toEqual({
+          status: "answered",
+          answers: { answers: { secret_value: ["stored"] } },
+        });
+      });
+    },
+  );
+
+  it("keeps a committed answer terminal and reports refresh failure without inviting overwrite", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      mockReferencedStoreSnapshot();
+      reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
+      const id = await requestSecretQuestion();
+      const value = "test-secret-refresh-failed";
+      const resolutionId = "committed-before-refresh";
+      const result = await call("question.resolve", {
+        id,
+        answers: { answers: { secret_value: [value] } },
+        resolutionId,
+      });
+      expect(result).toMatchObject([
+        false,
+        undefined,
+        { code: "UNAVAILABLE", message: expect.stringContaining("was saved") },
+      ]);
+      expect(manager.get(id)?.status).toBe("answered");
+      expect(await manager.waitAnswer(id)).toEqual({
+        status: "answered",
+        answers: { answers: { secret_value: ["stored"] } },
+      });
+      expect(await call("question.waitAnswer", { id, includeResolutionId: true })).toEqual([
+        true,
+        { status: "answered", answers: { answers: { secret_value: ["stored"] } }, resolutionId },
+        undefined,
+      ]);
+      expect(
+        (
+          await call("question.resolve", {
+            id,
+            answers: { answers: { secret_value: ["test-secret-overwrite"] } },
+          })
+        )[0],
+      ).toBe(false);
+      expect(readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" })).toEqual({
+        ok: true,
+        value,
+      });
+      expect(reloadSecrets).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify([result, manager.get(id), broadcast.mock.calls])).not.toContain(value);
+    });
+  });
+
+  it("keeps store-bound questions pending when the write service is unavailable", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.spyOn(storeWriteService, "write").mockImplementation(() => {
+        throw new Error("database unavailable");
+      });
+      const id = await requestSecretQuestion();
+
+      expect(
+        await call("question.resolve", {
+          id,
+          answers: { answers: { secret_value: ["test-secret-value-unavailable-123"] } },
+        }),
+      ).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      expect(manager.get(id)?.status).toBe("pending");
+    });
   });
 
   it("returns INVALID_REQUEST for answers that violate the stored question", async () => {

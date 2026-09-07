@@ -103,7 +103,7 @@ async function captureEmbeddingError(
 ): Promise<Error | undefined> {
   const { provider } = await createOllamaEmbeddingProvider(options);
   try {
-    await provider.embedQuery("hello");
+    await provider.embed("hello", { inputType: "query" });
   } catch (error) {
     return error as Error;
   }
@@ -273,7 +273,7 @@ describe("Ollama embedding provider real transport", () => {
     options.remote.headers = { "X-Proxy-Auth": proxyAuth };
     const { provider } = await createOllamaEmbeddingProvider(options);
 
-    const vector = await provider.embedQuery("hello");
+    const vector = await provider.embed("hello", { inputType: "query" });
 
     expect(server.requests).toEqual([
       {

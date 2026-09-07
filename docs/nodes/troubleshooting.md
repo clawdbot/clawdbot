@@ -68,6 +68,13 @@ Healthy signals:
 - `nodes describe` includes the capability you're calling.
 - Exec approvals show the expected mode/allowlist.
 
+If startup preparation disables container session hosting that you enabled, check the node host's
+local stderr for `node host worker hosting disabled: ...` and follow the reported
+engine or context recovery guidance. The macOS app forwards worker stderr to its
+logger under subsystem `ai.openclaw`, category `node-host-worker`; see
+[macOS logging](/platforms/mac/logging) for capture options. After fixing the cause,
+restart the node host. Explicitly disabled hosting produces no such diagnostic.
+
 ## Foreground requirements
 
 `camera.*` and `screen.*` are foreground-only on iOS/Android nodes.

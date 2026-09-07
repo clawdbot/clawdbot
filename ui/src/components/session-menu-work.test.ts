@@ -5,10 +5,7 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
-import {
-  fetchSessionMenuWork,
-  resolveSessionPullRequestIndicatorState,
-} from "./session-menu-work.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
 
 function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
   return {
@@ -43,31 +40,6 @@ describe("isLoopbackHostname", () => {
     ["127.0.0.1.evil.com", false],
   ])("classifies %s as loopback: %s", (hostname, expected) => {
     expect(isLoopbackHostname(hostname)).toBe(expected);
-  });
-});
-
-describe("session pull request indicators", () => {
-  it.each([
-    {
-      name: "prioritizes an active PR over merged history",
-      pullRequests: [
-        pullRequest({ number: 1, state: "merged" }),
-        pullRequest({ number: 2, state: "draft" }),
-      ],
-      expected: "open",
-    },
-    {
-      name: "shows merged history",
-      pullRequests: [pullRequest({ state: "merged" })],
-      expected: "merged",
-    },
-    {
-      name: "ignores closed history",
-      pullRequests: [pullRequest({ state: "closed" })],
-      expected: "none",
-    },
-  ] as const)("$name", ({ pullRequests, expected }) => {
-    expect(resolveSessionPullRequestIndicatorState(pullRequests)).toBe(expected);
   });
 });
 

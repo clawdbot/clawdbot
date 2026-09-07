@@ -1,4 +1,6 @@
 // Opencode plugin entrypoint registers its OpenClaw integration.
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -14,6 +16,7 @@ import {
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
+  prepareOpencodeZenModel,
   resolveOpencodeZenModel,
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
@@ -23,18 +26,6 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
-
-function resolveOpencodeZenCatalogAuth(
-  resolveProviderApiKey: (providerId: string) => OpencodeZenCatalogAuth,
-): OpencodeZenCatalogAuth | undefined {
-  const own = resolveProviderApiKey(PROVIDER_ID);
-  if (own.apiKey || own.discoveryApiKey) {
-    return own;
-  }
-  const shared = resolveProviderApiKey("opencode-go");
-  return shared.apiKey || shared.discoveryApiKey ? shared : undefined;
-}
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -102,10 +93,37 @@ export default defineSingleProviderPluginEntry({
         : undefined;
     },
     resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+    prepareDynamicModel: async (ctx) => {
+      const profileProvider = ctx.authProfileId
+        ? ctx.config?.auth?.profiles?.[ctx.authProfileId]?.provider
+        : undefined;
+      const ownsProfile = Boolean(
+        ctx.authProfileId &&
+        (ctx.authProfileId.startsWith("opencode:") ||
+          ctx.authProfileId.startsWith("opencode-go:") ||
+          profileProvider === "opencode" ||
+          profileProvider === "opencode-go"),
+      );
+      const configured = Boolean(
+        ownsProfile ||
+        ctx.providerConfig ||
+        ctx.config?.models?.providers?.opencode ||
+        ctx.config?.models?.providers?.["opencode-go"] ||
+        process.env.OPENCODE_API_KEY?.trim() ||
+        process.env.OPENCODE_ZEN_API_KEY?.trim(),
+      );
+      return configured ? await prepareOpencodeZenModel({ modelId: ctx.modelId }) : undefined;
+    },
     catalog: {
       order: "simple",
       run: async (ctx) => {
-        const auth = resolveOpencodeZenCatalogAuth(ctx.resolveProviderApiKey);
+        if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
+        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+          PROVIDER_ID,
+          "opencode-go",
+        ]);
         if (!auth) {
           return null;
         }
@@ -114,12 +132,16 @@ export default defineSingleProviderPluginEntry({
             provider: buildStaticOpencodeZenProviderConfig(auth.apiKey),
           };
         }
-        return {
-          provider: await buildOpencodeZenLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
+        return await runLiveProviderCatalog({
+          providerId: PROVIDER_ID,
+          profileId: auth.profileId,
+          run: async () => ({
+            provider: await buildOpencodeZenLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           }),
-        };
+        });
       },
       staticRun: async () => ({ provider: buildStaticOpencodeZenProviderConfig() }),
     },

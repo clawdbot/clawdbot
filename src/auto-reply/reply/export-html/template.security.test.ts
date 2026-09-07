@@ -81,6 +81,7 @@ async function renderTemplate(sessionData: SessionData) {
 
   const parseHTML = await loadParseHTML();
   const { document } = parseHTML(html);
+  const downloads: Blob[] = [];
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -92,6 +93,14 @@ async function renderTemplate(sessionData: SessionData) {
     clearTimeout: () => {},
     setTimeout: immediateTimeout,
     URLSearchParams,
+    Blob,
+    URL: class extends URL {
+      static override createObjectURL(blob: Blob) {
+        downloads.push(blob);
+        return "blob:session-export";
+      }
+      static override revokeObjectURL() {}
+    },
     TextDecoder,
     atob: (s: string) => Buffer.from(s, "base64").toString("binary"),
     btoa: (s: string) => Buffer.from(s, "binary").toString("base64"),
@@ -107,7 +116,13 @@ async function renderTemplate(sessionData: SessionData) {
   vm.runInContext(markedJs, runtime);
   vm.runInContext(highlightJs, runtime);
   vm.runInContext(templateJs, runtime);
-  return { document };
+  return {
+    document,
+    downloadJson: async () => {
+      vm.runInContext("downloadSessionJson()", runtime);
+      return await expectDefined(downloads.at(-1), "download missing").text();
+    },
+  };
 }
 
 function now() {
@@ -181,6 +196,83 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it.each(["consult", "answer"])("honors hidden input with %s selected while preserving raw export", async (leafId) => {
+    const session: SessionData = {
+      header: { id: "session-hidden-input", timestamp: now() },
+      entries: [
+        {
+          id: "hidden-root",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "custom_message",
+          customType: "context",
+          content: "Hidden root context",
+          display: false,
+        },
+        {
+          id: "speech",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "Explain the change. Context: Spoken style:" },
+        },
+        {
+          id: "consult",
+          parentId: "speech",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "user",
+            content: "Synthetic consultation instructions",
+            display: false,
+            provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+          },
+        },
+        {
+          id: "answer",
+          parentId: "consult",
+          timestamp: now(),
+          type: "message",
+          message: { role: "assistant", content: "The change is ready." },
+        },
+      ],
+      leafId,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document, downloadJson } = await renderTemplate(session);
+    expect(document.querySelectorAll(".user-message")).toHaveLength(1);
+    expect(document.getElementById("entry-speech")?.textContent).toContain(
+      "Explain the change. Context: Spoken style:",
+    );
+    expect(document.getElementById("entry-consult")).toBeNull();
+    expect(document.getElementById("entry-hidden-root")).toBeNull();
+    const treeIds = () => Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    const selectFilter = (filter: string) => requireElement(
+      document.querySelector<HTMLButtonElement>(`[data-filter="${filter}"]`), "filter missing",
+    ).click();
+    selectFilter("all");
+    expect(treeIds()).toEqual(["hidden-root", "speech", "consult", "answer"]);
+    expect(document.querySelector('[data-id="consult"]')?.textContent).toContain("[hidden] user:");
+    requireElement(document.querySelector<HTMLElement>('[data-id="consult"]'), "hidden tree entry missing").click();
+    expect(document.getElementById("entry-answer")?.textContent).toContain("The change is ready.");
+    expect(document.getElementById("entry-consult")).toBeNull();
+    selectFilter("user-only");
+    expect(treeIds()).not.toContain("consult");
+    selectFilter("default");
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 1 assistant, 1 custom");
+    const encoded = requireElement(document.getElementById("session-data"), "session data missing");
+    expect(JSON.parse(Buffer.from(encoded.textContent ?? "", "base64").toString("utf8"))).toEqual(
+      session,
+    );
+    expect((await downloadJson()).split("\n").map((line) => JSON.parse(line))).toEqual([
+      { type: "header", ...session.header }, ...session.entries,
+    ]);
+  });
+
   it("renders export warnings in the header without interpreting HTML", async () => {
     const warning = 'Backend <img src=x onerror="alert(1)"> transcript is incomplete';
     const session: SessionData = {

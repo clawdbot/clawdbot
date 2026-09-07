@@ -2,7 +2,7 @@ import type { ExecHost } from "../infra/exec-approvals.js";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import type {
@@ -31,9 +31,7 @@ export function buildExecForegroundResult(params: {
   aggregateOutputDropped?: boolean;
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
-  const retentionCapNote = params.aggregateOutputDropped
-    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
-    : "";
+  const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
       params.outcome.failureKind === "signal" &&
@@ -44,7 +42,7 @@ export function buildExecForegroundResult(params: {
           "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
-    const outputText = `${warningText}${params.outcome.reason}${linuxOomGuidance}${retentionCapNote}`;
+    const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
     return failedTextResult(outputText, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
@@ -58,7 +56,7 @@ export function buildExecForegroundResult(params: {
       cwd: params.cwd,
     });
   }
-  const outputText = `${warningText}${renderExecOutputText(params.outcome.aggregated)}${retentionCapNote}`;
+  const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, {
     status: "completed",
     exitCode: params.outcome.exitCode,
@@ -84,33 +82,34 @@ export function resolveExecReviewerDefaults(params: {
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+// Preparation and execution must interpret elevation identically before host policy runs.
+export function resolveExecElevatedMode(
+  defaults: ExecToolDefaults | undefined,
+  requested: unknown,
+) {
+  const elevated = defaults?.elevated;
+  const defaultMode =
+    elevated?.defaultLevel === "full"
+      ? "full"
+      : elevated?.defaultLevel === "ask" || elevated?.defaultLevel === "on"
+        ? "ask"
+        : "off";
+  if (typeof requested === "boolean") {
+    return requested ? (defaultMode === "full" ? "full" : "ask") : "off";
+  }
+  return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
+}
+
 export function createExecHostResolver(defaults?: ExecToolDefaults) {
   return (params: ExecToolArgs): ExecHost => {
-    const elevatedDefaults = defaults?.elevated;
-    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-    const elevatedDefaultMode =
-      elevatedDefaults?.defaultLevel === "full"
-        ? "full"
-        : elevatedDefaults?.defaultLevel === "ask"
-          ? "ask"
-          : elevatedDefaults?.defaultLevel === "on"
-            ? "ask"
-            : "off";
-    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-    const elevatedMode =
-      typeof params.elevated === "boolean"
-        ? params.elevated
-          ? elevatedDefaultMode === "full"
-            ? "full"
-            : "ask"
-          : "off"
-        : effectiveDefaultMode;
+    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
     const requestedTarget = requireValidExecTarget(params.host);
     return resolveExecTarget({
       configuredTarget: defaults?.host,
       requestedTarget,
       elevatedRequested: elevatedMode !== "off",
       sandboxAvailable: Boolean(defaults?.sandbox),
+      sandboxRequired: defaults?.sandboxRequired,
     }).effectiveHost;
   };
 }

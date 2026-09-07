@@ -4,10 +4,11 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY?.trim() ?? "";
@@ -89,7 +90,7 @@ describeTtsLive("minimax tts live", () => {
       return;
     }
 
-    const provider = buildMinimaxSpeechProvider();
+    const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
     const voiceNote = await provider.synthesize({
       text: "OpenClaw MiniMax voice note test OK.",
@@ -111,7 +112,7 @@ describeTokenPlanTtsLive("minimax token plan tts live", () => {
     const savedApiKey = process.env.MINIMAX_API_KEY;
     delete process.env.MINIMAX_API_KEY;
     try {
-      const provider = buildMinimaxSpeechProvider();
+      const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
       const audioFile = await provider.synthesize({
         text: "OpenClaw MiniMax Token Plan text to speech integration test OK.",

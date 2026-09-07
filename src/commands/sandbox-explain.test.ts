@@ -264,40 +264,117 @@ describe("sandbox explain command", () => {
     });
   });
 
-  it("reports the generated sandbox workspace for non-rw sessions", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            workspaceAccess: "none",
-            workspaceRoot: "/tmp/openclaw-sandboxes",
+  it.each([
+    { workspaceAccess: "none", writable: true, agentMounts: [] },
+    {
+      workspaceAccess: "ro",
+      writable: false,
+      agentMounts: [expect.objectContaining({ source: "agent", writable: false })],
+    },
+  ])(
+    "reports the generated sandbox workspace for $workspaceAccess sessions",
+    async ({ workspaceAccess, writable, agentMounts }) => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+              workspaceAccess,
+              workspaceRoot: "/tmp/openclaw-sandboxes",
+            },
           },
+          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
 
-    const logs: string[] = [];
-    await sandboxExplainCommand({ json: true, agent: "builder" }, {
-      log: (msg: string) => logs.push(msg),
-      error: (msg: string) => logs.push(msg),
-      exit: (_code: number) => {},
-    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, agent: "builder" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
-    const parsed = JSON.parse(logs.join(""));
-    expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
-      path.resolve("/tmp/openclaw-sandboxes"),
-    );
-    expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
-      /^workspace-[a-f0-9]{32}$/,
-    );
-    expect(parsed.sandbox.workspaceSource).toBe("sandbox");
-    expect(parsed.sandbox.workspaceMounts).toEqual([
-      expect.objectContaining({ source: "workspace", writable: false }),
-    ]);
+      const parsed = JSON.parse(logs.join(""));
+      expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
+        path.resolve("/tmp/openclaw-sandboxes"),
+      );
+      expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
+        /^workspace-[a-f0-9]{32}$/,
+      );
+      expect(parsed.sandbox.workspaceSource).toBe("sandbox");
+      expect(parsed.sandbox.workspaceMounts).toEqual([
+        expect.objectContaining({ source: "workspace", writable }),
+        ...agentMounts,
+      ]);
+    },
+  );
+
+  it("reports guest-isolated workspaces and the effective writable-access cap", async () => {
+    await withOpenClawTestState({ label: "sandbox-explain-guests" }, async (state) => {
+      const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+      const agentWorkspace = state.workspaceDir;
+      const sessions = [
+        { key: "agent:builder:guest-a-first", principalId: "guest-a" },
+        { key: "agent:builder:guest-a-second", principalId: "guest-a" },
+        { key: "agent:builder:guest-b", principalId: "guest-b" },
+      ];
+      for (const session of sessions) {
+        await replaceSessionEntry(
+          { storePath, sessionKey: session.key },
+          {
+            sessionId: session.key,
+            updatedAt: Date.now(),
+            sandbox: "required",
+            createdActor: { type: "human", source: "profile", id: session.principalId },
+          },
+        );
+      }
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              scope: "shared",
+              workspaceAccess: "rw",
+              workspaceRoot: state.statePath("sandboxes"),
+            },
+          },
+          list: [{ id: "builder", workspace: agentWorkspace }],
+        },
+        session: { store: storePath },
+      };
+
+      const workspaceRoots: string[] = [];
+      for (const session of sessions) {
+        const logs: string[] = [];
+        await sandboxExplainCommand({ json: true, session: session.key }, {
+          log: (message: string) => logs.push(message),
+          error: (message: string) => logs.push(message),
+          exit: () => {},
+        } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+        const parsed = JSON.parse(logs.join(""));
+        expect(parsed.sandbox).toMatchObject({
+          scope: "agent",
+          workspaceAccess: "ro",
+          workspaceSource: "sandbox",
+          sessionIsSandboxed: true,
+        });
+        expect(parsed.sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(agentWorkspace));
+        expect(parsed.sandbox.workspaceMounts).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ source: "workspace", writable: false }),
+            expect.objectContaining({ source: "agent", writable: false }),
+          ]),
+        );
+        workspaceRoots.push(parsed.sandbox.effectiveHostWorkspaceRoot);
+      }
+
+      expect(workspaceRoots[0]).toBe(workspaceRoots[1]);
+      expect(workspaceRoots[0]).not.toBe(workspaceRoots[2]);
+    });
   });
 
   it("reports the agent workspace for direct sessions", async () => {

@@ -25,12 +25,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
-import {
-  formatDeprecatedNonInteractiveAuthChoiceError,
-  isDeprecatedAuthChoice,
-  normalizeLegacyOnboardAuthChoice,
-  resolveDeprecatedAuthChoiceReplacement,
-} from "./auth-choice-legacy.js";
+import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -165,7 +160,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     );
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node".');
+    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
     return rejectOption(opts, runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
@@ -204,7 +199,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     return rejectOption(
       opts,
       runtime,
-      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
+      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000")}.`,
     );
   }
   if (opts.nonInteractive && opts.mode === "remote" && opts.remoteUrl?.trim()) {
@@ -543,26 +538,18 @@ export async function setupWizardCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   assertSupportedRuntime(runtime);
-  const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
-    env: process.env,
-  });
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+  const { authChoice: normalizedAuthChoice, deprecated } = resolveLegacyOnboardAuthChoice(
+    opts.authChoice,
+    { env: process.env },
+  );
+  if (opts.nonInteractive && deprecated) {
     // Non-interactive output must be deterministic; reject deprecated aliases
     // instead of printing prompts or compatibility guidance mid-flow.
-    rejectOption(
-      opts,
-      runtime,
-      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
-        env: process.env,
-      })!,
-    );
+    rejectOption(opts, runtime, deprecated.nonInteractiveError);
     return;
   }
-  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
-    runtime.log(
-      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
-    );
+  if (deprecated) {
+    runtime.log(deprecated.message);
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
@@ -644,8 +631,7 @@ export async function setupWizardCommand(
   if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
     // Reset is destructive, so prove the selected interactive surface can run
     // before reading or moving any operator state.
-    runtime.error(t("wizard.guided.ttyRequired"));
-    runtime.exit(1);
+    rejectOption(normalizedOpts, runtime, t("wizard.guided.ttyRequired"));
     return;
   }
 

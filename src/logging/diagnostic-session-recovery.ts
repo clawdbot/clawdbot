@@ -7,7 +7,10 @@ import type {
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
+  | "human_input_wait"
+  | "runtime_owned_wait"
   | "deferred_maintenance_wait"
+  | "terminal_outcome_committed"
   | "global_lane_wait"
   | "active_lane_task"
   | "already_in_flight"
@@ -80,6 +83,12 @@ export type StuckSessionRecoveryOutcome =
       status: "failed";
       action: "none";
       reason: "exception";
+      error: string;
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "failed";
+      action: "fail_worker_turn";
+      reason: "terminal_worker";
       error: string;
     });
 

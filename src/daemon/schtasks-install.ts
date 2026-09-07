@@ -18,7 +18,6 @@ import {
   encodeWindowsLauncherScript,
   quoteSchtasksArg,
   readScheduledTaskCommand,
-  resolveSchtasksCreateUser,
   resolveStartupEntryPath,
   resolveTaskLauncherScriptPath,
   resolveTaskName,
@@ -38,11 +37,11 @@ import {
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
-  probeScheduledTaskExists,
   resolveFallbackRuntime,
   waitForFallbackTakeoverRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
@@ -123,9 +122,7 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
-  taskEnv: GatewayServiceEnv;
 }> {
-  await assertSchtasksAvailable().catch(() => undefined);
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
   const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
@@ -148,7 +145,7 @@ async function writeScheduledTaskScript({
       encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
     );
   }
-  return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
+  return { scriptPath, taskLaunchPath, taskDescription };
 }
 
 export async function stageScheduledTask({
@@ -242,12 +239,9 @@ async function activateScheduledTask(params: {
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
-    const createUser = resolveSchtasksCreateUser(params.env, taskUser);
-    create = await execSchtasks(createUser ? [...xmlArgs, "/RU", createUser, "/NP"] : xmlArgs);
-    if (create.code !== 0 && createUser) {
-      // Retry without elevated `/RU` when the account password cannot be stored.
-      create = await execSchtasks(xmlArgs);
-    }
+    // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
+    // with a non-interactive S4U logon, so a successful task never starts here.
+    create = await execSchtasks(xmlArgs);
   } finally {
     await fs.rm(path.dirname(xmlPath), { recursive: true, force: true }).catch(() => {});
   }
@@ -363,16 +357,23 @@ export async function installScheduledTask(
   if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
     // The old launcher can still own the listener; terminate it and prove the replacement.
     await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
+    let scheduledTaskRunAccepted = false;
     try {
       // Re-reading ownership now would inspect the replacement command, not the captured fallback.
       await restartRegisteredScheduledTask({
         env: activationEnv,
         stdout: args.stdout,
         mode: { kind: "fallback-takeover" },
+        onRunMutation: () => {
+          scheduledTaskRunAccepted = true;
+        },
       });
     } catch (err) {
-      // Restore availability if takeover fails after terminating the captured fallback.
-      await launchFallbackTaskScript(fallbackEnv, installedCommand);
+      // An accepted /Run can still start later. Replacing it with a detached Gateway
+      // would defeat Scheduler's single-instance policy and create a duplicate listener.
+      if (!scheduledTaskRunAccepted) {
+        await launchFallbackTaskScript(fallbackEnv, installedCommand);
+      }
       throw err;
     }
   } else if (

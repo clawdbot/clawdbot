@@ -1,6 +1,14 @@
 /** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
+import { runExec } from "../process/exec.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceCommandSnapshot,
+  GatewayServiceEnvironmentValueSource,
+  GatewayServiceReadOptions,
+} from "./service-types.js";
 
 // launchd defaults to a 10s spawn throttle. Keep that default explicitly so
 // crash loops back off instead of respawning every second while still allowing
@@ -35,11 +43,15 @@ export function parseLaunchdPlistLabel(contents: string): string | null {
   return rawLabel === undefined ? null : plistUnescape(rawLabel).trim() || null;
 }
 
-type ReadLaunchAgentProgramArgumentsOptions = {
+type ReadLaunchAgentProgramArgumentsOptions = GatewayServiceReadOptions & {
   expectedEnvironmentWrapperPath?: string;
   expectedEnvironmentFilePath?: string;
   generatedEnvironmentLabel?: string;
 };
+
+export function quoteLaunchAgentEnvironmentValue(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 function parseGeneratedEnvValue(value: string): string {
   const trimmed = value.trim();
@@ -137,22 +149,27 @@ async function readLaunchAgentEnvironmentFile(
   }
   const envFilePath = layout.envFilePath;
   let content = "";
-  const candidateEnvFilePaths = Array.from(
-    new Set(
-      [
-        envFilePath,
-        resolveSiblingGeneratedEnvFilePath(envFilePath, options),
-        options?.expectedEnvironmentFilePath,
-      ].filter((candidate): candidate is string => Boolean(candidate)),
-    ),
-  );
+  const candidateEnvFilePaths = options?.requireEffective
+    ? [envFilePath]
+    : Array.from(
+        new Set(
+          [
+            envFilePath,
+            resolveSiblingGeneratedEnvFilePath(envFilePath, options),
+            options?.expectedEnvironmentFilePath,
+          ].filter((candidate): candidate is string => Boolean(candidate)),
+        ),
+      );
   // Corrupted wrapper args can still point near the generated env dir. Try the
   // sibling canonical env file before giving up so repair rewrites retain env.
   for (const candidate of candidateEnvFilePaths) {
     try {
       content = await fs.readFile(candidate, "utf8");
       break;
-    } catch {
+    } catch (error) {
+      if (options?.requireEffective) {
+        throw error;
+      }
       // Keep trying; mangled wrapper args may still have the canonical env file.
     }
   }
@@ -160,21 +177,41 @@ async function readLaunchAgentEnvironmentFile(
     return {};
   }
   const environment: Record<string, string> = {};
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
+  const lines = content.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const rawLine = lines[index] ?? "";
+    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    if (!line.trim() || line.startsWith("#")) {
       continue;
     }
-    const match = line.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    const match = line.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/);
     if (!match) {
+      if (options?.requireEffective) {
+        throw new Error("Unsupported LaunchAgent environment syntax");
+      }
       continue;
     }
     const key = match[1];
-    const value = match[2];
+    let value = match[2];
     if (!key || value === undefined) {
       continue;
     }
-    environment[key] = parseGeneratedEnvValue(value);
+    let parsedValue = parseGeneratedEnvValue(value);
+    if (options?.requireEffective) {
+      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
+      while (
+        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
+        index + 1 < lines.length
+      ) {
+        value += `\n${lines[++index]}`;
+        parsedValue = parseGeneratedEnvValue(value);
+      }
+      // Strict inspection accepts the writer's literal syntax, never shell expressions.
+      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
+        throw new Error("Unsupported LaunchAgent environment value");
+      }
+    }
+    environment[key] = parsedValue;
   }
   return environment;
 }
@@ -194,8 +231,9 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   if (!env) {
     return "";
   }
+  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
   const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
   if (entries.length === 0) {
     return "";
@@ -209,82 +247,66 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
 };
 
-export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string): Promise<{
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
-} | null>;
-export async function readLaunchAgentProgramArgumentsFromFile(
-  plistPath: string,
-  options: ReadLaunchAgentProgramArgumentsOptions,
-): Promise<{
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
-} | null>;
+async function decodeLaunchAgentPlist(
+  contents: Uint8Array,
+  timeoutMs?: number,
+): Promise<GatewayServiceCommandSnapshot> {
+  // Decode the captured bytes, not a second path read: native parsing must validate
+  // the complete definition whose command and environment we report.
+  const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+    input: contents,
+    timeoutMs: Math.min(timeoutMs ?? 5_000, 5_000),
+    maxBuffer: 1024 * 1024,
+    logOutput: false,
+  });
+  const plist = asOptionalRecord(JSON.parse(stdout));
+  const programArguments = plist?.ProgramArguments;
+  const workingDirectory = plist?.WorkingDirectory;
+  const environment = plist?.EnvironmentVariables;
+  if (
+    !Array.isArray(programArguments) ||
+    !programArguments.every((arg): arg is string => typeof arg === "string") ||
+    (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
+    (environment !== undefined && !isStringRecord(environment))
+  ) {
+    throw new Error("Invalid LaunchAgent command fields");
+  }
+  return { programArguments, workingDirectory, environment };
+}
+
 export async function readLaunchAgentProgramArgumentsFromFile(
   plistPath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
-): Promise<{
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
-} | null> {
+): Promise<GatewayServiceCommandConfig | null> {
   try {
-    const plist = await fs.readFile(plistPath, "utf8");
-    const programMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
-    if (!programMatch) {
-      return null;
-    }
-    const programArgumentsXml = programMatch.at(1);
-    if (programArgumentsXml === undefined) {
-      return null;
-    }
-    const args: string[] = [];
-    for (const match of programArgumentsXml.matchAll(/<string>([\s\S]*?)<\/string>/gi)) {
-      const rawArgument = match.at(1);
-      if (rawArgument === undefined) {
+    const plist = await fs.readFile(plistPath).catch(async (error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        if (options?.requireEffective) {
+          const absent = await fs.lstat(plistPath).then(
+            () => false,
+            (statError: unknown) => hasErrnoCode(statError, "ENOENT"),
+          );
+          if (!absent) {
+            throw new Error("Unreadable LaunchAgent definition");
+          }
+        }
         return null;
       }
-      args.push(plistUnescape(rawArgument).trim());
+      throw error;
+    });
+    if (plist === null) {
+      return null;
     }
-    const workingDirMatch = plist.match(
-      /<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/i,
-    );
-    const workingDirectoryXml = workingDirMatch?.at(1);
-    const workingDirectory =
-      workingDirectoryXml === undefined ? "" : plistUnescape(workingDirectoryXml).trim();
-    const envMatch = plist.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i);
-    const inlineEnvironment: Record<string, string> = {};
-    if (envMatch) {
-      const environmentXml = envMatch.at(1);
-      if (environmentXml === undefined) {
-        return null;
-      }
-      for (const pair of environmentXml.matchAll(
-        /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
-      )) {
-        const rawKey = pair.at(1);
-        const rawValue = pair.at(2);
-        if (rawKey === undefined || rawValue === undefined) {
-          return null;
-        }
-        const key = plistUnescape(rawKey).trim();
-        if (!key) {
-          continue;
-        }
-        const value = plistUnescape(rawValue).trim();
-        inlineEnvironment[key] = value;
-      }
-    }
+    const {
+      programArguments: args,
+      workingDirectory,
+      environment: inlineEnvironment = {},
+    } = await decodeLaunchAgentPlist(plist, options?.timeoutMs);
     const fileEnvironment = await readLaunchAgentEnvironmentFile(args, options);
     const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
+    if (options?.requireEffective && !effectiveProgramArguments[0]) {
+      throw new Error("Missing LaunchAgent command");
+    }
     const environment = { ...inlineEnvironment, ...fileEnvironment };
     const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
     // Track source provenance so repair flows can tell inline plist env from the
@@ -300,13 +322,16 @@ export async function readLaunchAgentProgramArgumentsFromFile(
         : "file";
     }
     return {
-      programArguments: effectiveProgramArguments.filter(Boolean),
+      programArguments: effectiveProgramArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
       ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
       sourcePath: plistPath,
     };
   } catch {
+    if (options?.requireEffective) {
+      throw new Error("Effective LaunchAgent service command could not be inspected.");
+    }
     return null;
   }
 }

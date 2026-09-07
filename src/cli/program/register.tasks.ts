@@ -5,7 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { TASK_FLOW_STATUSES } from "../../tasks/task-flow-registry.types.js";
 import {
   TASK_RUNTIMES,
-  TASK_STATUSES,
+  TASK_STATUS_FILTERS,
   type TaskNotifyPolicy,
 } from "../../tasks/task-registry.types.js";
 import {
@@ -50,7 +50,7 @@ function addTasksListOptions(command: Command): Command {
   return command
     .option("--json", "Output as JSON", false)
     .option("--runtime <name>", `Filter by kind (${TASK_RUNTIMES.join(", ")})`)
-    .option("--status <name>", `Filter by status (${TASK_STATUSES.join(", ")})`);
+    .option("--status <name>", `Filter by status (${TASK_STATUS_FILTERS.join(", ")})`);
 }
 
 function isTaskNotifyPolicy(value: unknown): value is TaskNotifyPolicy {

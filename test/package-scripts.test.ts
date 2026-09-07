@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { parseBuildAllArgs, resolveBuildAllSteps } from "../scripts/build-all.mts";
+import { detectChangedScope } from "../scripts/ci-changed-scope.mjs";
 
 type RootPackageJson = {
   scripts: Record<string, string>;
@@ -38,7 +40,7 @@ function readWindowsCiCoverageScript(): string {
   return readWindowsCiPartScripts().join(" ");
 }
 
-function readWindowsCiTargets(script: string): string[] {
+function readProjectTestTargets(script: string): string[] {
   const tokens = tokenizeCommand(script);
   const runnerIndex = tokens.indexOf("scripts/test-projects.mts");
   return runnerIndex < 0 ? [] : tokens.slice(runnerIndex + 1);
@@ -98,7 +100,7 @@ describe("package scripts", () => {
   it("finds node script targets after env assignments and valued node options", () => {
     expect(
       extractNodeScriptTargets(
-        "FOO=1 node --import tsx scripts/release-check.ts && node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts && env BAR=1 node -r tsx scripts/check.ts",
+        "FOO=1 node --import ./scripts/tsx.mjs scripts/release-check.ts && node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-surface-report.mts && env BAR=1 node -r ./preload.cjs scripts/check.ts",
       ),
     ).toEqual([
       "scripts/release-check.ts",
@@ -138,35 +140,36 @@ describe("package scripts", () => {
     expect(directNodeEnvScripts).toEqual([]);
   });
 
-  it.each([
-    { scriptName: "build:docker", expectedCount: 2 },
-    { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
-    { scriptName: "build:strict-smoke", expectedCount: 1 },
-  ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
-    const script = expectDefined(
-      readPackageJson().scripts[scriptName],
-      `package script ${scriptName}`,
-    );
+  it.each([{ scriptName: "build:docker", expectedCount: 2 }])(
+    "runs TypeScript steps in $scriptName through the tooling bootstrap",
+    ({ scriptName, expectedCount }) => {
+      const script = expectDefined(
+        readPackageJson().scripts[scriptName],
+        `package script ${scriptName}`,
+      );
 
-    expect(script).not.toContain("--experimental-strip-types");
-    expect(script.match(/node --import tsx scripts\/[^\s]+\.ts/gu)).toHaveLength(expectedCount);
-  });
+      expect(script).not.toContain("--experimental-strip-types");
+      expect(
+        script.match(/node --import \.\/scripts\/tsx\.mjs scripts\/[^\s]+\.ts(?=\s|$)/gu),
+      ).toHaveLength(expectedCount);
+    },
+  );
 
   it("enables live cache validation in the package script", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
-      "node --import tsx scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
     );
   });
 
-  it("runs browser extension bootstrap E2E against real Chromium", () => {
+  it("builds runtime artifacts before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
   it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
     expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
-      "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
+      "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/analyze-plugin-sdk-usage.ts",
     );
   });
 
@@ -176,18 +179,51 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs runtime postbuild before plugin SDK strict export checks", () => {
-    expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
+  it.each(["build:strict-smoke", "build:plugin-sdk:strict-smoke"])(
+    "%s publishes canonical declarations before strict export checks",
+    (scriptName) => {
+      const script = expectDefined(readPackageJson().scripts[scriptName], scriptName);
+      const tokens = tokenizeCommand(script);
+      const buildAllIndex = tokens.indexOf("scripts/build-all.mts");
+      const targets =
+        buildAllIndex < 0
+          ? extractNodeScriptTargets(script)
+          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
+              .filter((step) => step.kind !== "pnpm")
+              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+      const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
+
+      expect(check).toBeGreaterThanOrEqual(0);
+      for (const prerequisite of [
+        "scripts/runtime-postbuild.mjs",
+        "scripts/write-plugin-sdk-entry-dts.ts",
+      ]) {
+        const publication = targets.indexOf(prerequisite);
+        expect(publication, prerequisite).toBeGreaterThanOrEqual(0);
+        expect(publication, prerequisite).toBeLessThan(check);
+      }
+    },
+  );
+
+  it("builds generated plugin assets before Docker runtime postbuild", () => {
+    const commands = expectDefined(
+      readPackageJson().scripts["build:docker"],
+      "package script build:docker",
+    ).split(" && ");
+
+    expect(commands.indexOf("pnpm plugins:assets:build")).toBeLessThan(
+      commands.indexOf("node scripts/runtime-postbuild.mjs"),
     );
   });
 
   it("cleans package builds before validating release contents", () => {
     const scripts = readPackageJson().scripts;
 
-    expect(scripts["build:package"]).toBe("node --import tsx scripts/build-all.mts package");
+    expect(scripts["build:package"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
+    );
     expect(scripts["release:check"]).toBe(
-      "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+      "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
     );
   });
 
@@ -212,23 +248,42 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
-  it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
-    const scripts = readPackageJson().scripts;
-    const partScripts = readWindowsCiPartScripts();
-    const partTargets = partScripts.map(readWindowsCiTargets);
-
-    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
-    // width is pinned here: a 3rd part queues and a single lane serializes.
-    expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
-    expect(scripts["test:windows:ci:3"]).toBeUndefined();
-    for (const [partIndex, targets] of partTargets.entries()) {
-      const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
-      expect(
-        targets.filter((target) => laterTargets.has(target)),
-        `Windows CI part ${partIndex + 1} overlaps a later part`,
-      ).toEqual([]);
-    }
+  it("routes every declared Windows CI test to its native lane", () => {
+    const missedTargets = readWindowsCiPartScripts()
+      .flatMap(readProjectTestTargets)
+      .filter((target) => !detectChangedScope([target]).runWindows);
+    expect(missedTargets).toEqual([]);
   });
+
+  it.for([
+    { platform: "windows", parts: [1, 2] },
+    { platform: "macos", parts: [1, 2, 3] },
+  ])(
+    "partitions $platform CI coverage into disjoint explicit test lists",
+    ({ platform, parts }) => {
+      const scripts = readPackageJson().scripts;
+      const partScripts = parts.map((part) =>
+        expectDefined(scripts[`test:${platform}:ci:${part}`], `${platform} CI part ${part}`),
+      );
+      const partTargets = partScripts.map(readProjectTestTargets);
+
+      expect(scripts[`test:${platform}:ci`]).toBe(
+        parts.map((part) => `pnpm test:${platform}:ci:${part}`).join(" && "),
+      );
+      expect(scripts[`test:${platform}:ci:${parts.length + 1}`]).toBeUndefined();
+      for (const [partIndex, targets] of partTargets.entries()) {
+        expect(targets.length).toBeGreaterThan(0);
+        expect(
+          targets.every((target) => target.endsWith(".test.ts") && fs.existsSync(target)),
+        ).toBe(true);
+        const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
+        expect(
+          targets.filter((target) => laterTargets.has(target)),
+          `${platform} CI part ${partIndex + 1} overlaps a later part`,
+        ).toEqual([]);
+      }
+    },
+  );
 
   it("runs node workspace transfer coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain(
@@ -242,6 +297,15 @@ describe("package scripts", () => {
 
   it("runs direct-run entrypoint coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
+  });
+
+  it("runs compiled worker path, IPC, transform, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readProjectTestTargets)).toEqual(
+      expect.arrayContaining([
+        "test/scripts/vitest-worker-artifacts.test.ts",
+        "test/scripts/vitest-worker-artifacts.transforms.test.ts",
+      ]),
+    );
   });
 
   it("runs Docker package process-tree coverage in Windows CI", () => {
@@ -331,6 +395,11 @@ describe("package scripts", () => {
     expect(readWindowsCiCoverageScript()).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",
     );
+    expect(
+      readWindowsCiPartScripts()
+        .flatMap(readProjectTestTargets)
+        .filter((target) => target === "test/scripts/install-ps1.test.ts"),
+    ).toHaveLength(1);
   });
 
   it("runs env launcher coverage in Windows CI", () => {

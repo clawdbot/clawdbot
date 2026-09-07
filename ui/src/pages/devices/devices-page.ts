@@ -1,5 +1,10 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
+import type {
+  EnvironmentSummary,
+  EnvironmentsListResult,
+  SystemInfoResult,
+} from "@openclaw/gateway-protocol";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
@@ -11,13 +16,15 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   approveDevicePairing,
   approveNodePairingRequest,
@@ -25,19 +32,14 @@ import {
   loadDevices,
   loadExecApprovals,
   loadNodes,
-  rejectDevicePairing,
-  rejectNodePairingRequest,
   removeExecApprovalsFormValue,
-  removeInventoryEntry,
-  removeStaleInventoryEntries,
-  revokeDeviceToken,
   rotateDeviceToken,
   saveExecApprovals,
   updateExecApprovalsFormValue,
   type ExecApprovalsTarget,
-  type InventoryRemovalRequest,
   type DevicesPageDataState,
 } from "../../lib/nodes/index.ts";
+import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -45,6 +47,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { DevicesDialogController } from "./devices-dialogs.ts";
 import { renderDevices } from "./view.ts";
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
@@ -57,29 +60,7 @@ export type DevicesRouteData = {
 };
 
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
-
-type InventoryRemovalPrompt =
-  | { kind: "entry"; entry: InventoryRemovalRequest }
-  | { kind: "stale"; entries: InventoryRemovalRequest[] };
-
-function readPresence(value: unknown): PresenceEntry[] | null {
-  const presence =
-    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
-}
-
-function presenceConnectivitySignature(entries: PresenceEntry[]): string {
-  const states = new Map<string, "connected" | "offline">();
-  for (const entry of entries) {
-    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
-    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
-      continue;
-    }
-    const key = entry.roles?.includes("node") ? `${id}:node` : id;
-    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
-  }
-  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
-}
+const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
 class DevicesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -88,6 +69,9 @@ class DevicesPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: DevicesRouteData;
 
   @state() presence: PresenceEntry[] = [];
+  @state() private gatewaySystemInfo: SystemInfoResult | null = null;
+  @state() private desktopEnvironments: EnvironmentSummary[] = [];
+  private systemInfoUnavailable = false;
   @state() private pageState = createInitialDevicesState();
   @state() private canPairDevice = false;
   @state() private canManagePairing = false;
@@ -95,6 +79,26 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
   private pendingConfirmation: AbortController | null = null;
+  // Dialog orchestration (destructive confirmations + the alias editor) lives
+  // in its own controller; the page exposes only the narrow seam it needs.
+  private readonly dialogs = new DevicesDialogController({
+    canManagePairing: () => this.canManagePairing,
+    gatewayConnected: () => this.gateway.connected,
+    requestGeneration: () => this.requestGeneration,
+    gatewayClient: () => this.gateway.client,
+    gatewayUrl: () => this.context.gateway.connection.gatewayUrl,
+    runPageTask: (task) => this.runPageTask(task),
+    pendingDialog: () => this.pendingConfirmation,
+    setPendingDialog: (controller) => {
+      this.pendingConfirmation = controller;
+    },
+    setDevicesError: (message) => {
+      this.pageState.devicesError = message;
+      // The controller writes outside the page's task cycle; the callout must
+      // render without waiting for the next unrelated update.
+      this.requestUpdate();
+    },
+  });
 
   private routeDataInitialized = false;
   private readonly gateway = new GatewayPageController(this, {
@@ -131,11 +135,52 @@ class DevicesPage extends OpenClawLightDomElement {
       }
     },
   });
+  private readonly systemInfoTask = new Task(this, {
+    args: () =>
+      [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
+    task: ([gateway, client], { signal }) =>
+      gateway && client
+        ? client.request<SystemInfoResult>("system.info", {}, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.gatewaySystemInfo = result;
+      // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
+      this.systemInfoPolling.stop();
+      this.systemInfoPolling.start();
+    },
+    onError: (error) => {
+      if (isMissingOperatorReadScopeError(error)) {
+        this.gatewaySystemInfo = null;
+        this.systemInfoUnavailable = true;
+        this.systemInfoPolling.stop();
+      }
+    },
+  });
+  private readonly environmentsTask = new Task(this, {
+    args: () =>
+      [this.gateway.gateway, this.canLoadDesktopEnvironments ? this.gateway.client : null] as const,
+    task: ([gateway, client], { signal }) =>
+      gateway && client
+        ? client.request<EnvironmentsListResult>("environments.list", {}, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.desktopEnvironments = result.environments;
+    },
+    onError: () => {
+      this.desktopEnvironments = [];
+    },
+  });
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => this.refreshSystemInfo(),
+    false,
+  );
   private readonly polling = new PollController(
     this,
     DEVICES_ACTIVE_POLL_INTERVAL_MS,
     () => {
-      void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+      this.refreshNodeInventory(true);
       if (this.canManagePairing) {
         void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
       }
@@ -154,7 +199,7 @@ class DevicesPage extends OpenClawLightDomElement {
           if (this.gateway.gateway !== gateway || this.context.gateway !== gateway) {
             return;
           }
-          const presence = event.event === "presence" ? readPresence(event.payload) : null;
+          const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
           if (presence) {
             const connectivityChanged =
               presenceConnectivitySignature(presence) !==
@@ -165,7 +210,7 @@ class DevicesPage extends OpenClawLightDomElement {
               if (this.canManagePairing) {
                 void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
               }
-              void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+              this.refreshNodeInventory(true);
             }
           }
           if (
@@ -180,9 +225,10 @@ class DevicesPage extends OpenClawLightDomElement {
           if (
             event.event === "node.pair.requested" ||
             event.event === "node.pair.resolved" ||
-            event.event === "node.runnerInventory.changed"
+            event.event === "node.runnerInventory.changed" ||
+            event.event === "node.hostStats"
           ) {
-            void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+            this.refreshNodeInventory(true);
           }
         }),
     );
@@ -203,6 +249,7 @@ class DevicesPage extends OpenClawLightDomElement {
     this.cancelPendingConfirmation();
     this.subscriptions.clear();
     void this.presenceTask.run([null, null]);
+    this.resetInventoryDetails();
     this.presence = [];
     this.canPairDevice = false;
     this.canManagePairing = false;
@@ -220,13 +267,21 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState.connected = snapshot.phase === "connected";
     this.pageState.requestGeneration = this.gateway.epoch;
     this.syncGatewayState(snapshot);
+    if (!this.canLoadSystemInfo) {
+      void this.systemInfoTask.run([null, null]);
+      this.gatewaySystemInfo = null;
+    }
+    if (!this.canLoadDesktopEnvironments) {
+      void this.environmentsTask.run([null, null]);
+      this.desktopEnvironments = [];
+    }
     if (
       this.routeDataInitialized &&
       snapshot.phase === "connected" &&
       snapshot.client &&
       (change.identityChanged || change.connectionChanged)
     ) {
-      const initialPresence = readPresence(snapshot.hello?.snapshot);
+      const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
       this.presence = initialPresence ?? [];
       void this.loadPresence();
     }
@@ -250,7 +305,7 @@ class DevicesPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.resetServerState(snapshot);
-      this.presence = readPresence(snapshot.hello?.snapshot) ?? [];
+      this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
       void this.loadPresence();
       this.ensureInitialData();
       return;
@@ -261,7 +316,7 @@ class DevicesPage extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       requestGeneration: this.gateway.epoch,
     };
-    const initialPresence = readPresence(snapshot.hello?.snapshot);
+    const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
     if (initialPresence) {
       this.presence = initialPresence;
     }
@@ -279,6 +334,7 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState = next;
     void this.presenceTask.run([null, null]);
     this.presence = [];
+    this.resetInventoryDetails();
   }
 
   private async runPageTask<T>(
@@ -304,7 +360,7 @@ class DevicesPage extends OpenClawLightDomElement {
       return;
     }
     if (!pageState.nodes.length && !pageState.nodesLoading) {
-      void this.runPageTask((current) => loadNodes(current));
+      this.refreshNodeInventory();
     }
     if (this.canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
       void this.runPageTask((current) => loadDevices(current));
@@ -321,11 +377,55 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private syncPolling() {
+    if (this.canLoadSystemInfo) {
+      this.systemInfoPolling.start();
+    } else {
+      this.systemInfoPolling.stop();
+    }
     if (this.gateway.connected && this.gateway.client) {
       this.polling.start();
       return;
     }
     this.polling.stop();
+  }
+
+  private get canLoadSystemInfo(): boolean {
+    const snapshot = this.gateway.snapshot;
+    return (
+      this.isConnected &&
+      snapshot?.phase === "connected" &&
+      !this.systemInfoUnavailable &&
+      isGatewayMethodAdvertised(snapshot, "system.info") === true
+    );
+  }
+
+  private get canLoadDesktopEnvironments(): boolean {
+    const snapshot = this.gateway.snapshot;
+    return this.isConnected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
+  }
+
+  private refreshSystemInfo() {
+    if (this.canLoadSystemInfo && this.systemInfoTask.status !== TaskStatus.PENDING) {
+      void this.systemInfoTask.run();
+    }
+  }
+
+  private refreshNodeInventory(quiet = false) {
+    this.refreshSystemInfo();
+    if (this.canLoadDesktopEnvironments && this.environmentsTask.status !== TaskStatus.PENDING) {
+      void this.environmentsTask.run();
+    }
+    void this.runPageTask((pageState) => loadNodes(pageState, { quiet }));
+  }
+
+  private resetInventoryDetails() {
+    // A replacement source or reconnect must retire callbacks before its data can arrive.
+    void this.systemInfoTask.run([null, null]);
+    void this.environmentsTask.run([null, null]);
+    this.systemInfoPolling.stop();
+    this.gatewaySystemInfo = null;
+    this.desktopEnvironments = [];
+    this.systemInfoUnavailable = false;
   }
 
   private loadPresence(): Promise<void> {
@@ -340,114 +440,6 @@ class DevicesPage extends OpenClawLightDomElement {
   private cancelPendingConfirmation() {
     this.pendingConfirmation?.abort();
     this.pendingConfirmation = null;
-  }
-
-  // Every destructive Devices action confirms here, never through window.confirm: the
-  // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
-  // scope and current authority are revalidated before the operation runs.
-  private async confirmDestructiveAction(
-    prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
-    run: (pageState: DevicesPageDataState) => unknown,
-  ) {
-    if (this.pendingConfirmation) {
-      return;
-    }
-    const controller = new AbortController();
-    this.pendingConfirmation = controller;
-    const generation = this.requestGeneration;
-    const client = this.gateway.client;
-    const confirmed = await showConfirmDialog({
-      ...prompt,
-      danger: true,
-      signal: controller.signal,
-    });
-    if (this.pendingConfirmation === controller) {
-      this.pendingConfirmation = null;
-    }
-    if (
-      !confirmed ||
-      controller.signal.aborted ||
-      generation !== this.requestGeneration ||
-      client !== this.gateway.client ||
-      !this.gateway.connected ||
-      !this.canManagePairing
-    ) {
-      return;
-    }
-    await this.runPageTask(run);
-  }
-
-  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    if (!this.canManagePairing) {
-      return Promise.resolve();
-    }
-    if (prompt.kind === "entry") {
-      const entry = prompt.entry;
-      return this.confirmDestructiveAction(
-        {
-          title: t("devices.inventory.removePromptTitle", { name: entry.name }),
-          message: t("devices.inventory.removePromptBody"),
-          details: t("devices.inventory.deviceId", { id: entry.id }),
-          confirmLabel: t("devices.inventory.remove"),
-        },
-        (pageState) => removeInventoryEntry(pageState, entry),
-      );
-    }
-    const entries = prompt.entries;
-    return this.confirmDestructiveAction(
-      {
-        title: t(
-          entries.length === 1
-            ? "devices.inventory.removeStalePromptTitleOne"
-            : "devices.inventory.removeStalePromptTitle",
-          { count: String(entries.length) },
-        ),
-        message: t("devices.inventory.removeStalePromptBody"),
-        confirmLabel: t("devices.inventory.remove"),
-      },
-      (pageState) => removeStaleInventoryEntries(pageState, entries),
-    );
-  }
-
-  private confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    if (!this.canManagePairing) {
-      return Promise.resolve();
-    }
-    return this.confirmDestructiveAction(
-      {
-        title: t(
-          target === "device"
-            ? "devices.inventory.rejectDevicePromptTitle"
-            : "devices.inventory.rejectNodePromptTitle",
-        ),
-        message: t("devices.inventory.rejectPromptBody"),
-        confirmLabel: t("devices.inventory.reject"),
-      },
-      (pageState) =>
-        target === "device"
-          ? rejectDevicePairing(pageState, requestId)
-          : rejectNodePairingRequest(pageState, requestId),
-    );
-  }
-
-  private confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    if (!this.canManagePairing) {
-      return Promise.resolve();
-    }
-    return this.confirmDestructiveAction(
-      {
-        title: t("devices.inventory.revokePromptTitle", { role }),
-        message: t("devices.inventory.revokePromptBody"),
-        details: t("devices.inventory.deviceId", { id: deviceId }),
-        confirmLabel: t("devices.inventory.revoke"),
-      },
-      (pageState) =>
-        revokeDeviceToken(pageState, {
-          deviceId,
-          gatewayUrl: this.context.gateway.connection.gatewayUrl,
-          role,
-        }),
-    );
   }
 
   // A rotation always ends in a dialog: with the replacement when the Gateway issued it
@@ -513,8 +505,7 @@ class DevicesPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("devices")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("devices")}
-            ${renderDocsLink(DEVICES_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("devices")} ${renderLearnMoreLink(DEVICES_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -524,6 +515,9 @@ class DevicesPage extends OpenClawLightDomElement {
           nodes: devices.nodes,
           presence: this.presence,
           gatewayVersion,
+          basePath: this.context.basePath,
+          gatewaySystemInfo: this.gatewaySystemInfo,
+          desktopEnvironments: this.desktopEnvironments,
           lastError: devices.lastError,
           devicesLoading: devices.devicesLoading,
           devicesError: devices.devicesError,
@@ -554,22 +548,25 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
             }
           },
-          onDeviceReject: (requestId) => void this.confirmPairingReject("device", requestId),
+          onDeviceReject: (requestId) =>
+            void this.dialogs.confirmPairingReject("device", requestId),
           onNodeApprove: (requestId) => {
             if (this.canManagePairing) {
               void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
             }
           },
-          onNodeReject: (requestId) => void this.confirmPairingReject("node", requestId),
-          onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
+          onNodeReject: (requestId) => void this.dialogs.confirmPairingReject("node", requestId),
+          onInventoryRemove: (entry) =>
+            void this.dialogs.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
             if (entries.length > 0) {
-              void this.confirmInventoryRemoval({ kind: "stale", entries });
+              void this.dialogs.confirmInventoryRemoval({ kind: "stale", entries });
             }
           },
           onDeviceRotate: (device, role, scopes) =>
             void this.reportRotationOutcome(device, role, scopes),
-          onDeviceRevoke: (deviceId, role) => void this.confirmTokenRevoke(deviceId, role),
+          onDeviceRevoke: (deviceId, role) => void this.dialogs.confirmTokenRevoke(deviceId, role),
+          onDeviceRename: (device) => void this.dialogs.editAlias(device),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>

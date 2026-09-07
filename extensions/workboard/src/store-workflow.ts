@@ -13,7 +13,6 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertCanMutateClaimedCard,
-  capText,
   cardBoardId,
   cardChildIds,
   cardParentIds,
@@ -48,6 +47,7 @@ import type {
 } from "./store-inputs.js";
 import {
   appendCompletionProof,
+  capText,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
@@ -143,7 +143,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
               ? "running"
               : guarded.status,
-          agentId: guarded.agentId ?? ownerId,
           ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
             ? { workspaceAccess: options.adoptWorkspaceAccess }
             : {}),
@@ -268,9 +267,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (input.proofId !== undefined && !proofId) {
       throw new Error("proofId must be a non-empty string.");
     }
-    if (proofId && !proofInput) {
-      throw new Error("proof is required when proofId is provided.");
-    }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
@@ -316,7 +312,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? appendCompletionProof(metadata.proof, proof, proofId) : metadata.proof,
+          proof: appendCompletionProof(metadata.proof, proof, proofId),
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
@@ -327,7 +323,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       },
       {
         enforceStatusHolds: true,
-        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
+        preserveProofId: proofId ?? proof?.id,
       },
     );
   }

@@ -5,68 +5,21 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
+// Consumers project shared responses without mutation; settled replies are never retained.
+const authReads = new WeakMap<
+  GatewayBrowserClient,
+  { pending: Map<string, Promise<ModelAuthStatusResult>>; refreshes: number }
+>();
+
+/** Retire sharing eligibility without cancelling existing consumers' own reads. */
+export function invalidateModelAuthStatusRequests(client: GatewayBrowserClient): void {
+  authReads.get(client)?.pending.clear();
+}
 
 /** Map credential-runtime aliases onto the provider card/attention identity. */
 export function canonicalModelAuthProviderId(provider: string): string {
   const normalized = normalizeProviderId(provider);
   return resolveUsageProviderId(normalized) ?? normalized;
-}
-
-type PendingModelAuthStatus = {
-  controller: AbortController;
-  promise: Promise<ModelAuthStatusResult>;
-  settled: boolean;
-  subscribers: number;
-};
-
-const pendingModelAuthStatusByClient = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, PendingModelAuthStatus>
->();
-
-function modelAuthStatusAbortError(): Error {
-  const error = new Error("gateway request aborted for models.authStatus");
-  error.name = "AbortError";
-  return error;
-}
-
-function subscribeModelAuthStatus(
-  pending: PendingModelAuthStatus,
-  signal?: AbortSignal,
-): Promise<ModelAuthStatusResult> {
-  // Each projection owns cancellation; only the final subscriber may stop the
-  // shared producer, or one unmounting pane would fail its live peers.
-  pending.subscribers += 1;
-  let released = false;
-  const release = () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    pending.subscribers -= 1;
-    if (!pending.settled && pending.subscribers === 0) {
-      pending.controller.abort();
-    }
-  };
-  if (!signal) {
-    return pending.promise.finally(release);
-  }
-  let rejectAbort: (error: Error) => void = () => {};
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject;
-  });
-  const onAbort = () => {
-    release();
-    rejectAbort(modelAuthStatusAbortError());
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) {
-    onAbort();
-  }
-  return Promise.race([pending.promise, aborted]).finally(() => {
-    signal.removeEventListener("abort", onAbort);
-    release();
-  });
 }
 
 /**
@@ -124,41 +77,52 @@ export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
-  if (opts?.signal?.aborted) {
-    throw modelAuthStatusAbortError();
-  }
-  const refresh = opts?.refresh === true;
-  const agentId = opts?.agentId || undefined;
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
     agentId: opts.agentId,
   };
-  const requestKey = JSON.stringify([refresh, agentId ?? null]);
-  let requests = pendingModelAuthStatusByClient.get(client);
-  if (!requests) {
-    requests = new Map();
-    pendingModelAuthStatusByClient.set(client, requests);
+  const request = async (signal?: AbortSignal) => {
+    const result = signal
+      ? await client.request<ModelAuthStatusResult>("models.authStatus", params, { signal })
+      : await client.request<ModelAuthStatusResult>("models.authStatus", params);
+    return result ?? EMPTY_AUTH_STATUS;
+  };
+  if (opts.signal && !opts.refresh) {
+    return await request(opts.signal);
   }
-  let pending = requests.get(requestKey);
-  if (!pending || pending.controller.signal.aborted) {
-    const controller = new AbortController();
-    pending = {
-      controller,
-      promise: client
-        .request<ModelAuthStatusResult>("models.authStatus", params, { signal: controller.signal })
-        .then((result) => result ?? EMPTY_AUTH_STATUS),
-      settled: false,
-      subscribers: 0,
-    };
-    requests.set(requestKey, pending);
-    const shared = pending;
+  let state = authReads.get(client);
+  if (!state) {
+    state = { pending: new Map(), refreshes: 0 };
+    authReads.set(client, state);
+  }
+  if (opts.refresh) {
+    // Explicit refresh can change shared auth without a config event. Keep every
+    // refresh independent, and suspend ordinary sharing until all refreshes settle.
+    state.pending.clear();
+    state.refreshes += 1;
+    try {
+      return await request(opts.signal);
+    } finally {
+      state.refreshes -= 1;
+    }
+  }
+  if (state.refreshes > 0) {
+    return await request(opts.signal);
+  }
+  const requests = state.pending;
+  const agentId = opts.agentId;
+  let pending = requests.get(agentId);
+  if (!pending) {
+    const shared = request();
+    requests.set(agentId, shared);
     const finish = () => {
-      shared.settled = true;
-      if (requests.get(requestKey) === shared) {
-        requests.delete(requestKey);
+      // A retired read can settle after its replacement; only remove this flight.
+      if (requests.get(agentId) === shared) {
+        requests.delete(agentId);
       }
     };
-    void shared.promise.then(finish, finish);
+    void shared.then(finish, finish);
+    pending = shared;
   }
-  return subscribeModelAuthStatus(pending, opts?.signal);
+  return await pending;
 }

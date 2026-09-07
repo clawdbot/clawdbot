@@ -1,10 +1,15 @@
 // Microsoft Foundry tests cover index plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -126,6 +131,7 @@ const defaultFoundryModelId = "gpt-5.4";
 const defaultFoundryProfileId = "microsoft-foundry:entra";
 const defaultFoundryAgentDir = "/tmp/test-agent";
 const defaultAzureCliLoginError = "Please run 'az login' to setup account.";
+const foundryTokenCacheMaxEntries = 128;
 let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
@@ -247,12 +253,14 @@ function buildFoundryRuntimeAuthContext(
   };
 }
 
-function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
+function mockAzureCliToken(params: {
+  accessToken: string;
+  expiresInMs: number;
+  response?: Promise<void>;
+}) {
   execFileMock.mockImplementationOnce(async () => {
-    if (params.delayMs) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, params.delayMs);
-      });
+    if (params.response) {
+      await params.response;
     }
     return {
       stdout: JSON.stringify({
@@ -268,12 +276,10 @@ function mockAzureCliTokenRaw(stdout: string) {
   execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
-function mockAzureCliLoginFailure(delayMs?: number) {
+function mockAzureCliLoginFailure(response?: Promise<void>) {
   execFileMock.mockImplementationOnce(async () => {
-    if (delayMs) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+    if (response) {
+      await response;
     }
     throw Object.assign(new Error("az failed"), { stderr: defaultAzureCliLoginError, stdout: "" });
   });
@@ -375,6 +381,17 @@ describe("microsoft-foundry plugin", () => {
 
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
+    );
+  });
+
+  it("hard-stops a synchronous Azure CLI command at its timeout", () => {
+    execFileSyncMock.mockReturnValue("ok");
+    execAz(["version", "--output", "none"]);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "az",
+      ["version", "--output", "none"],
+      expect.objectContaining({ timeout: 30_000, killSignal: "SIGKILL" }),
     );
   });
 
@@ -600,44 +617,328 @@ describe("microsoft-foundry plugin", () => {
   it("dedupes concurrent Entra token refreshes for the same profile", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "deduped-token", expiresInMs: 60_000, delayMs: 10 });
+    const tokenResponse = createDeferred<void>();
+    mockAzureCliToken({
+      accessToken: "deduped-token",
+      expiresInMs: 60_000,
+      response: tokenResponse.promise,
+    });
     ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
     const runtimeContext = buildFoundryRuntimeAuthContext();
+    const pending = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
+    const settled = Promise.allSettled(pending);
+    try {
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      tokenResponse.resolve();
+      const [first, second] = await Promise.all(pending);
 
-    const [first, second] = await Promise.all([
-      prepareRuntimeAuth(runtimeContext),
-      prepareRuntimeAuth(runtimeContext),
-    ]);
-
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-    expect(requireRuntimeAuthResult(first).apiKey).toBe("deduped-token");
-    expect(requireRuntimeAuthResult(second).apiKey).toBe("deduped-token");
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      expect(requireRuntimeAuthResult(first).apiKey).toBe("deduped-token");
+      expect(requireRuntimeAuthResult(second).apiKey).toBe("deduped-token");
+    } finally {
+      tokenResponse.resolve();
+      await settled;
+    }
   });
+
+  it("bounds settled Entra tokens by least-recently-used account tuple", async () => {
+    const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
+    execFileMock.mockImplementation(async () => ({
+      stdout: JSON.stringify({
+        accessToken: `token-${execFileMock.mock.calls.length}`,
+        expiresOn: new Date(Date.now() + 10 * 60_000).toISOString(),
+      }),
+      stderr: "",
+    }));
+    const prepareForTenant = async (tenantId: string) => {
+      ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore({ tenantId }));
+      return await prepareRuntimeAuth(buildFoundryRuntimeAuthContext());
+    };
+
+    for (let index = 0; index < foundryTokenCacheMaxEntries; index += 1) {
+      await prepareForTenant(`lru-${runtimeAuthTestTenantId}-${index}`);
+    }
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries);
+
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-0`);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries);
+
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-${foundryTokenCacheMaxEntries}`);
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-0`);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 1);
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-1`);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
+  });
+
+  it("reclaims expired tokens before evicting an older live account", async () => {
+    const prepare = requirePrepareRuntimeAuth(registerProvider());
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    execFileMock.mockImplementation(async () => ({
+      stdout: JSON.stringify({
+        accessToken: "synthetic-expiry-token",
+        expiresOn: new Date(now + 60 * 60_000).toISOString(),
+      }),
+      stderr: "",
+    }));
+    const prepareForTenant = async (index: number) => {
+      ensureAuthProfileStoreMock.mockReturnValueOnce(
+        buildEntraProfileStore({ tenantId: `expiry-${runtimeAuthTestTenantId}-${index}` }),
+      );
+      return await prepare(buildFoundryRuntimeAuthContext());
+    };
+    for (let index = 0; index < foundryTokenCacheMaxEntries - 1; index++) {
+      await prepareForTenant(index);
+    }
+    mockAzureCliToken({ accessToken: "synthetic-short-token", expiresInMs: 6 * 60_000 });
+    await prepareForTenant(foundryTokenCacheMaxEntries - 1);
+    clock.mockReturnValue(now + 7 * 60_000);
+    await prepareForTenant(foundryTokenCacheMaxEntries);
+    await prepareForTenant(0);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 1);
+    await prepareForTenant(foundryTokenCacheMaxEntries - 1);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
+  });
+
+  it("keeps one active refresh while settled account entries churn", async () => {
+    const prepare = requirePrepareRuntimeAuth(registerProvider());
+    const release = createDeferred<void>();
+    execFileMock.mockImplementation(async () => ({
+      stdout: JSON.stringify({
+        accessToken: "synthetic-churn-token",
+        expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }),
+      stderr: "",
+    }));
+    execFileMock.mockImplementationOnce(async () => {
+      await release.promise;
+      return {
+        stdout: JSON.stringify({
+          accessToken: "synthetic-held-token",
+          expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
+        }),
+        stderr: "",
+      };
+    });
+    const prepareForTenant = async (index: number) => {
+      ensureAuthProfileStoreMock.mockReturnValueOnce(
+        buildEntraProfileStore({ tenantId: `churn-${runtimeAuthTestTenantId}-${index}` }),
+      );
+      return await prepare(buildFoundryRuntimeAuthContext());
+    };
+    const pending = [prepareForTenant(0)];
+    try {
+      for (let index = 1; index <= foundryTokenCacheMaxEntries + 1; index++) {
+        await prepareForTenant(index);
+      }
+      pending.push(prepareForTenant(0));
+      expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
+      release.resolve();
+      const results = await Promise.all(pending);
+      expect(results.map((result) => requireRuntimeAuthResult(result).apiKey)).toEqual([
+        "synthetic-held-token",
+        "synthetic-held-token",
+      ]);
+      await prepareForTenant(0);
+      expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+    }
+  });
+
+  it(
+    "refreshes an evicted account through the real provider and Azure CLI boundary",
+    {
+      timeout: 180_000,
+    },
+    async ({ signal }) => {
+      const { runExec } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/process-runtime")
+      >("openclaw/plugin-sdk/process-runtime");
+      const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+      const proofDir = await fs.mkdtemp(path.join(os.tmpdir(), "foundry-cache-proof-"));
+      const binDir = path.join(proofDir, "bin");
+      const homeDir = path.join(proofDir, "home");
+      const azureDir = path.join(proofDir, "azure");
+      const stateDir = path.join(proofDir, "state");
+      try {
+        await Promise.all([binDir, homeDir, azureDir, stateDir].map((dir) => fs.mkdir(dir)));
+        const fakeAz = path.join(proofDir, "fake-az.mjs");
+        await fs.writeFile(
+          fakeAz,
+          String.raw`#!/usr/bin/env node
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+const args = process.argv.slice(2);
+assert.deepEqual(args.slice(0, 2), ["account", "get-access-token"]);
+const value = (name) => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
+const tenant = value("--tenant");
+assert(tenant && value("--resource") && !value("--subscription"));
+fs.appendFileSync(path.join(import.meta.dirname, "calls.jsonl"), JSON.stringify({ tenant }) + "\n");
+process.stdout.write(JSON.stringify({
+  accessToken: "synthetic-proof-" + tenant,
+  expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
+}));
+`,
+        );
+        if (process.platform === "win32") {
+          await fs.writeFile(
+            path.join(binDir, "az.cmd"),
+            `@echo off\r\n"${process.execPath}" "${fakeAz}" %*\r\n`,
+          );
+        } else {
+          await fs.chmod(fakeAz, 0o700);
+          await fs.symlink(fakeAz, path.join(binDir, "az"));
+        }
+        const script = path.join(proofDir, "proof.mts");
+        await fs.writeFile(
+          script,
+          String.raw`import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+const { default: plugin } = await import(process.argv[3]);
+
+const proofDir = process.argv[2];
+assert(proofDir);
+const agentDir = path.join(proofDir, "state", "agents", "main", "agent");
+let provider: ProviderPlugin | undefined;
+plugin.register(createTestPluginApi({ registerProvider: (value) => { provider = value; } }));
+assert(provider?.prepareRuntimeAuth);
+const prepare = provider.prepareRuntimeAuth;
+const tenant = (index: number) => "00000000-0000-0000-0000-" + String(index).padStart(12, "0");
+const prepareForTenant = async (index: number) => {
+  upsertAuthProfile({
+    profileId: "microsoft-foundry:proof",
+    agentDir,
+    credential: {
+      type: "api_key", provider: "microsoft-foundry", key: "__entra_id_dynamic__",
+      metadata: { authMethod: "entra-id", tenantId: tenant(index), api: "openai-responses" },
+    },
+  });
+  const result = await prepare({
+    provider: "microsoft-foundry", config: {}, agentDir, env: process.env,
+    modelId: "synthetic-model", apiKey: "__entra_id_dynamic__", authMode: "api_key",
+    profileId: "microsoft-foundry:proof",
+    model: { id: "synthetic-model", name: "synthetic-model", provider: "microsoft-foundry",
+      api: "openai-responses", baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000, maxTokens: 100 },
+  });
+  assert(result?.apiKey && result.request?.auth?.mode === "authorization-bearer");
+  assert(result.apiKey.includes(tenant(index)), "prepared token must belong to the selected synthetic tenant");
+};
+const calls = async () => (await fs.readFile(path.join(proofDir, "calls.jsonl"), "utf8")).trim().split("\n").length;
+const started = performance.now();
+for (let index = 0; index < 128; index++) {
+  await prepareForTenant(index);
+}
+assert.equal(await calls(), 128);
+await prepareForTenant(0);
+assert.equal(await calls(), 128);
+await prepareForTenant(128);
+assert.equal(await calls(), 129);
+await prepareForTenant(0);
+const afterRetouched = await calls();
+await prepareForTenant(1);
+const afterOldest = await calls();
+console.info("[foundry-public-provider-cache-proof]", JSON.stringify({
+  seededTuples: 128, afterRetouched, afterOldest,
+  allTenantBindingsCorrect: true, elapsedMs: performance.now() - started,
+  rssBytes: process.memoryUsage().rss,
+}));
+assert.equal(afterRetouched, 129);
+assert.equal(afterOldest, 130, "the evicted account must refresh through az");
+`,
+        );
+        // The child has its own real profile store and token cache. Only az is synthetic;
+        // no ambient credentials or the parent Vitest mocks enter its provider graph.
+        const { stdout } = await runExec(
+          process.execPath,
+          ["--import", "tsx/esm", script, proofDir, new URL("./index.ts", import.meta.url).href],
+          {
+            cwd: repoRoot,
+            signal,
+            timeoutMs: 150_000,
+            logOutput: false,
+            baseEnv: {
+              PATH: [
+                binDir,
+                path.dirname(process.execPath),
+                ...(process.platform === "win32" ? [] : ["/usr/bin", "/bin"]),
+              ].join(path.delimiter),
+              HOME: homeDir,
+              USERPROFILE: homeDir,
+              TMPDIR: proofDir,
+              TEMP: proofDir,
+              TMP: proofDir,
+              SystemRoot: process.env.SystemRoot,
+              ComSpec: process.env.ComSpec,
+              OPENCLAW_STATE_DIR: stateDir,
+              AZURE_CONFIG_DIR: azureDir,
+              TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
+              TSX_DISABLE_CACHE: "1",
+              NODE_ENV: "test",
+              CI: "1",
+            },
+          },
+        );
+        const observed = stdout
+          .split("\n")
+          .find((line) => line.startsWith("[foundry-public-provider-cache-proof] "));
+        expect(observed).toBeDefined();
+        console.info(observed);
+      } finally {
+        await fs.rm(proofDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliLoginFailure(10);
-    mockAzureCliToken({ accessToken: "recovered-token", expiresInMs: 10 * 60_000, delayMs: 10 });
+    const failedResponse = createDeferred<void>();
+    const recoveryResponse = createDeferred<void>();
+    mockAzureCliLoginFailure(failedResponse.promise);
+    mockAzureCliToken({
+      accessToken: "recovered-token",
+      expiresInMs: 10 * 60_000,
+      response: recoveryResponse.promise,
+    });
     ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
 
     const runtimeContext = buildFoundryRuntimeAuthContext();
+    const pending = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
+    let settled = Promise.allSettled(pending);
+    try {
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      failedResponse.resolve();
+      const failed = await settled;
+      expect(failed.every((result) => result.status === "rejected")).toBe(true);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
 
-    const failed = await Promise.allSettled([
-      prepareRuntimeAuth(runtimeContext),
-      prepareRuntimeAuth(runtimeContext),
-    ]);
-    expect(failed.every((result) => result.status === "rejected")).toBe(true);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-
-    const [first, second] = await Promise.all([
-      prepareRuntimeAuth(runtimeContext),
-      prepareRuntimeAuth(runtimeContext),
-    ]);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
-    expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
-    expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
+      const retries = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
+      pending.push(...retries);
+      settled = Promise.allSettled(pending);
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+      recoveryResponse.resolve();
+      const [first, second] = await Promise.all(retries);
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+      expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
+      expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
+    } finally {
+      // Broken dedupe can consume the recovery response in the first pair.
+      failedResponse.resolve();
+      recoveryResponse.resolve();
+      await settled;
+    }
   });
 
   it("refreshes again when a cached token is too close to expiry", async () => {

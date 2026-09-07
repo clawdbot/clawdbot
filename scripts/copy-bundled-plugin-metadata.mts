@@ -3,14 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  collectBundledPluginBuildEntries,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+  collectSourceCheckoutPluginBuildEntries,
+  mapPluginCatalogEntries,
 } from "./lib/bundled-plugin-build-entries.mjs";
-import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
+  resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const PACKAGE_ICON_PATH = path.join("assets", "icon.png");
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -31,87 +33,22 @@ type SkillPathParams = {
   repoRoot: string;
 };
 
-function shouldCopyBundledPluginMetadata(
-  id: string,
-  env: NodeJS.ProcessEnv,
-  buildablePluginDirs: Set<string>,
-): boolean {
-  if (!buildablePluginDirs.has(id)) {
-    return false;
-  }
-  if (!NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)) {
-    return true;
-  }
-  return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-}
-
-function rewritePackageExtensions(entries: unknown): string[] | undefined {
+function rewritePackageExtensions(entries: unknown, extension: string): string[] | undefined {
   if (!Array.isArray(entries)) {
     return undefined;
   }
 
   return entries
-    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
-      return `./${rewritten}`;
-    });
+    .map((entry) => rewritePackageEntry(entry, extension))
+    .filter((entry) => entry !== undefined);
 }
 
-function collectTopLevelPublicSurfaceEntries(pluginDir: string): string[] {
-  if (!fs.existsSync(pluginDir)) {
-    return [];
-  }
-
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      if (!/\.(?:[cm]?[jt]s)$/u.test(dirent.name) || dirent.name.endsWith(".d.ts")) {
-        return [];
-      }
-
-      const normalizedName = dirent.name.toLowerCase();
-      if (
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
-        return [];
-      }
-
-      return [dirent.name];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function isManifestlessBundledRuntimeSupportPackage(params: {
-  dirName: string;
-  packageJson: unknown;
-  topLevelPublicSurfaceEntries: string[];
-}): boolean {
-  const packageName =
-    isRecord(params.packageJson) && typeof params.packageJson.name === "string"
-      ? params.packageJson.name
-      : "";
-  if (packageName !== `@openclaw/${params.dirName}`) {
-    return false;
-  }
-  return params.topLevelPublicSurfaceEntries.length > 0;
-}
-
-function rewritePackageEntry(entry: unknown): string | undefined {
+function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
   if (typeof entry !== "string" || entry.trim().length === 0) {
     return undefined;
   }
   const normalized = entry.replace(/^\.\//, "");
-  const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+  const rewritten = normalized.replace(/\.[^.]+$/u, extension);
   return `./${rewritten}`;
 }
 
@@ -256,6 +193,24 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
+function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
+  const source = path.join(pluginDir, PACKAGE_ICON_PATH);
+  const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
+  let sourceIsFile = false;
+  try {
+    sourceIsFile = fs.lstatSync(source).isFile();
+  } catch {
+    // Missing or unreadable presentation assets must not invalidate the plugin package.
+  }
+  if (!sourceIsFile) {
+    removePathIfExists(target);
+    return;
+  }
+  removePathIfExists(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
@@ -271,8 +226,11 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   // would redirect recursive deletes into the link target.
   assertRealOutputRoot(path.join(repoRoot, "dist"));
 
-  const buildablePluginDirs = new Set(
-    collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),
+  const buildEntries = new Map(
+    collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => [
+      entry.id,
+      entry,
+    ]),
   );
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set<string>();
@@ -289,40 +247,20 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
       : undefined;
     const packageJson = isRecord(parsedPackageJson) ? parsedPackageJson : undefined;
-    const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
-    const hasExternalLocalDist =
-      isRecord(packageJson?.openclaw) &&
-      isRecord(packageJson.openclaw.build) &&
-      packageJson.openclaw.build.bundledDist === false &&
-      fs.existsSync(distPluginDir);
-    if (
-      !hasExternalLocalDist &&
-      !shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)
-    ) {
+    const buildEntry = buildEntries.get(dirent.name);
+    if (!buildEntry) {
       removePathIfExists(distPluginDir);
       continue;
     }
-    if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
-      removePathIfExists(distPluginDir);
-      continue;
-    }
-
-    const isManifestlessSupportPackage =
-      !fs.existsSync(manifestPath) &&
-      isManifestlessBundledRuntimeSupportPackage({
-        dirName: dirent.name,
-        packageJson,
-        topLevelPublicSurfaceEntries,
-      });
+    const distNodeModules = path.join(distPluginDir, "node_modules");
+    // Remove only dist-owned entries, including an old directory link itself,
+    // before skill cleanup or an isolated/unified profile transition.
+    fs.rmSync(distNodeModules, { recursive: true, force: true });
 
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
-      removePathIfExists(distPluginDir);
-      continue;
-    }
 
     if (fs.existsSync(manifestPath)) {
       const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -331,7 +269,9 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
       const mergedManifest = mergeGeneratedChannelConfigs(
-        manifest,
+        mapPluginCatalogEntries(manifest, (entry: string) =>
+          rewritePackageEntry(entry, buildEntry.runtimeExtension),
+        ),
         pluginId ? generatedChannelConfigsByPlugin.get(pluginId) : undefined,
       );
       // Generated skill assets live under a dedicated dist-owned directory.
@@ -346,25 +286,37 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         ? { ...mergedManifest, skills: copiedSkills }
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+      copyPackageIcon(pluginDir, distPluginDir);
     } else {
       removeFileIfExists(distManifestPath);
+      removeFileIfExists(path.join(distPluginDir, PACKAGE_ICON_PATH));
     }
 
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-    if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+    if (packageJson && isRecord(packageJson.openclaw)) {
+      const extension = buildEntry.runtimeExtension;
+      const channel = resolvePluginRuntimeChannelMetadata(packageJson.openclaw.channel, {
+        pluginDir: dirent.name,
+        runtimeBuildOutputs: rewritePackageExtensions(buildEntry.sourceEntries, extension) ?? [],
+        runtimeRoot: ".",
+      });
       packageJson.openclaw = {
         ...packageJson.openclaw,
-        extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
+        ...(channel ? { channel } : {}),
+        extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
-          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }
           : {}),
       };
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    if (buildEntry.isolated) {
+      linkSourcePluginDependencies(pluginDir, distNodeModules);
+    }
   }
 
   if (!fs.existsSync(distExtensionsRoot)) {

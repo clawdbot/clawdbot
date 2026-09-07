@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { fetchAgentIdentity } from "../lib/agents/identity.ts";
 import { normalizeAssistantIdentity, type AssistantIdentity } from "../lib/assistant-identity.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -68,9 +70,11 @@ export function loadLocalAssistantIdentity(opts?: {
   }
 }
 
-export function applyLocalAssistantIdentity(
-  result: Partial<AssistantIdentity> | null,
-): AssistantIdentity | null {
+export async function fetchAssistantIdentity(
+  client: GatewayBrowserClient,
+  agentId: string,
+): Promise<AssistantIdentity | null> {
+  const result = await fetchAgentIdentity(client, agentId);
   if (!result) {
     return null;
   }

@@ -1,10 +1,15 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  resolveNodeCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
+} from "../node-command-policy.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { readNodeSessionWithheldCommands } from "../node-registry.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
 type DevicePlacementEligibility =
-  | { ok: true; availableSlots: number }
+  | { ok: true; availableSlots: number; node: NodeWorkerSupervisorNodeProof }
   | { ok: false; error: string };
 
 export async function resolveDevicePlacementEligibility(params: {
@@ -19,6 +24,8 @@ export async function resolveDevicePlacementEligibility(params: {
     pairingGeneration?: string;
     platform?: string;
     deviceFamily?: string;
+    declaredCommands?: readonly string[];
+    commands?: readonly string[];
   };
 }): Promise<DevicePlacementEligibility> {
   const { deviceId, requirement } = params;
@@ -34,11 +41,12 @@ export async function resolveDevicePlacementEligibility(params: {
   }
   const node = availability.node;
   if (
-    params.currentNode &&
-    (params.currentNode.nodeId !== node.nodeId ||
-      (params.currentNode.connId && params.currentNode.connId !== node.connId) ||
-      (params.currentNode.pairingGeneration &&
-        params.currentNode.pairingGeneration !== node.pairingGeneration))
+    node.nodeId !== deviceId ||
+    (params.currentNode &&
+      (params.currentNode.nodeId !== node.nodeId ||
+        (params.currentNode.connId && params.currentNode.connId !== node.connId) ||
+        (params.currentNode.pairingGeneration &&
+          params.currentNode.pairingGeneration !== node.pairingGeneration)))
   ) {
     return {
       ok: false,
@@ -55,13 +63,18 @@ export async function resolveDevicePlacementEligibility(params: {
     commands: declaredCommands,
     approvedCommands: declaredCommands,
   });
-  for (const command of requirement.requiredNodeCommands) {
-    if (!isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok) {
-      return {
-        ok: false,
-        error: `paired-device command ${command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
-      };
-    }
+  const requiredNodeCommand = resolveRequiredNodeCommandAuthority({
+    requiredCommands: requirement.requiredNodeCommands,
+    declaredCommands: params.currentNode?.declaredCommands ?? declaredCommands,
+    effectiveCommands: params.currentNode?.commands ?? declaredCommands,
+    withheldCommands: params.currentNode ? readNodeSessionWithheldCommands(params.currentNode) : [],
+    allowlist,
+  });
+  if (requiredNodeCommand && requiredNodeCommand.state !== "invocable") {
+    return {
+      ok: false,
+      error: `paired-device command ${requiredNodeCommand.command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
+    };
   }
   if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
     return {
@@ -72,5 +85,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true, availableSlots: node.workerHost.capacity.available };
+  return { ok: true, availableSlots: node.workerHost.capacity.available, node };
 }

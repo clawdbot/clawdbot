@@ -1,6 +1,9 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
-import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  WizardNextResult as ProtocolWizardNextResult,
+  WizardStep as ProtocolWizardStep,
+} from "../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   DEVICE_CODE_PHISHING_WARNING,
@@ -50,17 +53,8 @@ export function sanitizeWizardStepForClient(step: WizardStep): WizardStep {
   return safe;
 }
 
-type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
-
-type WizardNextResult = {
-  done: boolean;
-  step?: WizardStep;
-  status: WizardSessionStatus;
-  error?: string;
-  channels?: string[];
-  accounts?: Array<{ channel: string; accountId: string }>;
-  preparedModelRef?: string;
-};
+type WizardSessionStatus = NonNullable<ProtocolWizardNextResult["status"]>;
+type WizardNextResult = ProtocolWizardNextResult & { status: WizardSessionStatus };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
   if (value === null || value === undefined) {
@@ -75,191 +69,190 @@ function normalizeTextAnswer(value: unknown): string | undefined {
   return undefined;
 }
 
-class WizardSessionPrompter implements WizardPrompter {
-  constructor(private session: WizardSession) {}
-
-  async intro(title: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title,
-      message: "",
-      executor: "client",
-    });
+/** Own enumerable, closure-bound methods survive the runtime installer's note adapter. */
+function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
+  async function prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
+    return await session.awaitAnswer(createStep(step));
   }
 
-  async outro(message: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title: "Done",
-      message,
-      executor: "client",
-    });
-  }
-
-  async note(message: string, title?: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      title,
-      message,
-      executor: "client",
-    });
-  }
-
-  async deviceCode(params: {
-    title: string;
-    code: string;
-    expiresInMinutes?: number;
-    message?: string;
-  }): Promise<void> {
-    const fallbackMessage = [
-      params.message ?? "Enter this one-time code on the provider's sign-in page.",
-      `Code: ${params.code}`,
-      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
-      // Device-code phishing works by getting the victim to enter the attacker's
-      // code, so the warning has to cover received codes, not just shared ones.
-      // Unconditional: codes delivered over a chat channel are the risky case and
-      // carry no expiry hint. Matches the Codex CLI prompt.
-      DEVICE_CODE_PHISHING_WARNING,
-    ].join("\n");
-    await this.prompt({
-      type: "note",
-      title: params.title,
-      message: fallbackMessage,
-      deviceCode: {
-        code: params.code,
-        ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
-        ...(params.message ? { message: params.message } : {}),
-      },
-      executor: "client",
-    });
-  }
-
-  async plain(message: string): Promise<void> {
-    await this.prompt({
-      type: "note",
-      message,
-      format: "plain",
-      executor: "client",
-    });
-  }
-
-  async select<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValue?: T;
-  }): Promise<T> {
-    const res = await this.prompt({
-      type: "select",
-      message: params.message,
-      options: params.options.map((opt) => ({
-        value: opt.value,
-        label: opt.label,
-        hint: opt.hint,
-      })),
-      initialValue: params.initialValue,
-      executor: "client",
-    });
-    return res as T;
-  }
-
-  async multiselect<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValues?: T[];
-  }): Promise<T[]> {
-    const res = await this.prompt({
-      type: "multiselect",
-      message: params.message,
-      options: params.options.map((opt) => ({
-        value: opt.value,
-        label: opt.label,
-        hint: opt.hint,
-      })),
-      initialValue: params.initialValues,
-      executor: "client",
-    });
-    return (Array.isArray(res) ? res : []) as T[];
-  }
-
-  async text(params: {
-    message: string;
-    initialValue?: string;
-    placeholder?: string;
-    validate?: (value: string) => string | undefined;
-    sensitive?: boolean;
-  }): Promise<string> {
-    const res = await this.session.awaitAnswer(
-      this.createStep({
-        type: "text",
-        message: params.message,
-        initialValue: params.initialValue,
-        placeholder: params.placeholder,
-        sensitive: params.sensitive,
-        executor: "client",
-      }),
-      params.validate,
-    );
-    const value =
-      res === null || res === undefined
-        ? ""
-        : typeof res === "string"
-          ? res
-          : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
-            ? String(res)
-            : "";
-    return value;
-  }
-
-  async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
-    const res = await this.prompt({
-      type: "confirm",
-      message: params.message,
-      initialValue: params.initialValue,
-      executor: "client",
-    });
-    return Boolean(res);
-  }
-
-  progress(label: string): WizardProgress {
-    let stopped = false;
-    this.session.pushProgress(label);
-    return {
-      update: (message) => {
-        if (!stopped) {
-          this.session.pushProgress(message);
-        }
-      },
-      stop: (message) => {
-        if (stopped) {
-          return;
-        }
-        stopped = true;
-        if (message) {
-          this.session.pushProgress(message);
-        }
-      },
-    };
-  }
-
-  async openUrl(url: string): Promise<void> {
-    this.session.queueExternalUrl(url);
-  }
-
-  private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
-    return await this.session.awaitAnswer(this.createStep(step));
-  }
-
-  private createStep(step: Omit<WizardStep, "id">): WizardStep {
+  function createStep(step: Omit<WizardStep, "id">): WizardStep {
     // Each emitted step receives an id so remote clients can answer the exact
     // pending prompt and stale answers can be rejected. Explicit browser
     // destinations bind to the very next step regardless of its input type.
-    const externalUrl = this.session.consumeExternalUrl();
+    const externalUrl = session.consumeExternalUrl();
     return {
       ...step,
       ...(externalUrl ? { externalUrl } : {}),
       id: randomUUID(),
     };
   }
+  return {
+    cancel(message) {
+      throw new WizardCancelledError(message);
+    },
+    async intro(title: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title,
+        message: "",
+        executor: "client",
+      });
+    },
+
+    async outro(message: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title: "Done",
+        message,
+        executor: "client",
+      });
+    },
+
+    async note(message: string, title?: string): Promise<void> {
+      await prompt({
+        type: "note",
+        title,
+        message,
+        executor: "client",
+      });
+    },
+
+    async deviceCode(params: {
+      title: string;
+      code: string;
+      expiresInMinutes?: number;
+      message?: string;
+    }): Promise<void> {
+      const fallbackMessage = [
+        params.message ?? "Enter this one-time code on the provider's sign-in page.",
+        `Code: ${params.code}`,
+        ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+        // Device-code phishing works by getting the victim to enter the attacker's
+        // code, so the warning has to cover received codes, not just shared ones.
+        // Unconditional: codes delivered over a chat channel are the risky case and
+        // carry no expiry hint. Matches the Codex CLI prompt.
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n");
+      await prompt({
+        type: "note",
+        title: params.title,
+        message: fallbackMessage,
+        deviceCode: {
+          code: params.code,
+          ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
+          ...(params.message ? { message: params.message } : {}),
+        },
+        executor: "client",
+      });
+    },
+
+    async plain(message: string): Promise<void> {
+      await prompt({
+        type: "note",
+        message,
+        format: "plain",
+        executor: "client",
+      });
+    },
+
+    async select<T>(params: {
+      message: string;
+      options: Array<{ value: T; label: string; hint?: string }>;
+      initialValue?: T;
+    }): Promise<T> {
+      const res = await prompt({
+        type: "select",
+        message: params.message,
+        options: params.options.map((opt) => ({
+          value: opt.value,
+          label: opt.label,
+          hint: opt.hint,
+        })),
+        initialValue: params.initialValue,
+        executor: "client",
+      });
+      return res as T;
+    },
+
+    async multiselect<T>(params: {
+      message: string;
+      options: Array<{ value: T; label: string; hint?: string }>;
+      initialValues?: T[];
+    }): Promise<T[]> {
+      const res = await prompt({
+        type: "multiselect",
+        message: params.message,
+        options: params.options.map((opt) => ({
+          value: opt.value,
+          label: opt.label,
+          hint: opt.hint,
+        })),
+        initialValue: params.initialValues,
+        executor: "client",
+      });
+      return (Array.isArray(res) ? res : []) as T[];
+    },
+
+    async text(params: Parameters<WizardPrompter["text"]>[0]): Promise<string> {
+      const res = await session.awaitAnswer(
+        createStep({
+          type: "text",
+          message: params.message,
+          initialValue: params.initialValue,
+          placeholder: params.placeholder,
+          sensitive: params.sensitive,
+          executor: "client",
+        }),
+        params.validate,
+        params.signal,
+      );
+      const value =
+        res === null || res === undefined
+          ? ""
+          : typeof res === "string"
+            ? res
+            : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
+              ? String(res)
+              : "";
+      return value;
+    },
+
+    async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
+      const res = await prompt({
+        type: "confirm",
+        message: params.message,
+        initialValue: params.initialValue,
+        executor: "client",
+      });
+      // Answers cross the wire as unknown values; truthy strings are not consent.
+      return res === true;
+    },
+
+    progress(label: string): WizardProgress {
+      let stopped = false;
+      session.pushProgress(label);
+      return {
+        update: (message) => {
+          if (!stopped) {
+            session.pushProgress(message);
+          }
+        },
+        stop: (message) => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          if (message) {
+            session.pushProgress(message);
+          }
+        },
+      };
+    },
+
+    async openUrl(url: string): Promise<void> {
+      session.queueExternalUrl(url);
+    },
+  };
 }
 
 export class WizardSession {
@@ -270,8 +263,10 @@ export class WizardSession {
   private progressSteps: WizardStep[] = [];
   private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
-  private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private inputClosedError: Error | undefined;
+  private preparationCancellationLocked = false;
+  private expiryPending = false;
   private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
@@ -286,6 +281,8 @@ export class WizardSession {
   private error: string | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
+  private modelActivation: ProtocolWizardNextResult["modelActivation"];
+  private activationRejection: ProtocolWizardNextResult["activationRejection"];
 
   constructor(
     private runner: (
@@ -295,15 +292,23 @@ export class WizardSession {
     ) => Promise<void>,
     options?: { timeoutMs?: number },
   ) {
-    const prompter = new WizardSessionPrompter(this);
+    const prompter = createWizardSessionPrompter(this);
     if (options?.timeoutMs !== undefined) {
-      this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
+      this.expiryTimer = setTimeout(() => {
+        this.expiryPending = true;
+        this.cancel();
+      }, options.timeoutMs);
       this.expiryTimer.unref?.();
     }
     this.runnerPromise = this.run(prompter);
   }
 
   async next(): Promise<WizardNextResult> {
+    // Retired progress must not hide the terminal outcome or bypass the Gateway's
+    // done-result settlement barrier before clients decide whether setup may retry.
+    if (this.status !== "running") {
+      return this.terminalResult();
+    }
     const progressStep = this.progressSteps.shift();
     if (progressStep) {
       this.rememberDeliveredProgressStep(progressStep.id);
@@ -312,21 +317,19 @@ export class WizardSession {
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
     }
-    if (this.pendingTerminalResolution) {
-      this.pendingTerminalResolution = false;
-      return this.terminalResult();
-    }
-    if (this.status !== "running") {
-      return this.terminalResult();
-    }
     if (!this.stepDeferred) {
       this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
-    if (step) {
-      return { done: false, step, status: this.status };
+    if (step && this.getStatus() === "running") {
+      return { done: false, step, status: "running" };
     }
     return this.terminalResult();
+  }
+
+  /** A non-consuming view for polling clients; retired prompts are never replayed. */
+  getCurrentStep(): WizardStep | undefined {
+    return this.status === "running" ? (this.currentStep ?? this.progressSteps.at(-1)) : undefined;
   }
 
   private terminalResult(): WizardNextResult {
@@ -343,6 +346,12 @@ export class WizardSession {
       ...(this.status === "done" && this.preparedModelRef
         ? { preparedModelRef: this.preparedModelRef }
         : {}),
+      ...(this.status === "done" && this.modelActivation
+        ? { modelActivation: this.modelActivation }
+        : {}),
+      ...(this.status === "error" && this.activationRejection
+        ? { activationRejection: this.activationRejection }
+        : {}),
     };
   }
 
@@ -354,6 +363,16 @@ export class WizardSession {
   /** Record the exact provider-owned model prepared by a setup flow. */
   setPreparedModelRef(modelRef: string) {
     this.preparedModelRef = modelRef;
+  }
+
+  /** Record the live activation result, distinct from provider preparation. */
+  setModelActivation(activation: NonNullable<ProtocolWizardNextResult["modelActivation"]>) {
+    this.modelActivation = activation;
+  }
+
+  /** Only the activation owner can distinguish rejection from possibly committed failure. */
+  setActivationRejection(rejection: NonNullable<ProtocolWizardNextResult["activationRejection"]>) {
+    this.activationRejection = rejection;
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -382,28 +401,63 @@ export class WizardSession {
   }
 
   cancel(): boolean {
-    if (this.status !== "running" || this.cancellationLocked) {
+    if (
+      this.status !== "running" ||
+      this.cancellationLocked ||
+      this.inputClosedError ||
+      this.preparationCancellationLocked
+    ) {
       return false;
     }
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
-    this.currentStep = null;
-    for (const [, pending] of this.answerDeferred) {
-      // Reject all pending prompt promises so the runner can unwind through its
-      // normal cancellation path.
-      pending.deferred.reject(new WizardCancelledError());
-    }
-    this.answerDeferred.clear();
+    this.rejectPendingAnswers();
     this.progressSteps = [];
     this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
   }
 
+  /** Close client input without interrupting an operation past its commit point. */
+  close(error: Error): void {
+    if (this.status !== "running") {
+      return;
+    }
+    this.inputClosedError ??= error;
+    if (!this.cancellationLocked && !this.preparationCancellationLocked) {
+      this.abortController.abort(this.inputClosedError);
+    }
+    this.rejectPendingAnswers(this.inputClosedError);
+  }
+
   /** The underlying mutation crossed its durable commit point and must finish. */
   lockCancellation() {
+    this.signal.throwIfAborted();
+    if (!this.cancellationLocked) {
+      this.finishPreparation();
+    }
     this.cancellationLocked = true;
+  }
+
+  /** Protect preparation until the next client checkpoint or final commit. */
+  lockCancellationForPreparation() {
+    this.signal.throwIfAborted();
+    this.preparationCancellationLocked = true;
+  }
+
+  /** Resume cancellation after preparation, before more input or verification. */
+  finishPreparation() {
+    this.preparationCancellationLocked = false;
+    if (this.inputClosedError && !this.cancellationLocked) {
+      this.abortController.abort(this.inputClosedError);
+      throw this.inputClosedError;
+    }
+    // Expiry during an artifact commit remains due at the next safe checkpoint.
+    if (this.expiryPending) {
+      this.cancel();
+      this.signal.throwIfAborted();
+    }
   }
 
   get signal(): AbortSignal {
@@ -470,42 +524,76 @@ export class WizardSession {
       if (this.status !== "running") {
         return;
       }
-      if (err instanceof WizardCancelledError) {
+      // A provider may translate an aborted prompt into user cancellation.
+      // The recorded host closure still owns that outcome, including after writes.
+      const error = err instanceof WizardCancelledError ? (this.inputClosedError ?? err) : err;
+      if (error instanceof WizardCancelledError) {
         this.status = "cancelled";
-        this.error = err.message;
+        this.error = error.message;
       } else {
         this.status = "error";
-        this.error = String(err);
+        this.error = String(error);
       }
     } finally {
       this.settled = true;
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
+      // Browser completion can win while manual input is pending. Terminal
+      // sessions must retire that prompt and reject retained answer handles.
+      this.rejectPendingAnswers();
       this.resolveStep(null);
     }
+  }
+
+  private rejectPendingAnswers(error: Error = new WizardCancelledError()) {
+    this.currentStep = null;
+    for (const pending of this.answerDeferred.values()) {
+      pending.deferred.reject(error);
+    }
+    this.answerDeferred.clear();
   }
 
   async awaitAnswer(
     step: WizardStep,
     validate?: (value: string) => string | undefined,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
     }
-    this.pushStep(step);
+    const clientCheckpoint =
+      wizardStepAwaitsInput(step) || (step.type === "note" && step.executor === "client");
+    if (this.inputClosedError) {
+      if (clientCheckpoint) {
+        this.finishPreparation();
+      }
+      throw this.inputClosedError;
+    }
+    signal?.throwIfAborted();
+    if (clientCheckpoint) {
+      this.finishPreparation();
+    }
     const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
-    return await deferred.promise;
+    const abort = () => {
+      this.answerDeferred.delete(step.id);
+      if (this.currentStep?.id === step.id) {
+        this.currentStep = null;
+      }
+      deferred.reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    this.pushStep(step);
+    try {
+      return await deferred.promise;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 
   private resolveStep(step: WizardStep | null) {
     if (!this.stepDeferred) {
-      if (step === null) {
-        // The runner can finish immediately after an answer before next() has
-        // installed a waiter; remember that terminal state for the next poll.
-        this.pendingTerminalResolution = true;
-      }
       return;
     }
     const deferred = this.stepDeferred;

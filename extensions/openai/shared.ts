@@ -1,14 +1,16 @@
 // Openai plugin module implements shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
-  cloneFirstTemplateModel,
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  buildFirstTemplateModel,
+  findCatalogTemplate,
   matchesExactOrPrefix,
-  type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
@@ -74,16 +76,17 @@ const resolveOpenAIResponsesTransportTurnState: NonNullable<
   OpenAIResponsesProviderHooks["resolveTransportTurnState"]
 > = (ctx) => resolveOpenAITransportTurnState(ctx);
 
-const openAIResponsesStreamHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
-const wrapOpenAIResponsesStreamFn = openAIResponsesStreamHooks.wrapStreamFn;
+const loadResponsesStream = createLazyRuntimeModule(() => import("./responses-stream.runtime.js"));
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
   OpenAIResponsesProviderHooks["wrapStreamFn"]
-> = (ctx) =>
-  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
-    config: ctx.config,
-    agentId: ctx.agentId,
-    nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
-  });
+> = (ctx) => {
+  // Catalog registration keeps synchronous hooks; StreamFn already permits async
+  // startup, so transport and tool execution load only when the stream is invoked.
+  const loadStream = createLazyRuntimeSurface(loadResponsesStream, (runtime) =>
+    runtime.wrapOpenAIResponsesStream(ctx),
+  );
+  return async (...args) => (await loadStream())(...args);
+};
 
 export function buildOpenAIResponsesProviderHooks(options?: {
   transport?: "auto" | "sse" | "websocket" | "websocket-cached";
@@ -91,7 +94,6 @@ export function buildOpenAIResponsesProviderHooks(options?: {
   return {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
-    ...openAIResponsesStreamHooks,
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
   };
@@ -123,4 +125,4 @@ export function buildOpenAISyntheticCatalogEntry(
   };
 }
 
-export { cloneFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };
+export { buildFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };

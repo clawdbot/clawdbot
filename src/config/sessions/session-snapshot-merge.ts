@@ -63,6 +63,7 @@ function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: Sess
     !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
     beforeState?.cycleId !== afterState?.cycleId ||
     beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
+    beforeState?.startedAttempt !== afterState?.startedAttempt ||
     !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
     !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
   );
@@ -90,6 +91,7 @@ function mainSessionRecoveryCycleStateUnchanged(
   return (
     beforeState.cycleId === afterState.cycleId &&
     beforeState.chargedAttempts === afterState.chargedAttempts &&
+    beforeState.startedAttempt === afterState.startedAttempt &&
     isDeepStrictEqual(beforeState.reservation, afterState.reservation) &&
     isDeepStrictEqual(beforeState.tombstone, afterState.tombstone)
   );

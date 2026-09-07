@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 type PluginManifest = {
@@ -69,6 +73,74 @@ function listRepositoryOwnedChannelSkillFiles(): string[] {
 }
 
 describe("bundled channel-provider skill contracts", () => {
+  it.each<{
+    label: string;
+    pluginId: "discord" | "slack";
+    config: OpenClawConfig;
+    eligible: boolean;
+    disabled?: boolean;
+  }>([
+    {
+      label: "exposes Discord with only a named-account token",
+      pluginId: "discord",
+      config: {
+        channels: { discord: { accounts: { support: { token: "test-discord-token" } } } },
+      },
+      eligible: true,
+    },
+    {
+      label: "exposes Discord with a root token",
+      pluginId: "discord",
+      config: { channels: { discord: { token: "test-discord-token" } } },
+      eligible: true,
+    },
+    {
+      label: "hides Discord without channel configuration",
+      pluginId: "discord",
+      config: {},
+      eligible: false,
+    },
+    {
+      label: "honors explicit Discord skill disablement",
+      pluginId: "discord",
+      config: {
+        channels: { discord: { token: "test-discord-token" } },
+        skills: { entries: { discord: { enabled: false } } },
+      },
+      eligible: false,
+      disabled: true,
+    },
+    {
+      label: "exposes Slack with only named-account credentials",
+      pluginId: "slack",
+      config: {
+        channels: {
+          slack: {
+            accounts: { support: { botToken: "xoxb-test-token", appToken: "xapp-test-token" } },
+          },
+        },
+      },
+      eligible: true,
+    },
+  ])("$label", ({ pluginId, config, eligible, disabled = false }) => {
+    const workspaceDir = resolve(process.cwd(), "extensions", pluginId);
+    // Load the shipped asset without discovering operator skills or activating plugin runtimes.
+    const entries = loadWorkspaceSkills(workspaceDir, { config, workspaceOnly: true });
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config,
+      entries,
+      managedSkillsDir: resolve(workspaceDir, "skills"),
+    });
+    expect(report.skills.find((skill) => skill.name === pluginId)).toMatchObject({
+      eligible,
+      disabled,
+      modelVisible: eligible,
+    });
+
+    const snapshot = buildSkillSnapshot(workspaceDir, { config, entries });
+    expect(snapshot.prompt.includes(`<name>${pluginId}</name>`)).toBe(eligible);
+  });
+
   it("does not teach retired tool, action, parameter, or install contracts", () => {
     const failures: string[] = [];
     const skillFiles = listRepositoryOwnedChannelSkillFiles();

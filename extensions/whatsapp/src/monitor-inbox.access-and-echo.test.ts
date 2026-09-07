@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
 import {
   buildNotifyMessageUpsert,
-  expectPairingPromptSent,
   getRecordChannelActivityMock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
@@ -12,6 +11,7 @@ import {
   startInboxMonitor,
   upsertPairingRequestMock,
   waitForMessageCalls,
+  waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -227,14 +227,8 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
     expect(onMessage).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     const upsertBlockedAgain = buildNotifyMessageUpsert({
       id: "no-config-1b",
@@ -293,15 +287,9 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000, interval: 5 },
-    );
+    await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     expect(onMessage).not.toHaveBeenCalled();
-    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });

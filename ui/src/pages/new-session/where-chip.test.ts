@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-function renderPicker(isAdmin: boolean) {
+function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "eligible-order") {
   const state = resolveWhereChip({
     environments: [
       {
@@ -48,6 +48,7 @@ function renderPicker(isAdmin: boolean) {
       popoverOpen: true,
       popoverHiding: false,
       isAdmin,
+      ...(autoPlacementMode ? { autoPlacementMode } : {}),
       onGuardTransition: vi.fn(),
       onPopoverShow: vi.fn(),
       onPopoverHide: vi.fn(),
@@ -63,7 +64,7 @@ function renderPicker(isAdmin: boolean) {
 }
 
 describe("Where chip", () => {
-  it("projects the selected device label and exact capacity facts", () => {
+  it("keeps capacity structured and exposes busy slots without an ambiguous visible fraction", () => {
     const state = resolveWhereChip({
       environments: [
         {
@@ -82,14 +83,27 @@ describe("Where chip", () => {
 
     expect(state.kind).toBe("device");
     expect(state.label).toBe("Build runner");
-    expect(state.devices[0]?.facts).toEqual(["Worker slots 1/2"]);
+    const row = renderPicker(false).querySelector('[data-value="device:runner"]');
+    expect(row?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
+    );
+    expect(row?.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(row?.textContent).not.toContain("Worker slots");
+    expect(state.devices[0]?.workerSlots).toEqual({ total: 2, available: 1 });
+    expect(state.devices[0]?.facts).toEqual([]);
   });
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
-    expect(writer.querySelector('[data-value="auto-device"]')?.textContent).toContain(
-      "Any available node",
+    const autoRow = writer.querySelector('[data-value="auto-device"]');
+    expect(autoRow?.textContent).toContain("Auto");
+    expect(autoRow?.querySelector(".session-menu__sub")?.textContent).toContain(
+      "Least-busy device",
     );
+    const remoteExec = renderPicker(false, "eligible-order");
+    expect(
+      remoteExec.querySelector('[data-value="auto-device"] .session-menu__sub')?.textContent,
+    ).toContain("First eligible device");
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
     expect(
@@ -152,6 +166,7 @@ describe("Where chip", () => {
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
     expect(device?.textContent).toContain("This runtime does not support paired devices");
+    // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
     expect(device?.title).toBe("This runtime does not support paired devices");
   });
 
@@ -263,15 +278,34 @@ describe("Where chip", () => {
       },
       workerSlots: { total: 1, available: 0 },
       invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
       disabled: false,
+      label: "1 of 1 slots busy",
+      tone: "warn",
+    },
+    {
+      name: "shows slot-less remote execution without a capacity claim",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: undefined,
+      invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
+      disabled: false,
+      label: "Codex exec",
+      tone: undefined,
     },
     {
       name: "keeps worker execution capacity-gated",
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       workerSlots: { total: 1, available: 0 },
       invocableCommands: [],
+      commandState: undefined,
       disabled: true,
-      reason: /worker slots/i,
+      reason: "No worker slots are available. Wait for a slot or pick another device.",
+      label: "Slot utilization unavailable",
+      tone: "stale",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",
@@ -281,12 +315,25 @@ describe("Where chip", () => {
       },
       workerSlots: { total: 1, available: 1 },
       invocableCommands: [],
+      commandState: "unauthorized" as const,
       disabled: true,
-      reason: /enable|approv/i,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+      label: "Slot utilization unavailable",
+      tone: "stale",
     },
   ])(
     "$name in the New Session picker",
-    ({ devicePlacement, workerSlots, invocableCommands, disabled, reason }) => {
+    ({
+      devicePlacement,
+      workerSlots,
+      invocableCommands,
+      commandState,
+      disabled,
+      reason,
+      label,
+      tone,
+    }) => {
       const state = resolveWhereChip({
         environments: [
           {
@@ -298,6 +345,14 @@ describe("Where chip", () => {
             workerSlots,
             capabilities: ["codex.exec-server.stdio.v1"],
             invocableCommands,
+            ...(commandState
+              ? {
+                  requiredNodeCommand: {
+                    command: "codex.exec-server.stdio.v1",
+                    state: commandState,
+                  },
+                }
+              : {}),
           },
         ],
         cloudProfiles: [],
@@ -332,8 +387,13 @@ describe("Where chip", () => {
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
       expect(device?.disabled).toBe(disabled);
+      const meter = device?.querySelector('[role="img"]');
+      expect(meter?.getAttribute("aria-label")).toBe(label);
+      if (tone) {
+        expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
+      }
       if (reason) {
-        expect(device?.title).toMatch(reason);
+        expect(device?.title).toBe(reason);
       }
     },
   );

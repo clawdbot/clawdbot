@@ -14,15 +14,10 @@ import { installSharedTestSetup } from "./setup.shared.js";
 installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-const WORKER_PLUGIN_RUNTIME_HELPERS = Symbol.for("openclaw.testSetupPluginRuntimeHelpers");
 const WORKER_CLEANUP_HELPERS = Symbol.for("openclaw.testSetupCleanupHelpers");
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
-};
-type WorkerPluginRuntimeHelpers = {
-  resetPluginRuntimeStateForTest: typeof import("../src/plugins/runtime.js").resetPluginRuntimeStateForTest;
-  setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 type WorkerCleanupHelpers = {
   clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
@@ -50,19 +45,6 @@ const workerRuntimeState = (() => {
   }
   return globalState[WORKER_RUNTIME_STATE];
 })();
-
-function loadWorkerPluginRuntimeHelpers(): Promise<WorkerPluginRuntimeHelpers> {
-  const globalState = globalThis as typeof globalThis & {
-    [WORKER_PLUGIN_RUNTIME_HELPERS]?: Promise<WorkerPluginRuntimeHelpers>;
-  };
-  globalState[WORKER_PLUGIN_RUNTIME_HELPERS] ??= import("../src/plugins/runtime.js").then(
-    (pluginRuntime) => ({
-      resetPluginRuntimeStateForTest: pluginRuntime.resetPluginRuntimeStateForTest,
-      setActivePluginRegistry: pluginRuntime.setActivePluginRegistry,
-    }),
-  );
-  return globalState[WORKER_PLUGIN_RUNTIME_HELPERS];
-}
 
 function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
   const globalState = globalThis as typeof globalThis & {
@@ -348,8 +330,11 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
 }
 
 async function installDefaultPluginRegistry(): Promise<void> {
-  const { resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-    await loadWorkerPluginRuntimeHelpers();
+  // Worker module resets retire the lifecycle maps. Activate through the current
+  // real module, never a cached closure or a suite's partial runtime mock.
+  const { resetPluginRuntimeStateForTest, setActivePluginRegistry } = await vi.importActual<
+    typeof import("../src/plugins/runtime.js")
+  >("../src/plugins/runtime.js");
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());

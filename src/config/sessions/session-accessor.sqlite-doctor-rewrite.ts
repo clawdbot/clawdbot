@@ -97,7 +97,7 @@ export function rewriteDoctorSessionEntries(params: {
           });
           publishSessionEntryCacheInvalidation(
             database,
-            { ...row, entry_json: entryJson },
+            { sessionKey, entry: nextEntry },
             writeGeneration,
           );
           batchRewritten += 1;

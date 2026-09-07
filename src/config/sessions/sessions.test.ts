@@ -35,6 +35,34 @@ it("filters legacy row metadata with a noncanonical transcript id", () => {
   ).toBeUndefined();
 });
 
+it("keeps only recognized archive reasons on archived rows", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "archived-session",
+      updatedAt: 42,
+      archivedAt: 41,
+      archiveReason: "active-session-cap",
+    }),
+  ).toMatchObject({ archiveReason: "active-session-cap" });
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "active-session",
+      updatedAt: 42,
+      archivedBy: { type: "human", id: "stale-actor" },
+      archiveReason: "active-session-cap",
+    }),
+  ).not.toMatchObject({ archivedBy: expect.anything(), archiveReason: expect.anything() });
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "legacy-archive",
+      updatedAt: 42,
+      archivedAt: 41,
+      archivedBy: { type: "human", id: "operator-1" },
+      archiveReason: "unknown",
+    }),
+  ).toMatchObject({ archivedBy: { type: "human", id: "operator-1" } });
+});
+
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
   expect(
     normalizePersistedSessionEntryShape(
@@ -450,6 +478,37 @@ describe("session work admission", () => {
     expect(
       resolveSessionWorkStartError("agent:main:pending", {
         sessionId: "pending-session",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
+    const entry = {
+      sessionId: "failed-session",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: {
+          reason: "automatic recovery exhausted",
+          recoveredSessionId: "dashboard-successor",
+          recoveredSessionKey: "agent:main:dashboard:successor",
+        },
+      },
+    };
+
+    expect(resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry)).toContain(
+      "ended during restart recovery",
+    );
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", {
+        ...entry,
+        modelSelectionLocked: true,
+      }),
+    ).toContain("Open it in WebChat and use Resume in new session");
+    expect(
+      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry, {
+        allowRestartTombstoneReplacement: true,
       }),
     ).toBeUndefined();
   });

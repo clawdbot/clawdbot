@@ -2,8 +2,6 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   BoardActionParamsSchema,
-  BoardMetadataParamsSchema,
-  BoardMetadataResultSchema,
   BoardSnapshotSchema,
   BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResultSchema,
@@ -12,48 +10,6 @@ import {
   BoardWidgetPutResultSchema,
   BoardWidgetResizeOpSchema,
 } from "./board.js";
-
-describe("BoardMetadata schemas", () => {
-  it("bounds unique session lookups and preserves per-session failures", () => {
-    expect(
-      Value.Check(BoardMetadataParamsSchema, {
-        targets: [
-          { sessionKey: "agent:main:main" },
-          { sessionKey: "agent:main:work", agentId: "main" },
-        ],
-      }),
-    ).toBe(true);
-    expect(Value.Check(BoardMetadataParamsSchema, { targets: [] })).toBe(false);
-    expect(
-      Value.Check(BoardMetadataParamsSchema, {
-        targets: [{ sessionKey: "agent:main:main", unknown: true }],
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(BoardMetadataParamsSchema, {
-        targets: Array.from({ length: 101 }, (_, index) => ({ sessionKey: `agent:main:${index}` })),
-      }),
-    ).toBe(false);
-
-    expect(
-      Value.Check(BoardMetadataResultSchema, {
-        outcomes: [
-          {
-            ok: true,
-            sessionKey: "agent:main:main",
-            revision: 2,
-            hasBoard: true,
-          },
-          {
-            ok: false,
-            sessionKey: "agent:main:work",
-            error: { code: "UNAVAILABLE", message: "database busy" },
-          },
-        ],
-      }),
-    ).toBe(true);
-  });
-});
 
 describe("BoardActionParamsSchema", () => {
   it("accepts both exact cron triggers and plugin action verbs", () => {

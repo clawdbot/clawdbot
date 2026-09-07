@@ -7,7 +7,7 @@ import {
 import type { CronJob } from "../types.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
-import { applyJobResult } from "./timer.js";
+import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
   const target = raw
@@ -533,6 +533,77 @@ describe("cron failure alert account routing", () => {
       }),
     );
   });
+
+  it.each(
+    (["not-delivered", "unknown"] as const).flatMap((deliveryStatus) =>
+      [false, true].map((implicit) => ({ deliveryStatus, implicit })),
+    ),
+  )(
+    "records $deliveryStatus delivery and only alerts for a known failure (implicit=$implicit)",
+    ({ deliveryStatus, implicit }) => {
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const state = createCronServiceState({
+        storePath: "/tmp/openclaw-cron-recorded-delivery-alert.json",
+        cronEnabled: true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        sendCronFailureAlert,
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const job: CronJob = {
+        id: "recorded-delivery",
+        name: "Recorded delivery",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "report" },
+        ...(implicit ? {} : { delivery: { mode: "announce" as const } }),
+        failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
+        state: {},
+      };
+      const deferredNotifications: DeferredCronNotifications = [];
+      const outcome = authorCronRunCompletion(state, job, {
+        status: "ok",
+        deliveryState: {
+          delivered: deliveryStatus === "not-delivered" ? false : undefined,
+          status: deliveryStatus,
+          error: "recorded transport failure",
+          failureNotification: { status: "not-requested" },
+        },
+      });
+      expect(outcome.completionStatus).toBe(
+        deliveryStatus === "not-delivered" ? "failed" : "unknown",
+      );
+      applyJobResult(
+        state,
+        job,
+        {
+          ...outcome,
+          startedAt: 1_000,
+          endedAt: 2_000,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.state.lastDeliveryError).toBe("recorded transport failure");
+      expect(deferredNotifications).toHaveLength(deliveryStatus === "not-delivered" ? 1 : 0);
+      if (deliveryStatus === "unknown") {
+        return;
+      }
+      deferredNotifications[0]?.();
+      expect(sendCronFailureAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: {
+            text: 'Automation "Recorded delivery" delivery failed\nLast error: recorded transport failure',
+          },
+        }),
+      );
+    },
+  );
 
   it.each([
     {

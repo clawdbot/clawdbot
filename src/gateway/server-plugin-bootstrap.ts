@@ -6,6 +6,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
@@ -41,6 +42,7 @@ type GatewayPluginBootstrapParams = {
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   channelPluginLoadIntent?: ChannelPluginLoadIntent;
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
@@ -53,7 +55,7 @@ type GatewayPluginBootstrapParams = {
 // plugin ids/source hints without exposing internal diagnostic objects.
 function logGatewayPluginDiagnostics(params: {
   diagnostics: PluginRegistry["diagnostics"];
-  log: Pick<GatewayPluginBootstrapLog, "error" | "info">;
+  log: Pick<GatewayPluginBootstrapLog, "error" | "warn">;
 }) {
   for (const diag of params.diagnostics) {
     const degradedPlugin = diag.pluginId ? findActiveDegradedPlugin(diag.pluginId) : undefined;
@@ -78,7 +80,8 @@ function logGatewayPluginDiagnostics(params: {
     if (diag.level === "error") {
       params.log.error(message);
     } else {
-      params.log.info(message);
+      // `PluginDiagnostic.level` is only "warn" | "error": this branch is every warn diagnostic.
+      params.log.warn(message);
     }
   }
 }
@@ -127,6 +130,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,

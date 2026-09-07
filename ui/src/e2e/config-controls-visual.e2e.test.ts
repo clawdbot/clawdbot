@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,12 +20,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-controls",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("settings-controls");
+  }
+});
 
 async function resolvedBackground(page: Page, value: string): Promise<string> {
   return page.evaluate((background) => {
@@ -95,16 +100,36 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
@@ -165,7 +190,6 @@ suite.define(() => {
           expect(await selected.getAttribute("aria-checked")).toBe("true");
           expect(await unselected.getAttribute("aria-checked")).toBe("false");
           if (captureUiProofEnabled) {
-            await mkdir(uiProofArtifactDir, { recursive: true });
             await selected
               .locator(
                 "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' settings-row ')][1]",
@@ -257,7 +281,6 @@ suite.define(() => {
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator(".content-header").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-settings-view.png"),
@@ -306,9 +329,6 @@ suite.define(() => {
 
   for (const host of ["browser", "app"] as const) {
     it(`routes links to the Control UI browser in a ${host}-hosted UI`, async () => {
-      if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
           colorScheme: "dark",
@@ -326,7 +346,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {
@@ -497,10 +521,12 @@ suite.define(() => {
           ).toBe(true);
           await browserPanel.getByText("Example", { exact: true }).first().waitFor();
           await expect
-            .poll(
-              async () => (await browserPanel.textContent())?.includes("Loading page...") ?? true,
+            .poll(() =>
+              browserPanel
+                .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="browser"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           expect(await browserPanel.textContent()).not.toContain("Browser request failed");
 
           if (host === "app") {

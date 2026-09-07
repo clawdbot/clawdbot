@@ -9,7 +9,7 @@ export type ScopeUpgradeState =
   | { phase: "requesting" }
   | { phase: "pending"; requestId: string }
   | { phase: "rejected"; requestId: string; expired: boolean }
-  | { phase: "error"; message: string };
+  | { phase: "error"; message: string; retryable: boolean };
 
 export function readScopeUpgradeAvailability(
   snapshot: ApplicationGatewaySnapshot,

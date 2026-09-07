@@ -9,8 +9,9 @@ export function buildSkillWorkshopPromptSection(): string[] {
   return [
     "## Skill Workshop",
     "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-    "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch it now; the configured autonomous mode disables repair, leaves it pending, or applies it immediately. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
-    "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
+    "Exception: background Workshop maintenance may use normal file tools inside its provided Workshop directory when the run authorizes direct edits. Draft-only reviews continue to stage proposals.",
+    "Used skill proved wrong or incomplete: read it and follow the available tool's publication and autonomous policy. Where supported, autonomous mode may disable repair, stage a proposal, or apply it. Without an applicable autonomous policy, unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
+    "Publication-only create/update requires an explicit user request; never present it as a pending draft. Apply/reject/quarantine only explicit user ask.",
     "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
     "",
   ];

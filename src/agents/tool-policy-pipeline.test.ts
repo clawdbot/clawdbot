@@ -2,6 +2,11 @@
 // warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -301,23 +306,44 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("declared context excludes disabled plugin tools", () => {
-    const declared = buildDeclaredToolAllowlistContext({
-      config: { plugins: { entries: { browser: { enabled: false } } } },
-      workspaceDir: process.cwd(),
-    });
-
-    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
-  });
-
-  test("declared context excludes denied plugin tools", () => {
-    const declared = buildDeclaredToolAllowlistContext({
-      config: { plugins: { entries: { browser: { enabled: true } } } },
-      workspaceDir: process.cwd(),
-      toolDenylist: ["browser"],
-    });
-
-    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
+  test.each([
+    {
+      name: "disabled owner",
+      plugins: { entries: { "blocked-owner": { enabled: false } } },
+      toolDenylist: undefined,
+    },
+    { name: "denied owner", plugins: { deny: ["blocked-owner"] }, toolDenylist: undefined },
+    { name: "tool-denied owner", plugins: {}, toolDenylist: ["blocked-owner"] },
+    { name: "denied tool", plugins: {}, toolDenylist: ["blocked_tool"] },
+  ])("declared context excludes a $name and keeps eligible tools", ({ plugins, toolDenylist }) => {
+    const config = { plugins };
+    const workspaceDir = process.cwd();
+    const manifestRegistry = makeRegistry([
+      {
+        id: "Allowed-Owner",
+        origin: "bundled",
+        channels: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+      {
+        id: "Blocked-Owner",
+        origin: "bundled",
+        channels: [],
+        contracts: { tools: ["blocked_tool"] },
+      },
+    ]);
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({ config, manifestRegistry, workspaceDir }),
+      { config, workspaceDir },
+    );
+    try {
+      expect(buildDeclaredToolAllowlistContext({ config, workspaceDir, toolDenylist })).toEqual({
+        pluginIds: ["Allowed-Owner"],
+        pluginToolNames: ["allowed_tool"],
+      });
+    } finally {
+      setCurrentPluginMetadataSnapshot(undefined);
+    }
   });
 
   test("declared context excludes disabled MCP servers", () => {
@@ -614,6 +640,79 @@ describe("tool-policy-pipeline", () => {
       ],
     });
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+  });
+
+  test("reads policy changes at each stage and each new filtering operation", () => {
+    const tools = [{ name: "read" }, { name: "write" }, { name: "exec" }];
+    const policy = { allow: ["read", "write"], deny: [] as string[] };
+    const run = (denied: string) =>
+      applyToolPolicyPipeline({
+        tools,
+        toolMeta: () => undefined,
+        warn: () => {},
+        steps: [
+          { policy: { allow: ["*"] }, label: "first" },
+          { policy, label: "second" },
+        ],
+        onFilter: ({ step }) => {
+          if (step.label === "first") {
+            policy.deny.splice(0, policy.deny.length, denied);
+          }
+        },
+      });
+
+    const first = run("write");
+    expect(first).toEqual([tools[0]]);
+    expect(first[0]).toBe(tools[0]);
+    const second = run("read");
+    expect(second).toEqual([tools[1]]);
+    expect(second[0]).toBe(tools[1]);
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "write", "exec"]);
+  });
+
+  test("reads declared tool changes after each layer's filter callback", () => {
+    const tools = [{ name: "read" }];
+    const declared = {
+      pluginIds: new Set([" First-Owner ", ""]),
+      pluginToolNames: ["old-tool", " OLD-TOOL ", ""],
+      mcpServerNames: ["Old Server"],
+    };
+    const events: string[] = [];
+    const filtered = applyToolPolicyPipeline({
+      tools,
+      toolMeta: () => undefined,
+      warn: (message) => events.push(message),
+      declaredToolAllowlist: declared,
+      steps: [
+        {
+          policy: { allow: ["*", "first-owner", "old-tool", "old-server__*"] },
+          label: "declared first",
+          stripPluginOnlyAllowlist: true,
+        },
+        {
+          policy: { allow: ["*", "second-owner", "new-tool", "new-server__*", "old-tool"] },
+          label: "declared second",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+      onFilter: ({ step }) => {
+        events.push(`filtered: ${step.label}`);
+        if (step.label === "declared first") {
+          declared.pluginIds.clear();
+          declared.pluginIds.add(" Second-Owner ");
+          declared.pluginToolNames.splice(0, declared.pluginToolNames.length, " NEW-TOOL ");
+          declared.mcpServerNames.splice(0, declared.mcpServerNames.length, "New Server");
+        }
+      },
+    });
+
+    expect(filtered).toEqual(tools);
+    expect(filtered[0]).toBe(tools[0]);
+    expect(events).toEqual([
+      "filtered: declared first",
+      "tools: declared second allowlist contains unknown entries (old-tool). These entries won't match any tool unless the plugin is enabled.",
+      "filtered: declared second",
+    ]);
   });
 
   test("applies deny filtering after allow filtering", () => {

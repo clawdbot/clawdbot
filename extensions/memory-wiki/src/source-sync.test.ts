@@ -289,37 +289,4 @@ describe("syncMemoryWikiImportedSources", () => {
       indexUpdatedFiles: [],
     });
   });
-
-  it("returns a no-op sync result outside imported-source modes", async () => {
-    const config = createConfig("isolated");
-
-    const result = await syncMemoryWikiImportedSources({ config });
-
-    expect(syncBridgeMock).not.toHaveBeenCalled();
-    expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
-    expect(refreshIndexesMock).toHaveBeenCalledWith({
-      config,
-      syncResult: {
-        importedCount: 0,
-        updatedCount: 0,
-        skippedCount: 0,
-        removedCount: 0,
-        artifactCount: 0,
-        workspaces: 0,
-        pagePaths: [],
-      },
-    });
-    expect(result).toEqual({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-      indexesRefreshed: true,
-      indexRefreshReason: "import-changed",
-      indexUpdatedFiles: ["index.md", "sources/index.md"],
-    });
-  });
 });

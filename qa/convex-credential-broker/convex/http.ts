@@ -287,16 +287,31 @@ http.route({
       const body = await parseJsonObject(request);
       const actorRole = parseActorRole(body);
       assertRoleAllowed(tokenRole, actorRole);
-
-      const result = await ctx.runMutation(internal.credentials.acquireLease, {
-        kind: requireString(body, "kind"),
-        ownerId: requireString(body, "ownerId"),
-        actorRole,
+      const kind = requireString(body, "kind");
+      const ownerId = requireString(body, "ownerId");
+      const prepared = await ctx.runQuery(internal.credentials.prepareLeaseAcquisition, {
+        kind,
         leaseTtlMs: optionalPositiveInteger(body, "leaseTtlMs"),
         heartbeatIntervalMs: optionalPositiveInteger(body, "heartbeatIntervalMs"),
       });
-
-      return jsonResponse(200, result);
+      if (prepared.status !== "ok") return jsonResponse(200, prepared);
+      for (const credentialId of prepared.credentialIds) {
+        const result = await ctx.runMutation(internal.credentials.tryAcquireLease, {
+          kind,
+          ownerId,
+          actorRole,
+          credentialId,
+          leaseTtlMs: prepared.leaseTtlMs,
+          heartbeatIntervalMs: prepared.heartbeatIntervalMs,
+        });
+        if (result.status === "ok") return jsonResponse(200, result);
+      }
+      const exhausted = await ctx.runMutation(internal.credentials.recordLeaseAcquisitionFailure, {
+        kind,
+        ownerId,
+        actorRole,
+      });
+      return jsonResponse(200, exhausted);
     } catch (error) {
       const normalized = normalizeError(error);
       return jsonResponse(normalized.httpStatus, normalized.payload);

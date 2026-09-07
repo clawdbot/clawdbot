@@ -1,7 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   createNewSessionPageE2eSuite,
@@ -9,22 +11,31 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const proofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "connect-machine",
-);
 
-async function captureProof(page: import("playwright").Page, fileName: string) {
+async function captureProof(
+  page: Page,
+  fileName: string,
+  presentation?: { surface: Locator; content: readonly Locator[] },
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "connect-machine"), { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(suite.artifactDir, "connect-machine", fileName),
+      await takeControlUiViewportScreenshot(
+        page,
+        presentation?.surface ?? page.locator(".shell"),
+        presentation?.content ?? [page.locator(".new-session-page__message")],
+      ),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "connect-machine"), fileName),
   });
 }
 
@@ -37,7 +48,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: proofArtifactDir,
+              dir: path.join(suite.artifactDir, "connect-machine"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -79,7 +90,10 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       const connect = place.getByRole("button", { name: "Connect a machine…" });
       await connect.waitFor();
-      await captureProof(page, "01-picker-foot.png");
+      await captureProof(page, "01-picker-foot.png", {
+        surface: place.locator('wa-popup [part="popup"]'),
+        content: [connect],
+      });
       await connect.click();
 
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
@@ -104,7 +118,10 @@ suite.define(() => {
         joinUrl: true,
       });
       await dialog.getByText(`npx openclaw connect ${secondJoinUrl}`, { exact: true }).waitFor();
-      await captureProof(page, "02-connect-dialog.png");
+      await captureProof(page, "02-connect-dialog.png", {
+        surface: dialog.locator("dialog"),
+        content: [copy],
+      });
     } finally {
       await context.close();
     }
@@ -173,6 +190,34 @@ suite.define(() => {
       await retry.click();
       await dialog.getByText(`npx openclaw connect ${joinUrl}`, { exact: true }).waitFor();
       expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(2);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("redacts sensitive connection-link failures before rendering them", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["device.pair.setupCode"],
+    });
+    const secret = "e2e-pairing-bearer-secret";
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator("#new-session-where-trigger").click();
+      await page.getByRole("button", { name: "Connect a machine…" }).click();
+      await gateway.waitForRequest("device.pair.setupCode");
+      await gateway.rejectDeferred("device.pair.setupCode", {
+        message: `pairing failed: Authorization: Bearer ${secret}`,
+      });
+
+      const alert = page
+        .locator('openclaw-modal-dialog[label="Connect a machine"]')
+        .getByRole("alert");
+      await alert.waitFor();
+      expect(await alert.textContent()).toContain("Authorization: [redacted]");
+      expect(await alert.textContent()).not.toContain(secret);
     } finally {
       await context.close();
     }

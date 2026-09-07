@@ -56,8 +56,27 @@ describe("CronService restart catch-up within a cron slot's first second", () =>
     }
   });
 
-  it("replays the first daylight-saving fold after restarting in the repeated hour", async () => {
-    const restartAtMs = Date.parse("2026-11-01T06:05:00.000Z");
+  it.each([
+    {
+      label: "the first daylight-saving fold after restarting in the repeated hour",
+      id: "restart-missed-first-daylight-saving-fold",
+      restartAt: "2026-11-01T06:05:00.000Z",
+      expression: "30 1,3 * * *",
+      lastRunAt: "2026-10-31T07:30:00.000Z",
+      nextRunAt: "2026-11-01T08:30:00.000Z",
+    },
+    {
+      label: "the last valid reminder after restarting beyond a spring-forward gap",
+      id: "restart-missed-before-daylight-saving-gap",
+      restartAt: "2027-03-14T07:05:00.000Z",
+      expression: "45 1,2,3 * * *",
+      lastRunAt: "2027-03-13T08:45:00.000Z",
+      nextRunAt: "2027-03-14T07:45:00.000Z",
+    },
+  ])("replays $label", async ({ id, restartAt, expression, lastRunAt, nextRunAt }) => {
+    const restartAtMs = Date.parse(restartAt);
+    const lastRunAtMs = Date.parse(lastRunAt);
+    const nextRunAtMs = Date.parse(nextRunAt);
     vi.setSystemTime(new Date(restartAtMs));
     const store = await makeStorePath();
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
@@ -66,18 +85,18 @@ describe("CronService restart catch-up within a cron slot's first second", () =>
       storePath: store.storePath,
       jobs: [
         {
-          id: "restart-missed-first-daylight-saving-fold",
-          name: "first daylight-saving fold",
+          id,
+          name: id,
           enabled: true,
-          createdAtMs: Date.parse("2026-10-01T00:00:00.000Z"),
-          updatedAtMs: Date.parse("2026-10-31T07:30:00.000Z"),
-          schedule: { kind: "cron", expr: "30 1,3 * * *", tz: "America/New_York" },
+          createdAtMs: lastRunAtMs,
+          updatedAtMs: lastRunAtMs,
+          schedule: { kind: "cron", expr: expression, tz: "America/New_York" },
           sessionTarget: "isolated",
           wakeMode: "now",
           payload: { kind: "command", argv: ["echo", "FIRED"] },
           state: {
-            nextRunAtMs: Date.parse("2026-11-01T08:30:00.000Z"),
-            lastRunAtMs: Date.parse("2026-10-31T07:30:00.000Z"),
+            nextRunAtMs,
+            lastRunAtMs,
             lastStatus: "ok",
           },
         },
@@ -97,9 +116,9 @@ describe("CronService restart catch-up within a cron slot's first second", () =>
     try {
       await cron.start();
       expect(runCommandJob).toHaveBeenCalledTimes(1);
-      expect(cron.getJob("restart-missed-first-daylight-saving-fold")?.state).toMatchObject({
+      expect(cron.getJob(id)?.state).toMatchObject({
         lastRunAtMs: restartAtMs,
-        nextRunAtMs: Date.parse("2026-11-01T08:30:00.000Z"),
+        nextRunAtMs,
       });
     } finally {
       cron.stop();

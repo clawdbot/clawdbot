@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -20,6 +21,7 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { presenceUserKey } from "../../shared/presence-user.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -126,6 +128,7 @@ function attributedSuggestionClient(
       syntheticClient: true,
       senderAttribution: {
         id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
         name: `Suggested by ${label}`,
       },
     },
@@ -518,7 +521,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typeof requestParams.preview === "string"
         ? {
             ...requestParams,
-            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+            preview: truncateCodePoints(requestParams.preview.trim(), 400),
           }
         : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
@@ -560,6 +563,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (role === "viewer" && visibility !== "shared" && visibility !== "suggest") {
       respond(true, { ok: true, broadcast: false });
       return;
+    }
+    if (params.typing) {
+      context.recordClientActivity?.(client);
     }
     const sessionKeys = new Set([
       params.sessionKey,
@@ -612,7 +618,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           return false;
         }
         const liveIdentities = liveViewerIdentities(sessionKeys);
-        if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
+        const actorKey = presenceUserKey({
+          id: actor.id,
+          identity: { type: "profile", id: actor.id },
+        });
+        if (liveIdentities.size < 2 || !liveIdentities.has(actorKey)) {
           return false;
         }
         const event: SessionTypingEvent = {

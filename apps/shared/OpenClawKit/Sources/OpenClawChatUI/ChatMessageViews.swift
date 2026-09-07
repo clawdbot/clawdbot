@@ -417,7 +417,9 @@ private struct ChatMessageBody: View {
 
     var body: some View {
         let text = self.primaryText
-        let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+        let textColor = self.isUser
+            ? OpenClawChatTheme.userText(on: self.userAccent)
+            : OpenClawChatTheme.assistantText
         let shouldRenderBubble = self.shouldRenderBubble
         let toolActivityItems = self.toolActivityItems
 
@@ -475,6 +477,7 @@ private struct ChatMessageBody: View {
                     AttachmentRow(
                         att: self.visibleInlineAttachments[idx],
                         isUser: self.isUser,
+                        userAccent: self.userAccent,
                         resolverReady: self.mediaArtifactResolverReady,
                         playbackAllowed: self.mediaPlaybackAllowed,
                         loadMedia: self.loadMediaArtifact)
@@ -740,6 +743,7 @@ private struct ChatMessageBody: View {
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let userAccent: Color?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let loadMedia: @MainActor @Sendable (
@@ -787,13 +791,16 @@ private struct AttachmentRow: View {
             Text(self.isAudio ? "Voice note" : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .foregroundStyle(
+                    self.isUser
+                        ? OpenClawChatTheme.userText(on: self.userAccent)
+                        : OpenClawChatTheme.assistantText)
             if self.isAudio, let durationSeconds = self.att.durationSeconds {
                 Text(openClawVoiceNoteDurationLabel(durationSeconds))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(
                         self.isUser
-                            ? OpenClawChatTheme.userText.opacity(0.72)
+                            ? OpenClawChatTheme.userText(on: self.userAccent).opacity(0.72)
                             : OpenClawChatTheme.assistantText.opacity(0.72))
             }
             Spacer()
@@ -1154,9 +1161,8 @@ private struct ChatAssistantTextBody: View {
 
 @MainActor
 private struct ChatStreamingAssistantTextBody: View {
-    let text: String
+    private let inputSnapshot: Snapshot
     let markdownVariant: ChatMarkdownVariant
-    let includesThinking: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var snapshot: Snapshot
@@ -1165,12 +1171,13 @@ private struct ChatStreamingAssistantTextBody: View {
     @State private var pendingUntil: TimeInterval?
 
     init(text: String, markdownVariant: ChatMarkdownVariant, includesThinking: Bool) {
-        self.text = text
         self.markdownVariant = markdownVariant
-        self.includesThinking = includesThinking
 
         let now = Date.timeIntervalSinceReferenceDate
         let snapshot = Snapshot(text: text, includesThinking: includesThinking)
+        // State retains its old value across updates. Reuse this prepared input
+        // when applying the delta instead of parsing the same Markdown again.
+        self.inputSnapshot = snapshot
         let location = snapshot.lastProseLocation
         let revealState = location.map {
             step(state: ChatStreamingRevealState(), newText: snapshot.prose(at: $0).plainText, now: now)
@@ -1191,17 +1198,19 @@ private struct ChatStreamingAssistantTextBody: View {
                 }
             }
         }
-        .onChange(of: self.text) { _, _ in
+        .onChange(of: self.inputSnapshot.sourceText) { _, _ in
             self.updateSnapshot()
         }
-        .onChange(of: self.includesThinking) { _, _ in
+        .onChange(of: self.inputSnapshot.includesThinking) { _, _ in
             self.updateSnapshot()
         }
         .onChange(of: self.reduceMotion) { _, reduceMotion in
             self.pendingUntil = reduceMotion ? nil : self.futureDeadline()
         }
         .onAppear {
-            if self.snapshot.sourceText != self.text || self.snapshot.includesThinking != self.includesThinking {
+            if self.snapshot.sourceText != self.inputSnapshot.sourceText ||
+                self.snapshot.includesThinking != self.inputSnapshot.includesThinking
+            {
                 self.updateSnapshot()
             }
         }
@@ -1247,7 +1256,7 @@ private struct ChatStreamingAssistantTextBody: View {
 
     private func updateSnapshot() {
         let now = Date.timeIntervalSinceReferenceDate
-        let nextSnapshot = Snapshot(text: self.text, includesThinking: self.includesThinking)
+        let nextSnapshot = self.inputSnapshot
         let nextLocation = nextSnapshot.lastProseLocation
         let nextRevealState: ChatStreamingRevealState
         if let nextLocation {

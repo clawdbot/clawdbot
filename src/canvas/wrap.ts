@@ -1,11 +1,4 @@
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+import { escapeHtml } from "../shared/html-escape.js";
 
 const WIDGET_THEME_TOKENS = [
   "surface",
@@ -24,6 +17,11 @@ const WIDGET_THEME_TOKENS = [
   "danger",
   "info",
   "radius",
+  "radius-full",
+  "scrollbar-size",
+  "scrollbar-thumb-inset",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
   "font-body",
   "font-mono",
 ] as const;
@@ -39,6 +37,9 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#bd4531;--accent-fill:#bd4531;--accent-fg:#ffffff;
 --ok:#15803d;--warn:#b45309;--danger:#dc2626;--info:#2563eb;
 --radius:10px;
+--radius-full:9999px;--scrollbar-size:12px;--scrollbar-thumb-inset:3px;
+--scrollbar-thumb:color-mix(in srgb,var(--muted) 32%,transparent);
+--scrollbar-thumb-hover:color-mix(in srgb,var(--muted) 64%,transparent);
 --font-body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 --accent-subtle:color-mix(in srgb,var(--accent) 10%,transparent);
@@ -52,7 +53,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --border:#1e2028;--border-strong:#2e3040;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
-*{box-sizing:border-box}html,body{margin:0}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
+*{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
 body{font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
@@ -94,16 +95,49 @@ export function buildWidgetDocument(
   const bodyClass = isSvg ? ' class="svg-widget"' : "";
   // Inline scripts may drive the widget; CSP blocks resource loads, while preview metadata
   // prevents the iframe from inheriting same-origin access to the parent application.
-  // The size reporter lets the embedding chat fit the iframe to the content; the
-  // parent clamps reported heights, so widget code cannot abuse the channel.
+  // The embedding bridge lets a host fit the iframe to its content. A board
+  // host also receives only the vertical scroll remainder that the widget
+  // document cannot consume itself; without that handoff, an auto-height frame
+  // traps touch and wheel gestures before they can reach the board scroller.
   const sizeReporter =
     "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
+    "const listen=window.addEventListener.bind(window);" +
+    "const stop=Event.prototype.stopImmediatePropagation;let boardNonce='';" +
+    'listen("message",event=>{const data=event.data;if(event.source!==parent||' +
+    'data?.type!=="openclaw:widget-board-host"||typeof data.nonce!=="string"||!data.nonce)return;' +
+    "boardNonce=data.nonce;stop.call(event);},true);" +
     // documentElement.scrollHeight reports the viewport for short content, so
     // measure the body box, which tracks the actual widget height.
     "let last=0;const report=()=>{const b=document.body;if(!b)return;" +
     "const h=Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height));" +
-    'if(h&&h!==last){last=h;window.parent.postMessage({type:"openclaw:widget-size",height:h},"*");}};' +
-    "addEventListener('load',report);new ResizeObserver(report).observe(document.body);" +
+    'if(h&&h!==last){last=h;post({type:"openclaw:widget-size",height:h},"*");}};' +
+    "const remainder=(target,delta)=>{let value=delta;const root=document.scrollingElement;" +
+    "let rootSeen=false;const consume=node=>{if(!value)return;const max=node.scrollHeight-node.clientHeight;" +
+    "if(max<=1)return;const available=value<0?node.scrollTop:max-node.scrollTop;" +
+    "value=Math.sign(value)*Math.max(0,Math.abs(value)-Math.max(0,available));};" +
+    "let node=target instanceof Element?target:null;while(node){const style=getComputedStyle(node);" +
+    'const overflow=style.overflowY;if((overflow==="auto"||overflow==="scroll")){consume(node);' +
+    "if(node===root)rootSeen=true;}node=node.parentElement;}if(root&&!rootSeen)consume(root);return value;};" +
+    'listen("wheel",event=>{if(!event.isTrusted||!boardNonce||event.ctrlKey)return;' +
+    "const scale=event.deltaMode===1?16:event.deltaMode===2?window.innerHeight:1;" +
+    "const delta=event.deltaY*scale;if(!delta||Math.abs(delta)<=Math.abs(event.deltaX*scale))return;" +
+    "const deltaY=remainder(event.target,delta);if(!deltaY)return;" +
+    'if(deltaY===delta)event.preventDefault();post({type:"openclaw:widget-scroll",deltaY,nonce:boardNonce},"*");},{passive:false});' +
+    "let touchId=-1;let lastX=0;let lastY=0;const findTouch=touches=>{" +
+    "for(let index=0;index<touches.length;index++){const touch=touches.item(index);" +
+    "if(touch?.identifier===touchId)return touch;}return null;};" +
+    'listen("touchstart",event=>{if(!event.isTrusted||!boardNonce||event.touches.length!==1)return;' +
+    "const touch=event.touches.item(0);if(!touch)return;touchId=touch.identifier;" +
+    "lastX=touch.clientX;lastY=touch.clientY;},{passive:true});" +
+    'listen("touchmove",event=>{if(!event.isTrusted||!boardNonce||touchId<0)return;const touch=findTouch(event.touches);' +
+    "if(!touch)return;const deltaX=lastX-touch.clientX;const deltaY=lastY-touch.clientY;" +
+    "lastX=touch.clientX;lastY=touch.clientY;if(!deltaY||Math.abs(deltaY)<=Math.abs(deltaX))return;" +
+    "const remaining=remainder(event.target,deltaY);if(!remaining)return;" +
+    'if(remaining===deltaY)event.preventDefault();post({type:"openclaw:widget-scroll",deltaY:remaining,nonce:boardNonce},"*");},{passive:false});' +
+    "const endTouch=event=>{if(touchId>=0&&!findTouch(event.touches))touchId=-1;};" +
+    'listen("touchend",endTouch,{passive:true});listen("touchcancel",endTouch,{passive:true});' +
+    "listen('load',report);new ResizeObserver(report).observe(document.body);" +
     "setTimeout(report,50);setTimeout(report,500);})();</script>";
   // This bridge precedes widget code and snapshots every authority-bearing
   // primitive. Inline chat keeps its private prompt port; board hosting adopts
@@ -265,5 +299,5 @@ export function buildWidgetDocument(
     : "'none'";
   const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
 }
