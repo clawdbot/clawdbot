@@ -835,6 +835,60 @@ textarea.settings-input {
 
 /* ── Mobile ── */
 
+.shell--embed-settings {
+  --settings-control-height: 44px;
+
+  :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :is(input, select, textarea, wa-select) {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em));
+  }
+
+  .settings-secret__toggle {
+    right: 0;
+  }
+
+  .settings-secret > :is(input, textarea) {
+    padding-right: calc(44px + var(--space-2));
+  }
+
+  .settings-section__help-button > span {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
+    --settings-control-height: 44px;
+
+    :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    :is(input, select, textarea, wa-select) {
+      font-size: max(16px, var(--control-ui-touch-input-size, 1em));
+    }
+
+    .settings-secret__toggle {
+      right: 0;
+    }
+
+    .settings-secret > :is(input, textarea) {
+      padding-right: calc(44px + var(--space-2));
+    }
+
+    .settings-section__help-button > span {
+      width: 16px;
+      height: 16px;
+    }
+  }
+}
+
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
@@ -886,5 +940,132 @@ textarea.settings-input {
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
+  }
+
+  :is(.shell--settings, .shell--embed-settings, openclaw-skills-page, openclaw-cron-page) {
+    .settings-section__actions {
+      max-width: 100%;
+      flex-wrap: wrap;
+    }
+
+    .settings-row__control {
+      justify-content: flex-start;
+    }
+
+    .settings-row:not(.settings-row--stacked)
+      .settings-row__control
+      > :is(
+        .settings-input:not([type="number"], [type="time"]),
+        .settings-select,
+        .settings-secret,
+        .settings-phone-presentation,
+        .settings-segmented
+      ) {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .settings-row:is(.settings-row--nav, .settings-row--toggle) {
+      flex-wrap: nowrap;
+    }
+
+    .settings-row:is(.settings-row--nav, .settings-row--toggle) > .settings-row__control {
+      width: auto;
+      max-width: 50%;
+      justify-content: flex-end;
+    }
+
+    .settings-segmented__btn {
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .identity-name-control {
+      width: 100%;
+    }
+
+    .identity-name-control .settings-input {
+      flex: 1 1 auto;
+      width: 100%;
+    }
+
+    .settings-kv {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-1);
+    }
+
+    .settings-kv dd + dt {
+      margin-top: var(--space-3);
+    }
+  }
+
+  /* Keep table headers available to assistive technology while each record
+     presents its existing translated column labels beside the values. */
+  .settings-table--stacked {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .settings-table--stacked thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .settings-table--stacked :is(tbody, tr, td) {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .settings-table--stacked tbody tr {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .settings-table--stacked tbody tr + tr {
+    border-top: 1px solid var(--border);
+  }
+
+  .settings-table--stacked tbody td {
+    padding: var(--space-2) 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: start;
+  }
+
+  .settings-table--stacked td[data-label] {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  .settings-table--stacked td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font: 500 var(--control-ui-text-sm) / 1.45 var(--font-body);
+  }
+
+  .settings-table--stacked td > * {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .settings-table--stacked .btn {
+    width: 100%;
+    min-width: 44px;
+    min-height: 44px;
+    white-space: normal;
   }
 }
