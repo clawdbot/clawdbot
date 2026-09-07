@@ -207,6 +207,180 @@ describe("nextcloud-talk inbound authz", () => {
     );
   });
 
+  it("deletes media staged while the ingress claim is cancelled", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    const abortController = new AbortController();
+    const abortReason = new Error("ingress claim retired");
+    const readAllowFromStore = vi.fn(async () => ["paired-user"]);
+    const coreRuntime = createPluginRuntimeMock();
+    const deleteMediaBuffer = vi.fn(async () => undefined);
+    Object.assign(coreRuntime.channel.media, { deleteMediaBuffer });
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      abortController.abort(abortReason);
+      return {
+        id: "staged-cancelled.pdf",
+        path: "/tmp/staged-cancelled.pdf",
+        size: 1_024,
+        contentType: "application/pdf",
+      };
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await expect(
+      handleNextcloudTalkInbound({
+        message: {
+          messageId: "m-cancelled-during-download",
+          roomToken: "room-cancelled-during-download",
+          roomName: "Cancelled During Download",
+          senderId: "paired-user",
+          senderName: "Paired User",
+          text: "inspect this",
+          mediaType: "text/plain",
+          timestamp: Date.now(),
+          isGroupChat: false,
+          attachment: TEST_ATTACHMENT,
+        },
+        account: {
+          accountId: "default",
+          enabled: true,
+          baseUrl: "https://cloud.example.com",
+          secret: "",
+          secretSource: "none",
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            mediaAllowFrom: ["paired-user"],
+          },
+        },
+        config: {
+          channels: {
+            "nextcloud-talk": {
+              dmPolicy: "pairing",
+              allowFrom: [],
+            },
+          },
+        },
+        runtime,
+        turnAdoptionLifecycle: {
+          abortSignal: abortController.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+      }),
+    ).rejects.toBe(abortReason);
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: abortController.signal }),
+    );
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestInit: expect.objectContaining({ signal: abortController.signal }),
+      }),
+    );
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-cancelled.pdf");
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("inbound media non-outcome"),
+    );
+  });
+
+  it("does not yield between the final cancellation fence and dispatch", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    const abortController = new AbortController();
+    const abortReason = new Error("ingress claim retired");
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => ["paired-user"]);
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => ({
+      id: "staged-active.pdf",
+      path: "/tmp/staged-active.pdf",
+      size: 1_024,
+      contentType: "application/pdf",
+    }));
+    const buildContextMock = vi.mocked(coreRuntime.channel.inbound.buildContext);
+    const buildContext = buildContextMock.getMockImplementation();
+    buildContextMock.mockImplementation((params) => {
+      queueMicrotask(() => abortController.abort(abortReason));
+      return buildContext!(params);
+    });
+    let abortedAtDispatch: boolean | undefined;
+    vi.mocked(coreRuntime.channel.inbound.dispatch).mockImplementationOnce(async () => {
+      abortedAtDispatch = abortController.signal.aborted;
+      return undefined as never;
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-final-cancellation-fence",
+        roomToken: "room-final-cancellation-fence",
+        roomName: "Final Cancellation Fence",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        baseUrl: "https://cloud.example.com",
+        secret: "",
+        secretSource: "none",
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          mediaAllowFrom: ["paired-user"],
+        },
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime: createTestRuntimeEnv(),
+      turnAdoptionLifecycle: {
+        abortSignal: abortController.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    });
+
+    expect(abortedAtDispatch).toBe(false);
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  });
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);

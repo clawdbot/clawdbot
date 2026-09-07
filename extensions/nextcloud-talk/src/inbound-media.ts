@@ -257,8 +257,10 @@ async function fetchNextcloudTalkJson(params: {
   hostname: string;
   accountConfig: NextcloudTalkAccountConfig;
   auditContext: string;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; payload: unknown } | { ok: false; status?: number }> {
   try {
+    params.signal?.throwIfAborted();
     const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(params.accountConfig);
     const { response, release } = await params.fetchGuarded({
       url: params.url,
@@ -273,6 +275,7 @@ async function fetchNextcloudTalkJson(params: {
       maxRedirects: 0,
       requireHttps: new URL(params.origin).protocol === "https:",
       timeoutMs: NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
       policy: {
         ...privateNetworkPolicy,
         hostnameAllowlist: [params.hostname],
@@ -283,17 +286,26 @@ async function fetchNextcloudTalkJson(params: {
       if (!response.ok) {
         return { ok: false, status: response.status };
       }
-      return {
-        ok: true,
-        payload: await readProviderJsonResponse<unknown>(response, "Nextcloud Talk media lookup", {
+      const payload = await readProviderJsonResponse<unknown>(
+        response,
+        "Nextcloud Talk media lookup",
+        {
           maxBytes: 64 * 1024,
           chunkTimeoutMs: NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS,
-        }),
+        },
+      );
+      params.signal?.throwIfAborted();
+      return {
+        ok: true,
+        payload,
       };
     } finally {
       await releaseNextcloudTalkGuardedResponse({ response, release });
     }
   } catch {
+    if (params.signal?.aborted) {
+      params.signal.throwIfAborted();
+    }
     return { ok: false };
   }
 }
@@ -307,7 +319,9 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   accountConfig: NextcloudTalkAccountConfig;
   reference: Extract<NextcloudTalkAttachmentReferenceResult, { ok: true }>;
   fetchGuarded?: NextcloudTalkGuardedFetch;
+  signal?: AbortSignal;
 }): Promise<NextcloudTalkAuthenticatedMediaSourceResult> {
+  params.signal?.throwIfAborted();
   const credentials = resolveNextcloudTalkApiCredentials({
     apiUser: params.accountConfig.apiUser,
     apiPassword: params.accountConfig.apiPassword,
@@ -334,6 +348,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     hostname: params.reference.hostname,
     accountConfig: params.accountConfig,
     auditContext: "nextcloud-talk.inbound-media-user",
+    signal: params.signal,
   });
   if (!user.ok) {
     return {
@@ -349,6 +364,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   if (!canonicalUserId) {
     return { ok: false, reason: "media_auth_unavailable" };
   }
+  params.signal?.throwIfAborted();
 
   const historyUrl = buildSameOriginUrl(
     base,
@@ -366,6 +382,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     hostname: params.reference.hostname,
     accountConfig: params.accountConfig,
     auditContext: "nextcloud-talk.inbound-media-message",
+    signal: params.signal,
   });
   if (!history.ok) {
     return {
@@ -442,7 +459,9 @@ export async function saveNextcloudTalkInboundMedia(params: {
   fileName: string;
   mimeType: string;
   authorization: string;
+  signal?: AbortSignal;
 }): Promise<Awaited<ReturnType<NextcloudTalkSaveRemoteMedia>>> {
+  params.signal?.throwIfAborted();
   const originProtocol = new URL(params.origin).protocol;
   const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(params.accountConfig);
   return await params.saveRemoteMedia({
@@ -451,6 +470,7 @@ export async function saveNextcloudTalkInboundMedia(params: {
     maxRedirects: 0,
     requestInit: {
       headers: { Authorization: params.authorization },
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     requireHttps: originProtocol === "https:",
     responseHeaderTimeoutMs: NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,

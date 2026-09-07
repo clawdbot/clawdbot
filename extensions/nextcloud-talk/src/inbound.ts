@@ -142,6 +142,8 @@ export async function handleNextcloudTalkInbound(params: {
   turnAdoptionLifecycle?: Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
+  const ingressAbortSignal = params.turnAdoptionLifecycle?.abortSignal;
+  ingressAbortSignal?.throwIfAborted();
   const core = getNextcloudTalkRuntime();
   const pairing = createChannelPairingController({
     core,
@@ -366,6 +368,35 @@ export async function handleNextcloudTalkInbound(params: {
   let stagedMediaId: string | undefined;
   let authorizedMediaUnavailable = false;
   let performedAsyncMediaWork = false;
+  // Claim retirement may race a store write that ignores or narrowly loses the abort.
+  // Clear local adoption state before best-effort deletion so no later branch can dispatch it.
+  const deleteStagedMedia = async () => {
+    const mediaId = stagedMediaId;
+    stagedMediaId = undefined;
+    stagedMedia = undefined;
+    if (!mediaId) {
+      return;
+    }
+    try {
+      await core.channel.media.deleteMediaBuffer(mediaId);
+    } catch {
+      logNextcloudTalkMediaNonOutcome({
+        log: (messageLocal) => runtime.log?.(messageLocal),
+        reason: "media_cleanup_failed",
+        accountId: account.accountId,
+        messageId: message.messageId,
+        senderId,
+      });
+    }
+  };
+  const cleanupAndThrowIfIngressAborted = async () => {
+    if (!ingressAbortSignal?.aborted) {
+      return;
+    }
+    await deleteStagedMedia();
+    ingressAbortSignal.throwIfAborted();
+  };
+  const throwIfIngressAborted = () => ingressAbortSignal?.throwIfAborted();
   const mediaSenderAllowed =
     hasInboundMedia &&
     isNextcloudTalkMediaSenderAllowed({
@@ -436,6 +467,7 @@ export async function handleNextcloudTalkInbound(params: {
         });
       } else {
         performedAsyncMediaWork = true;
+        throwIfIngressAborted();
         const authenticatedSource = await resolveNextcloudTalkAuthenticatedMediaSource({
           baseUrl: account.baseUrl,
           roomToken,
@@ -444,7 +476,9 @@ export async function handleNextcloudTalkInbound(params: {
           attachment: message.attachment,
           accountConfig: account.config,
           reference: attachmentReference,
+          signal: ingressAbortSignal,
         });
+        throwIfIngressAborted();
         if (!authenticatedSource.ok) {
           authorizedMediaUnavailable = true;
           logNextcloudTalkMediaNonOutcome({
@@ -459,6 +493,7 @@ export async function handleNextcloudTalkInbound(params: {
           });
         } else {
           access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+          throwIfIngressAborted();
           if (access.ingress.admission !== "dispatch") {
             runtime.log?.(
               isGroup && access.activationAccess.shouldSkip
@@ -468,6 +503,7 @@ export async function handleNextcloudTalkInbound(params: {
             return;
           }
           try {
+            throwIfIngressAborted();
             const saved = await saveNextcloudTalkInboundMedia({
               saveRemoteMedia: core.channel.media.saveRemoteMedia,
               url: authenticatedSource.url,
@@ -478,6 +514,7 @@ export async function handleNextcloudTalkInbound(params: {
               fileName: authenticatedSource.fileName,
               mimeType: authenticatedSource.contentTypeOverride ?? message.attachment.mimeType,
               authorization: authenticatedSource.authorization,
+              signal: ingressAbortSignal,
             });
             stagedMediaId = saved.id;
             stagedMedia = {
@@ -488,7 +525,13 @@ export async function handleNextcloudTalkInbound(params: {
                   ? { contentType: saved.contentType }
                   : {}),
             };
+            if (ingressAbortSignal?.aborted) {
+              await cleanupAndThrowIfIngressAborted();
+            }
           } catch (error) {
+            if (ingressAbortSignal?.aborted) {
+              await cleanupAndThrowIfIngressAborted();
+            }
             authorizedMediaUnavailable = true;
             const failure = classifyNextcloudTalkMediaFailure(error);
             logNextcloudTalkMediaNonOutcome({
@@ -507,21 +550,15 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   if (performedAsyncMediaWork) {
+    if (ingressAbortSignal?.aborted) {
+      await cleanupAndThrowIfIngressAborted();
+    }
     access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+    if (ingressAbortSignal?.aborted) {
+      await cleanupAndThrowIfIngressAborted();
+    }
     if (access.ingress.admission !== "dispatch") {
-      if (stagedMediaId) {
-        try {
-          await core.channel.media.deleteMediaBuffer(stagedMediaId);
-        } catch {
-          logNextcloudTalkMediaNonOutcome({
-            log: (messageLocal) => runtime.log?.(messageLocal),
-            reason: "media_cleanup_failed",
-            accountId: account.accountId,
-            messageId: message.messageId,
-            senderId,
-          });
-        }
-      }
+      await deleteStagedMedia();
       runtime.log?.(
         isGroup && access.activationAccess.shouldSkip
           ? `nextcloud-talk: drop room ${roomToken} (no mention)`
@@ -531,6 +568,9 @@ export async function handleNextcloudTalkInbound(params: {
     }
   }
 
+  if (ingressAbortSignal?.aborted) {
+    await cleanupAndThrowIfIngressAborted();
+  }
   const agentBody = authorizedMediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
@@ -580,6 +620,9 @@ export async function handleNextcloudTalkInbound(params: {
     },
   });
 
+  if (ingressAbortSignal?.aborted) {
+    await cleanupAndThrowIfIngressAborted();
+  }
   await core.channel.inbound.dispatch({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,

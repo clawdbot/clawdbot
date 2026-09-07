@@ -293,6 +293,59 @@ describe("Nextcloud Talk inbound media policy", () => {
     expect(releaseHistory).toHaveBeenCalledOnce();
   });
 
+  it("stops authenticated metadata lookup when the ingress claim is cancelled", async () => {
+    const abortController = new AbortController();
+    const abortReason = new Error("ingress claim retired");
+    const fetchGuarded = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        abortController.abort(abortReason);
+        return {
+          response: new Response(JSON.stringify({ ocs: { data: { id: "users/alice" } } }), {
+            status: 200,
+          }),
+          finalUrl: "https://nextcloud.example/ocs/v1.php/cloud/user?format=json",
+          release: vi.fn(async () => undefined),
+        };
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ ocs: { data: [] } }), { status: 200 }),
+        finalUrl: "https://nextcloud.example/ocs/v2.php/apps/spreed/api/v1/chat/room-token",
+        release: vi.fn(async () => undefined),
+      });
+
+    await expect(
+      resolveNextcloudTalkAuthenticatedMediaSource({
+        baseUrl: "https://nextcloud.example",
+        roomToken: "room-token",
+        messageId: "4242",
+        senderId: "users/alice",
+        attachment: {
+          fileId: "9001",
+          name: "receipt.pdf",
+          mimeType: "application/pdf",
+          declaredSizeBytes: 2048,
+          shareUrl: "https://nextcloud.example/s/redacted-token",
+          hideDownload: false,
+        },
+        accountConfig: { apiUser: "alice", apiPassword: "test-password" },
+        reference: {
+          ok: true,
+          origin: "https://nextcloud.example",
+          hostname: "nextcloud.example",
+          fileName: "receipt.pdf",
+        },
+        fetchGuarded,
+        signal: abortController.signal,
+      }),
+    ).rejects.toBe(abortReason);
+
+    expect(fetchGuarded).toHaveBeenCalledOnce();
+    expect(fetchGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: abortController.signal }),
+    );
+  });
+
   it("normalizes authenticated native voice-message video MIME to audio MIME", async () => {
     const fetchGuarded = vi
       .fn()
