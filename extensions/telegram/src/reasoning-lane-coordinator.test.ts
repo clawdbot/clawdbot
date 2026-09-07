@@ -47,6 +47,7 @@ describe("splitTelegramReasoningText", () => {
     "< internal",
     "<  internal",
     "</ internal",
+    "< /internal",
     "< / internal",
     "<\u00a0internal",
   ])("does not emit partial reasoning tag prefix %j", (text) => {

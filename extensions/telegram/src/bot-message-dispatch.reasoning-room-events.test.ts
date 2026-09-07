@@ -198,6 +198,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
         "< internal",
         "<  internal",
         "</ internal",
+        "< /internal",
         "< / internal",
         "<\u00a0internal",
       ]) {
