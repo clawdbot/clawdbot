@@ -19,6 +19,16 @@ type GatewayProgramArgs = {
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
+export function normalizeHomebrewServiceEntrypoint(entrypointPath: string): string {
+  const match = entrypointPath.match(
+    /^(.*?[/\\])Cellar[/\\]openclaw-cli[/\\][^/\\]+([/\\]libexec[/\\]lib[/\\]node_modules[/\\]openclaw[/\\]dist[/\\]index\.(?:c?js|mjs))$/i,
+  );
+  if (match && match[1] && match[2]) {
+    return path.join(match[1], "opt", "openclaw-cli", match[2]);
+  }
+  return entrypointPath;
+}
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -43,7 +53,7 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
       },
     );
     if (preferredDistEntrypoint) {
-      return preferredDistEntrypoint;
+      return normalizeHomebrewServiceEntrypoint(preferredDistEntrypoint);
     }
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
@@ -54,12 +64,12 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
     if (normalizedLooksLikeDist && normalized !== resolvedPath) {
       try {
         await fs.access(normalized);
-        return normalized;
+        return normalizeHomebrewServiceEntrypoint(normalized);
       } catch {
         // Fall through to return resolvedPath
       }
     }
-    return resolvedPath;
+    return normalizeHomebrewServiceEntrypoint(resolvedPath);
   }
 
   const distCandidates = buildDistCandidates(resolvedPath, normalized);
@@ -67,7 +77,7 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   for (const candidate of distCandidates) {
     try {
       await fs.access(candidate);
-      return candidate;
+      return normalizeHomebrewServiceEntrypoint(candidate);
     } catch {
       // keep going
     }

@@ -520,4 +520,24 @@ describe("resolveNodeProgramArguments", () => {
       "18789",
     ]);
   });
+
+  it("normalizes Homebrew Cellar entrypoint to stable opt path", async () => {
+    const cellarEntry = path.resolve(
+      "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw/dist/index.js",
+    );
+    const stableOptEntry = path.resolve(
+      "/opt/homebrew/opt/openclaw-cli/libexec/lib/node_modules/openclaw/dist/index.js",
+    );
+    process.argv = ["node", cellarEntry];
+    fsMocks.realpath.mockResolvedValue(cellarEntry);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      runtimePath: validatedNodePath,
+    });
+
+    expect(result.programArguments[2]).toBe(stableOptEntry);
+  });
 });

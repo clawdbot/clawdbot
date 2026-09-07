@@ -153,6 +153,42 @@ describe("update CLI shared helpers", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("guides Homebrew-managed installations to use brew upgrade", async () => {
+    await expect(
+      resolveGlobalManager({
+        root: "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw",
+        installKind: "package",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(
+      "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+    );
+  });
+
+  it("does not treat global npm packages under HOMEBREW_PREFIX as Homebrew formula installs", async () => {
+    const originalPrefix = process.env.HOMEBREW_PREFIX;
+    process.env.HOMEBREW_PREFIX = "/opt/homebrew";
+    runCommandWithTimeout.mockResolvedValue({
+      ...successfulCommandResult,
+      code: 1,
+      stderr: "not owned",
+    });
+
+    try {
+      await expect(
+        resolveGlobalManager({
+          root: "/opt/homebrew/lib/node_modules/openclaw",
+          installKind: "package",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow(
+        "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+      );
+    } finally {
+      process.env.HOMEBREW_PREFIX = originalPrefix;
+    }
+  });
+
   it("publishes a successful fresh clone only after the clone completes", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {
       const checkoutDir = path.join(base, "nested", "openclaw");

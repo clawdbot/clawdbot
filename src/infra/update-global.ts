@@ -1249,6 +1249,11 @@ export async function resolveGlobalInstallTarget(params: {
   };
 }
 
+export function isHomebrewInstallRoot(pkgRoot: string): boolean {
+  const normalized = path.resolve(pkgRoot);
+  return /[/\\](?:Cellar|opt)[/\\]openclaw-cli[/\\]/i.test(normalized);
+}
+
 /**
  * Identifies which global package manager owns an existing package root.
  * Command probes are checked first, then pnpm/bun layout fingerprints.
