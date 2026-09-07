@@ -37,8 +37,11 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function tarEntries(entries: Record<string, string>): string {
+function tarEntries(entries: Record<string, string>, options?: { producerRoot?: boolean }): string {
   const blocks: Buffer[] = [];
+  if (options?.producerRoot) {
+    blocks.push(createTarDirHeader("./"));
+  }
   for (const [relPath, contents] of Object.entries(entries)) {
     const payload = Buffer.from(contents);
     blocks.push(createTarFileHeader(relPath, payload.byteLength), payload);
@@ -68,16 +71,16 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
   header.write(`${text}\0`.slice(-length), offset, length, "ascii");
 }
 
-function createTarFileHeader(name: string, size: number): Buffer {
+function createTarFileHeader(name: string, size: number, type = "0"): Buffer {
   const header = Buffer.alloc(512);
   writeTarString(header, 0, 100, name);
-  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
   writeTarOctal(header, 108, 8, 0);
   writeTarOctal(header, 116, 8, 0);
   writeTarOctal(header, 124, 12, size);
   writeTarOctal(header, 136, 12, 0);
   header.fill(" ", 148, 156);
-  header.write("0", 156, 1, "ascii");
+  header.write(type, 156, 1, "ascii");
   header.write("ustar\0", 257, 6, "ascii");
   header.write("00", 263, 2, "ascii");
   const checksum = header.reduce((sum, byte) => sum + byte, 0);
@@ -85,6 +88,10 @@ function createTarFileHeader(name: string, size: number): Buffer {
   header[154] = 0;
   header[155] = 0x20;
   return header;
+}
+
+function createTarDirHeader(name: string): Buffer {
+  return createTarFileHeader(name, 0, "5");
 }
 
 function createCtx(overrides: {
@@ -150,8 +157,9 @@ function mockDirFetchArchive(
   invokeNode: ReturnType<typeof createCtx>["invokeNode"],
   root: string,
   entries: Record<string, string>,
+  options?: { producerRoot?: boolean },
 ) {
-  const tarBase64 = tarEntries(entries);
+  const tarBase64 = tarEntries(entries, options);
   invokeNode
     .mockResolvedValueOnce({
       ok: true,
@@ -1054,6 +1062,24 @@ describe("file-transfer node invoke policy", () => {
       expect(persistLiteralGrant).not.toHaveBeenCalled();
     },
   );
+
+  it("accepts the producer root header at the exact descendant cap", async () => {
+    const entries = Object.fromEntries(
+      Array.from({ length: 5000 }, (_, index) => [`file-${index}.txt`, ""]),
+    );
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/home/me" },
+      pluginConfig: { nodes: { "node-1": { allowReadPaths: ["/home/me", "/home/me/**"] } } },
+    });
+    // The real producer archives "."; its root directory header is one member.
+    mockDirFetchArchive(invokeNode, "/home/me", entries, { producerRoot: true });
+
+    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
+
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: true });
+  });
 
   it.each([
     {
