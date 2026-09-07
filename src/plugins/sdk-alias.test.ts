@@ -1370,6 +1370,39 @@ describe("plugin sdk alias helpers", () => {
     expectWorkspaceAliasTargets(aliases, workspaceAliases, "expectedDistFile");
   });
 
+  it.each(["src", "dist"] as const)(
+    "loads gateway error details through Jiti from %s workspace artifacts",
+    async (resolution) => {
+      const fixture = createPluginSdkAliasFixture();
+      const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
+        ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
+        [
+          "@openclaw/gateway-protocol/gateway-error-details",
+          "gateway-protocol",
+          "gateway-error-details",
+        ],
+      ]);
+      const details = expectDefined(workspaceAliases[1], "gateway error details fixture");
+      fs.writeFileSync(details.srcFile, 'export const fallback = "source fallback";\n');
+      fs.writeFileSync(details.distFile, 'export const fallback = "built fallback";\n');
+      const entry = writePluginEntry(fixture.root, bundledPluginFile("demo", "index.ts"));
+      fs.writeFileSync(
+        entry,
+        'export { fallback } from "@openclaw/gateway-protocol/gateway-error-details";\n',
+      );
+      const aliases = buildPluginLoaderAliasMap(entry, undefined, undefined, resolution);
+      const createJiti = await getCreateJiti();
+      const loader = createJiti(entry, {
+        ...buildPluginLoaderJitiOptions(aliases),
+        tryNative: false,
+      });
+
+      expect(loader(entry)).toMatchObject({
+        fallback: resolution === "src" ? "source fallback" : "built fallback",
+      });
+    },
+  );
+
   it("derives workspace aliases from packaged root dist when package metadata is absent", () => {
     const fixture = createPluginSdkAliasFixture();
     const sourcePluginEntry = writePluginEntry(
