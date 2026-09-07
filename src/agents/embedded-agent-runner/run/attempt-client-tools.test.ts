@@ -599,4 +599,36 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["plugin_probe"]);
     expect(result.sideEffectToolOwners).toEqual(new Map());
   });
+
+  it("resolves loopDetection guard keys into the client tool context", () => {
+    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
+    const attemptConfig: OpenClawConfig = {
+      tools: {
+        codeMode: false,
+        toolSearch: false,
+        loopDetection: {
+          enabled: true,
+          turnLimit: 75,
+          maxConsecutiveErrorBatches: 2,
+          maxIdleRepeatCalls: 5,
+        },
+      },
+    };
+
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+    });
+
+    // The same resolved config flows through catalogToolHookContext into the
+    // tool-loop admission and the agent session's runLoop guards.
+    expect(result.clientToolLoopDetection).toEqual({
+      enabled: true,
+      turnLimit: 75,
+      maxConsecutiveErrorBatches: 2,
+      maxIdleRepeatCalls: 5,
+    });
+  });
 });

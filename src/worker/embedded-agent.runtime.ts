@@ -25,12 +25,18 @@ import { ModelRegistry } from "../agents/sessions/model-registry.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import {
+  resolveLoopGuardRuntimeConfig,
+  resolveToolLoopDetectionConfig,
+  type LoopGuardRuntimeConfig,
+} from "../agents/tool-loop-detection-config.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -104,10 +110,42 @@ type RunWorkerEmbeddedTurnParams = {
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
+  /**
+   * Operator-resolved runLoop guard state carried across the process boundary
+   * by the launch descriptor (gateway resolves `tools.loopDetection`). When
+   * omitted, the worker falls back to the sandbox-fixed config resolution,
+   * which carries no `tools.loopDetection` block and therefore keeps every
+   * guard off (pre-guard behavior).
+   */
+  loopGuardConfig?: LoopGuardRuntimeConfig;
   signal?: AbortSignal;
 };
 
 const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
+
+/**
+ * Resolves the effective runLoop guard config for a worker session. The
+ * gateway serializes the operator-resolved state (global + per-agent
+ * overrides, `enabled: false` kill switch) into the launch descriptor; the
+ * worker sandbox runs with a fixed minimal config, so without a serialized
+ * value it falls back to that fixed resolution. Guards are opt-in: the fixed
+ * worker config carries no `tools.loopDetection` block, so the fallback keeps
+ * every guard off (pre-guard behavior) unless the gateway serialized a value.
+ *
+ * Module-internal: only the turn harness consumes it, so an export would be
+ * flagged as dead code by the production Knip scan (test usage is excluded).
+ */
+function resolveWorkerSessionLoopGuardConfig(
+  serialized: LoopGuardRuntimeConfig | undefined,
+): LoopGuardRuntimeConfig {
+  return (
+    serialized ??
+    resolveLoopGuardRuntimeConfig({
+      cfg: WORKER_TOOL_CONFIG,
+      agentId: DEFAULT_AGENT_ID,
+    })
+  );
+}
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
   const resources = params.skillResources
@@ -348,6 +386,14 @@ async function runWorkerEmbeddedTurnWithResources(
         settingsManager,
         resourceLoader,
         withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
+        // Worker sessions are native-owner loops: the gateway resolves the same
+        // loopDetection config used for the tool hook context and serializes the
+        // effective guard state into the launch descriptor, so `enabled: false`
+        // and per-agent/global overrides apply here too (the worker config is
+        // fixed by the sandbox). Omitted serialized state falls back to the
+        // sandbox-fixed resolution (no block configured → every guard off,
+        // pre-guard behavior).
+        loopGuardConfig: resolveWorkerSessionLoopGuardConfig(params.loopGuardConfig),
       });
     } catch (error) {
       turnLifetime.abort();

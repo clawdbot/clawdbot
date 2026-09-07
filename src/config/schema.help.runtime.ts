@@ -404,7 +404,21 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Master switch for loop protection. The runLoop hard cutoffs are opt-in and separate from this switch: each guard (turnLimit, maxConsecutiveErrorBatches, maxIdleRepeatCalls) activates independently when set to a positive integer. Set enabled: true to activate the existing rolling-history detectors (pre-guard behavior) — it does NOT by itself engage the hard cutoffs. Set enabled: false to disable both the rolling-history detectors and any configured runLoop guards.",
+  "tools.loopDetection.turnLimit":
+    "Maximum assistant turns in one runLoop run. Reaching the limit ends the run gracefully with a terminal message instead of another provider request (no extra tokens burned). Activates the turn guard when set to a positive integer. The runaway-loop incident that motivated this guard burned 219 turns; a value of 200 is a reasonable starting point.",
+  "tools.loopDetection.maxConsecutiveErrorBatches":
+    "Maximum consecutive tool batches in which every call errored. Reaching the limit ends the run gracefully; any successful result resets the streak. Activates the error-batch guard when set to a positive integer. A value of 3 is a reasonable starting point.",
+  "tools.loopDetection.maxIdleRepeatCalls":
+    "Maximum consecutive tool calls with the same name and identical arguments. Reaching the limit ends the run gracefully even when results succeed (catches errors hidden inside successful output). Activates the idle-repeat guard when set to a positive integer. A value of 3 is a reasonable starting point.",
+  "agents.entries.*.tools.loopDetection.enabled":
+    "Per-agent override for the loop protection master switch. When false, both the rolling-history detectors and the runLoop guards are disabled for this agent only; the top-level setting still applies to every other agent. When unset, the agent inherits the top-level value.",
+  "agents.entries.*.tools.loopDetection.turnLimit":
+    "Per-agent override for the maximum assistant turns in one runLoop run. When unset, the agent inherits the top-level tools.loopDetection.turnLimit.",
+  "agents.entries.*.tools.loopDetection.maxConsecutiveErrorBatches":
+    "Per-agent override for the maximum consecutive tool batches in which every call errored. When unset, the agent inherits the top-level tools.loopDetection.maxConsecutiveErrorBatches.",
+  "agents.entries.*.tools.loopDetection.maxIdleRepeatCalls":
+    "Per-agent override for the maximum consecutive tool calls with the same name and identical arguments. When unset, the agent inherits the top-level tools.loopDetection.maxIdleRepeatCalls.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

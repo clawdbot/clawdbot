@@ -7,6 +7,7 @@ import type {
   ToolResultMessage,
   EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
+import { stableStringify } from "@openclaw/normalization-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -65,6 +66,12 @@ const TOOL_ADMISSION_FAILURE_DETAILS = {
   status: "blocked",
   deniedReason: "tool-admission",
 } as const;
+const LOOP_GUARD_MAX_TURNS_MESSAGE = (limit: number) =>
+  `OpenClaw stopped this run because it reached the configured maximum of ${limit} assistant turns (maxTurns).`;
+const LOOP_GUARD_MAX_ERROR_BATCHES_MESSAGE = (limit: number) =>
+  `OpenClaw stopped this run because ${limit} consecutive tool batches in a row ended in errors (maxConsecutiveErrorBatches).`;
+const LOOP_GUARD_MAX_IDLE_REPEATS_MESSAGE = (limit: number) =>
+  `OpenClaw stopped this run because the same tool was called with identical arguments ${limit} times in a row without progress (maxIdleRepeatCalls).`;
 
 function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
@@ -248,6 +255,16 @@ async function runLoop(
   const toolLoopRecoveryState = initialConfig.toolLoopRecoveryState ?? {
     criticalToolLoopSeen: false,
   };
+  // Run-scoped loop-guard state. Each guard is optional (undefined = disabled)
+  // and scoped to this single loop run: continuations and new prompt runs
+  // restart the counters (same scope as toolLoopRecoveryState).
+  let turnCount = 0;
+  let consecutiveErrorBatches = 0;
+  // Per-signature consecutive-repeat counts for the idle-repeat guard. A
+  // signature's streak only survives turns in which it actually appears, so
+  // alternating parallel batches [A,B],[A,B],[A,B] build each signature's
+  // count to 3 instead of resetting on every alternation.
+  const idleRepeatCounts = new Map<string, number>();
   // Check for steering messages at start (user may have typed while waiting)
   const initialSteering = getSteeringAtCheckpoint(config);
   let pendingMessages: AgentMessage[] = Array.isArray(initialSteering)
@@ -283,6 +300,171 @@ async function runLoop(
     return true;
   };
 
+  // Guards and tool-loop recovery are hard cutoffs that take precedence over
+  // queued steering. getSteeringMessages is an exported callback that drains
+  // its source destructively: messages polled into pendingMessages are already
+  // removed from the source. Only Agent supplies requeueSteeringMessages, so
+  // direct agentLoop/runAgentLoop callers would otherwise lose that input.
+  // Preserve it: requeue for the next run when a sink exists, otherwise emit
+  // the drained messages into this run's terminal sequence (before the
+  // terminal message) so the run's result carries them instead of dropping
+  // them silently.
+  const preserveDrainedSteering = async (): Promise<void> => {
+    if (pendingMessages.length === 0) {
+      return;
+    }
+    if (config.requeueSteeringMessages) {
+      config.requeueSteeringMessages(pendingMessages);
+      pendingMessages = [];
+      return;
+    }
+    const drained = pendingMessages;
+    pendingMessages = [];
+    if (!turnOpen) {
+      await emit({ type: "turn_start" });
+      turnOpen = true;
+    }
+    for (const message of drained) {
+      if (message.role === "user") {
+        turnTainted = false;
+      }
+      await emit({ type: "message_start", message });
+      await emit({ type: "message_end", message });
+      state.context.messages.push(message);
+      newMessages.push(message);
+    }
+  };
+
+  // Emits a terminal "guard stopped this run" message (same event ceremony as
+  // the tool-loop recovery termination) and ends the run without throwing.
+  const emitLoopGuardTermination = async (text: string): Promise<void> => {
+    // Guards are hard cutoffs that take precedence over queued input:
+    // requeue drained steering for the next run (Agent path) or preserve it
+    // in this run's terminal sequence (direct loop callers).
+    await preserveDrainedSteering();
+    const terminalMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: config.model.api,
+      provider: config.model.provider,
+      model: config.model.id,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    state.context.messages.push(terminalMessage);
+    newMessages.push(terminalMessage);
+    if (!turnOpen) {
+      await emit({ type: "turn_start" });
+      turnOpen = true;
+    }
+    await emit({ type: "message_start", message: terminalMessage });
+    await emit({ type: "message_end", message: terminalMessage });
+    await emit({ type: "turn_end", message: terminalMessage, toolResults: [] });
+    turnOpen = false;
+    await emit({ type: "agent_end", messages: newMessages });
+  };
+
+  // Advances the consecutive-error-batch and idle-repeat counters for the turn
+  // that just completed and returns the guard stop text when a threshold is
+  // reached. Both state machines are run-scoped and reset on a new run.
+  const updateLoopGuardState = (
+    message: AssistantMessage,
+    executedToolBatch: ExecutedToolCallBatch | undefined,
+  ): string | undefined => {
+    if (
+      config.maxConsecutiveErrorBatches !== undefined ||
+      config.maxIdleRepeatCalls !== undefined
+    ) {
+      const batchAllError = executedToolBatch !== undefined && executedToolBatch.allError;
+      if (batchAllError) {
+        consecutiveErrorBatches += 1;
+      } else {
+        // A turn with at least one non-error result or no tool calls at all
+        // breaks the streak.
+        consecutiveErrorBatches = 0;
+      }
+      if (
+        config.maxConsecutiveErrorBatches !== undefined &&
+        consecutiveErrorBatches >= config.maxConsecutiveErrorBatches
+      ) {
+        return LOOP_GUARD_MAX_ERROR_BATCHES_MESSAGE(config.maxConsecutiveErrorBatches);
+      }
+      // Idle repeats count per *observed* model decision: multiple identical
+      // calls inside one assistant message were prepared/executed concurrently
+      // with no result or model retry interval in between, so they count as a
+      // single occurrence. Only a signature repeating across turns (each a
+      // provider round trip) builds the streak, matching the "429 hidden in a
+      // successful output" disease: the model re-issues the same call after
+      // seeing the same result each time.
+      //
+      // Steering-skipped calls never executed: they produced no result, so
+      // they cannot be "idle repeats" in the disease sense. Including them
+      // would let three steering interruptions of the same call falsely
+      // terminate the run. Build a set of skipped toolCallIds from the
+      // finalized batch and exclude them from idle-repeat accounting,
+      // mirroring how allErrorOfBatch excludes them from error-batch counting.
+      const skippedToolCallIds = new Set<string>();
+      if (executedToolBatch !== undefined) {
+        for (const resultMessage of executedToolBatch.messages) {
+          const details = resultMessage.details;
+          if (
+            typeof details === "object" &&
+            details !== null &&
+            "status" in details &&
+            "deniedReason" in details &&
+            details.status === "skipped" &&
+            details.deniedReason === "steering"
+          ) {
+            skippedToolCallIds.add(resultMessage.toolCallId);
+          }
+        }
+      }
+      const seenSignatures = new Set<string>();
+      for (const toolCall of message.content) {
+        if (toolCall.type !== "toolCall") {
+          continue;
+        }
+        if (skippedToolCallIds.has(toolCall.id)) {
+          continue;
+        }
+        const signature = stableStringify({ name: toolCall.name, args: toolCall.arguments });
+        if (seenSignatures.has(signature)) {
+          continue;
+        }
+        seenSignatures.add(signature);
+        // Each signature tracks its own consecutive streak across turns.
+        // A batch that alternates signatures (e.g. [A,B] then [A,B] again)
+        // still advances both streaks instead of resetting on each switch.
+        const count = (idleRepeatCounts.get(signature) ?? 0) + 1;
+        idleRepeatCounts.set(signature, count);
+        if (config.maxIdleRepeatCalls !== undefined && count >= config.maxIdleRepeatCalls) {
+          return LOOP_GUARD_MAX_IDLE_REPEATS_MESSAGE(config.maxIdleRepeatCalls);
+        }
+      }
+      // A signature that did not appear this turn had its consecutive streak
+      // broken; drop it so a stale count cannot accumulate across gaps.
+      // Map iteration tolerates deleting entries mid-loop. A turn with no
+      // tool calls at all neither extends nor resets any streak (the model
+      // made no repeat decision), so keep the map untouched in that case.
+      if (seenSignatures.size > 0) {
+        for (const signature of idleRepeatCounts.keys()) {
+          if (!seenSignatures.has(signature)) {
+            idleRepeatCounts.delete(signature);
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
     let hasMoreToolCalls = true;
@@ -290,6 +472,14 @@ async function runLoop(
     // Inner loop: process tool calls and steering messages
     while (hasMoreToolCalls || pendingMessages.length > 0) {
       if (await stopIfAborted()) {
+        return newMessages;
+      }
+
+      // maxTurns is a hard cutoff checked right before another provider
+      // request would start, so a turn that stops naturally (no tool calls,
+      // no queued messages) ends cleanly without a guard message.
+      if (config.maxTurns !== undefined && turnCount >= config.maxTurns) {
+        await emitLoopGuardTermination(LOOP_GUARD_MAX_TURNS_MESSAGE(config.maxTurns));
         return newMessages;
       }
 
@@ -370,6 +560,7 @@ async function runLoop(
         runtime,
       );
       const { message } = streamed;
+      turnCount += 1;
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         await emit({
@@ -411,6 +602,7 @@ async function runLoop(
             terminateRun: batches.some((batch) => batch.terminateRun),
             intervention: batches.find((batch) => batch.intervention)?.intervention,
             fatal: batches.find((batch) => batch.fatal)?.fatal,
+            allError: batches.every((batch) => batch.allError),
           }
         : undefined;
       const toolResults = executedToolBatch?.messages ?? [];
@@ -436,6 +628,10 @@ async function runLoop(
         return newMessages;
       }
       if (executedToolBatch?.terminateRun) {
+        // The tool batch that requested termination may have drained steering
+        // into pendingMessages; preserve it (requeue or terminal sequence)
+        // instead of dropping it, matching the guard termination path.
+        await preserveDrainedSteering();
         const terminalMessage = {
           ...createFailureMessage(
             config.model,
@@ -446,13 +642,27 @@ async function runLoop(
         };
         state.context.messages.push(terminalMessage);
         newMessages.push(terminalMessage);
-        await emit({ type: "turn_start" });
-        turnOpen = true;
+        if (!turnOpen) {
+          await emit({ type: "turn_start" });
+          turnOpen = true;
+        }
         await emit({ type: "message_start", message: terminalMessage });
         await emit({ type: "message_end", message: terminalMessage });
         await emit({ type: "turn_end", message: terminalMessage, toolResults: [] });
         turnOpen = false;
         await emit({ type: "agent_end", messages: newMessages });
+        return newMessages;
+      }
+
+      // Run-loop guards: graceful safety cutoffs for runaway loops. They fire
+      // after the current turn fully completes (turn_end already emitted) and
+      // terminate with a terminal message + agent_end instead of throwing, so
+      // no provider tokens are burned on the stop. They are hard cutoffs: they
+      // take precedence over queued steering/follow-up messages (which remain
+      // queued for the next run) because their purpose is bounding the run.
+      const loopGuardStopText = updateLoopGuardState(message, executedToolBatch);
+      if (loopGuardStopText !== undefined) {
+        await emitLoopGuardTermination(loopGuardStopText);
         return newMessages;
       }
 
@@ -801,6 +1011,7 @@ async function executeToolCallGroups(
     terminate: shouldTerminateToolBatch(finalizedCalls),
     terminateRun: false,
     ...(fatal ? { fatal } : {}),
+    allError: allErrorOfBatch(finalizedCalls),
   };
 }
 
@@ -980,6 +1191,36 @@ function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): b
   return (
     finalizedCalls.length > 0 &&
     finalizedCalls.every((finalized) => finalized.result.terminate === true)
+  );
+}
+
+// Steering interruptions complete the unstarted tail as synthetic error results
+// so committed tool calls stay paired. Those are not tool failures: a batch
+// whose calls were all steered away must not count toward the consecutive
+// error-batch guard, or three interruptions in a row would misreport the run
+// as "ended in errors". Real executions in the same batch still count.
+function isSteeringSkippedFinalized(finalized: FinalizedToolCallOutcome): boolean {
+  const details = finalized.result.details;
+  if (typeof details !== "object" || details === null) {
+    return false;
+  }
+  // Steering interruptions complete the unstarted tail as synthetic error
+  // results produced by createErrorToolResult with `deniedReason: "steering"`;
+  // the `in` checks narrow the read to that marker without casting.
+  return (
+    "status" in details &&
+    "deniedReason" in details &&
+    details.status === "skipped" &&
+    details.deniedReason === "steering"
+  );
+}
+
+function allErrorOfBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
+  const errorRelevantCalls = finalizedCalls.filter(
+    (finalized) => !isSteeringSkippedFinalized(finalized),
+  );
+  return (
+    errorRelevantCalls.length > 0 && errorRelevantCalls.every((finalized) => finalized.isError)
   );
 }
 
@@ -1498,6 +1739,7 @@ async function completeToolLoopInterventionBatch(
     terminate: params.terminal || shouldTerminateToolBatch(finalizedCalls),
     terminateRun: params.terminal,
     intervention: params.intervention,
+    allError: finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.isError),
   };
 }
 

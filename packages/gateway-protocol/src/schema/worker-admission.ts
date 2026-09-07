@@ -49,6 +49,15 @@ export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
+export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
+/**
+ * Advertised by worker bundles built from the loop-guard launch contract:
+ * the gateway may serialize the operator-resolved runLoop guard state as the
+ * `loopGuardConfig` assignment field. Bundles without this feature reject
+ * unknown launch fields, so the gateway must omit the field until the
+ * environment is reprovisioned with a bundle that advertises it.
+ */
+export const WORKER_LOOP_GUARD_PROTOCOL_FEATURE = "worker-loop-guard-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "skill-resources-v1",
   "worker-skill-workshop-v1",
@@ -61,6 +70,11 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
+  // Loop-guard is an additive capability advertised by new worker builds.
+  // The launcher fences guard-enabled turns when the capability is absent;
+  // configless and enabled:false turns still run on bundles without it.
+  WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;

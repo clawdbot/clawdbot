@@ -30,6 +30,14 @@ export class WorkerTurnExecutionError extends Error {}
 // Journal-terminal launches get a short cleanup grace before failure is surfaced.
 // This never limits a live launch or a turn still holding its claim.
 const TERMINAL_WORKER_CLEANUP_GRACE_MS = 30_000;
+/**
+ * Thrown when an attached worker bundle lacks a launch capability the current
+ * gateway build requires (execution-context carrier or loop-guard wire
+ * contract). The bundle cannot serve this or any later turn, so the placement
+ * must be failed (drained → reconciled → failed) rather than left active:
+ * leaving it active keeps re-selecting the unusable worker on every turn.
+ */
+export class WorkerCapabilityFenceError extends Error {}
 
 function workerTurnRecoveryError(error: unknown): string {
   const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })

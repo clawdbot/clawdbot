@@ -5,6 +5,10 @@ import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protoco
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  type LoopGuardRuntimeConfig,
+  resolveLoopGuardRuntimeConfig,
+} from "../../agents/tool-loop-detection-config.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import {
@@ -20,6 +24,7 @@ import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
   supportsWorkerExecutionContextLaunch,
+  supportsWorkerLoopGuardLaunch,
 } from "./admission.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
@@ -27,6 +32,7 @@ import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { registerWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
+  WorkerCapabilityFenceError,
   WorkerTurnExecutionError,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
@@ -47,6 +53,14 @@ import {
   reconcileWorkspaceAfterTurn,
   recoverWorkspaceBeforeTurn,
 } from "./workspace-result-finalize.js";
+
+function isLoopGuardRuntimeConfigEnabled(config: LoopGuardRuntimeConfig): boolean {
+  return (
+    config.maxTurns !== undefined ||
+    config.maxConsecutiveErrorBatches !== undefined ||
+    config.maxIdleRepeatCalls !== undefined
+  );
+}
 
 export async function executeWorkerTurn(
   params: Omit<Parameters<typeof executeRemoteExecTurn>[0], "environments" | "runLocal"> & {
@@ -77,6 +91,18 @@ export async function executeWorkerTurn(
   if (!supportsWorkerExecutionContextLaunch(bootstrapReceipt)) {
     throw new Error(
       "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
+    );
+  }
+  const loopGuardConfig = resolveLoopGuardRuntimeConfig({
+    cfg: turn.config,
+    agentId: placement.agentId,
+  });
+  if (
+    isLoopGuardRuntimeConfigEnabled(loopGuardConfig) &&
+    !supportsWorkerLoopGuardLaunch(bootstrapReceipt)
+  ) {
+    throw new WorkerCapabilityFenceError(
+      "Active worker bundle lacks the loop-guard capability; reprovision the worker before launch",
     );
   }
   await recoverWorkspaceBeforeTurn(params);
@@ -337,6 +363,7 @@ export async function executeWorkerTurn(
                   workerContainmentRoot: placement.remoteWorkspaceDir,
                 }
               : {}),
+            ...(isLoopGuardRuntimeConfigEnabled(loopGuardConfig) ? { loopGuardConfig } : {}),
             modelRef,
             inferenceOptions: reasoning ? { reasoning } : {},
             ...(turn.extraSystemPrompt === undefined

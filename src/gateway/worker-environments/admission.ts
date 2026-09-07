@@ -4,6 +4,7 @@ import {
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -36,6 +37,18 @@ export function supportsWorkerExecutionContextLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
 ): boolean {
   return handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true;
+}
+
+/**
+ * True only for bundles that understand the serialized runLoop guard state.
+ * The loop-guard launch feature is an upgrade boundary like the execution
+ * carrier: bundles without it must be reprovisioned rather than launched in
+ * the pre-guard execution mode.
+ */
+export function supportsWorkerLoopGuardLaunch(
+  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
+): boolean {
+  return handshake?.protocolFeatures.includes(WORKER_LOOP_GUARD_PROTOCOL_FEATURE) === true;
 }
 
 type WorkerConnectionAdmissionResult =

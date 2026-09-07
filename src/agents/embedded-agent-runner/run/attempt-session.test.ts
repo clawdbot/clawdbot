@@ -352,6 +352,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(sessionCall?.[1]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
+      loopGuardConfig: {
+        maxTurns: undefined,
+        maxConsecutiveErrorBatches: undefined,
+        maxIdleRepeatCalls: undefined,
+      },
     });
     expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
@@ -459,6 +464,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[1]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
+      loopGuardConfig: {
+        maxTurns: undefined,
+        maxConsecutiveErrorBatches: undefined,
+        maxIdleRepeatCalls: undefined,
+      },
     });
   });
 
@@ -476,5 +486,54 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "publish-session",
       "activate-tools",
     ]);
+  });
+
+  it("passes per-key loopDetection overrides through to the agent session", async () => {
+    const fixture = createInput();
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      config: {
+        tools: {
+          loopDetection: {
+            enabled: true,
+            turnLimit: 50,
+            maxConsecutiveErrorBatches: 2,
+            maxIdleRepeatCalls: 4,
+          },
+        },
+      },
+    };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+      beforeToolBatch: undefined,
+      contextOverflowRecoveryOwner: "caller",
+      loopGuardConfig: { maxTurns: 50, maxConsecutiveErrorBatches: 2, maxIdleRepeatCalls: 4 },
+    });
+  });
+
+  it("disables all runLoop guards when tools.loopDetection.enabled is false", async () => {
+    const fixture = createInput();
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      config: {
+        tools: {
+          loopDetection: { enabled: false },
+        },
+      },
+    };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+      beforeToolBatch: undefined,
+      contextOverflowRecoveryOwner: "caller",
+      loopGuardConfig: {
+        maxTurns: undefined,
+        maxConsecutiveErrorBatches: undefined,
+        maxIdleRepeatCalls: undefined,
+      },
+    });
   });
 });

@@ -8,6 +8,7 @@ import {
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import type { LoopGuardRuntimeConfig } from "../agents/tool-loop-detection-config.js";
 import type { WorkerGitHubLaunchBinding, WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
@@ -551,5 +552,144 @@ describe("worker launch descriptor", () => {
     expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
       "invalid worker launch descriptor",
     );
+  });
+
+  it("round-trips an operator-serialized loopGuardConfig on the assignment", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.loopGuardConfig = {
+      maxTurns: 50,
+      maxConsecutiveErrorBatches: 3,
+      maxIdleRepeatCalls: 5,
+    };
+
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    // A fully-disabled (opt-out) state serializes as all-undefined values.
+    const disabled = launchDescriptor();
+    disabled.assignment.loopGuardConfig = {
+      maxTurns: undefined,
+      maxConsecutiveErrorBatches: undefined,
+      maxIdleRepeatCalls: undefined,
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(disabled))).toEqual(disabled);
+  });
+
+  it("round-trips a JSON-serialized loopGuardConfig exactly as it arrives on the wire", () => {
+    // JSON.stringify drops `undefined` values, so the gateway-side object
+    // shapes must survive the wire: full, partial, and fully-disabled `{}`.
+    const cases: Array<{
+      in: LoopGuardRuntimeConfig;
+      onTheWire: Record<string, unknown>;
+    }> = [
+      {
+        in: { maxTurns: 50, maxConsecutiveErrorBatches: 3, maxIdleRepeatCalls: 5 },
+        onTheWire: { maxTurns: 50, maxConsecutiveErrorBatches: 3, maxIdleRepeatCalls: 5 },
+      },
+      {
+        // enabled: false resolves to all-undefined on the gateway; JSON drops
+        // every key and the worker sees `{}`.
+        in: {
+          maxTurns: undefined,
+          maxConsecutiveErrorBatches: undefined,
+          maxIdleRepeatCalls: undefined,
+        },
+        onTheWire: {},
+      },
+      {
+        // A partial override arrives with only its set keys; the missing
+        // guards stay disabled.
+        in: { maxTurns: 50, maxConsecutiveErrorBatches: undefined, maxIdleRepeatCalls: undefined },
+        onTheWire: { maxTurns: 50 },
+      },
+    ];
+
+    for (const { in: input, onTheWire } of cases) {
+      const descriptor = launchDescriptor();
+      descriptor.assignment.loopGuardConfig = input;
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON.stringify drops `undefined` keys, which is exactly the disabled-state wire shape under test.
+      const wire = JSON.parse(JSON.stringify(structuredClone(descriptor)));
+      expect(wire.assignment.loopGuardConfig).toEqual(onTheWire);
+
+      const parsed = parseWorkerLaunchDescriptor(wire);
+      expect(parsed.assignment.loopGuardConfig).toEqual(input);
+    }
+  });
+
+  it("rejects a malformed loopGuardConfig on the assignment", () => {
+    const descriptor = launchDescriptor();
+    const cases: unknown[] = [
+      {
+        ...descriptor,
+        assignment: { ...descriptor.assignment, loopGuardConfig: { maxTurns: -1 } },
+      },
+      {
+        // Zero values are rejected on the wire: the public config schema only
+        // allows positive integers, and a `maxTurns: 0` would silently
+        // terminate the loop before the first provider request.
+        ...descriptor,
+        assignment: { ...descriptor.assignment, loopGuardConfig: { maxTurns: 0 } },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: { maxConsecutiveErrorBatches: 0 },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: { maxIdleRepeatCalls: 0 },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: {
+            maxTurns: 0,
+            maxConsecutiveErrorBatches: 0,
+            maxIdleRepeatCalls: 0,
+          },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: { maxTurns: 1.5, maxConsecutiveErrorBatches: 3, maxIdleRepeatCalls: 3 },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: {
+            maxTurns: "200",
+            maxConsecutiveErrorBatches: 3,
+            maxIdleRepeatCalls: 3,
+          },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          loopGuardConfig: {
+            maxTurns: 50,
+            maxConsecutiveErrorBatches: 3,
+            maxIdleRepeatCalls: 3,
+            unexpected: true,
+          },
+        },
+      },
+    ];
+
+    for (const candidate of cases) {
+      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
   });
 });
