@@ -92,14 +92,7 @@ export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
 }
 
-export async function removePackageUpdatePath(targetPath: string): Promise<boolean> {
-  try {
-    await removePath(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
 export async function swapStagedPackageInstall(params: {
   stage: StagedPackageInstall;
@@ -185,6 +178,7 @@ export async function swapStagedPackageInstall(params: {
       originalRoot: targetSwapRoot,
       previous: previousTree ?? null,
       allowAbsentRoot: fromBackup,
+      phase: fromBackup ? "retained" : "restored",
       timeoutMs: params.timeoutMs,
       launchers: shims.map((shim) => ({
         path: fromBackup ? shim.backup : shim.destination,
@@ -291,7 +285,7 @@ export async function swapStagedPackageInstall(params: {
     }
     return messages;
   };
-  try {
+  const prepareBaseline = async () => {
     if (params.recovery && params.prepareRecovery) {
       throw new Error("Package recovery may be supplied or prepared, never both");
     }
@@ -415,6 +409,9 @@ export async function swapStagedPackageInstall(params: {
       // Persist the exact descriptor before service preparation or package mutation.
       await recoveryTransaction.prepare();
     }
+  };
+  try {
+    await (native ? prepareBaseline() : baseline.observe("baseline", prepareBaseline));
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native

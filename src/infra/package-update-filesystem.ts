@@ -169,3 +169,12 @@ export async function discardPackageUpdateBackup(
     }
   }
 }
+
+export async function removePackageUpdatePath(targetPath: string): Promise<boolean> {
+  try {
+    await removePackagePath(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}

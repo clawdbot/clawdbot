@@ -587,6 +587,7 @@ export function createPackageRecoveryTransaction(
           root: descriptor.liveRoot,
           originalRoot: descriptor.liveRoot,
           previous: descriptor.previous,
+          phase: "restored",
           launchers: descriptor.launchers.map((entry) => ({
             path: launcherPath(entry.name),
             fingerprint: entry.previous,

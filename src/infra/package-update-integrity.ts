@@ -3,6 +3,7 @@ import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
@@ -12,6 +13,8 @@ const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
 const MAX_SCAN_MS = 30_000;
+const log = createSubsystemLogger("update/package-integrity");
+let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 
@@ -29,24 +32,29 @@ export async function verifyPackageRecoveryMaterial(params: {
   launchers: Array<{ path: string | null; fingerprint: string | null }>;
   allowAbsentRoot?: boolean;
   timeoutMs?: number;
+  phase?: "retained" | "restored";
 }): Promise<void> {
   const reader = createPackageIntegrityReader(params.timeoutMs);
-  if (params.previous) {
-    if (!isDeepStrictEqual(await reader.tree(params.root, params.originalRoot), params.previous)) {
+  await reader.observe(params.phase ?? "retained", async () => {
+    if (params.previous) {
+      if (
+        !isDeepStrictEqual(await reader.tree(params.root, params.originalRoot), params.previous)
+      ) {
+        throw new Error("Package rollback verification failed: retained package tree changed");
+      }
+    } else if (!params.allowAbsentRoot && (await reader.exists(params.root))) {
       throw new Error("Package rollback verification failed: retained package tree changed");
     }
-  } else if (!params.allowAbsentRoot && (await reader.exists(params.root))) {
-    throw new Error("Package rollback verification failed: retained package tree changed");
-  }
-  for (const launcher of params.launchers) {
-    if (
-      launcher.fingerprint !== null
-        ? !launcher.path || (await reader.launcher(launcher.path)) !== launcher.fingerprint
-        : launcher.path && (await reader.exists(launcher.path))
-    ) {
-      throw new Error(`Package rollback verification failed: launcher ${launcher.path} changed`);
+    for (const launcher of params.launchers) {
+      if (
+        launcher.fingerprint !== null
+          ? !launcher.path || (await reader.launcher(launcher.path)) !== launcher.fingerprint
+          : launcher.path && (await reader.exists(launcher.path))
+      ) {
+        throw new Error(`Package rollback verification failed: launcher ${launcher.path} changed`);
+      }
     }
-  }
+  });
 }
 
 function identity(stat: BigIntStats): string {
@@ -72,19 +80,76 @@ function unchanged(left: BigIntStats, right: BigIntStats): boolean {
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
 export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
+  const startedAtMonotonicMs = performance.now();
   const budget = Number.isFinite(timeoutMs)
     ? Math.min(MAX_SCAN_MS, Math.max(1, timeoutMs))
     : MAX_SCAN_MS;
   const deadline = Date.now() + budget;
+  const timing = {
+    readerId: `${process.pid}:${++readerSequence}`,
+    timeOriginUnixMs: performance.timeOrigin,
+    startedAtMonotonicMs,
+    budgetMs: budget,
+    deadlineClock: "wall",
+    deadlineAtUnixMs: deadline,
+  };
+  let timeoutObservedAtMonotonicMs: number | undefined;
+  let pendingIo = 0;
+
+  async function trackIo<T>(operation: () => Promise<T>): Promise<T> {
+    pendingIo++;
+    try {
+      return await operation();
+    } finally {
+      pendingIo--;
+    }
+  }
+
+  async function observe<T>(
+    phase: "baseline" | "retained" | "restored",
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const emit = (event: string, facts?: Record<string, unknown>) => {
+      try {
+        log.debug(event, { ...timing, phase, event, ...facts });
+      } catch {
+        // A diagnostics sink must not replace the package result or primary error.
+      }
+    };
+    emit("reader-started");
+    let outcome = "failed";
+    try {
+      const result = await operation();
+      outcome = "completed";
+      return result;
+    } finally {
+      // Observe the completed scope, including its awaited cleanup, not merely
+      // the timeout notification. Uncancelable OS work can still be pending.
+      const settledAtMonotonicMs = performance.now();
+      emit("reader-settled", {
+        settledAtMonotonicMs,
+        elapsedMs: settledAtMonotonicMs - startedAtMonotonicMs,
+        outcome: timeoutObservedAtMonotonicMs === undefined ? outcome : "timed-out",
+        timeoutObservedAtMonotonicMs,
+        pendingIo,
+      });
+    }
+  }
 
   async function read<T>(operation: () => Promise<T>, closeLate?: (value: T) => Promise<void>) {
     let pending: Promise<T> | undefined;
-    const value = await awaitWithinDeadline(() => (pending = operation()), deadline);
+    const value = await awaitWithinDeadline(() => (pending = trackIo(operation)), deadline);
     if (value === ABSOLUTE_DEADLINE_EXPIRED) {
+      timeoutObservedAtMonotonicMs ??= performance.now();
       // An OS read cannot always be canceled. Close late descriptors and never
       // continue the walk after returning a timeout to the swap owner.
       if (pending && closeLate) {
-        void pending.then(closeLate, () => {}).catch(() => {});
+        void pending
+          .then(
+            (late) => trackIo(() => closeLate(late)),
+            () => {},
+          )
+          .catch(() => {});
       }
       throw new Error("Package rollback verification timed out");
     }
@@ -92,8 +157,10 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function close(resource: { close: () => Promise<void> }) {
-    const closing = resource.close().catch(() => {});
-    await awaitWithinDeadline(() => closing, deadline);
+    const closing = trackIo(() => resource.close()).catch(() => {});
+    if ((await awaitWithinDeadline(() => closing, deadline)) === ABSOLUTE_DEADLINE_EXPIRED) {
+      timeoutObservedAtMonotonicMs ??= performance.now();
+    }
   }
 
   async function entries(directoryPath: string, limit = MAX_TREE_ENTRIES): Promise<string[]> {
@@ -287,5 +354,5 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     return identity(stat);
   }
 
-  return { tree, launcher, exists, entries, directoryIdentity };
+  return { tree, launcher, exists, entries, directoryIdentity, observe };
 }

@@ -254,8 +254,8 @@ describe("Crabbox project snapshot provisioning", () => {
       await provider.provision(profile, "project-second", current.options);
       expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
       expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
-      // Pending images need verification before the fork; a successful fork already attests reuse.
-      expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(1);
+      // Waited capture already established readiness; reuse does not repeat the inspection.
+      expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(0);
       expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
       expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
       // A cache hit does not restart the machine; only allocation needs provider readiness.
