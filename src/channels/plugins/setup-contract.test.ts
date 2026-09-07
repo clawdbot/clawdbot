@@ -15,6 +15,25 @@ describe("defineChannelSetupContract", () => {
     expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
+  it("forwards the promotion declarations from the adapter", () => {
+    const setupContract = defineChannelSetupContract({
+      fields: {},
+      adapter: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        accountEntryLookup: "case-insensitive",
+        singleAccountKeysToMove: ["account"],
+        namedAccountPromotionKeys: ["account"],
+      },
+    });
+
+    // The wizard and the CLI hand this object to the single-account promotion as its setup surface
+    // (setup-wizard.ts:313, account-config-mutation.ts:145), so a declaration the contract drops
+    // never reaches the writer.
+    expect(setupContract.accountEntryLookup).toBe("case-insensitive");
+    expect(setupContract.singleAccountKeysToMove).toEqual(["account"]);
+    expect(setupContract.namedAccountPromotionKeys).toEqual(["account"]);
+  });
+
   it("requires field keys to match camelCased long flag names", () => {
     expect(() =>
       defineChannelSetupContract({

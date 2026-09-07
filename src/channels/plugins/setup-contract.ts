@@ -151,6 +151,7 @@ export type ChannelOwnedSetupContract = {
     accountId: string;
     input: unknown;
   }) => string | null;
+  accountEntryLookup?: ChannelSetupAdapter["accountEntryLookup"];
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: ChannelOwnedSetupAdapterShape<{
@@ -339,6 +340,7 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
         }
       : {}),
     configPromotion: adapter.configPromotion,
+    accountEntryLookup: adapter.accountEntryLookup,
     singleAccountKeysToMove: adapter.singleAccountKeysToMove,
     namedAccountPromotionKeys: adapter.namedAccountPromotionKeys,
     resolveSingleAccountPromotionTarget: adapter.resolveSingleAccountPromotionTarget,

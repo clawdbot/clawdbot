@@ -1,10 +1,17 @@
 // Signal tests cover setup adapter integration with account-owned transport policy.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupAdapter,
+  moveSingleAccountChannelSectionToDefaultAccount,
+} from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeCompatibilityConfig } from "../doctor-contract-api.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { createSignalCliPathTextInput, signalSetupAdapter } from "./setup-core.js";
+import {
+  createSignalCliPathTextInput,
+  signalSetupAdapter,
+  signalSetupContract,
+} from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
@@ -56,6 +63,8 @@ function reload(cfg: OpenClawConfig | undefined): OpenClawConfig {
 /**
  * A named add promotes single-account root keys into the map before the adapter writes
  * (src/channels/plugins/account-config-mutation.ts:141-152); calling the adapter alone skips it.
+ * The CLI hands the promotion the setup contract, not the adapter (account-config-mutation.ts:69
+ * and :145), so the contract has to forward Signal's declarations for the writer to see them.
  */
 function addNamedAccount(
   cfg: OpenClawConfig,
@@ -65,7 +74,7 @@ function addNamedAccount(
   const promoted = moveSingleAccountChannelSectionToDefaultAccount({
     cfg,
     channelKey: "signal",
-    setupSurface: signalSetupAdapter,
+    setupSurface: signalSetupContract as ChannelSetupAdapter,
   });
   return signalSetupAdapter.applyAccountConfig?.({ cfg: promoted, accountId, input });
 }
@@ -887,7 +896,7 @@ describe("signalSetupAdapter", () => {
     });
   });
 
-  it("sends a named add to a rename when promotion would write the stranded twin of a selected key", async () => {
+  it("adds a named account when promotion lands on the exact key listed after its stranded twin", () => {
     const cfg: OpenClawConfig = {
       channels: {
         signal: {
@@ -896,31 +905,27 @@ describe("signalSetupAdapter", () => {
         },
       },
     };
-    const renamePointer =
-      'Signal account "default" is stored under channels.signal.accounts "default", "Default.", and setup would write "Default.", which the account lookup does not select. Rename them so one key is "default", then rerun setup.';
+    const authored = structuredClone(cfg);
 
-    // The promotion targets the first key normalizing to "default"
-    // (src/channels/plugins/setup-helpers.ts:325-333), here the stranded alias, so the root number
-    // would land under a key the account lookup does not select while the exact key beside it
-    // keeps winning.
+    // The promotion resolves its key with the lookup Signal declares (accountEntryLookup in
+    // setup-core.ts, applied by resolveExistingAccountKey in src/channels/plugins/setup-helpers.ts),
+    // so the exact key wins however late it is listed and the root number lands where every reader
+    // looks. Before this change the writer took the first key normalizing to "default", the
+    // stranded alias, and this add was refused with a rename pointer. Doctor's collision warning
+    // still reports the pair.
     expect(
       signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),
-    ).toBe(renamePointer);
+    ).toBeNull();
+    const reloaded = reload(addNamedAccount(cfg, "work", externalNativeInput));
+    const accounts = reloaded.channels?.signal?.accounts;
 
-    detectSignalTransportMock.mockRejectedValue(new Error("unreachable"));
-    const bareInput = { httpUrl: "http://127.0.0.1:9299" };
-    const prepared = await signalSetupAdapter.prepareAccountConfigInput?.({
-      cfg,
-      accountId: "work",
-      input: bareInput,
-      runtime: {} as never,
-    });
-
-    expect(detectSignalTransportMock).not.toHaveBeenCalled();
-    expect(prepared).toBe(bareInput);
-    expect(
-      signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: prepared ?? bareInput }),
-    ).toBe(renamePointer);
+    expect(Object.keys(accounts ?? {})).toEqual(["Default.", "default", "work"]);
+    expect(accounts?.default).toEqual({ name: "Canon", account: "+15555550100" });
+    expect(accounts?.["Default."]).toEqual(authored.channels?.signal?.accounts?.["Default."]);
+    expect(reloaded.channels?.signal?.account).toBeUndefined();
+    expect(resolveSignalAccount({ cfg: reloaded, accountId: "default" }).config.account).toBe(
+      "+15555550100",
+    );
   });
 
   it("adds a named account when promotion lands on the selected key beside its stranded twin", () => {

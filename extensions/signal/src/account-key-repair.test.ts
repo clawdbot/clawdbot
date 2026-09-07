@@ -411,6 +411,25 @@ describe("signal account key repair", () => {
     expect(repaired.signal.accounts).toEqual({ "": { name: "Blank" } });
   });
 
+  it("moves a prototype-named key onto default without touching the map's prototype", () => {
+    // The config loader parses `"__proto__"` as an own data property, which an object literal
+    // cannot express, so the fixture is parsed the same way.
+    const accounts = JSON.parse('{"__proto__":{"name":"Proto"}}') as Record<string, unknown>;
+    expect(Object.hasOwn(accounts, "__proto__")).toBe(true);
+    expect(listSignalAccountIds(signalConfig({ accounts }))).toEqual(["default"]);
+
+    const repaired = repairSignal({ accounts });
+    const repairedAccounts = repaired.signal.accounts as Record<string, unknown>;
+
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "__proto__" to its normalized key channels.signal.accounts.default.',
+    ]);
+    expect(Object.getOwnPropertyNames(repairedAccounts)).toEqual(["default"]);
+    expect(Object.getPrototypeOf(repairedAccounts)).toBe(Object.prototype);
+    expect(repairedAccounts.default).toEqual({ name: "Proto" });
+    expect(JSON.stringify(repairedAccounts)).toBe('{"default":{"name":"Proto"}}');
+  });
+
   it.each([
     { shape: "an alias", accounts: { "Work Phone": { name: "Work" } } },
     { shape: "a case variant", accounts: { "Work-Phone": { name: "Work" } } },
@@ -420,6 +439,13 @@ describe("signal account key repair", () => {
       accounts: { "!!!": { name: "Bang" }, "???": { name: "Query" } },
     },
     { shape: "an empty key", accounts: { "": { name: "Blank" } } },
+    { shape: "a whitespace-only key", accounts: { "  ": { name: "Blank" } } },
+    { shape: "a key longer than the id limit", accounts: { ["a".repeat(70)]: { name: "Long" } } },
+    {
+      shape: "a prototype-named key",
+      // An object literal with a `__proto__` key sets the prototype instead of adding a key.
+      accounts: JSON.parse('{"__proto__":{"name":"Proto"}}') as Record<string, unknown>,
+    },
     { shape: "the exact default key", accounts: { default: { name: "Canon" } } },
     { shape: "a default alias", accounts: { "Default.": { name: "Alias" } } },
     {
@@ -441,6 +467,9 @@ describe("signal account key repair", () => {
     const repairedAccounts = repaired.channels?.signal?.accounts ?? {};
     const warnings = listSignalAccountKeyCollisionWarnings(repairedAccounts);
 
+    // The repair rebuilds the map from own keys, so a prototype-named key becomes an own `default`
+    // entry and never a prototype.
+    expect(Object.getPrototypeOf(repairedAccounts)).toBe(Object.prototype);
     // The contract is that a key the list helper surfaces is either selected by the shared account
     // lookup or named in a collision warning, never listed and then read as absent.
     for (const accountId of listSignalAccountIds(repaired)) {

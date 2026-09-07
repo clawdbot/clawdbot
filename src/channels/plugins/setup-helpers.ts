@@ -3,6 +3,7 @@
  *
  * Applies account names and validates setup results for channel onboarding adapters.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
@@ -325,11 +326,27 @@ function moveSingleAccountKeysIntoAccount(params: {
 function resolveExistingAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
+  accountEntryLookup: ChannelSetupAdapter["accountEntryLookup"],
 ): string {
-  return (
-    Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
-    targetAccountId
-  );
+  if (accountEntryLookup !== "case-insensitive") {
+    // The channel's readers select entries with resolveNormalizedAccountEntry
+    // (src/routing/account-lookup.ts:27-51), whose fallback scan takes the first key in map order
+    // whose normalized id is the target, so that key keeps receiving the moved values and an alias
+    // such as accounts["Work.Bot"] never gains a canonical twin that would shadow it.
+    return (
+      Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
+      targetAccountId
+    );
+  }
+  const accountId = normalizeAccountId(targetAccountId);
+  // The channel's readers select entries with resolveAccountEntry (account-lookup.ts:8-23), the
+  // exact key, else the first key in map order whose lowercase is the id, so the promotion lands
+  // on that key and otherwise on the canonical id. A key that only normalizes to the id is left
+  // as authored for doctor.
+  return Object.hasOwn(accounts, accountId)
+    ? accountId
+    : (Object.keys(accounts).find((key) => normalizeLowercaseStringOrEmpty(key) === accountId) ??
+        accountId);
 }
 
 function resolveSingleAccountPromotionTarget(params: {
@@ -390,8 +407,13 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const targetAccountId = hasAccounts
     ? resolveSingleAccountPromotionTarget({ channel: base, setupSurface: params.setupSurface })
     : DEFAULT_ACCOUNT_ID;
-  // Reuse the existing account key spelling so configs like `accounts.Ops` keep their shape.
-  const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
+  // The promotion lands on the key the channel's own account lookup selects, so a plain case
+  // variant such as `accounts.Ops` keeps its spelling under either rule.
+  const resolvedTargetAccountKey = resolveExistingAccountKey(
+    accounts,
+    targetAccountId,
+    params.setupSurface?.accountEntryLookup,
+  );
   return moveSingleAccountKeysIntoAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,

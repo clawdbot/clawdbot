@@ -431,6 +431,9 @@ export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   },
   prepareAccountConfigInput: ({ cfg, accountId, input }) =>
     prepareSignalSetupInput({ cfg, accountId, input }),
+  // The account resolver passes no normalizer to resolveMergedAccountConfig (accounts.ts:58-72), so
+  // it selects entries with the exact-or-case-folded lookup and promotion has to land there.
+  accountEntryLookup: "case-insensitive",
   singleAccountKeysToMove: [
     "signalNumber",
     "account",

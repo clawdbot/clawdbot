@@ -127,10 +127,12 @@ type SignalSetupWrite =
  * generic writers' account-map target set: a name write lands `accountId` alone, and an
  * account-config write also lands `default` for a default display name, plus whatever the
  * promotion a named add runs first creates or changes, with that writer (`promote`) as the oracle
- * for its own target instead of a model of it. The promotion is also the one writer that picks a
- * raw key, so its target is compared with the key the account lookup selects for that id, the
- * shared exact-or-case-folded lookup that the account resolver and the policy readers use, and a
- * promotion into any other key is refused.
+ * for its own target instead of a model of it. The promotion resolves its key with the lookup the
+ * adapter declares (`accountEntryLookup: "case-insensitive"` in setup-core.ts, applied by
+ * `resolveExistingAccountKey` in src/channels/plugins/setup-helpers.ts), the exact key, else the
+ * first case-folded key, else the canonical id, so it can only land on a key the account resolver
+ * selects or on the id itself, and the guard only has to check the state of each id a writer lands
+ * on.
  */
 export function findSignalAccountKeySetupBlock(params: {
   cfg: OpenClawConfig;
@@ -149,28 +151,23 @@ export function findSignalAccountKeySetupBlock(params: {
     namedAccount && params.write.kind === "account-config"
       ? params.write.promote(params.cfg).channels?.signal?.accounts
       : undefined;
-  const promotedWrites = Object.entries(promotedAccounts ?? {})
+  const promotedIds = Object.entries(promotedAccounts ?? {})
     .filter(([key, entry]) => signal?.accounts?.[key] !== entry)
     .flatMap(([key]) => {
       const id = listedAccountIdOf(key);
-      return id ? [{ key, id, promoted: true }] : [];
+      return id ? [id] : [];
     });
   // Default numbers and transports are written at the channel root, so a default entry reaches the
   // map only through a display name (src/channels/plugins/setup-helpers.ts:48-61). The root-name
   // migration a named add runs (:65-86) follows the promotion, which has already moved that name.
   const writesDefaultEntry = !namedAccount && writesName;
-  const writes = [
-    ...promotedWrites,
-    ...(namedAccount && (writesAccountConfig || writesName)
-      ? [{ key: accountId, id: accountId, promoted: false }]
-      : []),
-    ...(writesDefaultEntry
-      ? [{ key: DEFAULT_ACCOUNT_ID, id: DEFAULT_ACCOUNT_ID, promoted: false }]
-      : []),
+  const writtenIds = [
+    ...promotedIds,
+    ...(namedAccount && (writesAccountConfig || writesName) ? [accountId] : []),
+    ...(writesDefaultEntry ? [DEFAULT_ACCOUNT_ID] : []),
   ];
-  const accounts: Record<string, unknown> = signal?.accounts ?? {};
-  const states = assessSignalAccountKeys(accounts);
-  for (const { key, id, promoted } of writes) {
+  const states = assessSignalAccountKeys(signal?.accounts);
+  for (const id of writtenIds) {
     const state = states.get(id);
     const stored = `Signal account "${id}" is stored under channels.signal.accounts`;
     if (state?.kind === "repairable") {
@@ -178,22 +175,6 @@ export function findSignalAccountKeySetupBlock(params: {
     }
     if (state?.kind === "collision") {
       return `${stored} ${quoteAccountKeys(state.keys)}, which doctor cannot choose between. Rename them so one key is "${id}", then rerun setup.`;
-    }
-    // The id-targeted writers land on the id itself. Only the promotion writes a raw key
-    // (setup-helpers.ts:325-333), and the account lookup selects the exact key, otherwise the
-    // first case-folded key in map order (src/routing/account-lookup.ts:8-23). A promotion into
-    // any other key strands the moved settings, and doctor cannot move a key beside a winner, so
-    // rename.
-    const selectedKey = Object.hasOwn(accounts, id)
-      ? id
-      : Object.keys(accounts).find(
-          (candidate) => normalizeLowercaseStringOrEmpty(candidate) === id,
-        );
-    if (promoted && selectedKey !== undefined && key !== selectedKey) {
-      const others = Object.keys(accounts).filter(
-        (candidate) => candidate !== selectedKey && listedAccountIdOf(candidate) === id,
-      );
-      return `${stored} ${quoteAccountKeys([selectedKey, ...others])}, and setup would write "${key}", which the account lookup does not select. Rename them so one key is "${id}", then rerun setup.`;
     }
   }
   return undefined;
