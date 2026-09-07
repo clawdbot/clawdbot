@@ -30,7 +30,8 @@ enum PermissionManager {
     /// `swift build` dev binaries. Every notification-center call must check this
     /// first so unbundled invocations degrade to not-granted instead of crashing.
     static var notificationCenterAvailable: Bool {
-        Bundle.main.bundleIdentifier != nil
+        // Command-line executables can embed an identifier without an app bundle.
+        Bundle.main.bundleURL.pathExtension == "app" && Bundle.main.bundleIdentifier != nil
     }
 
     static func isNotificationAuthorized(status: UNAuthorizationStatus) -> Bool {

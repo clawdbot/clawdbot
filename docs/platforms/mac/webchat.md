@@ -136,6 +136,14 @@ for the intended Gateway. **Settings…** (Cmd-,) opens Dashboard settings;
 Dashboard window. **Connection…** remains native so you can repair connectivity
 without a working Dashboard.
 
+### Download attachments
+
+In an embedded Dashboard, choose an attachment's download action and select a
+destination in the macOS Save dialog. Finder reveals the file after the download
+finishes. Cancelling or failing a download leaves the Dashboard open; an existing
+destination file is replaced only after a successful transfer. Reloading the
+Dashboard, switching its Gateway, or closing its window cancels pending downloads.
+
 ## Quick Chat bar
 
 Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Open **Dashboard → Settings → This Mac → App** to change the global shortcut in a native recorder panel, then choose **Done**.
