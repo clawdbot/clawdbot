@@ -97,6 +97,7 @@ interface SidebarMenusControllerHost
   readonly onRetryConnect?: () => void;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
+  sidebarAgentsMode: "chip" | "roster";
   readonly pinnedAgentIds: readonly string[];
   readonly preferencesBrowserOnly: boolean;
   readonly selectedSessionKeys: ReadonlySet<string>;

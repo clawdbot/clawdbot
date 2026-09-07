@@ -220,13 +220,14 @@ describe("AppSidebar agent chip", () => {
     ).toEqual([
       "agent:main",
       "agent:research",
+      "command:sidebar-agents",
       "command:all-agents",
       "command:new-agent",
       "command:capabilities",
       "command:agent-settings",
     ]);
 
-    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
+    const agentRows = [...(menu?.querySelectorAll(".sidebar-agent-menu__agent-switch") ?? [])];
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
     expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
@@ -238,7 +239,7 @@ describe("AppSidebar agent chip", () => {
     );
     const switchMenu = menu;
     const researchRow = [
-      ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
+      ...(switchMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
     ].find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();
     switchMenu?.dispatchEvent(
@@ -463,7 +464,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it("collapses a single-agent roster to the four agent actions", async () => {
+  it("collapses a single-agent roster to the mode toggle and agent actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -490,6 +491,7 @@ describe("AppSidebar agent chip", () => {
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
     ).toEqual([
+      "command:sidebar-agents",
       "command:all-agents",
       "command:new-agent",
       "command:capabilities",

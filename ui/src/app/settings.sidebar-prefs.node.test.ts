@@ -13,6 +13,26 @@ import { loadSettings, saveSettings } from "./settings.ts";
 describe("sidebar preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("defaults old or invalid agent modes to chip and persists explicit roster mode", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const gatewayUrl = expectedGatewayUrl("");
+    const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+    expect(loadSettings().sidebarAgentsMode).toBe("chip");
+    for (const mode of ["roster", "chip"]) {
+      saveSettings(
+        makeUiSettings(gatewayUrl, { sidebarAgentsMode: mode === "roster" ? "roster" : "chip" }),
+      );
+      expect(loadSettings().sidebarAgentsMode).toBe(mode);
+    }
+    for (const mode of [undefined, true, "invalid", null]) {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...makeUiSettings(gatewayUrl), sidebarAgentsMode: mode }),
+      );
+      expect(loadSettings().sidebarAgentsMode).toBe("chip");
+    }
+  });
+
   it("persists sidebar width without leaking tab-local visibility across reloads", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");

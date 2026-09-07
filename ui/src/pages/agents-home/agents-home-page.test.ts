@@ -42,7 +42,7 @@ const roster: AgentsListResult = {
   ],
 };
 
-function createPage() {
+function createPage(pageSize = 2) {
   let sessions: GatewaySessionRow[] = [
     {
       key: "agent:harbor:team-room",
@@ -89,7 +89,7 @@ function createPage() {
     if (method === "sessions.list") {
       const offset =
         params && typeof params === "object" && "offset" in params ? Number(params.offset) : 0;
-      const rows = sessions.slice(offset, offset + 2);
+      const rows = sessions.slice(offset, offset + pageSize);
       return {
         ts: 6_000,
         path: "",
@@ -139,6 +139,7 @@ function createPage() {
     sessions: sessionCapability,
     navigate,
   };
+  const baselineEventListeners = eventListeners.size;
   const provider = createApplicationContextProvider(context);
   const page = new (customElements.get(elementName) ?? AgentsHomePage)();
   provider.append(page);
@@ -149,6 +150,8 @@ function createPage() {
   });
   return {
     page,
+    provider,
+    rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
     navigate,
     updateSessions: (next: GatewaySessionRow[]) => {
@@ -204,6 +207,60 @@ describe("AgentsHomePage", () => {
     expect(openChat?.textContent).toBe("Open chat");
     openChat?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/ember" });
+  });
+
+  it("shares bounded activity loading between consumers and stops after the last detach", async () => {
+    vi.useFakeTimers();
+    const { page, provider, request, rosterListenerCount, updateSessions, emitChange } =
+      createPage(100);
+    await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const second = new (customElements.get(elementName) ?? AgentsHomePage)();
+    provider.append(second);
+    await vi.waitFor(() => expect(second.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const calls = (method: string) =>
+      request.mock.calls.filter(
+        ([name, params]) =>
+          name === method &&
+          (method !== "sessions.list" ||
+            (params !== null &&
+              typeof params === "object" &&
+              "includeLastMessage" in params &&
+              params.includeLastMessage === true)),
+      );
+    expect(calls("sessions.subscribe")).toHaveLength(1);
+    expect(calls("sessions.list")).toHaveLength(1);
+    expect(rosterListenerCount()).toBe(1);
+
+    updateSessions(
+      Array.from({ length: 301 }, (_, index) => ({
+        key: `agent:harbor:task-${index}`,
+        kind: "direct",
+        updatedAt: index + 1,
+        lastMessagePreview: `Activity ${index}`,
+      })),
+    );
+    request.mockClear();
+    emitChange();
+    await vi.waitFor(() => {
+      expect(page.textContent).toContain("Activity 299");
+      expect(second.textContent).toContain("Activity 299");
+    });
+    expect(calls("sessions.list")).toHaveLength(3);
+    expect(calls("sessions.subscribe")).toHaveLength(0);
+    expect(page.textContent).not.toContain("Activity 300");
+
+    page.remove();
+    expect(rosterListenerCount()).toBe(1);
+    request.mockClear();
+    emitChange();
+    await vi.waitFor(() => expect(calls("sessions.list")).toHaveLength(3));
+    emitChange();
+    second.remove();
+    expect(rosterListenerCount()).toBe(0);
+    request.mockClear();
+    emitChange();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls("sessions.list")).toHaveLength(0);
   });
 
   it("refreshes live status and previews after session events and gateway reconnect", async () => {

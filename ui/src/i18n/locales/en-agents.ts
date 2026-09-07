@@ -3,6 +3,7 @@ export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
   allAgents: "All agents",
+  showAllAgents: "Show all agents in the sidebar",
   switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",

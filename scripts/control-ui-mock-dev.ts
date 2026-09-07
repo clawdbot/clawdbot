@@ -3341,9 +3341,18 @@ async function createMockGatewayPlugin(
     enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
+      const rosterPreferenceScript = `<script data-openclaw-sidebar-roster>
+        if (new URLSearchParams(location.search).get("sidebarAgents") === "roster") {
+          const gatewayUrl = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"].gatewayUrl;
+          const key = "openclaw.control.settings.v1:" + gatewayUrl;
+          const prefs = JSON.parse(localStorage.getItem(key) || "{}");
+          localStorage.setItem(key, JSON.stringify({ ...prefs, gatewayUrl, sidebarAgentsMode: "roster" }));
+          localStorage.setItem("openclaw.control.currentGateway.v1:" + new URL(gatewayUrl).origin, gatewayUrl);
+        }
+      </script>`;
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n${rosterPreferenceScript}\n  </head>`,
       );
     },
   };

@@ -1,0 +1,101 @@
+.sidebar-brand:has(.sidebar-agent-roster) {
+  flex-wrap: wrap;
+}
+
+openclaw-sidebar-agent-roster {
+  width: 100%;
+}
+
+.sidebar-agent-roster__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sidebar-agent-roster__row,
+.sidebar-agent-roster__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+.sidebar-agent-roster__row:hover,
+.sidebar-agent-roster__link:hover,
+.sidebar-agent-roster__row[aria-pressed="true"] {
+  background: var(--bg-hover);
+}
+
+.sidebar-agent-roster__avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg-accent);
+}
+
+.sidebar-agent-roster__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.sidebar-agent-roster__status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-agent-roster__status[data-working="true"] {
+  background: var(--ok);
+}
+
+.sidebar-agent-roster__copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.sidebar-agent-roster__copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-roster__activity,
+.sidebar-agent-roster__unread {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-agent-roster__link {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebar-agent-roster__link svg {
+  width: 14px;
+  height: 14px;
+}

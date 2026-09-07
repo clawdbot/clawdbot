@@ -65,6 +65,7 @@ export type SidebarLifecycleState = HTMLElement & {
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
@@ -542,6 +543,7 @@ export function createContext(
       agentsError: null,
       agentsList,
     },
+    ensureList: async (): Promise<AgentsListResult | null> => agents.state.agentsList,
     subscribe: () => () => undefined,
   };
   const agentSelection = createAgentSelectionCapability(gateway, agents, {

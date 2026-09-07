@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { until } from "lit/directives/until.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -56,7 +57,7 @@ import {
 } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
-type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
+export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   offline: boolean;
   getRouteSessionKey(): string;
@@ -117,31 +118,41 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const collapseLabel = t("nav.collapse");
   return html`
     <div class="sidebar-brand">
-      <openclaw-sidebar-agent-card
-        .agentName=${cardName}
-        .avatarUrl=${
-          cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
-        }
-        .avatarAuthReady=${avatarAuthReady}
-        .avatarText=${cardAvatarText}
-        .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
-        .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
-        .menuUnread=${menuUnread}
-        .switcherAvailable=${cardAgents.length > 1}
-        .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-        .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
-        .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        @contextmenu=${(event: MouseEvent) => {
-          event.preventDefault();
-          if (host.sidebarMenus.agentMenuPosition !== null) {
-            return;
-          }
-          const card = event.currentTarget as HTMLElement;
-          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
-          host.sidebarMenus.toggleAgentMenu(trigger);
-        }}
-      ></openclaw-sidebar-agent-card>
+      ${
+        host.sidebarAgentsMode === "roster"
+          ? until(
+              import("./sidebar-agent-roster.ts").then((module) =>
+                module.renderSidebarAgentRoster(host),
+              ),
+              nothing,
+            )
+          : html`<openclaw-sidebar-agent-card
+              .agentName=${cardName}
+              .avatarUrl=${
+                cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
+              }
+              .avatarAuthReady=${avatarAuthReady}
+              .avatarText=${cardAvatarText}
+              .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
+              .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
+              .menuUnread=${menuUnread}
+              .switcherAvailable=${cardAgents.length > 1}
+              .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+              .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+                host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
+              .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+              @contextmenu=${(event: MouseEvent) => {
+                event.preventDefault();
+                if (host.sidebarMenus.agentMenuPosition !== null) {
+                  return;
+                }
+                const card = event.currentTarget as HTMLElement;
+                const trigger =
+                  card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+                host.sidebarMenus.toggleAgentMenu(trigger);
+              }}
+            ></openclaw-sidebar-agent-card>`
+      }
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
           .content=${`${collapseLabel} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}

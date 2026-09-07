@@ -182,6 +182,8 @@ type SidebarAgentMenuParams = {
   pinnedAgentIds: readonly string[];
   connected: boolean;
   openMode: "hover" | "click";
+  rosterMode: boolean;
+  onToggleRoster: () => void;
   agentUnreadCount: (agentId: string) => number;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -329,6 +331,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           return;
         }
         switch (value) {
+          case `${COMMAND_VALUE_PREFIX}sidebar-agents`:
+            params.onToggleRoster();
+            break;
           case `${COMMAND_VALUE_PREFIX}all-agents`:
             params.onNavigate("agents-home");
             break;
@@ -397,6 +402,14 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           : nothing
       }
       <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item"
+        value="command:sidebar-agents"
+        type="checkbox"
+        .checked=${params.rosterMode}
+      >
+        ${t("agentChip.showAllAgents")}
+      </wa-dropdown-item>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
         <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
