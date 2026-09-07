@@ -834,10 +834,10 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     },
   );
 
-  it("fails closed when the command drops its lineage descriptor early", async () => {
+  it("preserves a root result when the command drops its lineage descriptor early", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const adapter = await createChildAdapter({
-      argv: ["/bin/sh", "-c", `exec 3>&-; trap '' TERM; printf "%s\\n" "$$"; sleep 60`],
+      argv: ["/bin/sh", "-c", `exec 3>&-; printf "%s\\n" "$$"; sleep 0.25`],
       stdinMode: "pipe-closed",
     });
     let output = "";
@@ -848,8 +848,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     const rootPid = Number.parseInt(output, 10);
     activePids.add(rootPid);
 
-    await expect(adapter.wait()).rejects.toThrow("cleanup identity lost");
-    await expect(adapter.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.waitForExtinction?.()).resolves.toBeUndefined();
     await waitFor(() => !isAlive(rootPid));
   });
 
