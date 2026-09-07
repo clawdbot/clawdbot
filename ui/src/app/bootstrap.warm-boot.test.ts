@@ -1,0 +1,103 @@
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
+import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { BOOT_RECORD_PREFIX, clearBootRecords, type BootRecord } from "./boot-record.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
+import * as gatewayStore from "./gateway-store.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { loadSettings } from "./settings.ts";
+
+vi.mock("../lib/sessions/session-roster-cache.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/sessions/session-roster-cache.runtime.ts")>()),
+  clearCachedBootState: vi.fn(async () => undefined),
+}));
+
+describe("warm boot profile validation", () => {
+  afterEach(() => {
+    clearBootRecords();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ...[
+      { cachedProfileId: "profile-a", profileId: "profile-b", clears: 1 },
+      { cachedProfileId: "profile-a", profileId: null, clears: 1 },
+      { cachedProfileId: null, profileId: "profile-b", clears: 1 },
+      { cachedProfileId: "profile-a", profileId: "profile-a", clears: 0 },
+      { cachedProfileId: null, profileId: null, clears: 0 },
+    ].map((entry) => ({ ...entry, pathname: "/chat", warmBoot: true })),
+    ...["/focus/terminal", "/approve/exec%3A1"].map((pathname) => ({
+      cachedProfileId: "profile-a",
+      profileId: "profile-b",
+      clears: 0,
+      pathname,
+      warmBoot: false,
+    })),
+  ])(
+    "clears $clears times for cached $cachedProfileId and connected $profileId on $pathname",
+    async ({ cachedProfileId, profileId, clears, pathname, warmBoot }) => {
+      const previousUrl = window.location.href;
+      window.history.replaceState({}, "", pathname);
+      const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
+      const record: BootRecord = {
+        version: 1,
+        scope,
+        savedAt: Date.now(),
+        profileId: cachedProfileId,
+        agents: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }],
+        },
+        groups: [],
+        sectionOrder: [],
+      };
+      localStorage.setItem(BOOT_RECORD_PREFIX + scope, JSON.stringify(record));
+      const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
+      const clearRoster = vi.mocked(clearCachedBootState);
+      const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+      const createGateway = gatewayStore.createApplicationGateway;
+      vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation((...args) => {
+        const gateway = createGateway(...args);
+        vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        });
+        return gateway;
+      });
+      const runtime = bootstrapApplication();
+      const publish = (phase: ApplicationGatewaySnapshot["phase"]) => {
+        const snapshot = runtime.context.gateway.snapshot;
+        Object.assign(snapshot, { phase, selfUser: profileId === null ? null : { id: profileId } });
+        for (const listener of listeners) {
+          listener(snapshot);
+        }
+      };
+      try {
+        expect(runtime.warmBoot).toBe(warmBoot);
+        publish("connecting");
+        expect(clearSnapshots).not.toHaveBeenCalled();
+        expect(clearRoster).not.toHaveBeenCalled();
+
+        publish("connected");
+        // Clearing the in-memory projection must precede later hello subscribers.
+        expect(clearSnapshots).toHaveBeenCalledTimes(clears);
+        await vi.dynamicImportSettled();
+        expect(clearRoster).toHaveBeenCalledTimes(clears);
+
+        publish("connected");
+        publish("reconnecting");
+        publish("connected");
+        await vi.dynamicImportSettled();
+        expect(clearSnapshots).toHaveBeenCalledTimes(clears);
+        expect(clearRoster).toHaveBeenCalledTimes(clears);
+      } finally {
+        runtime.stop();
+        window.history.replaceState({}, "", previousUrl);
+      }
+    },
+  );
+});

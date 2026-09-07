@@ -1,4 +1,4 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
   type ControlUiFocusLocation,
@@ -30,6 +30,7 @@ import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
+import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -38,6 +39,7 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
+import { persistBootRecord, readBootRecord } from "./boot-record.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
@@ -125,6 +127,7 @@ export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
   readonly documentMode: ControlUiDocumentMode | null;
+  readonly warmBoot: boolean;
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
@@ -214,7 +217,27 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
-  const agents = createAgentCapability(gateway);
+  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl));
+  let pendingBootProfileId =
+    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined;
+  const stopBootProfileValidation = gateway.subscribe((snapshot) => {
+    if (snapshot.phase !== "connected" || pendingBootProfileId === undefined) {
+      return;
+    }
+    const profileMismatch = pendingBootProfileId !== (snapshot.selfUser?.id ?? null);
+    pendingBootProfileId = undefined;
+    if (profileMismatch) {
+      // Invalidate visible history and its cursor before pane subscribers resume startup.
+      void clearStoredChatSnapshots();
+      void import("../lib/sessions/session-roster-cache.runtime.ts").then(
+        ({ clearCachedBootState }) => clearCachedBootState(),
+      );
+    }
+  });
+  const agents = createAgentCapability(gateway, {
+    cachedList: bootRecord?.agents ?? null,
+    cachedProfileId: bootRecord?.profileId ?? null,
+  });
   const startupLifecycle = createStartupLifecycle();
   const deferInitialLocationUntilGateway =
     firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
@@ -269,7 +292,29 @@ export function bootstrapApplication(): ApplicationRuntime {
       password: gateway.connection.password,
     }),
   });
-  const sessions = createSessionCapability(gateway, agentSelection);
+  const sessions = createSessionCapability(gateway, agentSelection, { bootRecord });
+  const persistLiveBootRecord = () => {
+    const agentsList = agents.state.agentsList;
+    if (
+      gateway.snapshot.phase === "connected" &&
+      agentsList &&
+      !agents.state.agentsListCached &&
+      sessions.groupsStatus() === "ready"
+    ) {
+      persistBootRecord({
+        version: 1,
+        savedAt: Date.now(),
+        scope: gatewayCredentialScope(gateway.connection.gatewayUrl),
+        profileId: gateway.snapshot.selfUser?.id ?? null,
+        agents: agentsList,
+        groups: [...sessions.state.groupSettings],
+        sectionOrder: [...sessions.state.sectionOrder],
+      });
+    }
+  };
+  const stopBootRecordPersistence = [gateway, agents, sessions].map((capability) =>
+    capability.subscribe(persistLiveBootRecord),
+  );
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -517,6 +562,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     context,
     router,
     documentMode,
+    warmBoot: bootRecord !== null && startsApplicationRouter && !hasPendingGateway,
     focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
@@ -653,6 +699,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     stop: () => {
       startupLifecycle.stop();
+      stopBootProfileValidation();
+      stopBootRecordPersistence.forEach((stop) => stop());
       stopPostConnect();
       connectionBootstrap.reset();
       agents.dispose();

@@ -12,7 +12,12 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  AgentsListResult,
+  ModelCatalogEntry,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
@@ -463,7 +468,7 @@ export type ControlUiMockGatewayScenario = {
   operatorScopes?: string[];
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
-  sessionScope?: "agent" | "global";
+  sessionScope?: AgentsListResult["scope"];
   mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -1082,7 +1087,7 @@ function normalizeScenario(
           ]),
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
-    sessionScope: scenario.sessionScope ?? "agent",
+    sessionScope: scenario.sessionScope ?? "per-sender",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,

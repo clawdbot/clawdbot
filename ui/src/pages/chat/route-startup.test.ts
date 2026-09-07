@@ -70,7 +70,12 @@ function fixture() {
       },
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
-    sessions: { canonicalListRevision: 1, list: vi.fn() },
+    sessions: {
+      canonicalListRevision: 1,
+      list: vi.fn(),
+      state: { result: null },
+      whenCachedRosterSettled: async () => undefined,
+    },
   } as unknown as ApplicationContext;
   const loadRoute = async () => {
     await router.navigate("chat", context, undefined, {
