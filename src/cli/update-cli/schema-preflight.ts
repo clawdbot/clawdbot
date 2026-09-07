@@ -108,6 +108,12 @@ export async function captureTargetDatabaseSchemaContext(
     )
       ? planned
       : undefined;
+  if (before?.path === snapshot.path && !legacyConfigPlan) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
+    );
+  }
   if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
     throw new UpdatePreMutationError(
       "database-schema-preflight",

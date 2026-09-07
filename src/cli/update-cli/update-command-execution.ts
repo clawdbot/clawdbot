@@ -37,6 +37,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { createUpdateProgress } from "./progress.js";
 import {
+  captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
@@ -307,6 +308,22 @@ export async function executeMutableUpdate(params: {
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
+  const readCandidateSource = async (env: NodeJS.ProcessEnv) => {
+    if (!params.legacyConfigPlan) {
+      return withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
+    }
+    const context = await captureTargetDatabaseSchemaContext(env, {
+      legacyConfigPlan: params.legacyConfigPlan,
+    });
+    if (!context.legacyConfigPlan) {
+      return withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
+    }
+    return { config: context.config, hash: context.configSnapshot.hash };
+  };
   const validateCandidate = async (root: string) => {
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     if (params.opts.run) {
@@ -322,10 +339,7 @@ export async function executeMutableUpdate(params: {
       signal?.throwIfAborted();
       const snapshot = rehearsal
         ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
-        : (validatedConfigSnapshot ??
-          (await withOwnedManagedUpdateEnv(env, () =>
-            readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-          )));
+        : (validatedConfigSnapshot ?? (await readCandidateSource(env)));
       const validation = await validateUpdateCandidateCanary({
         root,
         config: snapshot.config,
@@ -401,9 +415,7 @@ export async function executeMutableUpdate(params: {
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
-    const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-      readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-    );
+    const snapshot = await readCandidateSource(env);
     if (
       validatedConfigSnapshot?.hash !== undefined &&
       snapshot.hash !== validatedConfigSnapshot.hash

@@ -14,10 +14,42 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+
+/** Report rejected read-only admission without creating a run or recovery diagnostics. */
+export async function withUpdateAdmissionReporting<T>(
+  opts: UpdateCommandOptions,
+  admit: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await admit();
+  } catch (error) {
+    if (!(error instanceof GatewayServiceUpdateOwnershipError)) {
+      throw error;
+    }
+    const message = `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
+    if (opts.json) {
+      defaultRuntime.error(message);
+    }
+    printResult(
+      {
+        status: "error",
+        mode: "unknown",
+        reason: "managed-service-preflight",
+        steps: [],
+        durationMs: 0,
+      },
+      opts,
+      { nextAction: message },
+    );
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
+}
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {

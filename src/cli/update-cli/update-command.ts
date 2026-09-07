@@ -2,7 +2,6 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -10,7 +9,6 @@ import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-  normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -49,13 +47,14 @@ import {
   tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   mergeWindowsTaskRecoveryFailure,
   reportPreMutationUpdateFailure,
   UpdateCommandFailure,
+  withUpdateAdmissionReporting,
 } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -86,8 +85,8 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
   };
   // Rejected arguments and handoffs must not open or recover persistent state.
-  const prepared = await withUpdateInProgressEnv(invocationCwd, () =>
-    prepareUpdateCommand(inputOpts),
+  const prepared = await withUpdateAdmissionReporting(inputOpts, () =>
+    withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(inputOpts)),
   );
   // Post-core children report phase results; the outer updater owns the run ledger.
   if (prepared.postCoreUpdateResume) {
@@ -101,11 +100,13 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       });
     });
   }
-  const run = await admitUpdateCommandRun({
-    opts: inputOpts,
-    root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
-    invocationCwd,
-  });
+  const run = await withUpdateAdmissionReporting(inputOpts, () =>
+    admitUpdateCommandRun({
+      opts: inputOpts,
+      root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+      invocationCwd,
+    }),
+  );
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
     ...prepared.controlPlaneUpdateSentinelMeta,
@@ -193,21 +194,11 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
-    observe: false,
-  });
-  if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
-    configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
-      configSnapshot,
-      jsonMode: Boolean(opts.json),
-    });
-  }
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
+  const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
+    Boolean(opts.channel),
+  );
 
-  if (opts.channel && !configSnapshot.valid) {
+  if (opts.channel && !configSnapshot.valid && !legacyConfigPlan) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     await refuseUpdate(
       "invalid-config",
@@ -463,6 +454,7 @@ async function updateCommandInternal(
     { env: run.env },
   );
   const schemaPreflight = await preflightUpdateCommandSchemas({
+    legacyConfigPlan,
     root,
     updateInstallKind,
     switchToGit,
@@ -513,14 +505,14 @@ async function updateCommandInternal(
 
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
-    const channelChanged = requestedChannel !== null && requestedChannel !== storedChannel;
     await finishAlreadyCurrentUpdate({
+      legacyConfigPlan,
       opts,
       result: {
-        status: channelChanged ? "ok" : "skipped",
+        status: "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
         root,
-        ...(channelChanged ? {} : { reason: "already-current" }),
+        reason: "already-current",
         before: { version: currentVersion },
         after: { version: currentVersion },
         steps: [],
@@ -635,6 +627,7 @@ async function updateCommandInternal(
   };
 
   const execution = await executeMutableUpdate({
+    legacyConfigPlan,
     root,
     installKind,
     updateInstallKind,
@@ -671,7 +664,12 @@ async function updateCommandInternal(
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
-    await finishAlreadyCurrentUpdate({ opts, result, env: ownedManagedUpdateContext?.env });
+    await finishAlreadyCurrentUpdate({
+      opts,
+      result,
+      env: ownedManagedUpdateContext?.env,
+      legacyConfigPlan,
+    });
     return;
   }
   recoveryState.triageTarget.root = result.root ?? root;

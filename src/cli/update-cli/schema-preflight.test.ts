@@ -258,6 +258,30 @@ describe("planned legacy configuration admission", () => {
 });
 
 describe("planned migration managed profile isolation", () => {
+  it("refuses a newly valid replacement of the planned source before admission", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", bind: "localhost" },
+      });
+      const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
+      const { snapshot, writeOptions } = await createConfigIO({
+        env,
+        observe: false,
+      }).readConfigFileSnapshotForWrite();
+      const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+      expect(legacyConfigPlan).toBeDefined();
+      const replacement = JSON.stringify({ gateway: { mode: "local", bind: "lan" } });
+      fs.writeFileSync(configPath, replacement);
+      await expect(
+        captureTargetDatabaseSchemaContext(env, { legacyConfigPlan }),
+      ).rejects.toMatchObject({
+        reason: "database-schema-preflight",
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toBe(replacement);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    });
+  });
+
   it.each([
     "same source",
     "other valid source",
