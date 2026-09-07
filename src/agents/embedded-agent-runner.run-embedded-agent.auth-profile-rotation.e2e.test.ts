@@ -921,9 +921,8 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("rotates auto-pinned profiles on long-window rate limits after transient retries", async () => {
+  it("rotates auto-pinned profiles immediately on long-window rate limits", async () => {
     await runAutoPinnedRotationCase({
-      exhaustTransientRetries: true,
       errorMessage: "429 Too Many Requests: subscription usage limit reached",
       sessionKey: "agent:test:auto",
       runId: "run:auto",
