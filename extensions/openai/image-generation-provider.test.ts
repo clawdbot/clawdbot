@@ -394,8 +394,10 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ size: "941x1672", quality: "medium" });
     const result = await generateOpenAIImage("A cat wearing sunglasses", {
+      authStore: { version: 1, profiles: {} },
       size: "2160x3840",
       quality: "high",
+      outputFormat: "png",
     });
     expect(result.images[0]?.metadata).toEqual({ size: "941x1672", quality: "medium" });
   });
