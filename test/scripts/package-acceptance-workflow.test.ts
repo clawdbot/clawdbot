@@ -8413,7 +8413,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     expect(result.status, result.stderr).toBe(0);
     expect(output.baselines).toBe("");
-    expect(output.scenarios.split(" ")).toEqual([
+    expect(output.scenarios?.split(" ")).toEqual([
       "base",
       "acpx-openclaw-tools-bridge",
       "feishu-channel",
