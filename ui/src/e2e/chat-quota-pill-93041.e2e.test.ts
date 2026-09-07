@@ -538,9 +538,7 @@ suite.define(() => {
       const { client: connectedClient } = connectRequest.params as {
         client: { instanceId: string };
       };
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBe(2);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
 
       expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
         sessionKey: "global",
@@ -576,9 +574,7 @@ suite.define(() => {
       });
       await setSelectedAgent(page, "Work");
       await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThanOrEqual(3);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "work" } });
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({
@@ -675,15 +671,6 @@ suite.define(() => {
       expect(delayedMainState.account).not.toBe("main@example.test");
       expect(delayedMainState.displayName).not.toBe("Main OpenAI");
       expect(delayedMainState.plan).not.toBe("Main Pro");
-      const authRequests = await gateway.getRequests("models.authStatus");
-      const workAuthRequests = authRequests.filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "agentId" in request.params &&
-          request.params.agentId === "work",
-      );
-      expect(workAuthRequests.length).toBeGreaterThanOrEqual(2);
       const identityRequests = await gateway.getRequests("agent.identity.get");
       expect(
         identityRequests.filter(

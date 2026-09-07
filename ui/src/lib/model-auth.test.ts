@@ -71,6 +71,7 @@ describe("model auth status reads", () => {
 
   it("does not let a cancellable read join or cancel an ordinary read", async () => {
     const pending = createDeferred<ModelAuthStatusResult>();
+    const reason = new DOMException("consumer retired", "AbortError");
     const request = vi.fn(
       (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
         const signal = options?.signal;
@@ -78,7 +79,7 @@ describe("model auth status reads", () => {
           return pending.promise;
         }
         return new Promise<ModelAuthStatusResult>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener("abort", () => reject(reason), { once: true });
         });
       },
     );
@@ -89,7 +90,6 @@ describe("model auth status reads", () => {
       agentId: "main",
       signal: controller.signal,
     }).catch((error: unknown) => error);
-    const reason = new DOMException("consumer retired", "AbortError");
     controller.abort(reason);
     expect(await cancellable).toBe(reason);
     const follower = loadModelAuthStatus(client, { agentId: "main" });

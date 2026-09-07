@@ -35,16 +35,24 @@ suite.define(() => {
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
       const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await gateway.deferNext("sessions.list", rosterMatch);
+      // An earlier roster read can consume a one-shot rejection before the permission
+      // refresh; keep that query unavailable while checking the saved-mode outcome.
+      await gateway.setMethodResponse("sessions.list", {
+        cases: [
+          {
+            match: rosterMatch,
+            response: {
+              __mockError: { code: "UNAVAILABLE", message: "Roster refresh unavailable" },
+            },
+          },
+          { response: chatSessionListResponse([session]) },
+        ],
+      });
 
       await trigger.click();
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       await gateway.waitForRequest("sessions.patch");
       await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
-      await gateway.rejectDeferred("sessions.list", {
-        code: "UNAVAILABLE",
-        message: "Roster refresh unavailable",
-      });
 
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
