@@ -59,7 +59,15 @@ space is limited; opening the keyboard does not move them to another region.
 If the keyboard covers that region entirely, dismiss the keyboard to reach the
 prompt again.
 
-Other dialogs, sheets, and menus are not adapted yet.
+Chat actions and Add attachment (Photos, Videos, Files) menus stay in the safe
+region containing their trigger. These popups remain focusable without becoming
+keyboard (IME) targets. If folds, insets, or layout changes invalidate an open
+menu, it closes without choosing an action. Reopen it explicitly when space
+permits; it does not reopen automatically when the layout recovers. Dismissing
+the menu does not reset Chat's draft, editor, or reader state.
+
+The Thinking control opens an effort sheet, not an adapted dropdown. Other
+dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 
