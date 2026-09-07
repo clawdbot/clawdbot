@@ -140,10 +140,12 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -152,8 +154,10 @@ jobs:
             local fetch_status
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
-                -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
+              -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -190,6 +194,7 @@ jobs:
         if: inputs.historical_target_tag != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
         run: |
           set -euo pipefail
@@ -197,12 +202,8 @@ jobs:
             echo "historical_target_tag must be a canonical OpenClaw release tag." >&2
             exit 1
           fi
-          tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
-          remote="$(git remote get-url origin)"
-          tag_sha="$(git ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
-          if [[ -z "$tag_sha" ]]; then
-            tag_sha="$(git ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
-          fi
+          encoded_ref="$(jq -rn --arg value "refs/tags/${HISTORICAL_TARGET_TAG}" '$value | @uri')"
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
             echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -212,6 +213,7 @@ jobs:
         if: inputs.release_candidate_ref != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
         run: |
           set -euo pipefail
@@ -219,8 +221,8 @@ jobs:
             echo "release_candidate_ref must be a canonical OpenClaw release branch." >&2
             exit 1
           fi
-          remote="$(git remote get-url origin)"
-          branch_sha="$(git ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          encoded_ref="$(jq -rn --arg value "refs/heads/${RELEASE_CANDIDATE_REF}" '$value | @uri')"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
             echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -458,10 +460,12 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -470,8 +474,10 @@ jobs:
             local fetch_status
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
-                -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -507,44 +513,43 @@ jobs:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Prepare trusted pre-commit config
-        if: github.event_name == 'pull_request'
+      - name: Prepare trusted scanner config
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
-            git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
-            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
-            > "$trusted_config" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
+          trusted_policy="$RUNNER_TEMP/zizmor.yml"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:.github/zizmor.yml" > "$trusted_policy" 2>/dev/null; then
+              echo "::error title=trusted zizmor policy unavailable::Could not read .github/zizmor.yml from exact base ${BASE_SHA}."
+              exit 1
+            fi
           else
-            echo "::warning title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}; falling back to the checked-out config."
-            rm -f "$trusted_config"
-            exit 0
+            cp .github/zizmor.yml "$trusted_policy"
           fi
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
-      - name: Resolve Python runtime
-        id: setup-python
-        run: |
-          set -euo pipefail
-          python3 --version
-          version="$(python3 - <<'PY'
-          import platform
-          print(platform.python_version())
-          PY
-          )"
-          echo "python-version=${version}" >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/security-fast-pre-commit.yaml" <<EOF
+          repos:
+            - repo: local
+              hooks:
+                - { id: detect-private-key, name: detect private key, entry: detect-private-key, language: system, types: [text], exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)' }
+                - id: zizmor
+                  name: zizmor
+                  entry: zizmor
+                  language: system
+                  types: [yaml]
+                  files: '(\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$'
+                  require_serial: true
+                  args: [--config, "$trusted_policy", --persona=regular, --min-severity=medium, --min-confidence=medium]
+                  exclude: '^(vendor/|apps/swabble/)'
+          EOF
+          echo "PRE_COMMIT_CONFIG_PATH=$RUNNER_TEMP/security-fast-pre-commit.yaml" >> "$GITHUB_ENV"
 
-      - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.2.0
+      - name: Install security scanners
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.2.0 pre-commit-hooks==6.0.0 zizmor==1.22.0
 
       - name: Detect committed private keys
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+        run: GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -571,7 +576,8 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+          GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
+            pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Setup Node.js
         env:
@@ -599,9 +605,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -619,6 +627,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -664,9 +674,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -684,6 +696,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -921,9 +935,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -941,6 +957,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1011,9 +1029,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1031,6 +1051,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1092,9 +1114,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1112,6 +1136,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1169,9 +1195,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1189,6 +1217,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1247,9 +1277,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1267,6 +1299,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1404,9 +1438,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1424,6 +1460,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1453,6 +1491,8 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1463,7 +1503,11 @@ jobs:
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
+                auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+                git \
+                  -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                  -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+                  fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
@@ -1554,9 +1598,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1574,6 +1620,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1739,9 +1787,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1759,6 +1809,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1842,8 +1894,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -1851,8 +1905,10 @@ jobs:
             local fetch_status
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
-                -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -1909,8 +1965,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -1918,6 +1976,8 @@ jobs:
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
             local fetch_pid="$!"
@@ -2030,8 +2090,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -2039,6 +2101,8 @@ jobs:
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
             local fetch_pid="$!"
@@ -2097,8 +2161,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -2106,6 +2172,8 @@ jobs:
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
             local fetch_pid="$!"
@@ -2255,8 +2323,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
@@ -2264,6 +2334,8 @@ jobs:
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
             local fetch_pid="$!"
@@ -2355,9 +2427,11 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           workdir="$GITHUB_WORKSPACE"
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -2375,6 +2449,8 @@ jobs:
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 

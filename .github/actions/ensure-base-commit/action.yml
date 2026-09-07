@@ -15,6 +15,8 @@ runs:
       env:
         BASE_SHA: ${{ inputs.base-sha }}
         FETCH_REF: ${{ inputs.fetch-ref }}
+        CHECKOUT_REPO: ${{ github.repository }}
+        CHECKOUT_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
 
@@ -39,8 +41,12 @@ runs:
         fi
 
         fetch_base_ref() {
+          local auth_header
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           timeout --signal=TERM --kill-after=10s 30s git \
             -c protocol.version=2 \
+            -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
             fetch "$@"
         }
 
