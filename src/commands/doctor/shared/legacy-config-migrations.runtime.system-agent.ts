@@ -63,6 +63,24 @@ export function findLegacySystemAgentOwnerIssue(raw: unknown) {
     : undefined;
 }
 
+/** Complete ambient ownership when Doctor persists a legacy or newly materialized roster. */
+export function seedLegacyAmbientOwners(raw: Record<string, unknown>, changes: string[]): void {
+  const owner = resolveMissingLegacySystemAgent(raw);
+  if (!owner) {
+    return;
+  }
+  const { agentId, heartbeatUnresolved } = owner;
+  const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+  ensureRecord(defaults, "systemAgent").agentId = agentId;
+  changes.push(
+    `Set agents.defaults.systemAgent.agentId to ${agentId} for legacy ambient operations.`,
+  );
+  if (heartbeatUnresolved) {
+    ensureRecord(defaults, "heartbeat").agentId = agentId;
+    changes.push(`Set agents.defaults.heartbeat.agentId to ${agentId} for legacy heartbeats.`);
+  }
+}
+
 const LEGACY_SYSTEM_AGENT_CONFIG_RULE: LegacyConfigRule = {
   path: ["crestodian"],
   message:
@@ -98,20 +116,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT: LegacyConfigMigratio
           return;
         }
       }
-      const owner = resolveMissingLegacySystemAgent(raw);
-      if (!owner) {
-        return;
-      }
-      const { agentId, heartbeatUnresolved } = owner;
-      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
-      ensureRecord(defaults, "systemAgent").agentId = agentId;
-      changes.push(
-        `Set agents.defaults.systemAgent.agentId to ${agentId} for legacy ambient operations.`,
-      );
-      if (heartbeatUnresolved) {
-        ensureRecord(defaults, "heartbeat").agentId = agentId;
-        changes.push(`Set agents.defaults.heartbeat.agentId to ${agentId} for legacy heartbeats.`);
-      }
+      seedLegacyAmbientOwners(raw, changes);
     },
   }),
 ];

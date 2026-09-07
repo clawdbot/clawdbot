@@ -100,6 +100,8 @@ describe("Doctor model metadata corruption persistence", () => {
           await runInitialConfigWriteHealth(ctx);
 
           const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
+          expect(saved.agents.defaults.systemAgent).toEqual({ agentId: "main" });
+          expect(saved.agents.defaults.heartbeat).toBeUndefined();
           expect(saved.models.providers.openai.models[0]).toMatchObject({
             id: "gpt-5.6-sol",
             name: "gpt-5.6-sol",
