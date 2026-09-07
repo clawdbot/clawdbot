@@ -10,7 +10,7 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicy } from "./live-policy.js";
-import { clearPresences } from "./presence-cache.js";
+import { clearPresences, getPresence } from "./presence-cache.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 
 const mocks = vi.hoisted(() => ({
@@ -56,7 +56,7 @@ function presence(status: "online" | "offline", userId = "user-1"): GatewayPrese
 }
 
 function guildSnapshot(
-  presences: GatewayPresenceUpdate[],
+  presences: Array<Omit<GatewayPresenceUpdate, "guild_id">>,
   memberCount = 100,
 ): GatewayGuildCreateDispatchData {
   return {
@@ -284,17 +284,89 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["unconfigured", "disabled", "filtered"] as const)(
+    "caches snapshot status and activities when presence events are %s",
+    async (mode) => {
+      const listener = createPresenceListener({
+        guildEntries:
+          mode === "unconfigured"
+            ? undefined
+            : {
+                "guild-1": {
+                  presenceEvents: {
+                    channelId: "channel-1",
+                    enabled: mode !== "disabled",
+                    users: [],
+                  },
+                },
+              },
+      });
+      const snapshotPresence = {
+        user: { id: "user-1" },
+        status: PresenceUpdateStatus.Online,
+        activities: [{ name: "Chess", type: 0, created_at: 0 }],
+        client_status: {},
+      } satisfies Omit<GatewayPresenceUpdate, "guild_id">;
+
+      await listener.seedGuildSnapshot(guildSnapshot([snapshotPresence]));
+
+      expect(getPresence("molty", "user-1")).toEqual({
+        ...snapshotPresence,
+        guild_id: "guild-1",
+      });
+      expect(getPresence("other-account", "user-1")).toBeUndefined();
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    },
+  );
+
   it("orders a presence event after its pending live-policy guild seed", async () => {
     const policy = livePresencePolicy();
     const ready = createDeferred<DiscordLivePolicy>();
     const readPolicy = vi.fn().mockReturnValueOnce(ready.promise).mockResolvedValue(policy);
     const listener = createPresenceListener({ readPolicy });
     const seed = listener.seedGuildSnapshot(guildSnapshot([presence("offline")]));
+    expect(getPresence("molty", "user-1")?.status).toBe("offline");
     const event = listener.handle(presence("online"), humanClient);
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     ready.resolve(policy);
     await Promise.all([seed, event]);
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore cached presence when READY follows a pending snapshot and update", async () => {
+    const policy = livePresencePolicy();
+    const ready = createDeferred<DiscordLivePolicy>();
+    const listener = createPresenceListener({ readPolicy: () => ready.promise });
+    const seed = listener.seedGuildSnapshot(guildSnapshot([presence("offline")]));
+    const event = listener.handle(presence("online"), humanClient);
+    // Queue READY after policy resolution, before the pending update can resume.
+    ready.resolve(policy);
+    await ready.promise;
+    listener.resetGatewaySession();
+    await Promise.all([seed, event]);
+
+    expect(getPresence("molty", "user-1")).toBeUndefined();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps snapshot caching bounded and leaves unreported members unknown", async () => {
+    const listener = createPresenceListener({ guildEntries: undefined });
+    await listener.seedGuildSnapshot(
+      guildSnapshot(
+        Array.from({ length: 5_001 }, (_, i) => presence("online", `user-${i}`)),
+        75_001,
+      ),
+    );
+
+    expect(getPresence("molty", "user-0")).toBeUndefined();
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
+    expect(getPresence("molty", "user-5000")?.status).toBe("online");
+    expect(getPresence("molty", "unreported")).toBeUndefined();
+    await listener.seedGuildSnapshot({ id: "guild-1", unavailable: true });
+    expect(getPresence("molty", "user-5000")?.status).toBe("online");
   });
 
   it.each(["delete", "reset", "replace"] as const)(
