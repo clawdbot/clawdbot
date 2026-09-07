@@ -96,7 +96,8 @@ export async function withGitTargetInspectionRoot<T>(
               env: {
                 ...options.env,
                 GIT_CONFIG_NOSYSTEM: "1",
-                GIT_CONFIG_GLOBAL: os.devNull,
+                // Git for Windows cannot open the Win32 device path os.devNull returns ("\\.\nul").
+                GIT_CONFIG_GLOBAL: process.platform === "win32" ? "nul" : os.devNull,
                 GIT_CONFIG_COUNT: "0",
               },
             }
