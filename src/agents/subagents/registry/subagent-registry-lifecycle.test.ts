@@ -736,6 +736,33 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
+  it("hands announce dispatch the durable requester agent id on a multi-agent roster", async () => {
+    // Two agents and no default marker: resolveDefaultAgentId cannot pick one, so any
+    // consumer that re-derives the requester owner instead of reading the persisted
+    // one throws AGENT_SELECTION_REQUIRED. Spawn already captured the owner, so
+    // dispatch has to carry it.
+    const cfg = { agents: { list: [{ id: "alpha" }, { id: "beta" }] } };
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      // Unscoped on purpose: nothing downstream can parse the owner out of this key.
+      requesterSessionKey: "main",
+      requesterAgentId: "beta",
+    });
+    const runSubagentAnnounceFlow = vi.fn(
+      async (_announceParams: { requesterAgentId?: string }) => "delivered" as AnnounceFlowOutcome,
+    );
+    const controller = createLifecycleController({
+      entry,
+      getRuntimeConfig: () => cfg,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+
+    expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]?.requesterAgentId).toBe("beta");
+  });
+
   it("merges late visible reply evidence into an already-terminal completion", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const captureSubagentCompletionReply = vi.fn(async () => "legacy fallback");
