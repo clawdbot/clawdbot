@@ -1,7 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
+import {
+  resolveQaSuiteRoundTripConversation,
+  runQaSuiteRoundTripProbe,
+} from "./suite-round-trip.js";
 
 describe("QA suite round-trip probe", () => {
+  it.each([
+    {
+      policy: { directMessageOnly: true },
+      conversationId: "telegram-reply-chain-dm",
+      expected: { id: "telegram-reply-chain-dm", kind: "direct" },
+    },
+    {
+      policy: { requireGroupMention: true },
+      conversationId: "qa-routing-primary",
+      expected: { id: "qa-routing-primary", kind: "group" },
+    },
+  ])("resolves the scenario-owned $expected.kind route", ({ policy, conversationId, expected }) => {
+    expect(
+      resolveQaSuiteRoundTripConversation({
+        id: "scenario",
+        execution: { transportPolicy: policy, config: { conversationId } },
+      }),
+    ).toEqual(expected);
+  });
+
+  it.each([
+    {
+      execution: { transportPolicy: { directMessageOnly: true }, config: {} },
+      error: "must declare config.conversationId",
+    },
+    {
+      execution: {
+        transportPolicy: { directMessageOnly: true, requireGroupMention: true },
+        config: { conversationId: "room" },
+      },
+      error: "declares conflicting transport routes",
+    },
+    {
+      execution: { transportPolicy: {}, config: { conversationId: "room" } },
+      error: "does not declare a supported transport route",
+    },
+  ])("rejects invalid scenario route declarations: $error", ({ execution, error }) => {
+    expect(() =>
+      resolveQaSuiteRoundTripConversation({ id: "invalid-scenario", execution }),
+    ).toThrow(error);
+  });
+
   it("collects requested samples and chains native replies", async () => {
     const messages: Array<{ direction: "outbound"; id: string }> = [];
     const sendInbound = vi.fn().mockResolvedValue({ id: "inbound" });

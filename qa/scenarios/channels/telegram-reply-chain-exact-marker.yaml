@@ -22,6 +22,7 @@ scenario:
     summary: Request one exact Telegram marker and verify single-message delivery.
     config:
       requiredProviderMode: mock-openai
+      conversationId: telegram-reply-chain-dm
       marker: QA-TELEGRAM-REPLY-CHAIN-OK
 
 flow:
@@ -33,13 +34,13 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
-            conversation: { id: telegram-reply-chain-dm, kind: direct }
+            conversation: { id: { ref: config.conversationId }, kind: direct }
             senderId: qa-command-operator
             senderName: QA Command Operator
             text:
               expr: "`Telegram reply-chain marker QA. Reply exactly: ${config.marker}`"
         - waitForOutbound:
-            conversation: { id: telegram-reply-chain-dm, kind: direct }
+            conversation: { id: { ref: config.conversationId }, kind: direct }
             sinceIndex: { ref: startIndex }
             textIncludes: { ref: config.marker }
             timeoutMs: 90000

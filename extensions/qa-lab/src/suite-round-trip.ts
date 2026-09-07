@@ -5,6 +5,11 @@ import {
 } from "./live-transports/shared/live-transport-rtt.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaBusInboundMessageInput } from "./runtime-api.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+
+type QaSuiteRoundTripScenario = Pick<QaSeedScenarioWithSource, "id"> & {
+  execution: Pick<QaSeedScenarioWithSource["execution"], "transportPolicy" | "config">;
+};
 
 export type QaSuiteRoundTripProbe = {
   scenarioId: string;
@@ -16,6 +21,23 @@ export type QaSuiteRoundTripProbe = {
   textPrefix: string;
   chainReplies?: boolean;
 };
+
+export function resolveQaSuiteRoundTripConversation(
+  scenario: QaSuiteRoundTripScenario,
+): QaBusInboundMessageInput["conversation"] {
+  const { directMessageOnly, requireGroupMention } = scenario.execution.transportPolicy ?? {};
+  const conversationId = scenario.execution.config?.conversationId;
+  if (typeof conversationId !== "string" || !conversationId.trim()) {
+    throw new Error(`QA RTT scenario ${scenario.id} must declare config.conversationId`);
+  }
+  if (directMessageOnly && requireGroupMention) {
+    throw new Error(`QA RTT scenario ${scenario.id} declares conflicting transport routes`);
+  }
+  if (!directMessageOnly && !requireGroupMention) {
+    throw new Error(`QA RTT scenario ${scenario.id} does not declare a supported transport route`);
+  }
+  return { id: conversationId.trim(), kind: directMessageOnly ? "direct" : "group" };
+}
 
 export async function runQaSuiteRoundTripProbe(params: {
   probe: QaSuiteRoundTripProbe;

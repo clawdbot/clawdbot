@@ -411,19 +411,34 @@ describe("package Telegram live Docker E2E", () => {
     ).toThrow("unknown QA scenario id(s): telegram-unknown-rtt-check");
   });
 
-  it("builds a generic suite probe for the Telegram RTT lane", () => {
-    const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
-
-    expect(probe).toMatchObject({
+  it.each([
+    {
+      name: "default canary group",
+      env: {},
       scenarioId: "channel-canary",
+      policy: { requireGroupMention: true },
+      conversation: { id: "qa-routing-primary", kind: "group" },
+    },
+    {
+      name: "selected exact-marker direct message",
+      env: { OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-reply-chain-exact-marker" },
+      scenarioId: "telegram-reply-chain-exact-marker",
+      policy: { directMessageOnly: true },
+      conversation: { id: "telegram-reply-chain-dm", kind: "direct" },
+    },
+  ] as const)("builds the $name RTT route", ({ env, scenarioId, policy, conversation }) => {
+    const probe = testing.createRoundTripProbe(testing.resolveRttOptions(env), {
+      id: scenarioId,
+      execution: { transportPolicy: policy, config: { conversationId: conversation.id } },
+    });
+    expect(probe).toMatchObject({
+      scenarioId,
       count: 20,
       timeoutMs: 30_000,
       markerPrefix: "QA-TELEGRAM-RTT",
       textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
       chainReplies: true,
-      input: {
-        conversation: { id: "telegram-rtt-room", kind: "group" },
-      },
+      input: { conversation },
     });
   });
 

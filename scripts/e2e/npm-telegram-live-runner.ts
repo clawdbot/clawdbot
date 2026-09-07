@@ -7,7 +7,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
-import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
+import {
+  resolveQaSuiteRoundTripConversation,
+  type QaSuiteRoundTripProbe,
+} from "../../extensions/qa-lab/src/suite-round-trip.ts";
 import { normalizeCsvOrLooseStringList } from "../../packages/normalization-core/src/string-normalization.ts";
 import { isStrictAffirmativeValue } from "../lib/arg-utils.mts";
 import { compareReleaseVersions } from "../lib/release-version.mjs";
@@ -168,15 +171,19 @@ function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly
 
 function createRoundTripProbe(
   options: ReturnType<typeof resolveRttOptions>,
+  scenario?: Parameters<typeof resolveQaSuiteRoundTripConversation>[0],
 ): QaSuiteRoundTripProbe | undefined {
   if (!options) {
     return undefined;
+  }
+  if (!scenario) {
+    throw new Error(`missing QA RTT scenario: ${options.scenarioId}`);
   }
   return {
     ...options,
     markerPrefix: "QA-TELEGRAM-RTT",
     input: {
-      conversation: { id: "telegram-rtt-room", kind: "group" },
+      conversation: resolveQaSuiteRoundTripConversation(scenario),
       senderId: "qa-rtt-driver",
       senderName: "QA RTT Driver",
     },
@@ -245,10 +252,12 @@ async function main() {
     { runQaTelegramSuite },
     { resolveTelegramQaScenarioIds },
     { DEFAULT_QA_LIVE_PROVIDER_MODE },
+    { readQaScenarioById },
   ] = await Promise.all([
     import("../../extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts"),
     import("../../extensions/qa-lab/src/live-transports/telegram/scenario-selection.ts"),
     import("../../extensions/qa-lab/src/providers/index.ts"),
+    import("../../extensions/qa-lab/src/scenario-catalog.ts"),
   ]);
   const rawSutOpenClawCommand = process.env.OPENCLAW_NPM_TELEGRAM_SUT_COMMAND?.trim();
   if (!rawSutOpenClawCommand) {
@@ -273,6 +282,7 @@ async function main() {
       }),
   );
   const rttOptions = resolveRttOptions(process.env, scenarioIds);
+  const rttScenario = rttOptions ? readQaScenarioById(rttOptions.scenarioId) : undefined;
   const result = await runQaTelegramSuite({
     allowFailures: true,
     failFast: true,
@@ -285,7 +295,7 @@ async function main() {
     fastMode: isStrictAffirmativeValue(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
     resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
-    roundTripProbe: createRoundTripProbe(rttOptions),
+    roundTripProbe: createRoundTripProbe(rttOptions, rttScenario),
     ...(mutateConfig ? { mutateConfig } : {}),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
