@@ -42,6 +42,9 @@ export type GeminiEmbeddingClient = {
 
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+// Gemini batchEmbedContents API supports at most 100 requests per call.
+// https://ai.google.dev/api/embedding#method:-models.batchembedcontents
+const GEMINI_BATCH_EMBEDDING_MAX_REQUESTS = 100;
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-001": 2048,
   "gemini-embedding-2": 8192,
@@ -320,25 +323,33 @@ export async function createGeminiEmbeddingProvider(
     if (inputs.length === 0) {
       return [];
     }
-    const payload = await fetchGeminiEmbeddingPayload({
-      client,
-      endpoint: batchUrl,
-      body: {
-        requests: inputs.map((input) =>
-          buildGeminiEmbeddingRequest({
-            input,
-            model: client.model,
-            role: "document",
-            modelPath: client.modelPath,
-            taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
-            outputDimensionality,
-          }),
+    const embeddings: number[][] = [];
+    for (let offset = 0; offset < inputs.length; offset += GEMINI_BATCH_EMBEDDING_MAX_REQUESTS) {
+      const batch = inputs.slice(offset, offset + GEMINI_BATCH_EMBEDDING_MAX_REQUESTS);
+      const payload = await fetchGeminiEmbeddingPayload({
+        client,
+        endpoint: batchUrl,
+        body: {
+          requests: batch.map((input) =>
+            buildGeminiEmbeddingRequest({
+              input,
+              model: client.model,
+              role: "document",
+              modelPath: client.modelPath,
+              taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
+              outputDimensionality,
+            }),
+          ),
+        },
+        signal: callOptions?.signal,
+      });
+      embeddings.push(
+        ...readGeminiBatchEmbeddings(payload, batch.length).map((values) =>
+          sanitizeGeminiEmbedding(values, outputDimensionality),
         ),
-      },
-      signal: callOptions?.signal,
-    });
-    const embeddings = readGeminiBatchEmbeddings(payload, inputs.length);
-    return embeddings.map((values) => sanitizeGeminiEmbedding(values, outputDimensionality));
+      );
+    }
+    return embeddings;
   };
 
   return {
