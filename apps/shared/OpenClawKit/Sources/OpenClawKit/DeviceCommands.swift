@@ -45,8 +45,8 @@ public struct OpenClawBatteryStatusPayload: Codable, Sendable, Equatable {
         level: Double?,
         state: OpenClawBatteryState,
         lowPowerModeEnabled: Bool,
-        levelPercent: Int? = nil
-    ) {
+        levelPercent: Int? = nil)
+    {
         self.level = level
         self.levelPercent = levelPercent
         self.state = state
