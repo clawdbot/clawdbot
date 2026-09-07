@@ -321,6 +321,15 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     }
     turn.queuedFinal ||= hasFinalInboundReplyDispatch(turnResult.dispatchResult);
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
+    // A final source reply delivered out-of-band (e.g. message-tool-only mode)
+    // never flows through this channel's final block delivery, so
+    // finalAnswerDelivered would otherwise stay false and the terminal branch
+    // would emit a false failure notice for a run that did deliver its answer.
+    // Adopt the dedicated final-delivery signal here. Never clear an already-set
+    // flag: a directly delivered block final still counts.
+    if (turnResult.dispatchResult.sourceReplyFinalDelivered === true) {
+      turn.finalAnswerDelivered = true;
+    }
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     turn.suppressSilentReplyFallback =

@@ -647,6 +647,12 @@ export function createDispatchReplyOperationCoordinator(params: {
     dispatchReplyOperation?.abortSignal ??
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
+  // Distinct from observedReplyDelivery, which also latches on progress/partial
+  // deliveries: this records that a genuine *final* source reply settled through
+  // an out-of-band path (e.g. message-tool-only mode). Channel terminal branches
+  // use it to set finalAnswerDelivered so they do not emit a false failure notice
+  // for a run whose final answer was in fact delivered.
+  let sourceReplyFinalDelivered = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
@@ -654,6 +660,18 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
     observedReplyDelivery = true;
     await params.replyOptions?.onObservedReplyDelivery?.();
+  };
+  const markSourceReplyFinalDelivered = async () => {
+    // Final delivery is also visible delivery; keep the coarse flag consistent so
+    // downstream visible-delivery checks stay correct even if only this fires.
+    if (!observedReplyDelivery) {
+      await markObservedReplyDelivery();
+    }
+    if (sourceReplyFinalDelivered) {
+      return;
+    }
+    sourceReplyFinalDelivered = true;
+    await params.replyOptions?.onSourceReplyFinalDelivered?.();
   };
   const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
@@ -746,10 +764,12 @@ export function createDispatchReplyOperationCoordinator(params: {
     getDispatchReplyOperation: () => dispatchReplyOperation,
     getReplyOptions,
     getObservedReplyDelivery: () => observedReplyDelivery,
+    getSourceReplyFinalDelivered: () => sourceReplyFinalDelivered,
     getPreDispatchAbortSignal,
     isDispatchOperationAborted,
     isPreDispatchOperationAborted,
     markObservedReplyDelivery,
+    markSourceReplyFinalDelivered,
     releasePreDispatchLifecycleAdmission,
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,

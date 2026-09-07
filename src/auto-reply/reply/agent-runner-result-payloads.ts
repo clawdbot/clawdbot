@@ -237,6 +237,14 @@ export async function prepareReplyAgentPayloads(state: {
       }));
   if (sourceRoutedMessagingToolDelivery) {
     await opts?.onObservedReplyDelivery?.();
+    // A source-routed messaging-tool delivery that carries completed/terminal
+    // delivery evidence is the run's final answer, delivered out-of-band. Signal
+    // it distinctly so channel terminal branches set finalAnswerDelivered and do
+    // not emit a false failure notice. Guard on the final-only evidence: a merely
+    // route-matched legacy aggregate without terminal evidence stays coarse.
+    if (completedSourceReplyDelivery || successfulTerminalDelivery) {
+      await opts?.onSourceReplyFinalDelivered?.();
+    }
   }
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   // A terminal fallback is built separately after normal payload filtering.

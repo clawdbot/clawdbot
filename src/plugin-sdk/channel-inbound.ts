@@ -42,6 +42,7 @@ import type {
 
 export {
   readAgentRunTerminalOutcome,
+  recordAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../channels/turn/agent-run-terminal-outcome.js";
 
