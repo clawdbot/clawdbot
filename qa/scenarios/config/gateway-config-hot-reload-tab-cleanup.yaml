@@ -1,0 +1,32 @@
+title: Gateway tab cleanup hot reload
+scenario:
+  id: gateway-config-hot-reload-tab-cleanup
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.config-reload-hot-apply
+      - gateway.config-reload-hot-reload
+    secondary:
+      - gateway.config-reload-lifecycle
+  objective: Prove browser tab cleanup adopts disabled, enabled, and disabled policy on the production five-minute cadence without replacing its Gateway or external Chromium owner.
+  successCriteria:
+    - Nine Browser-tool-owned tabs survive a complete disabled sweep window.
+    - Enabling cleanup removes exactly the oldest tracked tab at the production eight-tab cap.
+    - Disabling cleanup again preserves nine tracked tabs through another complete sweep window.
+    - All phases preserve the Gateway PID, boot identity, and original authenticated WebSocket.
+    - The external Chromium PID, CDP connection, and unowned witness page survive every phase.
+  plugins: [qa-lab, browser]
+  docsRefs: [docs/gateway/configuration.md, docs/tools/browser.md]
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-config-hot-reload-tab-cleanup.ts
+    - extensions/browser/src/browser/session-tab-cleanup.ts
+  execution:
+    kind: script
+    parallelSafe: false
+    path: test/e2e/qa-lab/runtime/gateway-config-hot-reload-tab-cleanup.ts
+    config:
+      requiredProviderMode: mock-openai
+    args: [--output-dir, "${outputDir}"]
+    # 305s + up to 330s + 305s observations, plus Gateway/browser startup and cleanup.
+    timeoutMs: 1200000
+    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1 and Playwright Chromium. Owns a real Gateway and external browser for three sequential production-cadence cleanup phases; allow up to 20 minutes. Provider and widget HTTP upstreams are synthetic.

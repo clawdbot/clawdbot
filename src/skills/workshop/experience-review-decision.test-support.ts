@@ -45,7 +45,11 @@ export function assertExperienceReviewDecision(params: {
     expect(mutations).toHaveLength(0);
     for (const call of observation.toolCalls) {
       expect(isRecord(call.arguments) && call.arguments.action).toSatisfy(
-        (action: unknown) => action === "read" || action === "prepare_patch",
+        (action: unknown) =>
+          action === "list" ||
+          action === "inspect" ||
+          action === "read" ||
+          action === "prepare_patch",
       );
     }
     expect(progress.proposalIds).toEqual([]);

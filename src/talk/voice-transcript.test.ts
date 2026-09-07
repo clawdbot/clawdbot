@@ -6,6 +6,30 @@ import {
 } from "./voice-transcript.js";
 
 describe("VoiceTranscriptOperationRegistry", () => {
+  it("rejects close after an accepted operation fails and releases the failed owner", async () => {
+    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const first = createDeferred();
+    const key = "agent\0voice-failure";
+    const active = registry.run(key, () => first.promise);
+    const failure = new Error("persistence failed");
+    const failed = registry.run(key, () => {
+      throw failure;
+    });
+    const closeOperation = vi.fn(async () => undefined);
+    const closed = registry.close(key, closeOperation);
+    const completions = Promise.all([
+      expect(active).resolves.toBeUndefined(),
+      expect(failed).rejects.toBe(failure),
+      expect(closed).rejects.toBe(failure),
+    ]);
+
+    first.resolve();
+    await completions;
+
+    expect(closeOperation).not.toHaveBeenCalled();
+    await expect(registry.run(key, async () => "fresh owner")).resolves.toBe("fresh owner");
+  });
+
   it("keeps overflow terminal through drain and releases it only on close", async () => {
     const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
     const first = createDeferred();

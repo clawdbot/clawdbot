@@ -8,3 +8,5 @@ export class ConfigMutationConflictError extends Error {
     this.retryable = params.retryable ?? true;
   }
 }
+export const GUARDED_CONFIG_INCLUDE_WRITE_ERROR =
+  "This approved operation cannot update include-owned configuration. Use a trusted shell for this change.";

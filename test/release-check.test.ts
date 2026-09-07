@@ -2,25 +2,14 @@
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
-import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
+import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { collectBundledExtensionManifestErrors } from "../scripts/lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import { collectPackUnpackedSizeErrors } from "../scripts/lib/npm-pack-budget.mts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../scripts/lib/package-dist-inventory.ts";
-import {
-  listPluginSdkDistArtifacts,
-  listPackagedPrivatePluginSdkRuntimeArtifacts,
-  listUnpackagedPrivatePluginSdkDistArtifacts,
-} from "../scripts/lib/plugin-sdk-entries.mts";
-import {
-  WORKSPACE_TEMPLATE_PACK_PATHS,
-  createWorkspaceBootstrapSmokeEnv,
-} from "../scripts/lib/workspace-bootstrap-smoke.mts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
+import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import {
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledRootDependencyManifestErrors,
@@ -30,7 +19,6 @@ import {
   collectCriticalPluginSdkEntrypointSizeErrors,
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
-  collectMissingPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
   createPackedPluginSdkTypescriptSmokeProject,
@@ -42,10 +30,8 @@ import {
   PACKED_COMPLETION_SMOKE_ARGS,
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
-  resolveMissingPackBuildHint,
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
-import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
@@ -63,11 +49,7 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
   return withEnv(env, callback);
 }
 
-const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
-const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
-const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
-const requiredStaticExtensionAssetPaths = listStaticExtensionAssetOutputs();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -483,107 +465,14 @@ describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutable
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it("blocks all packaged node_modules payloads", () => {
+  it("leaves npm-selected bundled dependency paths to the canonical tarball verifier", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
         bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
-        bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
-    ).toEqual([
-      bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
-      bundledPluginFile("tlon", "node_modules/.bin/tlon"),
-      "node_modules/.bin/openclaw",
-    ]);
-  });
-
-  it("blocks generated docs artifacts from npm pack output", () => {
-    expect(
-      collectForbiddenPackPaths([
-        "dist/index.js",
-        "docs/.generated/config-baseline.json",
-        "docs/.generated/config-baseline.core.json",
-      ]),
-    ).toEqual([
-      "docs/.generated/config-baseline.core.json",
-      "docs/.generated/config-baseline.json",
-    ]);
-  });
-
-  it("blocks plugin SDK TypeScript build info from npm pack output", () => {
-    expect(collectForbiddenPackPaths(["dist/index.js", "dist/plugin-sdk/.tsbuildinfo"])).toEqual([
-      "dist/plugin-sdk/.tsbuildinfo",
-    ]);
-  });
-
-  it("blocks the old deep plugin SDK declaration tree from npm pack output", () => {
-    expect(
-      collectForbiddenPackPaths([
-        "dist/index.js",
-        "dist/plugin-sdk/index.d.ts",
-        "dist/plugin-sdk/types-abc123.d.ts",
-        "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
-        "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
-      ]),
-    ).toEqual([
-      "dist/plugin-sdk/index.d.ts",
-      "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
-      "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
-    ]);
-  });
-
-  it("blocks local build metadata from npm pack output", () => {
-    expect(
-      collectForbiddenPackPaths(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
-    ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
-  });
-
-  it("blocks Docker-selected external plugin trees from the core npm pack", () => {
-    expect(
-      collectForbiddenPackPaths([
-        "dist/index.js",
-        "dist/extensions/clickclack/index.js",
-        "dist/extensions/slack/setup-entry.js",
-        "dist/extensions/msteams/openclaw.plugin.json",
-      ]),
-    ).toEqual([
-      "dist/extensions/clickclack/index.js",
-      "dist/extensions/msteams/openclaw.plugin.json",
-      "dist/extensions/slack/setup-entry.js",
-    ]);
-  });
-
-  it("keeps local build metadata excluded by package files", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-    for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
-      expect(pkg.files).toContain(`!${entry}`);
-    }
-    expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
-  });
-
-  it("blocks private declarations and non-production SDK artifacts from npm pack output", () => {
-    expect(
-      collectForbiddenPackPaths(["dist/index.js", ...unpackagedPrivatePluginSdkPaths]),
-    ).toEqual([...unpackagedPrivatePluginSdkPaths].toSorted());
-  });
-
-  it("keeps private declarations and non-production SDK artifacts excluded by package files", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-
-    for (const entry of unpackagedPrivatePluginSdkPaths) {
-      expect(pkg.files).toContain(`!${entry}`);
-    }
-  });
-
-  it("keeps production-private plugin SDK runtime facades inside package files", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-
-    expect(packagedPrivatePluginSdkRuntimePaths.length).toBeGreaterThan(0);
-    for (const entry of packagedPrivatePluginSdkRuntimePaths) {
-      expect(pkg.files).not.toContain(`!${entry}`);
-      expect(collectForbiddenPackPaths([entry])).toEqual([]);
-    }
+    ).toEqual([]);
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -598,37 +487,6 @@ describe("collectForbiddenPackPaths", () => {
       "dist/extensions/browser/.OpenClaw-Install-Stage/package.json",
       "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
       "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
-    ]);
-  });
-
-  it("blocks private qa channel, qa lab, and suite paths from npm pack output", () => {
-    expect(
-      collectForbiddenPackPaths([
-        "dist/index.js",
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
-        "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
-        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
-        "dist/plugin-sdk/qa-channel.js",
-        "dist/plugin-sdk/qa-channel-protocol.d.ts",
-        "dist/plugin-sdk/qa-lab.js",
-        "dist/plugin-sdk/qa-runtime.js",
-        "dist/qa-runtime-B9LDtssJ.js",
-        "docs/channels/qa-channel.md",
-        "qa/scenarios/index.yaml",
-      ]),
-    ).toEqual([
-      "dist/extensions/qa-channel/runtime-api.js",
-      "dist/extensions/qa-lab/runtime-api.js",
-      "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
-      "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
-      "dist/plugin-sdk/qa-channel-protocol.d.ts",
-      "dist/plugin-sdk/qa-channel.js",
-      "dist/plugin-sdk/qa-lab.js",
-      "dist/plugin-sdk/qa-runtime.js",
-      "dist/qa-runtime-B9LDtssJ.js",
-      "docs/channels/qa-channel.md",
-      "qa/scenarios/index.yaml",
     ]);
   });
 
@@ -691,83 +549,7 @@ describe("collectForbiddenPackPaths", () => {
   });
 });
 
-describe("collectMissingPackPaths", () => {
-  it("requires the shipped channel catalog, control ui, and optional bundled metadata", () => {
-    const missing = collectMissingPackPaths([
-      "dist/index.js",
-      "dist/entry.js",
-      "dist/build-info.json",
-    ]);
-
-    for (const path of [
-      "dist/channel-catalog.json",
-      PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-      "dist/control-ui/index.html",
-      "scripts/prepare-git-hooks.mjs",
-      "scripts/preinstall-package-manager-warning.mjs",
-      "scripts/lib/official-external-channel-catalog.json",
-      "scripts/lib/official-external-plugin-catalog.json",
-      "scripts/lib/official-external-provider-catalog.json",
-      "scripts/lib/recommended-tool-installs.json",
-      "scripts/lib/guard-inventory-utils.mjs",
-      "scripts/lib/package-dist-imports.mjs",
-      "scripts/postinstall-bundled-plugins.mjs",
-      "dist/agents/compaction-planning.worker.js",
-      "dist/agents/model-provider-auth.worker.js",
-      "dist/agents/prepared-model-catalog.worker.js",
-      "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
-      "dist/config/sessions/session-transcript-reconcile.worker.js",
-      "dist/state/openclaw-database-verify.worker.js",
-      "dist/system-agent/setup-inference-detection.worker.js",
-      "dist/task-registry-control.runtime.js",
-      "dist/telegram-ingress-worker.runtime.js",
-      bundledDistPluginFile("telegram", "runtime-api.js"),
-      bundledDistPluginFile("telegram", "openclaw.plugin.json"),
-      bundledDistPluginFile("telegram", "package.json"),
-    ]) {
-      expect(missing).toContain(path);
-    }
-  });
-
-  it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
-    expect(
-      collectMissingPackPaths([
-        "dist/index.js",
-        "dist/entry.js",
-        "dist/control-ui/index.html",
-        "dist/extensions/acpx/error-format.mjs",
-        "dist/extensions/acpx/mcp-command-line.mjs",
-        "dist/extensions/acpx/mcp-proxy.mjs",
-        ...requiredBundledPluginPackPaths,
-        ...requiredStaticExtensionAssetPaths,
-        ...requiredPluginSdkPackPaths,
-        ...WORKSPACE_TEMPLATE_PACK_PATHS,
-        "scripts/prepare-git-hooks.mjs",
-        "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/official-external-channel-catalog.json",
-        "scripts/lib/official-external-plugin-catalog.json",
-        "scripts/lib/official-external-provider-catalog.json",
-        "scripts/lib/recommended-tool-installs.json",
-        "scripts/lib/guard-inventory-utils.mjs",
-        "scripts/lib/package-dist-imports.mjs",
-        "scripts/postinstall-bundled-plugins.mjs",
-        "dist/agents/compaction-planning.worker.js",
-        "dist/agents/model-provider-auth.worker.js",
-        "dist/agents/prepared-model-catalog.worker.js",
-        "dist/extensions/memory-core/memory-search-knn.child.js",
-        "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
-        "dist/config/sessions/session-transcript-reconcile.worker.js",
-        "dist/state/openclaw-database-verify.worker.js",
-        "dist/system-agent/setup-inference-detection.worker.js",
-        "dist/task-registry-control.runtime.js",
-        "dist/telegram-ingress-worker.runtime.js",
-        "dist/build-info.json",
-        "dist/channel-catalog.json",
-        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-      ]),
-    ).toStrictEqual([]);
-  });
-
+describe("packed install verification", () => {
   it("runs postpublish package integrity checks against the packed install before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-packed-install-"));
     try {
@@ -823,32 +605,6 @@ describe("collectMissingPackPaths", () => {
     expect(requiredBundledPluginPackPaths).toContain(
       bundledDistPluginFile("telegram", "runtime-api.js"),
     );
-  });
-});
-
-describe("resolveMissingPackBuildHint", () => {
-  it("points missing runtime build artifacts at pnpm build", () => {
-    expect(resolveMissingPackBuildHint(["dist/build-info.json"])).toBe(
-      "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
-    );
-  });
-
-  it("points missing Control UI artifacts at pnpm ui:build", () => {
-    expect(resolveMissingPackBuildHint(["dist/control-ui/index.html"])).toBe(
-      "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.",
-    );
-  });
-
-  it("points combined runtime and Control UI misses at both build commands", () => {
-    expect(
-      resolveMissingPackBuildHint(["dist/build-info.json", "dist/control-ui/index.html"]),
-    ).toBe(
-      "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.",
-    );
-  });
-
-  it("does not emit a build hint for unrelated packed paths", () => {
-    expect(resolveMissingPackBuildHint(["scripts/prepare-git-hooks.mjs"])).toBeNull();
   });
 });
 

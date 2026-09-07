@@ -6,9 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
-const { normalizeRoute, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
+const { prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
   await import("../../scripts/docs-link-audit.mts");
 
 type AuditCliCase = {
@@ -44,6 +45,116 @@ describe("docs-link-audit", () => {
     expect(md.renderer.render(document.tokens, md.options, document.env)).toContain(
       "&lt;Card href=&quot;/same&quot; title=&quot;Literal&quot; /&gt;",
     );
+  });
+
+  it.each([
+    {
+      name: "published possessive links",
+      source: "## Request today's summary\n\n## The vendor's harness, as a plugin",
+      headings: [
+        ["request-today's-summary", "request-todays-summary"],
+        ["the-vendor's-harness%2C-as-a-plugin", "the-vendors-harness-as-a-plugin"],
+      ],
+      collisions: [],
+    },
+    {
+      name: "normalized duplicates and numbered suffixes before alias reservation",
+      source: "## A-s\n\n## As\n\n## A-s\n\n## A-s-2\n\n## A-s",
+      headings: [
+        ["a-s", null],
+        ["as", "as-2"],
+        ["a-s-1", "as-3"],
+        ["a-s-2", "as-2-1"],
+        ["a-s-3", "as-4"],
+      ],
+      collisions: [{ id: "as", reason: "compatibility alias collision" }],
+    },
+    {
+      name: "percent bytes, underscores and numbered title prefixes",
+      source:
+        "## café 中文 _Über\n\n## café 中文 _Über\n\n## 1. Today\n\n## 1. Today\n\n## 100% ready",
+      headings: [
+        ["caf%C3%A9-%E4%B8%AD%E6%96%87-_%C3%BCber", "café-中文-_über"],
+        ["caf%C3%A9-%E4%B8%AD%E6%96%87-_%C3%BCber-1", "café-中文-_über-2"],
+        ["1.-today", "1-today"],
+        ["1.-today-1", "1-today-2"],
+        ["100%25-ready", "100%-ready"],
+      ],
+      collisions: [],
+    },
+  ])("preserves Mint heading targets for $name", ({ source, headings, collisions }) => {
+    const document = parseDocsDocument(source);
+    expect(
+      document.tokens
+        .filter((token) => token.type === "heading_open")
+        .map((token) => [token.attrGet("id"), token.meta?.anchorAlias ?? null]),
+    ).toEqual(headings);
+    expect(document.collisions).toEqual(collisions);
+    expect(new Set(document.ids).size).toBe(document.ids.length);
+  });
+
+  it.each([
+    {
+      name: "shared heading/Step TOC with an independent Tab counter",
+      source: [
+        "## Today's summary",
+        '<Steps titleSize="h2">',
+        '<Step title="Today\'s summary">one</Step>',
+        '<Step title="Today\'s summary">two</Step>',
+        "</Steps>",
+        "<Tabs>",
+        '<Tab title="Today\'s summary">one</Tab>',
+        '<Tab title="Todays summary">two</Tab>',
+        '<Tab title="Today\'s summary">three</Tab>',
+        "</Tabs>",
+        '<Accordion title="A-s">one</Accordion>',
+        '<Accordion title="As">two</Accordion>',
+        '<ParamField body="a-s">one</ParamField>',
+        '<ResponseField name="as">two</ResponseField>',
+      ],
+      ids: [
+        "today's-summary",
+        "todays-summary",
+        "todays-summary-2",
+        "todays-summary-3",
+        "todays-summary-1",
+        "todays-summary-2-1",
+        "todays-summary-3-1",
+        "as",
+        "as-1",
+        "param-as",
+        "param-as-1",
+      ],
+      collisions: [],
+    },
+    {
+      name: "authored IDs reserved before heading aliases and component IDs",
+      source: [
+        "## Today's summary",
+        '<a id="todays-summary"></a>',
+        '<Tab title="A-s">one</Tab>',
+        '<Tab id="as" title="Explicit">two</Tab>',
+        '<Accordion title="A-s">three</Accordion>',
+        '<ParamField body="a-s">four</ParamField>',
+        '<a id="param-as"></a>',
+      ],
+      ids: ["today's-summary", "todays-summary", "as", "param-as", "as-1", "as-2", "param-as-1"],
+      collisions: [{ id: "todays-summary", reason: "compatibility alias collision" }],
+    },
+    {
+      name: "raw component apostrophes normalized after separators",
+      source: [
+        '<Accordion title="A-s\'s guide">one</Accordion>',
+        '<ParamField body="a-s\'sGuide">two</ParamField>',
+      ],
+      ids: ["as-s-guide", "param-as-s-guide"],
+      collisions: [],
+    },
+  ])("preserves Mint component targets for $name", ({ source, ids, collisions }) => {
+    const document = parseDocsDocument(source.join("\n\n"));
+    expect(document.ids).toEqual(ids);
+    expect(document.collisions).toEqual(collisions);
+    expect(new Set(document.ids).size).toBe(document.ids.length);
   });
 
   it.each<AuditCliCase>([

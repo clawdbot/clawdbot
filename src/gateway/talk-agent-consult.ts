@@ -76,7 +76,10 @@ export async function startTalkRealtimeAgentConsult(
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(request.context.getRuntimeConfig().talk);
-  const authority = resolveTalkAgentConsultAuthority(request.client?.connect?.scopes);
+  const authority = resolveTalkAgentConsultAuthority(
+    request.client?.connect?.scopes,
+    request.client,
+  );
   let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
@@ -84,6 +87,13 @@ export async function startTalkRealtimeAgentConsult(
     let acknowledged = false;
     const chatSendOptions = {
       ...request,
+      client:
+        request.client && authority.replyCaller
+          ? {
+              ...request.client,
+              connect: { ...request.client.connect, caps: authority.replyCaller.GatewayClientCaps },
+            }
+          : request.client,
       req: {
         type: "req",
         id: `${request.req.id}:talk-tool-call`,

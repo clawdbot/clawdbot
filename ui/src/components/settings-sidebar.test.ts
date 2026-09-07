@@ -16,13 +16,14 @@ const saveIndicator = () => ({
   applying: false,
   applyDisabled: false,
   onRetry: vi.fn(),
+  onSave: vi.fn(),
   onReload: vi.fn(),
   onApply: vi.fn(),
 });
 
 const inactiveRefresh = {
   refreshRequired: false,
-  onRefresh: () => undefined,
+  onRefresh: async () => false,
 };
 
 beforeEach(async () => {

@@ -10,9 +10,8 @@ import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
-  normalizeClawHubSha256Integrity,
-  normalizeClawHubSha256Hex,
 } from "./clawhub-artifacts.js";
+import { normalizeClawHubSha256Integrity, normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
 import * as privateTempWorkspace from "./private-temp-workspace.js";
 
 const tempDirs = createTrackedTempDirs();

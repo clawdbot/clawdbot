@@ -144,7 +144,13 @@ export function resolveApplicationStartupSettings(
     }
     updateSettings({
       ...(gatewayUrl ? { gatewayUrl } : {}),
-      ...(token ? { token } : credentials ? { token: credentials.token } : {}),
+      // An explicit null retires shared-owner auth for the native browser sign-in
+      // route; an omitted token still preserves the selected Gateway's credentials.
+      ...(nativeAuth.token === null || token
+        ? { token: token ?? "" }
+        : credentials
+          ? { token: credentials.token }
+          : {}),
     });
     if (nativePassword) {
       password = nativePassword;

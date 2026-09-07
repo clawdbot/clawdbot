@@ -77,17 +77,17 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.mode":
     'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
   "session.maintenance.pruneAfter":
-    "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
+    "Archives eligible durable conversations and removes disposable automation entries older than this duration (default `30d`; for example `12h`). Archived conversations retain their history and can be restored; protected or routable conversations remain active.",
   "session.maintenance.archiveDashboardAfter":
     "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
   "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Protected entries count toward the limit but are never automatically removed, so the store can remain above the cap when protection alone exceeds it. Use lower limits for constrained environments, or higher limits when longer history is required.",
+    "Caps unarchived session entries (default 5000). Eligible durable overflow conversations are archived with their history; disposable automation entries are removed. Existing archives do not consume the cap. Protected active entries still count and can keep the store above the limit.",
   "session.maintenance.preserveRecent":
     "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    'Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false`, `0`, or `"0"` to disable.',
+    'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, dashboard, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
@@ -124,7 +124,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.autoStart[].whenOccupied":
     "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
-    "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
+    "Optional title for future transcript captures. Changing only titles keeps current captures running and does not rename their admitted title or saved notes. Other source changes retain their normal restart handling.",
   "transcripts.autoStart[].accountId":
     "Optional provider account or workspace identifier for transcript sources that need account disambiguation. Use the provider's documented account id format.",
   "transcripts.autoStart[].guildId":
@@ -346,8 +346,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id / DM peer id -> model override (values are provider/model or aliases).",
-  "messages.suppressToolErrors":
-    "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "group-mentions" acks group messages that mention the agent, whether or not the group requires mentions; "group-all" acks every group message. "off"/"none" disables ack reactions entirely.',

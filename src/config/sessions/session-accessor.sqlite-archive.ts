@@ -294,7 +294,9 @@ function resolveSourceWorkerExecArgv(): string[] {
 }
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {
@@ -309,6 +311,10 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       execArgv: sourceWorkerExecArgv,
       transferList: params.transferList,
     });
+    // Node clears threadId at exit. Keep only the spawned identity for the awaiting writer.
+    if (params.diagnostics) {
+      params.diagnostics.workerThreadId = worker.threadId;
+    }
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -317,14 +323,20 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
     worker.on("message", (message: { results: Result[]; type: string }) => {
-      if (message.type === params.expectedMessageType) {
+      if (message.type === "commit-request") {
+        try {
+          params.onCommitRequest?.();
+        } catch (error) {
+          workerError = toStringifiedError(error);
+        }
+      } else if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
       }
     });
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = toStringifiedError(error);
+      workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();
@@ -351,7 +363,9 @@ const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {

@@ -3,6 +3,7 @@
  *
  * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
@@ -52,37 +53,29 @@ export function buildAssistantMessage(params: {
   };
 }
 
-function buildAssistantMessageWithZeroUsage(params: {
-  model: StreamModelDescriptor;
-  content: AssistantMessage["content"];
-  stopReason: StopReason;
-  timestamp?: number;
-}): AssistantMessage {
-  return buildAssistantMessage({
-    model: params.model,
-    content: params.content,
-    stopReason: params.stopReason,
-    usage: buildUsageWithNoCost({}),
-    timestamp: params.timestamp,
-  });
-}
-
-// Single canonical sentinel placed in the `content` array of any assistant turn
-// that failed before the model produced its own content. AWS Bedrock Converse
-// rejects assistant messages with `content: []` during replay ("The content
-// field in the Message object at messages.N is empty."), which can persist into
-// the session file and trap subsequent turns in a validation-failure loop. The
-// raw provider error text is intentionally NOT placed in `content` because that
-// array is replayed back to the model on the next turn — provider error strings
-// can carry hostnames or upstream metadata, and replaying them as assistant
-// content opens a prompt-injection surface (CWE-200). The detailed error stays
-// in the peer `errorMessage` field, which clients/UIs read directly and
-// providers do not include in their wire payloads.
-//
-// This constant is the single source of truth used by replay normalization and
-// session-file repair as well, so a session repaired offline reads identically
-// to a live stream-error turn (and the repair pass remains idempotent).
+// Legacy error content remains readable without replaying provider diagnostics.
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
+
+export function isStreamErrorFallbackContent(content: unknown): boolean {
+  if (content == null) {
+    return true;
+  }
+  if (typeof content === "string") {
+    return !content.trim() || content.trim() === STREAM_ERROR_FALLBACK_TEXT;
+  }
+  return (
+    Array.isArray(content) &&
+    content.every((value) => {
+      const block = asOptionalRecord(value);
+      return (
+        block &&
+        (block.type === "text" || block.type === "input_text" || block.type === "output_text") &&
+        typeof block.text === "string" &&
+        isStreamErrorFallbackContent(block.text)
+      );
+    })
+  );
+}
 
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
@@ -90,10 +83,11 @@ export function buildStreamErrorAssistantMessage(params: {
   timestamp?: number;
 }): AssistantMessage & { stopReason: "error"; errorMessage: string } {
   return {
-    ...buildAssistantMessageWithZeroUsage({
+    ...buildAssistantMessage({
       model: params.model,
       content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
       stopReason: "error",
+      usage: buildUsageWithNoCost({}),
       timestamp: params.timestamp,
     }),
     stopReason: "error",

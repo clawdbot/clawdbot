@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/linux/**"
       - ".github/workflows/linux-app.yml"
+      - ".github/workflows/linux-app-release.yml"
   workflow_dispatch:
 
 concurrency:
@@ -20,7 +21,7 @@ permissions:
 jobs:
   build:
     name: Build Linux companion
-    # Match the release build base so PR artifacts have the same glibc floor.
+    # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -87,6 +88,11 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Test packaged runtime ABI scanner
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_packaged_runtime_smoke.py'
+
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
@@ -96,33 +102,58 @@ jobs:
         run: cargo +stable test --locked --all-targets
 
       - name: Stage AppImage GStreamer plugins
+        if: github.event_name == 'workflow_dispatch'
         run: |
           plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
           apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
+      - name: Prepare pinned AppImage tools
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: | # zizmor: ignore[github-env] trusted checked-in helper returns the native runtime path
+          set -euo pipefail
+          apps/linux/scripts/tauri-appimage-tools.sh prepare
+          apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+          runtime_file=$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)
+          printf 'LDAI_RUNTIME_FILE=%s\n' "$runtime_file" >> "$GITHUB_ENV"
+
       - name: Build Linux companion bundles
+        if: github.event_name == 'workflow_dispatch'
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-        # PR builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        # Validation builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false,"useLocalToolsDir":false}}'
 
-      - name: Test native first-run setup without a CLI
+      - name: Finalize AppImage
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: apps/linux/scripts/finalize-appimage.sh apps/linux/src-tauri/target/release/bundle/appimage
+
+      - name: Test native first-run setup and failed Gateway startup
         id: first-run
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/release/openclaw-desktop \
             2>&1 | tee "${RUNNER_TEMP}/linux-first-run.log"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/release/openclaw-desktop --local-start-failure \
+            2>&1 | tee -a "${RUNNER_TEMP}/linux-first-run.log"
 
       - name: Upload first-run failure log
-        if: failure() && steps.first-run.outcome == 'failure'
+        if: github.event_name == 'workflow_dispatch' && failure() && steps.first-run.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-first-run-failure
@@ -132,6 +163,7 @@ jobs:
 
       - name: Test packaged AppImage runtime
         id: packaged-runtime
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           shopt -s nullglob
@@ -149,7 +181,7 @@ jobs:
               "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
 
       - name: Upload packaged runtime failure evidence
-        if: failure() && steps.packaged-runtime.outcome == 'failure'
+        if: github.event_name == 'workflow_dispatch' && failure() && steps.packaged-runtime.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-packaged-runtime-failure
@@ -158,6 +190,7 @@ jobs:
           path: ${{ runner.temp }}/linux-packaged-runtime
 
       - name: Upload bundles
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-linux-companion

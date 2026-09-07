@@ -3,10 +3,9 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
-import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -163,11 +162,10 @@ export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: st
 export type ResolvedBoardView = {
   provider: BoardProvider;
   snapshot: BoardSnapshot;
+  available: boolean;
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  dock: BoardTab["chatDock"];
-  reopenDock: BoardVisibleChatDock;
 };
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
@@ -200,7 +198,7 @@ export function catalogRawResult(raw: unknown): string | null {
   }
   try {
     const text = JSON.stringify(result);
-    return text ? clampText(text, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+    return text || null;
   } catch {
     return null;
   }

@@ -1,5 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
-import { diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
+import { createNoopMeter, diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
 import * as otelCore from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -183,64 +183,53 @@ function diagnosticTraceContextFromSpanContext(spanContext: SpanContext): Diagno
   };
 }
 
+type DiagnosticsOtelState = {
+  traceProvider?: BasicTracerProvider;
+  meterProvider?: MeterProvider;
+  logProvider?: LoggerProvider | null;
+  unsubscribe?: (() => void) | null;
+  unregisterTracePropagationBridge?: (() => void) | null;
+  stopActiveTrustedSpans?: (() => void) | null;
+  unregisterOwnedSdkRuntime?: (() => void) | null;
+  unregisterUnhandledRejectionHandler?: (() => void) | null;
+  retireExporterRoutes?: (preserveFailures?: boolean) => void;
+};
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
-  let traceProvider: BasicTracerProvider | null = null;
-  let meterProvider: MeterProvider | null = null;
-  let logProvider: LoggerProvider | null = null;
-  let unsubscribe: (() => void) | null = null;
-  let unregisterTracePropagationBridge: (() => void) | null = null;
-  let stopActiveTrustedSpans: (() => void) | null = null;
-  let unregisterOwnedSdkRuntime: (() => void) | null = null;
-  let unregisterUnhandledRejectionHandler: (() => void) | null = null;
-  let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
+  let state: DiagnosticsOtelState = {};
   let preserveExporterRoutesOnNextStop = false;
 
   const stopStarted = async (options?: { preserveExporterRoutes?: boolean }) => {
-    const currentUnsubscribe = unsubscribe;
-    const currentUnregisterTracePropagationBridge = unregisterTracePropagationBridge;
-    const currentLogProvider = logProvider;
-    const currentTraceProvider = traceProvider;
-    const currentMeterProvider = meterProvider;
-    const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
-    const currentUnregisterOwnedSdkRuntime = unregisterOwnedSdkRuntime;
-    const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
-    const currentRetireExporterRoutes = retireExporterRoutes;
+    const current = state;
+    state = options?.preserveExporterRoutes
+      ? { retireExporterRoutes: current.retireExporterRoutes }
+      : {};
 
-    unsubscribe = null;
-    unregisterTracePropagationBridge = null;
-    logProvider = null;
-    traceProvider = null;
-    meterProvider = null;
-    stopActiveTrustedSpans = null;
-    unregisterOwnedSdkRuntime = null;
-    unregisterUnhandledRejectionHandler = null;
-    retireExporterRoutes = options?.preserveExporterRoutes ? currentRetireExporterRoutes : null;
-
-    const settle = async (...stops: Array<(() => void | Promise<void>) | null>) =>
+    const settle = async (...stops: Array<(() => void | Promise<void>) | null | undefined>) =>
       (
         await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
     // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
     const failures = await settle(
-      currentUnregisterTracePropagationBridge,
-      currentUnsubscribe,
-      currentStopActiveTrustedSpans,
-      currentUnregisterOwnedSdkRuntime,
+      current.unregisterTracePropagationBridge,
+      current.unsubscribe,
+      current.stopActiveTrustedSpans,
+      current.unregisterOwnedSdkRuntime,
     );
     const providerFailures = await settle(
-      currentLogProvider ? () => currentLogProvider.shutdown() : null,
-      currentTraceProvider ? () => currentTraceProvider.shutdown() : null,
-      currentMeterProvider ? () => currentMeterProvider.shutdown() : null,
+      () => current.logProvider?.shutdown(),
+      () => current.traceProvider?.shutdown(),
+      () => current.meterProvider?.shutdown(),
     );
     failures.push(...providerFailures);
     if (!options?.preserveExporterRoutes) {
-      currentRetireExporterRoutes?.(providerFailures.length > 0);
+      current.retireExporterRoutes?.(providerFailures.length > 0);
     }
     if (providerFailures.length > 0) {
       // Keep final callback failures visible until the next lifecycle call retires them.
-      retireExporterRoutes = currentRetireExporterRoutes;
+      state.retireExporterRoutes = current.retireExporterRoutes;
     }
-    failures.push(...(await settle(currentUnregisterUnhandledRejectionHandler)));
+    failures.push(...(await settle(current.unregisterUnhandledRejectionHandler)));
 
     if (failures.length === 1) {
       throw failures[0];
@@ -255,9 +244,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
   return {
     id: "diagnostics-otel",
+    reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
     async start(ctx) {
       preserveExporterRoutesOnNextStop = false;
       await stopStarted();
+      const active = state;
 
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
@@ -268,7 +259,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const sdkDisabled = isOtelSdkDisabled(ctx.logger);
       const sdkPreloaded = hasPreloadedOtelSdk();
       if (!sdkPreloaded) {
-        unregisterOwnedSdkRuntime = registerOwnedSdkRuntime((message) => ctx.logger.warn(message));
+        active.unregisterOwnedSdkRuntime = registerOwnedSdkRuntime((message) =>
+          ctx.logger.warn(message),
+        );
       }
       if (!sdkPreloaded && sdkDisabled) {
         return;
@@ -333,7 +326,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      retireExporterRoutes = (preserveFailures = false) => {
+      active.retireExporterRoutes = (preserveFailures = false) => {
         for (const route of exporterRoutes.values()) {
           if (preserveFailures && route.status === "failure") {
             continue;
@@ -474,7 +467,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               })
             : undefined;
           if (metricReader) {
-            meterProvider = new MeterProvider({
+            active.meterProvider = new MeterProvider({
               resource: detectedResource,
               readers: [metricReader],
               sdkMetricsEnabled,
@@ -503,11 +496,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                   ? Math.max(1000, otel.flushIntervalMs)
                   : readPositiveOtelNumber("OTEL_BSP_SCHEDULE_DELAY", 5000),
               exportTimeoutMillis: readPositiveOtelNumber("OTEL_BSP_EXPORT_TIMEOUT", 30_000),
-              ...(sdkMetricsEnabled && meterProvider
-                ? { selfObsMeterProvider: meterProvider }
+              ...(sdkMetricsEnabled && active.meterProvider
+                ? { selfObsMeterProvider: active.meterProvider }
                 : {}),
             });
-            traceProvider = new BasicTracerProvider({
+            active.traceProvider = new BasicTracerProvider({
               resource: detectedResource,
               spanProcessors: [spanProcessor],
               ...(sampleRate !== undefined
@@ -517,7 +510,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                     }),
                   }
                 : {}),
-              ...(sdkMetricsEnabled && meterProvider ? { meterProvider } : {}),
+              ...(sdkMetricsEnabled && active.meterProvider
+                ? { meterProvider: active.meterProvider }
+                : {}),
             });
           }
         } catch (err) {
@@ -553,14 +548,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
       }
 
-      const meter = meterProvider
-        ? meterProvider.getMeter("openclaw")
-        : metrics.getMeter("openclaw");
-      const tracer = traceProvider
-        ? traceProvider.getTracer("openclaw")
+      const meter = !metricsActive
+        ? createNoopMeter()
+        : active.meterProvider
+          ? active.meterProvider.getMeter("openclaw")
+          : metrics.getMeter("openclaw");
+      const tracer = active.traceProvider
+        ? active.traceProvider.getTracer("openclaw")
         : trace.getTracer("openclaw");
       const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer);
-      stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
+      active.stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
       const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
 
       const diagnosticsLogs = createDiagnosticsLogExporter({
@@ -577,7 +574,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         resource,
         serviceName,
       });
-      logProvider = diagnosticsLogs.logProvider;
+      active.logProvider = diagnosticsLogs.logProvider;
       const { recordLogRecord, recordSecurityEvent } = diagnosticsLogs;
 
       const recorderRuntime = createDiagnosticsRecorderRuntime({
@@ -594,19 +591,24 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createToolAndSystemRecorders(recorderRuntime),
       };
 
-      unsubscribe = subscribe(
+      active.unsubscribe = subscribe(
         createDiagnosticsEventHandler({
           logger: ctx.logger,
           recorders,
           recordLogRecord,
           recordSecurityEvent,
         }),
+        metricsActive
+          ? undefined
+          : tracesActive
+            ? { exclude: ["gateway.event_loop.sample", "diagnostic.gc"] }
+            : { include: ["log.record", "security.event"] },
       );
       if (tracesActive) {
         // Model/tool starts are queued while their lifecycle parents dispatch
         // synchronously. Prepare these child spans before outbound propagation,
         // then let the queued recorder reuse them instead of exporting duplicates.
-        unregisterTracePropagationBridge =
+        active.unregisterTracePropagationBridge =
           ctx.internalDiagnostics?.registerTracePropagationBridge?.({
             shouldPrepareEvent(event) {
               return event.type === "model.call.started" || event.type === "tool.execution.started";
@@ -628,7 +630,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       // Preserve the shipped preloaded-SDK crash guard, but own no handler while disabled.
       if (hasOwnedOtlpSignal || (sdkPreloaded && !sdkDisabled)) {
-        unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+        active.unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
           const otlpError = findOtlpExporterError(reason);
           if (!otlpError) {
             return false;

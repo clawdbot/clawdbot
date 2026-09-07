@@ -26,15 +26,16 @@ type DesktopConnectOptions = {
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
-  sendBackspace?(): void;
-  sendKeyboardEvent?(event: KeyboardEvent): void;
-  sendText?(text: string): void;
-  setScaleViewport?(enabled: boolean): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {
   background: string;
   disconnect(): void;
+  sendKey(keysym: number, code: string | null, down?: boolean): void;
   scaleViewport: boolean;
   viewOnly: boolean;
 };
@@ -102,8 +103,11 @@ export class DesktopClient {
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = options.scaleViewport ?? true;
+    let retired = false;
     rfb.addEventListener("connect", () => options.onConnect?.());
     rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
       // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
       const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
       options.onDisconnect?.({ ...closeDetail, clean });
@@ -133,7 +137,12 @@ export class DesktopClient {
         cancelable: true,
       });
     return {
-      disconnect: () => rfb.disconnect(),
+      disconnect: () => {
+        if (!retired) {
+          retired = true;
+          rfb.disconnect();
+        }
+      },
       disableInput: () => {
         rfb.viewOnly = true;
       },
@@ -146,10 +155,16 @@ export class DesktopClient {
         // keyboard owner to translate each inserted character and emit a
         // balanced press/release. Line breaks need Enter rather than Unicode LF.
         const normalizedText = text.replace(/\r\n?/g, "\n");
-        for (let index = 0; index < normalizedText.length; index += 1) {
+        for (const character of normalizedText) {
+          // noVNC 1.7's DOM key translator only accepts BMP characters. Its
+          // public RFB sender supports the full Unicode scalar keysym directly.
+          if (character.length === 2) {
+            rfb.sendKey(0x01000000 | character.codePointAt(0)!, null);
+            continue;
+          }
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
+              key: character === "\n" ? "Enter" : character,
               code: "Unidentified",
               bubbles: true,
               cancelable: true,
@@ -157,18 +172,7 @@ export class DesktopClient {
           );
         }
       },
-      sendBackspace: () => {
-        for (const type of ["keydown", "keyup"]) {
-          dispatchKeyboardEvent(
-            new KeyboardEvent(type, {
-              key: "Backspace",
-              code: "Backspace",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
-        }
-      },
+      sendBackspace: () => rfb.sendKey(0xff08, "Backspace"),
     };
   }
 }

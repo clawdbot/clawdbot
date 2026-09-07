@@ -7,27 +7,12 @@ private func runCLI() async -> Int32 {
     do {
         let descriptors = CLIRegistry.descriptors
         let program = Program(descriptors: descriptors)
-        let invocation = try program.resolve(argv: CommandLine.arguments)
-        try await dispatch(invocation: invocation)
+        let invocation = try program.resolve(argv: ["swabble"] + CommandLine.arguments.dropFirst())
+        try await dispatchSwabble(parsed: invocation.parsedValues, path: invocation.path)
         return 0
     } catch {
         fputs("error: \(error)\n", stderr)
         return 1
-    }
-}
-
-@available(macOS 26.0, *)
-@MainActor
-private func dispatch(invocation: CommandInvocation) async throws {
-    let parsed = invocation.parsedValues
-    let path = invocation.path
-    guard let first = path.first else { throw CommanderProgramError.missingCommand }
-
-    switch first {
-    case "swabble":
-        try await dispatchSwabble(parsed: parsed, path: path)
-    default:
-        throw CommanderProgramError.unknownCommand(first)
     }
 }
 

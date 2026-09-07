@@ -21,7 +21,11 @@ import {
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createCanonicalForkNativeFixture } from "./canonical-fork-native.test-support.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexComputerUseConfig, type CodexPluginConfig } from "./config.js";
+import {
+  resolveCodexComputerUseConfig,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -97,6 +101,7 @@ export async function createCanonicalForkFixture(params: {
     },
   };
   const controls = createCodexSessionCatalogControl({
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     config,
     getRuntimeConfig: () => config,
     getPluginConfig: () => pluginConfig,
@@ -124,6 +129,7 @@ export async function createCanonicalForkFixture(params: {
   const captured = createCapturedPluginRegistration({ id: "codex", config });
   const api = { ...captured.api, runtime };
   codexSessionCatalogRuntime.register({
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     api,
     bindingStore,
     control: controls,
@@ -232,6 +238,7 @@ export async function createCanonicalForkFixture(params: {
         // Tool factories, admitted composition, and schema projection remain real.
         const toolRuntime = {
           connection: {
+            assertCurrent: host.capabilities.assertActive,
             params: attempt,
             attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
@@ -339,8 +346,7 @@ export async function createCanonicalForkFixture(params: {
           startup?.turnRoute.release();
           startup?.releaseSharedClientLease();
           runAbortController.abort();
-          await preparedTools.scopedMcpTools?.dispose();
-          await preparedTools.configuredMcp?.dispose();
+          await preparedTools.disposeMcpTools();
           for (const cleanup of preparedTools.runCleanups) {
             await cleanup("fixture complete");
           }

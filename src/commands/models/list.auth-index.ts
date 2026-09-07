@@ -3,7 +3,6 @@ import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-crede
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
-  applyCliRuntimeModelAuthAvailability,
   type ModelAuthAvailabilityEvaluation,
   type ModelAuthAvailabilityRef,
 } from "../../agents/model-auth-availability.js";
@@ -55,6 +54,7 @@ export function createModelListAuthIndex(
   const env = params.env ?? process.env;
   const resolver = createModelAuthAvailabilityResolver({
     cfg: params.cfg,
+    agentId: params.agentId,
     authStore: params.authStore,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
@@ -71,19 +71,6 @@ export function createModelListAuthIndex(
   });
   return {
     providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
-    evaluateModelAuth: (provider, ref) => {
-      const evaluation = resolver.evaluateModelAuth(provider, ref);
-      return applyCliRuntimeModelAuthAvailability({
-        authResolver: resolver,
-        evaluation,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        metadataSnapshot: params.metadataSnapshot,
-        provider,
-        modelId: ref?.modelId,
-        preferredProfileId: ref?.preferredProfileId,
-        lockedProfileId: ref?.lockedProfileId,
-      });
-    },
+    evaluateModelAuth: resolver.evaluateRuntimeModelAuth,
   };
 }

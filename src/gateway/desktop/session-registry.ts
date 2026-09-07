@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
 
 const DEFAULT_LINGER_MS = 60_000;
 const MAX_OBSERVERS = 8;
+const log = createSubsystemLogger("gateway/desktop");
 
 export class DesktopSessionStaleOwnerError extends Error {
   constructor() {
@@ -35,8 +37,14 @@ type DesktopSessionAcquireResult = {
 type DesktopSessionAcquireRequest = {
   sourceKey: string;
   ownerEpoch: number;
-  start: (isCurrent: () => boolean) => Promise<DesktopSessionAcquireResult>;
+  /** Lifecycle events stop this exact owner; the stop promise joins initialization. */
+  start: (
+    isCurrent: () => boolean,
+    stop: () => Promise<void>,
+  ) => Promise<DesktopSessionAcquireResult>;
   teardown?: () => Promise<void>;
+  /** Release source resources only after initialization and transport teardown have joined. */
+  dispose?: () => Promise<void>;
 };
 
 type DesktopSessionActivateRequest = Omit<DesktopSessionAcquireRequest, "start">;
@@ -48,17 +56,15 @@ type DesktopSessionEntry = {
   ownerEpoch: number;
   initialization?: Promise<void>;
   stopPromise?: Promise<void>;
-  ready: Promise<DesktopSessionStartResult>;
-  resolveReady: (result: DesktopSessionStartResult) => void;
-  rejectReady: (error: Error) => void;
+  ready: Deferred<DesktopSessionStartResult>;
   readySettled: boolean;
   observers: Set<ObserverEntry>;
   observerReservations: Set<symbol>;
   controller?: ObserverEntry;
   lingerTimer?: ReturnType<typeof setTimeout>;
   stopped: boolean;
-  start: (isCurrent: () => boolean) => Promise<DesktopSessionStartResult>;
   teardown?: DesktopSessionAcquireRequest["teardown"];
+  dispose?: DesktopSessionAcquireRequest["dispose"];
   pendingStreams: Map<string, { stream: ConnectedRfbStream; reservation: { release(): void } }>;
 };
 
@@ -70,6 +76,7 @@ export function createDesktopSessionRegistry(
 ) {
   const lingerMs = deps.lingerMs ?? DEFAULT_LINGER_MS;
   const entries = new Map<string, DesktopSessionEntry>();
+  const owners = new Set<DesktopSessionEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
 
   const claimOwnerEpoch = (sourceKey: string, ownerEpoch: number): boolean => {
@@ -102,6 +109,10 @@ export function createDesktopSessionRegistry(
     // Publish cleanup ownership before observer callbacks can reenter Stop.
     const stopped = createDeferredCore();
     entry.stopPromise = stopped.promise;
+    // Idle expiry and transport exit have no caller to report cleanup failure to.
+    void stopped.promise.catch((error: unknown) => {
+      log.warn(`Desktop session cleanup failed: ${String(error)}`, { sourceKey: entry.sourceKey });
+    });
     void (async () => {
       entry.stopped = true;
       clearTimeout(entry.lingerTimer);
@@ -120,22 +131,40 @@ export function createDesktopSessionRegistry(
       entry.observerReservations.clear();
       if (!entry.readySettled) {
         entry.readySettled = true;
-        entry.rejectReady(new DesktopSessionStoppedError());
+        entry.ready.reject(new DesktopSessionStoppedError());
       }
       // Teardown brackets initialization so a source can stop the currently published
       // transport, then dispose anything initialization publishes before it settles.
-      await entry.teardown?.().catch(() => undefined);
+      await entry.teardown?.();
       await entry.initialization?.catch(() => undefined);
-      await entry.teardown?.().catch(() => undefined);
+      await entry.teardown?.();
+      await entry.dispose?.();
     })()
-      .finally(() => {
+      .then(() => {
+        owners.delete(entry);
         // Concurrent Stop and replacement acquisition must join the full teardown.
         if (entries.get(entry.sourceKey) === entry) {
           entries.delete(entry.sourceKey);
         }
       })
-      .then(stopped.resolve, stopped.reject);
-    return entry.stopPromise;
+      .then(stopped.resolve, (error: unknown) => {
+        // Retain cleanup custody even after a replacement leaves the active index.
+        entry.stopPromise = undefined;
+        stopped.reject(error);
+      });
+    return stopped.promise;
+  };
+
+  const stopEntries = (pending: DesktopSessionEntry[]): Promise<void> => {
+    const stopped = Promise.allSettled(pending.map(stopEntry)).then((outcomes) => {
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
+    });
+    // Each owner reports its failure; background callers may leave the joined result unawaited.
+    void stopped.catch(() => undefined);
+    return stopped;
   };
 
   const scheduleLinger = (entry: DesktopSessionEntry): void => {
@@ -148,7 +177,7 @@ export function createDesktopSessionRegistry(
   };
 
   const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
-    const result = await entry.ready;
+    const result = await entry.ready.promise;
     // Every observation gets an idle attachment window, including same-epoch reuse.
     scheduleLinger(entry);
     return result;
@@ -162,54 +191,47 @@ export function createDesktopSessionRegistry(
     claimOwnerEpoch(request.sourceKey, request.ownerEpoch);
     const current = entries.get(request.sourceKey);
     if (current) {
-      if (request.ownerEpoch < current.ownerEpoch) {
-        throw new DesktopSessionStaleOwnerError();
-      }
       if (request.ownerEpoch === current.ownerEpoch && !current.stopped) {
         return await waitForReady(current);
       }
     }
 
-    let resolveReady!: (result: DesktopSessionStartResult) => void;
-    let rejectReady!: (error: Error) => void;
-    const ready = new Promise<DesktopSessionStartResult>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    void ready.catch(() => undefined);
+    const previous = [...owners].filter((entry) => entry.sourceKey === request.sourceKey);
+    const ready = createDeferredCore<DesktopSessionStartResult>();
+    void ready.promise.catch(() => undefined);
     const entry: DesktopSessionEntry = {
       sourceKey: request.sourceKey,
       ownerEpoch: request.ownerEpoch,
       ready,
-      resolveReady,
-      rejectReady,
       readySettled: false,
       observers: new Set(),
       observerReservations: new Set(),
       pendingStreams: new Map(),
       stopped: false,
-      start: request.start,
       ...(request.teardown ? { teardown: request.teardown } : {}),
+      ...(request.dispose ? { dispose: request.dispose } : {}),
     };
     entries.set(request.sourceKey, entry);
-    entry.initialization = (async () => {
-      if (current) {
-        await stopEntry(current);
-      }
+    owners.add(entry);
+    entry.initialization = Promise.resolve().then(async () => {
+      await stopEntries(previous);
       if (!isCurrent(entry)) {
         return;
       }
-      const result = await entry.start(() => isCurrent(entry));
+      const result = await request.start(
+        () => isCurrent(entry),
+        () => stopEntry(entry),
+      );
       if (!isCurrent(entry)) {
         return;
       }
       entry.readySettled = true;
-      entry.resolveReady(result);
-    })();
+      entry.ready.resolve(result);
+    });
     void entry.initialization.catch((error: unknown) => {
       if (!entry.readySettled) {
         entry.readySettled = true;
-        entry.rejectReady(error instanceof Error ? error : new Error("Desktop session failed"));
+        entry.ready.reject(error instanceof Error ? error : new Error("Desktop session failed"));
       }
       void stopEntry(entry);
     });
@@ -315,13 +337,11 @@ export function createDesktopSessionRegistry(
       entry.stopped ||
       entry.ownerEpoch !== params.ownerEpoch ||
       params.reservation.sourceKey !== params.sourceKey ||
-      params.reservation.ownerEpoch !== params.ownerEpoch
+      params.reservation.ownerEpoch !== params.ownerEpoch ||
+      params.stream.destroyed ||
+      params.stream.readableEnded ||
+      params.stream.writableEnded
     ) {
-      params.reservation.release();
-      params.stream.destroy();
-      return undefined;
-    }
-    if (params.stream.destroyed || params.stream.readableEnded || params.stream.writableEnded) {
       params.reservation.release();
       params.stream.destroy();
       return undefined;
@@ -338,53 +358,48 @@ export function createDesktopSessionRegistry(
     return { kind: "stream", streamId } as const;
   }
 
-  function claimStream(attachment: { kind: "stream"; streamId: string }) {
-    for (const entry of entries.values()) {
-      const pending = entry.pendingStreams.get(attachment.streamId);
-      if (!pending) {
-        continue;
-      }
-      entry.pendingStreams.delete(attachment.streamId);
-      pending.reservation.release();
-      const stream = pending.stream;
-      if (stream.destroyed || stream.readableEnded || stream.writableEnded) {
-        stream.destroy();
-        return undefined;
-      }
-      return stream;
-    }
-    return undefined;
-  }
-
-  function hasPendingStream(attachment: { kind: "stream"; streamId: string }): boolean {
-    for (const entry of entries.values()) {
-      if (entry.pendingStreams.has(attachment.streamId)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  async function stop(sourceKey: string, ownerEpoch?: number): Promise<void> {
+  function claimStream(sourceKey: string, attachment: { kind: "stream"; streamId: string }) {
     const entry = entries.get(sourceKey);
-    if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
-      await stopEntry(entry);
+    const pending = entry?.pendingStreams.get(attachment.streamId);
+    if (!entry || !pending) {
+      return undefined;
     }
+    entry.pendingStreams.delete(attachment.streamId);
+    pending.reservation.release();
+    const stream = pending.stream;
+    if (stream.destroyed || stream.readableEnded || stream.writableEnded) {
+      stream.destroy();
+      return undefined;
+    }
+    return stream;
+  }
+
+  function hasPendingStream(sourceKey: string, attachment: { kind: "stream"; streamId: string }) {
+    return entries.get(sourceKey)?.pendingStreams.has(attachment.streamId) ?? false;
+  }
+
+  function stop(sourceKey: string, ownerEpoch?: number): Promise<void> {
+    return stopEntries(
+      [...owners].filter(
+        (entry) =>
+          entry.sourceKey === sourceKey &&
+          (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch),
+      ),
+    );
   }
 
   /**
    * Retires only owners strictly older than the claimant. An equal epoch shares the
    * session, so fencing must not tear down a peer that claimed the same generation.
    */
-  async function stopSuperseded(sourceKey: string, ownerEpoch: number): Promise<void> {
-    const entry = entries.get(sourceKey);
-    if (entry && entry.ownerEpoch < ownerEpoch) {
-      await stopEntry(entry);
-    }
+  function stopSuperseded(sourceKey: string, ownerEpoch: number): Promise<void> {
+    return stopEntries(
+      [...owners].filter((entry) => entry.sourceKey === sourceKey && entry.ownerEpoch < ownerEpoch),
+    );
   }
 
-  async function stopAll(): Promise<void> {
-    await Promise.all([...entries.values()].map(stopEntry));
+  function stopAll(): Promise<void> {
+    return stopEntries([...owners]);
   }
 
   return {

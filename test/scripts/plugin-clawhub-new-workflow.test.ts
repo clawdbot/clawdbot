@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -38,9 +39,8 @@ const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "u
 const clawhubCliPackage = JSON.parse(
   readFileSync(".github/release/clawhub-cli/package.json", "utf8"),
 ) as { dependencies?: Record<string, string> };
-const clawhubCliLock = JSON.parse(
-  readFileSync(".github/release/clawhub-cli/package-lock.json", "utf8"),
-) as {
+const clawhubCliLockBytes = readFileSync(".github/release/clawhub-cli/package-lock.json");
+const clawhubCliLock = JSON.parse(clawhubCliLockBytes.toString("utf8")) as {
   packages?: Record<string, { integrity?: string; version?: string }>;
 };
 
@@ -349,9 +349,8 @@ describe("Plugin ClawHub New workflow", () => {
     expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
-    expect(materializerSource).toContain(
-      "adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9",
-    );
+    const lockSha256 = createHash("sha256").update(clawhubCliLockBytes).digest("hex");
+    expect(materializerSource).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");
     expect(materializerSource).toContain("cli=${clawhub_cli}");

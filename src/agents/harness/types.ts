@@ -106,7 +106,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
-  | "codeModeRecovery"
+  | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
@@ -404,6 +404,9 @@ type AgentHarnessRunCapability<
     agentId?: string;
     sessionId: string;
     sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */

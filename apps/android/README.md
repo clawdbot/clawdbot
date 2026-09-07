@@ -7,6 +7,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
 - Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The compact composer keeps one control row; tap the model name for permissions and usage details, or the effort dial for Fast mode. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
@@ -22,6 +23,18 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+
+## Foldable layout
+
+Onboarding and the main app stay within the largest rectangular region clear of
+separating folds and fully occluding hinges reported by AndroidX WindowManager.
+Equal regions prefer the top, then the reading-direction start side. Opening the
+keyboard does not select a different region. Without an intersecting separator,
+the app keeps its full-window layout.
+
+This is an initial hinge-safety fallback, not a complete foldable layout. The
+other region is temporarily unused. Book-mode companion panes, a tabletop
+transcript/composer split, and separate-window dialogs are not adapted yet.
 
 ## Wear OS companion
 

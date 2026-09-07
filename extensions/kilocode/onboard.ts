@@ -7,11 +7,11 @@ export { KILOCODE_DEFAULT_MODEL_REF };
 
 export const { applyConfig: applyKilocodeConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: KILOCODE_DEFAULT_MODEL_REF,
-  resolveParams: () => ({
+  resolveParams: (cfg) => ({
     providerId: "kilocode",
     api: "openai-completions",
     baseUrl: KILOCODE_BASE_URL,
-    catalogModels: buildKilocodeProvider().models ?? [],
+    catalogModels: cfg.models?.mode === "replace" ? buildKilocodeProvider().models : [],
     aliases: [{ modelRef: KILOCODE_DEFAULT_MODEL_REF, alias: "Kilo Gateway" }],
   }),
 });

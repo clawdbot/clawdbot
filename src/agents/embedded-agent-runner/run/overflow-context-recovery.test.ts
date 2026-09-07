@@ -108,7 +108,7 @@ describe("recoverEmbeddedRunOverflow transcript ownership", () => {
             frozen: new Set(),
             ambiguousBaseKeys: new Set(),
             restoredCacheTtl: new Map(),
-            sourceTextByKey: new Map(),
+            sourceHashByKey: new Map(),
           },
           attemptCompactionCount: 0,
           runtimeAuthPlan: undefined,

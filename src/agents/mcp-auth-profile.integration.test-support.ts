@@ -349,7 +349,7 @@ async function runExternalScenario(root: string): Promise<void> {
 async function runRefreshScenario(root: string): Promise<void> {
   authRuntimeEntered = true;
   const { filterStringRecord } = await import("@openclaw/normalization-core/record-coerce");
-  const { saveAuthProfileStore } = await import("./auth-profiles/store.js");
+  const { saveAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
   const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
   const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
     await import("./mcp-auth-profile.js");

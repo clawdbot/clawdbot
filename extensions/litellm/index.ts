@@ -5,11 +5,9 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createProviderApiKeyAuthMethod,
-  normalizeOptionalSecretInput,
-} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalSecretInput } from "openclaw/plugin-sdk/provider-auth";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import { applyLitellmConfig, LITELLM_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildLitellmProvider } from "./provider-catalog.js";
@@ -97,6 +95,7 @@ export default definePluginEntry({
         order: "simple",
         run: (ctx) =>
           buildOpenAICompatibleProviderCatalog({
+            discoveryMode: "strict",
             ctx,
             providerId: PROVIDER_ID,
             buildProvider: buildLitellmProvider,

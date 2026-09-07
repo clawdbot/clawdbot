@@ -186,11 +186,18 @@ function renderPlacementStartupError(
   // banner action reachable when transcript deduplication hides the row.
   const hasInlineTurn =
     status.initialTurn && !findChatSubmissionMessage(messages, status.initialTurn.sendRunId, true);
-  const retry =
-    status.retryable && onRetry && !hasInlineTurn
+  const action = status.discardAndReload
+    ? html`<button
+        class="btn btn--sm danger chat-error__discard"
+        type="button"
+        @click=${status.discardAndReload}
+      >
+        ${t("newSession.discardUnsavedAndReload")}
+      </button>`
+    : status.retryable && onRetry && !hasInlineTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, retry, displayError);
+  return renderErrorNotice(error, action, displayError);
 }

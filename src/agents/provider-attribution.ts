@@ -3,13 +3,15 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
+  loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";

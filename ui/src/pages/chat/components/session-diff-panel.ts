@@ -284,7 +284,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
           ${icons.gitBranch}
           <span class="session-diff__branch-label">${branchLabel}</span>
         </span>
-        ${renderDiffStatChips(totalDiffStat(result.files))}
+        ${
+          result.unavailableReason === "workspace_stopped"
+            ? nothing
+            : renderDiffStatChips(totalDiffStat(result.files))
+        }
         <span class="session-diff__summary-spacer"></span>
         ${
           syncCommand && result.root && result.branch
@@ -445,13 +449,19 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     </span>`;
   }
 
-  private renderFileBody(view: FileView): TemplateResult {
+  private renderFileBody(view: FileView, result: SessionsDiffResult): TemplateResult {
     const { file, parsed } = view;
     if (file.binary === true) {
       return html`<div class="session-diff__note">${t("chat.sessionDiff.binaryFile")}</div>`;
     }
     if (!parsed) {
-      return html`<div class="session-diff__note">${t("chat.sessionDiff.tooLarge")}</div>`;
+      return html`<div class="session-diff__note">
+        ${t(
+          result.unavailableReason === "workspace_stopped"
+            ? "chat.sessionDiff.workspaceStoppedFile"
+            : "chat.sessionDiff.tooLarge",
+        )}
+      </div>`;
     }
     const renderGap = (line: DiffLine) => this.renderGap(view, line);
     return html`
@@ -512,7 +522,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
                 ? html`<span class="session-diff__badge">${t("chat.sessionDiff.untracked")}</span>`
                 : nothing
             }
-            ${renderDiffStatChips(diffStat(file))}
+            ${
+              result.unavailableReason === "workspace_stopped"
+                ? nothing
+                : renderDiffStatChips(diffStat(file))
+            }
           </button>
           <button
             class="btn btn--ghost btn--icon session-diff__file-menu"
@@ -540,7 +554,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
                   Math.min(12_000, (view.parsed?.lines.length ?? 2) * 19),
                 )}px`}
               >
-                ${this.renderFileBody(view)}
+                ${this.renderFileBody(view, result)}
               </div>`
         }
       </section>
@@ -600,6 +614,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     }
     return html`
       ${this.renderSummary(result)}
+      ${
+        result.unavailableReason === "workspace_stopped"
+          ? html`<div class="session-diff__note">${t("chat.sessionDiff.workspaceStopped")}</div>`
+          : nothing
+      }
       <button
         class="session-diff__section-title"
         type="button"
@@ -618,7 +637,9 @@ class SessionDiffPanel extends OpenClawLightDomElement {
           result.unavailableReason === "unknown_commit"
             ? html`<div class="session-diff__note">${t("chat.sessionDiff.unknownCommit")}</div>`
             : result.files.length === 0
-              ? html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
+              ? result.unavailableReason === "workspace_stopped"
+                ? nothing
+                : html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
               : views.map((view) => this.renderFile(view, result))
         }
         ${

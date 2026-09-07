@@ -2,12 +2,17 @@
  * Gateway health endpoint integration tests.
  */
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test, vi } from "vitest";
+import { writeConfigFile } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { drainSystemEvents } from "../infra/system-events.js";
+import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 
 // Health/presence coverage does not exercise post-restart delivery recovery.
 // Keep that auto-reply graph in the dedicated restart-sentinel suite.
@@ -27,6 +32,16 @@ let harnessClose: Promise<void> | undefined;
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
+    await writeConfigFile({
+      agents: {
+        defaults: {
+          workspace: path.join(
+            expectDefined(process.env.OPENCLAW_STATE_DIR, "gateway fixture state directory"),
+            "workspace",
+          ),
+        },
+      },
+    });
     harness = await startGatewayServerHarness();
   },
   cleanup: async () => {
@@ -124,7 +139,10 @@ describe("gateway server health/presence", () => {
     async () => {
       const { ws } = await harness.openClient();
 
-      const presenceEventP = onceMessage(ws, (o) => o.type === "event" && o.event === "presence");
+      const presenceEventP = onceMessage<PresenceEvent>(
+        ws,
+        (o) => o.type === "event" && o.event === "presence",
+      );
       ws.send(
         JSON.stringify({
           type: "req",
@@ -140,7 +158,78 @@ describe("gateway server health/presence", () => {
       const evtPayload = evt.payload as { presence?: unknown } | undefined;
       expect(Array.isArray(evtPayload?.presence)).toBe(true);
 
-      ws.close();
+      const instanceId = `presence-beacon-${randomUUID()}`;
+      const sessionKey = `agent:main:presence-${randomUUID()}`;
+      const text =
+        "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason periodic";
+      type PresenceEvent = {
+        type: string;
+        event?: string;
+        payload?: { presence: SystemPresence[] };
+        seq?: number;
+        stateVersion?: { presence?: number };
+      };
+      let seq = expectDefined(evt.seq, "presence sequence");
+      let version = expectDefined(evt.stateVersion?.presence, "presence state version");
+      const beacon = async (
+        overrides: { ip?: string; lastInputSeconds?: number },
+        ip: string,
+        lastInputSeconds: number,
+      ) => {
+        const eventP = onceMessage<PresenceEvent>(
+          ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "presence" &&
+            Boolean(
+              frame.payload?.presence.some(
+                (row) =>
+                  row.instanceId === instanceId &&
+                  row.ip === ip &&
+                  row.lastInputSeconds === lastInputSeconds,
+              ),
+            ),
+        );
+        const [response, event] = await Promise.all([
+          rpcReq(ws, "system-event", { text, instanceId, sessionKey, ...overrides }),
+          eventP,
+        ]);
+        expect(response).toMatchObject({ ok: true, payload: { ok: true } });
+        expect(event.seq).toBeGreaterThan(seq);
+        expect(event.stateVersion?.presence).toBeGreaterThan(version);
+        seq = expectDefined(event.seq, "presence sequence");
+        version = expectDefined(event.stateVersion?.presence, "presence state version");
+        const rows = event.payload?.presence.filter((row) => row.instanceId === instanceId);
+        expect(rows).toHaveLength(1);
+        expect(rows?.[0]).toMatchObject({
+          host: "Relay-Host",
+          ip,
+          version: "2.1.0",
+          lastInputSeconds,
+          mode: "ui",
+          reason: "periodic",
+          instanceId,
+          text,
+          ts: expect.any(Number),
+        });
+      };
+
+      try {
+        await beacon({}, "10.0.0.9", 7);
+        expect(drainSystemEvents(sessionKey)).toEqual([
+          "Node: Relay-Host (10.0.0.9) · app 2.1.0 · mode ui",
+        ]);
+
+        // Consuming the first event clears queue dedupe; it cannot hide a noisy refresh.
+        await beacon({ lastInputSeconds: 11 }, "10.0.0.9", 11);
+        expect(drainSystemEvents(sessionKey)).toEqual([]);
+
+        await beacon({ ip: "10.0.0.10", lastInputSeconds: 11 }, "10.0.0.10", 11);
+        expect(drainSystemEvents(sessionKey)).toEqual(["Node: Relay-Host (10.0.0.10)"]);
+      } finally {
+        drainSystemEvents(sessionKey);
+        ws.close();
+      }
     },
   );
 

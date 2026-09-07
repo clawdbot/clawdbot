@@ -123,8 +123,9 @@ validate every key and preview the result without changing session state.
 Archive reasons are assigned automatically and displayed as human-readable text
 in the Control UI. Explicit archive commands record `manual`; maintenance-owned
 archives record their owning trigger. Missing reasons remain protected as legacy
-state. Under disk pressure, only sessions explicitly archived by `maxEntries`
-are eligible for automatic deletion after cheaper cleanup tiers are exhausted.
+state. Age-retention archives also remain protected under disk pressure. Only
+sessions explicitly archived by `maxEntries` are eligible for automatic deletion
+after cheaper cleanup tiers are exhausted.
 
 ## Delete sessions
 
@@ -163,6 +164,13 @@ Both lifecycle commands:
   still processing the other valid keys;
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
+
+Dry-run uses the Gateway's session list to report protected agent-main sessions
+as failed, even when the CLI uses different local session settings. Already
+archived sessions remain successful archive no-ops. Dry-run does not execute all
+Gateway lifecycle checks: `global` previews can still show an archive or delete
+action that the Gateway refuses. Explicitly selected non-default global deletion
+remains supported. The real archive or delete request is authoritative.
 
 Example mixed-result JSON:
 
@@ -258,8 +266,11 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the unarchived session row count; archived rows do not
-  consume it. Eligible ordinary overflow is reported as `archive-cap` and
+- `pruneAfter` archives eligible durable sessions in place, preserving their IDs
+  and all transcript generations. Cleanup reports `archive-age`; the stored
+  `archiveReason` is `age-retention`. Disposable automation rows still delete.
+- `maxEntries` defaults to 5000 and caps the unarchived session row count;
+  archived rows do not consume it. Eligible ordinary overflow is reported as `archive-cap` and
   archived, while synthetic runtime overflow remains disposable. Protected
   unarchived rows are reported as `keep` and still consume the cap. If those
   protected rows prevent cleanup from reaching the cap, the unarchived store

@@ -22,8 +22,8 @@ import {
   type RichText,
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
-import { findTelegramHtmlIslands } from "./rich-blocks-html-map.js";
-import { parseInlineHtmlIslands } from "./rich-blocks-html.js";
+import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
+import { parseHtmlFragment, parseInlineHtmlIslands, type HtmlNode } from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
@@ -51,6 +51,7 @@ const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
 type InlineStyleKind = "bold" | "italic" | "strikethrough" | "code" | "spoiler";
 
 type StructuralSegment =
+  | { kind: "html"; start: number; end: number; node: Extract<HtmlNode, { kind: "element" }> }
   | { kind: "heading"; start: number; end: number; size: 1 | 2 | 3 | 4 | 5 | 6 }
   | { kind: "code_block"; start: number; end: number; language?: string }
   | { kind: "blockquote"; start: number; end: number }
@@ -287,44 +288,6 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function findAuthoredHtmlIslands(ir: MarkdownIR, start: number, end: number) {
-  // Only the opener must be authored HTML. Code nested inside an island body
-  // remains valid content, while an opener shown as code must stay literal.
-  const codeRanges = ir.styles.filter(
-    (span) =>
-      (span.style === "code" || span.style === "code_block") &&
-      span.end > start &&
-      span.start < end,
-  );
-  return findTelegramHtmlIslands(ir.text.slice(start, end)).filter(
-    (island) =>
-      !codeRanges.some(
-        (range) => start + island.start >= range.start && start + island.start < range.end,
-      ),
-  );
-}
-
-// Gap emitter: agent-authored block HTML islands (details/lists/media/math/…)
-// become typed blocks; the text around them stays on the paragraph path.
-function emitGapBlocks(ir: MarkdownIR, start: number, end: number): InputRichBlock[] {
-  if (end <= start) {
-    return [];
-  }
-  const islands = findAuthoredHtmlIslands(ir, start, end);
-  if (islands.length === 0) {
-    return splitParagraphs(ir, start, end);
-  }
-  const blocks: InputRichBlock[] = [];
-  let cursor = start;
-  for (const island of islands) {
-    blocks.push(...splitParagraphs(ir, cursor, start + island.start));
-    blocks.push(...island.blocks);
-    cursor = start + island.end;
-  }
-  blocks.push(...splitParagraphs(ir, cursor, end));
-  return blocks;
-}
-
 function renderAsciiTableGrid(table: MarkdownTableMeta): string {
   return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
     headerSeparator: true,
@@ -391,9 +354,10 @@ function renderTableBlock(table: MarkdownTableMeta): {
 function collectStructuralSegments(
   ir: MarkdownIR,
   tables: readonly MarkdownTableMeta[],
+  htmlNodes: readonly HtmlNode[],
 ): StructuralSegment[] {
   const segments: StructuralSegment[] = [];
-  const htmlIslands = findAuthoredHtmlIslands(ir, 0, ir.text.length);
+  const htmlIslands = findTelegramHtmlIslands(htmlNodes);
   for (const span of ir.styles) {
     if (span.end <= span.start) {
       continue;
@@ -426,16 +390,7 @@ function collectStructuralSegments(
     }
     segments.push({ kind: "list", start: source.start, end: source.end, source });
   }
-  // Containers sort before their children (start asc, end desc) so emitSegments
-  // can consume contained segments recursively instead of double-emitting them.
-  const containerRank = (segment: StructuralSegment) =>
-    segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
-  return segments.toSorted(
-    (left, right) =>
-      left.start - right.start ||
-      right.end - left.end ||
-      containerRank(left) - containerRank(right),
-  );
+  return segments;
 }
 
 function emitSegments(
@@ -444,26 +399,86 @@ function emitSegments(
   rangeStart: number,
   rangeEnd: number,
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+  htmlNodes: readonly HtmlNode[] = [],
 ): InputRichBlock[] {
+  const containerRank = (segment: StructuralSegment) =>
+    segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
+  const orderedSegments = [
+    ...segments,
+    ...findTelegramHtmlIslands(htmlNodes).map((node): StructuralSegment => ({
+      kind: "html",
+      start: node.start,
+      end: node.end,
+      node,
+    })),
+  ].toSorted((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start;
+    }
+    // Tables occupy no IR text. A table before an HTML opener shares its offset,
+    // but Markdown quotes/lists at that offset still own their table children.
+    const ownsTable = (segment: StructuralSegment) =>
+      segment.kind === "blockquote" || segment.kind === "list";
+    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
+      return -1;
+    }
+    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
+      return 1;
+    }
+    return right.end - left.end || containerRank(left) - containerRank(right);
+  });
   const blocks: InputRichBlock[] = [];
   let cursor = rangeStart;
   let index = 0;
-  while (index < segments.length) {
-    const segment = segments[index];
+  while (index < orderedSegments.length) {
+    const segment = orderedSegments[index];
     if (!segment) {
       break;
     }
     if (segment.start > cursor) {
-      blocks.push(...emitGapBlocks(ir, cursor, segment.start));
+      blocks.push(...splitParagraphs(ir, cursor, segment.start));
     }
     // Segments nested inside this one (fences/headings/tables in a blockquote)
     // belong to it; consuming them here prevents a second top-level emission.
     let next = index + 1;
-    while (next < segments.length && (segments[next]?.start ?? rangeEnd) < segment.end) {
+    while (
+      next < orderedSegments.length &&
+      (orderedSegments[next]?.start ?? rangeEnd) < segment.end
+    ) {
       next += 1;
     }
-    const children = segments.slice(index + 1, next);
+    const children = orderedSegments.slice(index + 1, next);
     switch (segment.kind) {
+      case "html": {
+        blocks.push(
+          ...renderTelegramHtmlIsland(segment.node, (nodes) => {
+            const content: InputRichBlock[] = [];
+            let first = 0;
+            for (let last = 0; last < nodes.length; last += 1) {
+              if (nodes[last + 1]?.start === nodes[last]!.end) {
+                continue;
+              }
+              const start = nodes[first]!.start;
+              const end = nodes[last]!.end;
+              // Removed summaries, credits, and checkboxes split body ranges.
+              // Render the remaining tree with the same Markdown owner as the root.
+              content.push(
+                ...emitSegments(
+                  ir,
+                  children.filter((child) => child.start >= start && child.end <= end),
+                  start,
+                  end,
+                  degradationReasons,
+                  nodes.slice(first, last + 1),
+                ),
+              );
+              first = last + 1;
+            }
+            return content;
+          }),
+        );
+        break;
+      }
       case "heading": {
         const text = irRangeToRichText(ir, segment.start, segment.end);
         if (text !== "") {
@@ -526,7 +541,7 @@ function emitSegments(
     index = next;
   }
   if (cursor < rangeEnd) {
-    blocks.push(...emitGapBlocks(ir, cursor, rangeEnd));
+    blocks.push(...splitParagraphs(ir, cursor, rangeEnd));
   }
   return blocks;
 }
@@ -553,14 +568,18 @@ export function markdownToTelegramRichBlocks(
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
-  const segments = collectStructuralSegments(ir, tables);
+  const htmlNodes = parseHtmlFragment(
+    ir.text,
+    ir.styles.filter((span) => span.style === "code" || span.style === "code_block"),
+  );
+  const segments = collectStructuralSegments(ir, tables, htmlNodes);
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
-  let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons);
+  let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
   if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
-    blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons);
+    blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);
   }
 
   if (blocks.length === 0 && ir.text.trim()) {
@@ -569,7 +588,7 @@ export function markdownToTelegramRichBlocks(
 
   // Plain recovery remains byte-compatible with the pre-native-list path.
   const plainBlocks = hasMarkdownLists
-    ? emitSegments(ir, flattenedSegments, 0, ir.text.length, new Set())
+    ? emitSegments(ir, flattenedSegments, 0, ir.text.length, new Set(), htmlNodes)
     : blocks;
 
   return {

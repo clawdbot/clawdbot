@@ -508,12 +508,6 @@ const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
 const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
 
-type TuiProcessExitTimer = {
-  unref?: () => void;
-};
-
-type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
-
 type TuiShutdownTask = () => void | Promise<void>;
 
 export function beginTuiShutdown(params: {
@@ -526,14 +520,9 @@ export function beginTuiShutdown(params: {
   hardExitMs: number;
   keepHardExitArmed?: boolean;
   onError: (error: unknown) => void;
-  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
-  setTimeoutFn?: TuiProcessExitTimeout;
-}): TuiProcessExitTimer {
-  const hardExit = params.setTimeoutFn
-    ? { kind: "custom" as const, timer: params.setTimeoutFn(params.forceExit, params.hardExitMs) }
-    : { kind: "native" as const, timer: setTimeout(params.forceExit, params.hardExitMs) };
-  const hardExitTimer = hardExit.timer;
-  hardExitTimer.unref?.();
+}): ReturnType<typeof setTimeout> {
+  const hardExitTimer = setTimeout(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref();
   // Stop referenced animations before transport teardown can stall or redraw.
   params.disposeStatus();
   void Promise.resolve()
@@ -562,11 +551,7 @@ export function beginTuiShutdown(params: {
     })
     .finally(() => {
       if (params.keepHardExitArmed !== true) {
-        if (params.clearTimeoutFn) {
-          params.clearTimeoutFn(hardExitTimer);
-        } else if (hardExit.kind === "native") {
-          clearTimeout(hardExit.timer);
-        }
+        clearTimeout(hardExitTimer);
       }
       params.disposeStatus();
     })
@@ -632,41 +617,19 @@ export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {
   return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
 }
 
-type ScheduleProcessExitAfterTuiReturnParams = {
-  delayMs?: number;
-  setTimeoutFn?: TuiProcessExitTimeout;
-  exit?: (code?: number) => never | void;
-  writeStderr?: (text: string) => void;
-};
-
 export function scheduleProcessExitAfterTuiReturn(
-  params?: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn?: undefined },
-): ReturnType<typeof setTimeout>;
-export function scheduleProcessExitAfterTuiReturn(
-  params: ScheduleProcessExitAfterTuiReturnParams & { setTimeoutFn: TuiProcessExitTimeout },
-): TuiProcessExitTimer;
-export function scheduleProcessExitAfterTuiReturn(
-  params: ScheduleProcessExitAfterTuiReturnParams = {},
-): TuiProcessExitTimer {
+  params: { delayMs?: number } = {},
+): ReturnType<typeof setTimeout> {
   const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
-  const exit = params.exit ?? ((code?: number) => process.exit(code));
-  const writeStderr =
-    params.writeStderr ??
-    ((text: string) => {
-      process.stderr.write(text);
-    });
-  const onTimeout = () => {
+  const timer = setTimeout(() => {
     try {
-      writeStderr("openclaw tui forcing process exit after return\n");
+      process.stderr.write("openclaw tui forcing process exit after return\n");
     } catch {
       // Best effort only; forced exit must not depend on stderr.
     }
-    exit(0);
-  };
-  const timer = params.setTimeoutFn
-    ? params.setTimeoutFn(onTimeout, delayMs)
-    : setTimeout(onTimeout, delayMs);
-  timer.unref?.();
+    process.exit(0);
+  }, delayMs);
+  timer.unref();
   return timer;
 }
 

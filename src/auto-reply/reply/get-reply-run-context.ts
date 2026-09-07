@@ -31,7 +31,6 @@ import {
   buildExecOverridePromptHint,
   hasInboundHistoryBody,
   hasReplyTargetContext,
-  resolvePromptSessionContextForSystemEvent,
   resolvePromptSilentReplyConversationType,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
@@ -63,6 +62,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const {
     ctx,
     sessionCtx,
+    conversation,
     cfg,
     agentId,
     agentCfg,
@@ -105,12 +105,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       config: cfg,
       attributes: traceAttributes,
     });
-  const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
-    sessionCtx,
-    sessionEntry,
-    ctx,
-    isHeartbeat,
-  });
+  const promptSessionCtx = { ...sessionCtx, ...conversation.fields };
   copyChannelParticipantAdmissionEvidence(ctx, promptSessionCtx);
   if (sessionCtx !== ctx) {
     copyChannelParticipantAdmissionEvidence(sessionCtx, promptSessionCtx);
@@ -221,7 +216,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const sessionStableConversationContext =
     sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
-  const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
+  const groupIntro = isGroupChat
+    ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
+    : "";
   const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
   const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
   const allowEmptyAssistantReplyAsSilent =
@@ -236,11 +233,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       : "required";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
-    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },
     cfg,
-    // promptSessionCtx restores the persisted channel/account for system-event
-    // turns, so reply formatting hints resolve against the delivery channel.
-    { includeFormattingHints: !useFastReplyRuntime, formattingHintsCtx: promptSessionCtx },
+    { includeFormattingHints: !useFastReplyRuntime },
   );
   const execOverridePromptHint = buildExecOverridePromptHint({
     execOverrides,

@@ -21,7 +21,9 @@ import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/au
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { runCliCleanup } from "./cleanup.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -177,6 +179,7 @@ export async function settlePreparedCliRun(params: {
   const terminalRunError = runError;
   let cleanupError: unknown;
   const recordCleanupError = (error: unknown) => {
+    recordAgentCleanupFailure();
     cleanupError ??= error;
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
@@ -192,10 +195,12 @@ export async function settlePreparedCliRun(params: {
     // a newer run. Never retire the newer runtime or close the shared listener.
     try {
       const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
-      await retireSessionMcpRuntime({
-        sessionId: runParams.sessionId,
-        reason: "cli-run-end",
-        onError: recordCleanupError,
+      await runCliCleanup(runParams, "cli-bundle-mcp-retire", async () => {
+        await retireSessionMcpRuntime({
+          sessionId: runParams.sessionId,
+          reason: "cli-run-end",
+          onError: recordCleanupError,
+        });
       });
     } catch (error) {
       recordCleanupError(error);
@@ -412,6 +417,7 @@ export function buildCliDeliveredFailure(params: {
     ...(evidence.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(evidence.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(evidence.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: evidence.messagingToolSentTexts }
       : {}),
@@ -653,6 +659,7 @@ export function buildCliRunResult(params: {
     ...(output.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(output.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: output.messagingToolSentTexts }
       : {}),
@@ -690,6 +697,7 @@ export function settleCliBackendOutcome(params: {
     runResult,
   } = params;
   if (cleanupError) {
+    recordAgentCleanupFailure();
     if (!deliveredMessagingSideEffect) {
       if (runFailed) {
         log.warn(`CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`);

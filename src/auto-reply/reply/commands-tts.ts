@@ -158,7 +158,7 @@ async function buildTtsAudioReply(params: {
     return {
       reply: {
         mediaUrl: result.audioPath,
-        audioAsVoice: result.audioAsVoice === true || result.voiceCompatible === true,
+        audioAsVoice: result.audioAsVoice === true,
         trustedLocalMedia: true,
         spokenText: params.text,
       },

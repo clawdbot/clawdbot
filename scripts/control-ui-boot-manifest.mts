@@ -13,7 +13,10 @@ import {
   controlUiBootManifestKey,
   controlUiCodeSplitting,
 } from "../ui/config/control-ui-chunking.ts";
-import { installMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../ui/src/test-helpers/control-ui-e2e.ts";
 import controlUiViteConfig from "../ui/vite.config.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,7 +80,9 @@ async function collectBootChunkPaths(
   distDir: string,
   route: "new" | "chat",
 ): Promise<Set<string>> {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({
+    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+  });
   try {
     const page = await browser.newPage();
     const chunkPaths = new Set<string>();

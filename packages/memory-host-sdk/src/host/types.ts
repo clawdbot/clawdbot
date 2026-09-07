@@ -152,6 +152,14 @@ export type MemoryProviderStatus = {
   lastSyncError?: string;
   workspaceDir?: string;
   dbPath?: string;
+  /** Explicit diagnostics for the whole shared agent database; payload sizes are not additive. */
+  storage?: {
+    databaseBytes: number;
+    walBytes: number;
+    reusableBytes: number;
+    embeddingCacheBytes: number;
+    embeddingCacheEntries: number;
+  };
   extraPaths?: MemoryExtraPath[];
   sources?: MemorySource[];
   sourceCounts?: Array<{
@@ -319,6 +327,12 @@ export interface MemorySearchManager {
       /** Active repository identities used only for project-aware ranking. */
       activeProjectKeys?: string[];
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      /**
+       * Ranked memory-file keyword candidates bounded by maxResults, available before semantic retrieval completes.
+       * Callers must apply the same visibility checks as for final results.
+       * Null invalidates a previous snapshot before its provider/index changes.
+       */
+      onPartialResults?: (results: MemorySearchResult[] | null) => void;
       sources?: MemorySource[];
       /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
       signal?: AbortSignal;
