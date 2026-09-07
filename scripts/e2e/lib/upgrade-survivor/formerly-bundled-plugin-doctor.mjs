@@ -7,7 +7,8 @@ import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { runManagedCommand } from "../../../lib/managed-child-process.mts";
+import { promisify } from "node:util";
+import { runManagedCommand, terminateManagedChild } from "../../../lib/managed-child-process.mts";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const expectedVersion = process.argv[2];
@@ -72,7 +73,7 @@ function cli(name, args, { json = true, binary = "openclaw" } = {}) {
   if (!json) {
     return result.stdout;
   }
-  const start = result.stdout.search(/^\s*[\[{]/mu);
+  const start = result.stdout.search(/^\s*[[{]/mu);
   assert(start >= 0, `${name} did not return JSON`);
   return JSON.parse(result.stdout.slice(start));
 }
@@ -134,7 +135,6 @@ const registryEnv = {
 delete registryEnv.OPENCLAW_NPM_REGISTRY_DIST_TAGS;
 delete registryEnv.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
 // The last version becomes latest. Both manifests and archives are real package bytes.
-const registryAbort = new AbortController();
 let registry;
 const registryRun = runManagedCommand({
   bin: process.execPath,
@@ -150,16 +150,10 @@ const registryRun = runManagedCommand({
   ],
   env: registryEnv,
   stdio: ["ignore", registryLog, registryLog],
-  signal: registryAbort.signal,
-  abortKillGraceMs: 1_000,
   requireProcessTreeExit: true,
   onReady: (child) => {
     registry = child;
   },
-}).catch((error) => {
-  if (error.code !== "ABORT_ERR") {
-    throw error;
-  }
 });
 fs.closeSync(registryLog);
 try {
@@ -192,12 +186,20 @@ try {
     listener.listen(0, "127.0.0.1", resolve);
   });
   const port = listener.address().port;
-  await new Promise((resolve, reject) =>
-    listener.close((error) => (error ? reject(error) : resolve())),
-  );
+  await promisify(listener.close.bind(listener))();
   env.OPENCLAW_GATEWAY_PORT = String(port);
   const config = {
-    agents: { defaults: { workspace } },
+    agents: { defaults: { workspace, model: { primary: "survivor/gpt-5.6-luna" } } },
+    models: {
+      providers: {
+        survivor: {
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          api: "openai-completions",
+          apiKey: "survivor-doctor-fixture",
+          models: [{ id: "gpt-5.6-luna", name: "Doctor fixture" }],
+        },
+      },
+    },
     gateway: {
       mode: "local",
       bind: "loopback",
@@ -294,6 +296,6 @@ try {
   });
   console.log(`Formerly bundled Doctor proof passed: ${proofArtifacts}/evidence.json`);
 } finally {
-  registryAbort.abort();
+  terminateManagedChild(registry, "SIGKILL");
   await registryRun;
 }

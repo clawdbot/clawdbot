@@ -172,11 +172,11 @@ export function seedLegacyOperatorExternalPlugin() {
   if (bundled) {
     // This is the published bundled-era web-search configuration, authored by its CLI.
     cli(["plugins", "enable", "duckduckgo"], "legacy-operator-enable-duckduckgo");
-    for (const [key, value] of [
-      ["plugins.entries.duckduckgo", entry],
-      ["tools.web.search.provider", "duckduckgo"],
-      ["tools.web.search.enabled", true],
-    ]) {
+    for (const [key, value] of Object.entries({
+      "plugins.entries.duckduckgo": entry,
+      "tools.web.search.provider": "duckduckgo",
+      "tools.web.search.enabled": true,
+    })) {
       cli(["config", "set", key, JSON.stringify(value), "--strict-json"], `legacy-operator-${key}`);
     }
     cli(["config", "validate", "--json"], "legacy-operator-duckduckgo-baseline-validate", {
