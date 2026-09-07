@@ -32,7 +32,7 @@ function openHeartbeatDatabase() {
       return runWithSqliteCoordinator(
         acquireStateDatabaseCoordinator({ databasePath: params.path, busyTimeoutMs: 0 }),
         "maintenance heartbeat open",
-        () => openTrackedStateDatabase(params.path),
+        () => openTrackedStateDatabase(params.path, { existingOnly: params.existingOnly }),
       );
     } catch (error) {
       if (!(error instanceof StateDatabaseCoordinatorContentionError)) {

@@ -1,6 +1,9 @@
 /** Maximum size of one file staged through the operator terminal. */
 export const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
+/** Lifetime of terminal upload paths, including paths retained by an unfinished UI batch. */
+export const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 /** Base64 expansion of MAX_TERMINAL_UPLOAD_BYTES. */
 export const MAX_TERMINAL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_TERMINAL_UPLOAD_BYTES / 3) * 4;
 

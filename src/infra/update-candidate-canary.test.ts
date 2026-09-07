@@ -102,6 +102,31 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it.each([undefined, "unknown-owned-v2"])(
+    "keeps unsupported checkpoint capability out of admission (%s)",
+    async (candidateMutation) => {
+      runtimeContract = {
+        state: 2,
+        agent: 3,
+        executorDelegation: "pid-start-v1",
+        candidateMutation,
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+      expect(result.checkpointContinuation).toBe(false);
+    },
+  );
   it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
     await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
     vi.stubGlobal(
@@ -119,6 +144,7 @@ describe("update candidate canary", () => {
     });
     expect(result).toMatchObject({ status: "ok", phase: "runtime" });
     expect(result.candidateSchemaVersions).toBeUndefined();
+    expect(result.checkpointContinuation).not.toBe(true);
     expect(result.steps).toEqual([
       expect.objectContaining({
         name: "candidate migration continuation",
@@ -133,6 +159,12 @@ describe("update candidate canary", () => {
   });
 
   it("rehearses and validates only private state before requiring started then ready, and reaps the process group", async () => {
+    runtimeContract = {
+      state: 2,
+      agent: 3,
+      executorDelegation: "pid-start-v1",
+      candidateMutation: "checkpoint-owned-v1",
+    };
     const requests: string[] = [];
     const completed: Array<{ name: string; argv: string[] }> = [];
     let startupCalls = 0;
@@ -173,6 +205,7 @@ describe("update candidate canary", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+    expect(result.checkpointContinuation).toBe(true);
     expect(result.steps.map((step) => step.name)).toEqual([
       "candidate migration rehearsal",
       "candidate doctor lint",

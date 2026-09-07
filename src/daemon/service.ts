@@ -449,10 +449,10 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
-function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, TResult>(
-  action: string,
-  mutate: (args: TArgs) => Promise<TResult>,
-): (args: TArgs) => Promise<TResult> {
+function guardGatewayServiceMutation<
+  TArgs extends { env?: GatewayServiceEnv; assertCurrent?: () => void },
+  TResult,
+>(action: string, mutate: (args: TArgs) => Promise<TResult>): (args: TArgs) => Promise<TResult> {
   return async (args) => {
     // Mutations must satisfy both lifecycle ownership and durable-config
     // version guards before invoking any platform service manager.
@@ -460,10 +460,15 @@ function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, 
     if (args.env && args.env !== process.env) {
       assertGatewayServiceMutationAllowed(action, args.env);
     }
-    return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertCurrent) => {
+    const assertCaller = args.assertCurrent;
+    return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertNative) => {
+      const assertCurrent = () => {
+        assertNative();
+        assertCaller?.();
+      };
       await assertFutureConfigActionAllowed(action);
       assertCurrent();
-      const result = await mutate(args);
+      const result = await mutate({ ...args, assertCurrent });
       assertCurrent();
       return result;
     });

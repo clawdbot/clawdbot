@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -136,6 +137,58 @@ describe("direct config writer exclusion", () => {
           finish.resolve();
           await owner;
           await writer;
+        }
+        expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19876);
+      },
+    );
+  });
+
+  it("closes guarded admission while an already-admitted writer drains", async () => {
+    const stateDir = tempDirs.make("openclaw-config-closed-admission-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local"}}\n');
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      async () => {
+        const io = createConfigIO({ configPath, observe: false, pluginValidation: "skip" });
+        const entered = deferred();
+        const returned = deferred();
+        const finish = deferred();
+        let inherited: AsyncResource | undefined;
+        let writer: Promise<unknown> | undefined;
+        const owner = withConfigWriteLock(
+          configPath,
+          async () => {
+            inherited = new AsyncResource("closed-config-owner");
+            writer = io.writeConfigFile(
+              { gateway: { mode: "local", port: 19876 } },
+              {
+                beforeCommit: async () => {
+                  entered.resolve();
+                  await finish.promise;
+                },
+              },
+            );
+            await entered.promise;
+            returned.resolve();
+          },
+          undefined,
+          () => undefined,
+        );
+        try {
+          await returned.promise;
+          // Yield the outer callback's settlement, but leave the admitted writer blocked.
+          await delay(0);
+          const late = inherited!.runInAsyncScope(() =>
+            io.writeConfigFile({ gateway: { mode: "local", port: 19877 } }),
+          );
+          await expect(late).rejects.toThrow(/admission has closed/);
+          expect(await fs.stat(`${configPath}.lock`)).toBeDefined();
+        } finally {
+          finish.resolve();
+          await owner;
+          await writer;
+          inherited?.emitDestroy();
         }
         expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19876);
       },

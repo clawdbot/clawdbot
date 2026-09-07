@@ -47,12 +47,9 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import {
-  AGENT_DATABASE_MAINTENANCE_LEASE,
-  assertNoOpenClawAgentDatabaseLeases,
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
-  runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
@@ -60,7 +57,6 @@ import {
   closeCachedOpenClawAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabases,
-  closeOpenClawAgentDatabasesAsync,
   evictLruAgentDatabaseHandles,
   retainAgentDatabase,
   retainFailedAgentDatabaseClose,
@@ -102,7 +98,6 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -742,30 +737,7 @@ export function disposeOpenClawAgentDatabaseByPath(
   return true;
 }
 
-/** Fence cross-process agent writers while Doctor reconciles shared plugin state. */
-export function withAgentDatabaseMaintenanceLease<T>(
-  options: Pick<OpenClawStateDatabaseOptions, "env">,
-  run: (maintenance: OpenClawStateLeaseContext) => Promise<T>,
-): Promise<T> {
-  return withOpenClawStateLease(
-    {
-      ...AGENT_DATABASE_MAINTENANCE_LEASE,
-      database: { scope: "shared", options },
-      leaseMs: 60_000,
-      waitMs: 5_000,
-      heartbeat: "worker",
-      leaseLabel: "agent database maintenance lease",
-      operationLabel: "agent.database.maintenance.lease",
-    },
-    async (maintenance) => {
-      // Claiming first closes the cross-process gap: every later writer claim
-      // observes this same lease inside its authoritative state transaction.
-      await closeOpenClawAgentDatabasesAsync();
-      assertNoOpenClawAgentDatabaseLeases(maintenance, options);
-      return runWithAgentDatabaseMaintenanceAuthority(maintenance, () => run(maintenance));
-    },
-  );
-}
+export { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 
 /** Release fixture handles and pathname trust before a test root is recreated. */
 export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {

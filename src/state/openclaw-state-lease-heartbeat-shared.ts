@@ -14,6 +14,7 @@ export const leaseHeartbeatState = {
 
 export type LeaseHeartbeatWorkerData = {
   path: string;
+  existingOnly?: boolean;
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
   expiresAt: number;

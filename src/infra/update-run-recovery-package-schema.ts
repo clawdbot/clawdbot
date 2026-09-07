@@ -9,7 +9,7 @@ import {
 } from "./package-update-recovery.js";
 
 /** Private storage validation of the producer's typed facts, not evidence of live authority. */
-export const RecoveryPackageObservationSchema = z.strictObject({
+const RecoveryPackageObservationSchema = z.strictObject({
   status: z.literal("verified"),
   descriptor: PackageTransactionDescriptorSchema,
   observation: z.strictObject({

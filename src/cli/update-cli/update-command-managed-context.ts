@@ -82,7 +82,13 @@ export async function withOwnedManagedUpdateEnv<T>(
     delete process.env[key];
   }
   // A caller may pass process.env itself; clearing it must not erase the supplied scope.
-  Object.assign(process.env, env === process.env ? previousEnv : env);
+  const phaseEnv = env === process.env ? previousEnv : env;
+  for (const [key, value] of Object.entries(phaseEnv)) {
+    // Node stringifies undefined on assignment; unset selectors must remain absent.
+    if (value !== undefined) {
+      process.env[key] = value;
+    }
+  }
   try {
     return await run();
   } finally {

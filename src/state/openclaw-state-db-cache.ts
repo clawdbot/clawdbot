@@ -9,6 +9,14 @@ import {
   runWithSqliteCoordinator,
 } from "../infra/sqlite-coordinator.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import {
+  confirmSqliteFileIntegrity,
+  type SqliteIntegrityConfirmation,
+} from "../infra/sqlite-integrity.js";
+import {
+  prepareSqliteReadOnlyLocationFromOwnedDatabase,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "../infra/sqlite-readonly-location.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
@@ -154,8 +162,8 @@ function getOpenClawStateDatabaseRuntimeFailure(pathname: string): Error | undef
     if (cachedDataVersions.get(cached.db) === dataVersion) {
       return undefined;
     }
-    // data_version is the cheap external-commit trigger. Re-read user_version
-    // only when another connection changed the file.
+    // data_version is the cheap external-commit trigger. Recheck published and
+    // content versions only when another connection changed the file.
     assertSupportedStateSchemaVersion(cached.db, resolvedPath);
     cachedDataVersions.set(cached.db, dataVersion);
     return undefined;
@@ -340,6 +348,75 @@ export function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
   return {
     assertCurrent: handles.assertCurrent,
     runWithSourceReads: handles.runWithSourceReads,
+    assertMutationCurrent: handles.assertMutationCurrent,
+    async mutate<T>(assertCurrent: () => void, operation: () => Promise<T>): Promise<T> {
+      let outcome: { value: T } | { error: unknown };
+      try {
+        outcome = {
+          value: await handles.runWithCanonicalMutation(
+            assertCurrent,
+            operation,
+            async (assertInspection) => {
+              assertInspection();
+              const opened = getOpenClawStateDatabaseIfOpenAtPath(databasePath);
+              if (opened) {
+                return await prepareSqliteReadOnlyLocationFromOwnedDatabase(opened.db, () => {
+                  assertInspection();
+                  if (getOpenClawStateDatabaseIfOpenAtPath(databasePath) !== opened) {
+                    throw new Error("SQLite inspection lost its original native owner");
+                  }
+                });
+              }
+              // Before first open, no cached OR uncached source handle may exist.
+              handles.assertDrainedDuringMutation();
+              return await handles.runWithSourceReads(async () => {
+                assertInspection();
+                return prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
+              });
+            },
+          ),
+        };
+      } catch (error) {
+        outcome = { error };
+      }
+      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
+      const database = cachedDatabases.get(databasePath);
+      if (database) {
+        try {
+          // Physical custody permits closure, never another mutation after authority loss.
+          handles.runWithCanonicalWrites(handles.assertCurrent, () => {
+            errors.push(...closeOpenClawStateDatabaseHandle(database));
+            if (!database.db.isOpen) {
+              cachedDatabases.delete(databasePath);
+            }
+          });
+          if (!database.db.isOpen) {
+            notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: databasePath });
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        handles.assertNoPins();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length > 1) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "SQLite mutation or drainage failed",
+          errors[0],
+        );
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      return outcome.value;
+    },
     async bindCaptured(assertCurrent: () => void, operation: () => undefined): Promise<void> {
       const errors: unknown[] = [];
       let result: unknown;
@@ -400,4 +477,13 @@ export function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
       }
     },
   };
+}
+
+/** Reconfirm an advisory worker failure on the live owner connection. */
+export function confirmOpenClawStateDatabaseIntegrity(
+  pathname: string,
+): SqliteIntegrityConfirmation {
+  const resolvedPath = path.resolve(pathname);
+  closeOpenClawStateDatabaseByPath(resolvedPath);
+  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }

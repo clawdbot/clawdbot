@@ -111,13 +111,13 @@ export const PackageTransactionDescriptorSchema = z
 
 export type PackageTransactionDescriptor = z.infer<typeof PackageTransactionDescriptorSchema>;
 export type PackageRetentionDecision = z.infer<typeof retention>;
-export type PackageRecoveryObservation = {
+type PackageRecoveryObservation = {
   previous: "live" | "retained" | "absent";
   candidate: "live" | "staged" | "displaced" | "absent";
   launchers: "previous" | "candidate" | "both" | "mixed" | "interrupted";
   successorLive: boolean;
 };
-export type PackageRecoveryFacts = {
+type PackageRecoveryFacts = {
   roots: Array<{
     path: string;
     identity: string | null;
@@ -193,7 +193,7 @@ function conflict(message: string): never {
   throw new PackageRecoveryConflict(message);
 }
 
-export function parsePackageTransactionDescriptor(input: unknown): PackageTransactionDescriptor {
+function parsePackageTransactionDescriptor(input: unknown): PackageTransactionDescriptor {
   let value = input;
   if (typeof input === "string") {
     if (Buffer.byteLength(input) > 1024 * 1024) {

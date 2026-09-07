@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { normalizeSqliteNonNegativeInteger } from "../infra/sqlite-busy-timeout.js";
 import {
   createSqliteLifecycleAggregateError,
@@ -167,7 +167,7 @@ function inspectOwnershipWhileCoordinatorHeld(databasePath: string, busyTimeoutM
   }
   // Write admission owns locking and recovery while the coordinator is held.
   // Inspect the live committed view without cloning a potentially busy family.
-  const database = openNodeSqliteDatabase(resolvedPath);
+  const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(resolvedPath));
   try {
     database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA trusted_schema = OFF;`);
     return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);

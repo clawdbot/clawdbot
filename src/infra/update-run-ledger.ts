@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
@@ -258,7 +259,13 @@ function mutateRun(
   update: (record: UpdateRunRecord) => void,
   options: LedgerOptions,
 ): UpdateRunRecord {
-  return writeRun((db) => mutateRunInTransaction(db, runId, update, options), options);
+  // An existing run can belong to a restored older runtime. History updates
+  // must never reopen through bootstrap/migration merely to report its outcome.
+  return runExistingOpenClawStateWriteTransaction(
+    ({ db }) => mutateRunInTransaction(db, runId, update, options),
+    options,
+    { schemaSql: schema, operationLabel: "update.run" },
+  );
 }
 
 export function createUpdateRun(

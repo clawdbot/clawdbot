@@ -2,19 +2,18 @@ import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
-import { isUpdateRecoveryMachineStateKey } from "./update-run-recovery-keys.js";
 import { validateUpdateRecoveryPublicationDatabaseAtPath } from "./update-run-recovery-publication.js";
+import { readUpdateRecoveryDatabaseBinding } from "./update-run-recovery-snapshot.js";
 import {
   beginUpdateRecovery,
   claimUpdateRecovery,
   loadUpdateRecovery,
   prepareUpdateRecoveryCarryForward,
-  readUpdateRecoveryDatabaseBinding,
   recordUpdateRecoveryIntent,
   recordUpdateRecoveryRestoreProgress,
   validateUpdateRecoveryDatabaseBinding,
@@ -22,7 +21,17 @@ import {
   UpdateRecoveryConflictError,
 } from "./update-run-recovery.js";
 
-const dirs = createTempDirTracker();
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const db of handles.splice(0)) {
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const fence = { assertCurrent() {} }; // Every writer belongs to this disposable test.
 const handles: ReturnType<typeof openNodeSqliteDatabase>[] = [];
 function open(file: string, readOnly = false) {
@@ -90,15 +99,6 @@ async function fixture() {
 function digest(file: string) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
-afterEach(() => {
-  for (const db of handles.splice(0)) {
-    if (db.isOpen) {
-      db.close();
-    }
-  }
-  closeOpenClawStateDatabaseForTest();
-  dirs.cleanup();
-});
 
 describe("recovery carry-forward", () => {
   it.each(["symbolic link", "hard link"])(
@@ -497,20 +497,20 @@ describe("recovery carry-forward", () => {
         )
         .all();
     const projection = (db: typeof f.sourceDb) =>
-      rows(db).filter((row) => isUpdateRecoveryMachineStateKey(row.state_key));
+      rows(db).filter((row) => String(row.state_key).startsWith("update.recovery."));
     expect(
       projection(f.sourceDb)
         .map((row) => String(row.state_key))
         .toSorted(),
     ).toEqual(["update.recovery." + f.expected.runId, "update.recovery." + other.runId].toSorted());
     const preserved = rows(f.stagedDb).filter(
-      (row) => !isUpdateRecoveryMachineStateKey(row.state_key),
+      (row) => !String(row.state_key).startsWith("update.recovery."),
     );
     const result = prepareUpdateRecoveryCarryForward(f.params);
     expect(projection(f.stagedDb)).toEqual(projection(f.sourceDb));
     expect(rows(f.stagedDb).some((row) => row.state_key === obsoleteKey)).toBe(false);
     expect(
-      rows(f.stagedDb).filter((row) => !isUpdateRecoveryMachineStateKey(row.state_key)),
+      rows(f.stagedDb).filter((row) => !String(row.state_key).startsWith("update.recovery.")),
     ).toEqual(preserved);
     expect(() =>
       validateUpdateRecoveryDatabaseBinding(f.stagedDb, result.record, result.stagedBinding),
@@ -522,7 +522,6 @@ describe("recovery carry-forward", () => {
     async (key) => {
       const f = await fixture();
       f.sourceDb.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(key, "{}", 1);
-      expect(isUpdateRecoveryMachineStateKey(key)).toBe(true);
       const before = readUpdateRecoveryDatabaseBinding(f.sourceDb, f.expected);
       const stageRows = () =>
         f.stagedDb.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all();

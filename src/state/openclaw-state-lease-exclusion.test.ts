@@ -121,6 +121,7 @@ describe("lease-backed file capture", () => {
     async (change) => {
       await withOpenClawTestState({ label: `lease-capture-${change}` }, async (state) => {
         const pathname = openOpenClawStateDatabase({ env: state.env }).path;
+        let changedLease: unknown;
         await expect(
           withOpenClawStateLease(options(state.env), async (lease) => {
             await requiredCapture(lease)(async (assertCurrent) => {
@@ -131,17 +132,22 @@ describe("lease-backed file capture", () => {
                   ? "UPDATE state_leases SET owner='replacement' WHERE scope='core:test-file-exclusion'"
                   : "UPDATE state_leases SET expires_at=expires_at+1000 WHERE scope='core:test-file-exclusion'",
               );
+              const db = new DatabaseSync(pathname, { readOnly: true });
+              try {
+                changedLease = db
+                  .prepare("SELECT * FROM state_leases WHERE scope='core:test-file-exclusion'")
+                  .get();
+              } finally {
+                db.close();
+              }
             });
           }),
         ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
         const current = openOpenClawStateDatabase({ env: state.env })
-          .db.prepare("SELECT owner FROM state_leases WHERE scope='core:test-file-exclusion'")
+          .db.prepare("SELECT * FROM state_leases WHERE scope='core:test-file-exclusion'")
           .get();
-        if (change === "owner") {
-          expect(current?.owner).toBe("replacement");
-        } else {
-          expect(current).toBeUndefined();
-        }
+        expect(changedLease).toBeDefined();
+        expect(current).toEqual(changedLease);
       });
     },
   );

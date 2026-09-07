@@ -254,7 +254,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Omit `agents.entries.*.skills` to inherit the defaults.
     - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
 
   </Accordion>
 
@@ -305,7 +305,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing. Spawn with `sessions_spawn({ thread: true })` or `/acp spawn --thread auto`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/config-agents#session) for all fields.
+    - See [full reference](/gateway/config-agents/sessions#session) for all fields.
 
   </Accordion>
 
@@ -327,7 +327,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
 
     Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents/sandbox#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -484,7 +484,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents/entries-and-multi-agent#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 

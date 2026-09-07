@@ -16,6 +16,7 @@ import {
 } from "./update-checkpoint-files.js";
 import {
   assertSqliteFamilyClosed,
+  isAbsentUpdateCheckpointRestoreResource,
   sameIdentity,
   planSchema,
   sharedBindingSchema,
@@ -153,6 +154,21 @@ export async function prepareUpdateCheckpointRestore(
         path.dirname(resource.sourcePath),
         `.openclaw-restore-${restoreId}-${index}`,
       );
+      if (before === null && resource.captured === null) {
+        const absent = { sourcePath: resource.sourcePath, stageDirectory, sqlite };
+        params.assertQuiescent();
+        if (!isAbsentUpdateCheckpointRestoreResource(absent)) {
+          throw new UpdateCheckpointPreservationUnavailable(resource.sourcePath);
+        }
+        plan.resources.push({
+          ...absent,
+          before: null,
+          after: null,
+          userVersion: resource.userVersion,
+          recovery: null,
+        });
+        continue;
+      }
       if (
         (await fs.realpath(path.dirname(resource.sourcePath))) !== path.dirname(resource.sourcePath)
       ) {

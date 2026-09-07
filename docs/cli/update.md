@@ -94,6 +94,12 @@ are labeled explicitly. The final report includes the outcome, recorded phase du
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+When switching from a dev checkout to a package, the updater replaces npm's
+install link and leaves the external checkout untouched. If activation fails,
+restoring that link and its launchers does not verify the mutable checkout's
+runtime. Recovery stays unverified and does not authorize an automatic restart;
+inspect the checkout and recovery report before restarting it.
+
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
@@ -239,10 +245,23 @@ verified running. Staging, candidate validation, and pre-activation repair are e
 records include service PID/port, version/build identity, settled health,
 plugin activation errors, channel readiness, and `/readyz`.
 
-After a live database migration, a fresh process from the candidate completes
-verification and writes the final outcome to the same run. It carries forward
-the activation steps; a schema upgrade does not create a separate report or let
-the old updater reopen the newer database.
+With transactional updaters from 2026.9.3 onward, a fresh process from the
+candidate completes verification after a live database migration and writes the
+final outcome to the same run. It carries forward the activation steps; a schema
+upgrade does not create a separate report or let the old updater reopen the
+newer database.
+
+The 2026.9.2 updater keeps its own completion path. For shared-state migrations,
+the candidate applies schema content but delays version publication until every
+affected terminal run is at least five minutes old, or each still-running row
+has been unchanged for more than 30 minutes. Doctor reports the deferral; the
+new Gateway already uses the migrated content and publishes the version after
+the deadline. Pending agent-database migrations, missing state metadata, and
+failed content migrations still produce `update-schema-bump-unfenced` with
+[manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for exact publication rules and the remaining risk to a stalled old CLI's final
+report.
 
 ## `update repair`
 
@@ -490,8 +509,9 @@ repair discards the candidate and leaves the serving Gateway untouched.
 Pre-activation repair uses disposable rehearsal state and configuration, then
 independently validates surviving candidate changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require
-operator-run `openclaw doctor --fix` or `openclaw triage`; post-activation repair
-uses the live installation. See
+operator-run `openclaw doctor --fix` or `openclaw triage`. Older, non-checkpoint
+finalization paths may use live post-activation repair; durable serving recovery
+uses the checkpoint path below. See
 [Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
 budgets, permitted repairs, and attempt reports.
 
@@ -515,36 +535,47 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
-The previous package tree remains available until activation or package restoration
-is verified. If activation fails before a working package is confirmed and rollback
-cannot be verified, finalization retains the backup and reports its location. Keep
-that backup and repair the installation before restarting, including for older
-targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged pre-existing shared and affected per-agent
-SQLite `user_version` values. A database first created during activation or
-verification is schema-neutral only at the candidate's supported version for its
-database kind; a missing pre-existing database or a new database at a foreign
-version blocks rollback. Newly created databases must also be readable by the
-previous package; unknown or incompatible support refuses rollback with
-`rollback-state-unverified`. The updater restores the previous generation and verifies
-it running before finishing `rolled-back`, preserving the failing check as its
-reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
-for the restoration and package-manager guards. A failure alone does not
-authorize restarting the candidate.
+### Durable serving recovery
 
-If configuration content changed or the databases are not schema-neutral, automatic rollback is refused with
-`state-migrated-no-rollback`. The updater enters `repairing` on the installed
-candidate, also used if rollback itself fails. If the previous package was
-already restored, repair targets that version. Between repair attempts, the
-updater starts or restarts a stopped or unhealthy service once and reruns the
-post-restart verification checks. Successful verification finishes the run as
-`succeeded` for the candidate, or `rolled-back` for the restored release with a
-nonzero command exit. Failed repair preserves the original failure and attempt summaries.
-Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
-preserving migrated state. These temporary validation
-snapshots are not a full-state backup; see [Rollback](/install/updating#rollback).
-If schema state cannot be verified, rollback is refused with
-`rollback-state-unverified`; unknown state never counts as schema-neutral.
+For an npm package update of an owned, running managed Gateway, candidates that
+advertise the checkpoint-continuation contract use durable recovery. The updater
+retains the previous package, captures original config and native-service files
+before suppression, and seals the stopped-state checkpoint before publishing the
+candidate. The checkpoint includes the shared and affected agent databases,
+config/include files, and inventoried plugin state. It excludes workspaces and
+cannot cover undeclared external resources.
+
+The fresh candidate accepts a one-use handoff under the live executor. Doctor,
+config and plugin writes run under their actual maintenance owners; their
+resulting state is captured before those owners release. A failed candidate can
+restore the matching previous package and checkpoint, including across schema
+migration, only while the persisted identities and source state still match.
+Operator changes, conflicting publication artifacts, unknown service ownership,
+or lost executor ownership leave recovery pending; they do not authorize a
+restart or overwrite.
+
+Native policy restoration and service start are journaled before dispatch.
+Completion requires fresh service/port ownership, the expected runtime's Gateway
+handshake and boot identity, and HTTP 200 from `/readyz`. Stored readiness or a
+terminal history row is not current authority. The durable completion path does
+not use inference. A verified previous runtime finishes `rolled-back` and the
+command exits nonzero, retaining the candidate's original failure.
+
+The selected package/checkpoint pair remains retained until a later successful
+serving update supersedes it. Retirement requires current serving authority; an
+interrupted or unverifiable deletion remains pending and preserves residual
+material. Re-running `openclaw update` checks pending recovery before ordinary
+mutable work. It can reconcile a matching sealed interrupted publication; missing,
+conflicting, legacy-only or unsealed evidence is reported rather than treated as a
+clean installation. `update finalize` does not bypass this admission.
+
+`--no-restart`, absent or stopped services, Git checkouts, shared-project pnpm/Bun
+installs, and targets without the checkpoint-continuation contract retain their
+existing update behavior. They do not gain durable serving-completion or full-state
+rollback guarantees. Their retained-package rollback still requires schema and
+configuration compatibility; see
+[Automatic rollback](/install/updating#automatic-schema-neutral-rollback).
+A disposable candidate rehearsal is not a user backup.
 
 ### Restart handoff
 

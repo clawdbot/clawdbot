@@ -6,6 +6,7 @@ import {
   type UpdateCheckpointRestoreResult,
 } from "./update-checkpoint-restore.js";
 import { createUpdateRecoveryCheckpointAdapter } from "./update-run-recovery-checkpoint.js";
+import { currentUpdateRecoveryNativeFacts } from "./update-run-recovery-native-schema.js";
 import {
   UpdateRecoveryConflictError,
   UpdateRecoveryRecordSchema,
@@ -68,8 +69,7 @@ export function createUpdateRecoveryCheckpointReplay(
     if (
       record.terminal ||
       record.nativeManager?.effects.at(-1)?.state === "intent" ||
-      (record.nativeManager &&
-        !(record.nativeManager.effects.at(-1)?.after ?? record.nativeManager.original).stopped) ||
+      (record.nativeManager && !currentUpdateRecoveryNativeFacts(record.nativeManager).stopped) ||
       intent?.kind !== "checkpoint-restore" ||
       intent.state !== "intent" ||
       intent.runtime !== "previous" ||

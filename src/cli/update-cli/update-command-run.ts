@@ -73,11 +73,11 @@ const previewAdmissions = new WeakMap<
   { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
 >();
 
-export async function admitUpdateCommandRun(params: {
+export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
-}): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+}): Promise<NodeJS.ProcessEnv> {
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
   // A preview belongs to its explicit state directory. Real updates follow the
   // same owned service selectors as finalization, then freeze them for all writers.
@@ -117,6 +117,15 @@ export async function admitUpdateCommandRun(params: {
       }
     }
   }
+  return env;
+}
+
+export async function admitUpdateCommandRun(params: {
+  opts: UpdateCommandOptions;
+  root: string;
+  invocationCwd?: string;
+}): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+  const env = await resolveUpdateCommandAdmissionEnv(params);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.

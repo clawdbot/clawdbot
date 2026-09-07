@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -31,11 +31,10 @@ import {
 import {
   acceptUpdateRecoveryHandoff,
   assertNoPendingUpdateRecovery,
-  assertUpdateRecoveryClaim,
+  assertExactUpdateRecoveryClaim,
   beginUpdateRecovery,
   bindUpdateRecoveryCheckpoint,
   claimUpdateRecovery,
-  loadUpdateRecoveries,
   inspectUpdateRecoveries,
   loadUpdateRecovery,
   prepareUpdateRecoveryHandoff,
@@ -47,7 +46,12 @@ import {
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 // Test owns every writer of these disposable databases.
 const fence = { assertCurrent() {} };
 function setup() {
@@ -157,10 +161,6 @@ function snapshot(root: string) {
 }
 
 describe("durable update recovery", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    tempDirs.cleanup();
-  });
   it("pins source paths at admission instead of deriving them from a later checkpoint", () => {
     const fixture = setup();
     const { options, run, from, to } = fixture;
@@ -314,11 +314,11 @@ describe("durable update recovery", () => {
     );
     const prepared = prepareUpdateRecoveryHandoff(verified, fence, options);
     expect(prepared.record.verification).toBeNull();
-    expect(() => assertUpdateRecoveryClaim(verified, fence, options)).toThrow(
+    expect(() => assertExactUpdateRecoveryClaim(verified, fence, options)).toThrow(
       UpdateRecoveryConflictError,
     );
     // Reloading correlation IDs cannot turn a prepared transfer into execution authority.
-    expect(() => assertUpdateRecoveryClaim(prepared.record, fence, options)).toThrow(
+    expect(() => assertExactUpdateRecoveryClaim(prepared.record, fence, options)).toThrow(
       UpdateRecoveryConflictError,
     );
     expect(() =>
@@ -338,7 +338,7 @@ describe("durable update recovery", () => {
     expect(accepted.claimKind).toBe("handoff");
     expect(accepted.handoff?.state).toBe("accepted");
     expect(accepted.claimId).not.toBe(prepared.record.claimId);
-    expect(() => assertUpdateRecoveryClaim(accepted, fence, options)).not.toThrow();
+    expect(() => assertExactUpdateRecoveryClaim(accepted, fence, options)).not.toThrow();
     expect(() => acceptUpdateRecoveryHandoff(prepared.handoff, to, fence, options)).toThrow(
       UpdateRecoveryConflictError,
     );
@@ -359,7 +359,7 @@ describe("durable update recovery", () => {
     expect(() => acceptUpdateRecoveryHandoff(prepared.handoff, to, fence, options)).toThrow(
       UpdateRecoveryConflictError,
     );
-    expect(() => assertUpdateRecoveryClaim(resumed, fence, options)).not.toThrow();
+    expect(() => assertExactUpdateRecoveryClaim(resumed, fence, options)).not.toThrow();
     expect(loadUpdateRecovery(run.runId, options)).toEqual(resumed);
   });
 
@@ -665,7 +665,7 @@ describe("durable update recovery", () => {
   it("keeps missing-state reads non-creating", () => {
     const root = tempDirs.make("openclaw-update-recovery-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
-    expect(loadUpdateRecoveries(options)).toEqual([]);
+    expect(loadUpdateRecovery("missing-run", options)).toBeUndefined();
     expect(inspectUpdateRecoveries(options)).toEqual([]);
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
@@ -832,10 +832,6 @@ defineUpdateRecoveryArtifactTests();
 defineUpdateRecoveryPackageTests();
 
 describe("systemd native identity binding", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    tempDirs.cleanup();
-  });
   it.each(["scope", "uid", "unit", "unit-space"] as const)(
     "rejects a different systemd %s during pending readback without advancing its record",
     async (field) => {

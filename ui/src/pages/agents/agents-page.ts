@@ -13,6 +13,12 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
@@ -44,6 +50,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
@@ -97,7 +104,8 @@ class AgentsPage
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
-  @state() chatModelCatalogError: string | null = null;
+  @state() chatModelCatalogStatus = createPanelRefreshStatus();
+  private chatModelCatalogPending: Promise<unknown> | null = null;
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -138,7 +146,7 @@ class AgentsPage
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    onIdentityChange: () => this.resetForClientChange(),
+    onIdentityChange: () => this.resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
         return;
@@ -146,7 +154,24 @@ class AgentsPage
       this.invalidateTransientRequests();
       this.resetModelCatalog();
     },
-    onSnapshot: () => this.syncGatewayState(),
+    onSnapshot: ({ becameAvailable, becameConnected }) => {
+      this.syncGatewayState();
+      if (becameAvailable && !becameConnected) {
+        const subscription = this.chatModelCatalogSubscription;
+        void Promise.resolve(this.chatModelCatalogPending).then(() => {
+          const snapshot = this.gateway.snapshot;
+          const status = this.chatModelCatalogStatus;
+          if (
+            subscription?.isCurrent() &&
+            snapshot &&
+            isGatewayAvailable(snapshot) &&
+            (status.awaitingGateway || status.error !== null)
+          ) {
+            this.ensureModelCatalog({ refresh: true });
+          }
+        });
+      }
+    },
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -157,7 +182,7 @@ class AgentsPage
         this.hasBoundAgents = true;
         this.agentsSource = agents;
         if (resetForSourceBind) {
-          this.resetForAgentsSourceChange();
+          this.resetForSourceChange();
         }
         this.syncAgentState(agents);
         this.ensureInitialData();
@@ -358,13 +383,7 @@ class AgentsPage
     }
   }
 
-  private resetForClientChange() {
-    this.agentsList = null;
-    this.agentsSelectedId = null;
-    this.resetSelectionState();
-  }
-
-  private resetForAgentsSourceChange() {
+  private resetForSourceChange() {
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
@@ -582,7 +601,8 @@ class AgentsPage
     this.chatModelCatalogSubscription?.unsubscribe();
     this.chatModelCatalogSubscription = null;
     this.chatModelCatalog = [];
-    this.chatModelCatalogError = null;
+    this.chatModelCatalogStatus = createPanelRefreshStatus();
+    this.chatModelCatalogPending = null;
   }
 
   private ensureModelCatalog(options: { refresh?: boolean } = {}) {
@@ -606,11 +626,19 @@ class AgentsPage
             return;
           }
           if (update.type === "invalidated") {
-            this.ensureModelCatalog();
+            this.chatModelCatalogPending = null;
+            this.ensureModelCatalog({ refresh: true });
           } else if (update.type === "error") {
-            this.chatModelCatalogError = formatUiError(update.error);
+            this.chatModelCatalogStatus = failPanelRefresh(
+              this.chatModelCatalogStatus,
+              update.error,
+              this.gateway.snapshot,
+            );
           } else {
-            this.chatModelCatalogError = null;
+            this.chatModelCatalogStatus =
+              update.type === "loading"
+                ? beginPanelRefresh(this.chatModelCatalogStatus)
+                : completePanelRefresh();
             if (update.type === "result") {
               this.chatModelCatalog = update.result.models ?? [];
             }
@@ -621,14 +649,28 @@ class AgentsPage
       const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
+        this.chatModelCatalogStatus = completePanelRefresh();
       }
+    }
+    if (
+      this.chatModelCatalogPending ||
+      (!options.refresh && this.chatModelCatalogStatus.hasLoaded)
+    ) {
+      return;
     }
     // The store owns current publications and pending reads. A superseded promise
     // must not overwrite its newer result or erase retained choices on failure.
     const metadataRequest = options.refresh
       ? revalidateChatMetadata(client, { agentId })
       : loadChatMetadata(client, { agentId });
-    void metadataRequest.catch(() => undefined);
+    const pending = metadataRequest
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.chatModelCatalogPending === pending) {
+          this.chatModelCatalogPending = null;
+        }
+      });
+    this.chatModelCatalogPending = pending;
   }
 
   private async loadAgentsAndCommit() {
@@ -992,7 +1034,7 @@ class AgentsPage
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
-          modelCatalogError: this.chatModelCatalogError,
+          modelCatalogStatus: this.chatModelCatalogStatus,
           pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
@@ -1139,7 +1181,7 @@ class AgentsPage
           // Availability facts (provider keys added/removed, new models) go
           // stale in the per-agent cache; opening the picker re-reads them,
           // mirroring the chat composer's on-open refresh.
-          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
+          onModelCatalogOpen: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);

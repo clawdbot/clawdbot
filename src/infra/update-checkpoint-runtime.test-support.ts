@@ -16,16 +16,38 @@ export async function buildCheckpointReaderRuntime(
   root: string,
   newer = false,
   pauseReader = false,
-  options: { agentReader?: boolean } = {},
+  options: { agentReader?: boolean; selfContained?: boolean; preWorkshop?: boolean } = {},
 ) {
   const version = newer ? "2.0.0" : "1.0.0";
-  const schemaVersion = OPENCLAW_STATE_SCHEMA_VERSION + (newer ? 1 : 0);
-  const schema = newer
+  if (options.preWorkshop && (newer || OPENCLAW_STATE_SCHEMA_VERSION !== 16)) {
+    throw new Error("The retained v15 fixture requires the known v16 Workshop migration.");
+  }
+  const schemaVersion = options.preWorkshop ? 15 : OPENCLAW_STATE_SCHEMA_VERSION + (newer ? 1 : 0);
+  let schema = newer
     ? OPENCLAW_STATE_SCHEMA_SQL.replace(
         "value_json TEXT NOT NULL,",
         "value_json TEXT NOT NULL,\n  next_runtime_only TEXT,",
       )
     : OPENCLAW_STATE_SCHEMA_SQL;
+  if (options.preWorkshop) {
+    for (const table of [
+      "skill_workshop_proposals",
+      "skill_workshop_collection_reviews",
+      "skill_workshop_proposal_rollbacks",
+      "skill_workshop_proposal_events",
+    ]) {
+      const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+      const end = schema.indexOf(") STRICT;", start);
+      if (start < 0 || end < 0) {
+        throw new Error("Missing historical schema boundary");
+      }
+      schema = schema.slice(0, start) + schema.slice(end + ") STRICT;".length);
+    }
+    schema = schema.replace(
+      /CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_owner_time[\s\S]*?;/u,
+      "",
+    );
+  }
   const agentSchemaVersion = OPENCLAW_AGENT_SCHEMA_VERSION + (newer ? 1 : 0);
   const agentSchema = newer
     ? OPENCLAW_AGENT_SCHEMA_SQL.replace(
@@ -35,11 +57,13 @@ export async function buildCheckpointReaderRuntime(
     : OPENCLAW_AGENT_SCHEMA_SQL;
   const sourceRoot = process.cwd();
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
-  await fs.symlink(
-    path.join(sourceRoot, "node_modules"),
-    path.join(root, "node_modules"),
-    "junction",
-  );
+  if (!options.selfContained) {
+    await fs.symlink(
+      path.join(sourceRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+  }
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({
@@ -98,7 +122,14 @@ export async function buildCheckpointReaderRuntime(
     bundle: true,
     platform: "node",
     format: "esm",
-    packages: "external",
+    packages: options.selfContained ? "bundle" : "external",
+    ...(options.selfContained
+      ? {
+          banner: {
+            js: "import { createRequire as fixtureCreateRequire } from 'node:module'; const require = fixtureCreateRequire(import.meta.url);",
+          },
+        }
+      : {}),
     tsconfig: path.join(sourceRoot, "tsconfig.json"),
     plugins: [
       {
@@ -123,12 +154,17 @@ export async function buildCheckpointReaderRuntime(
               loader: "ts",
             }));
           }
-          if (newer) {
+          if (newer || options.preWorkshop) {
             bundler.onLoad({ filter: /openclaw-state-db-contract\.ts$/ }, async (args) => ({
-              contents: (await fs.readFile(args.path, "utf8")).replace(
-                `OPENCLAW_STATE_SCHEMA_VERSION = ${OPENCLAW_STATE_SCHEMA_VERSION}`,
-                `OPENCLAW_STATE_SCHEMA_VERSION = ${schemaVersion}`,
-              ),
+              contents: (await fs.readFile(args.path, "utf8"))
+                .replace(
+                  `OPENCLAW_STATE_SCHEMA_VERSION = ${OPENCLAW_STATE_SCHEMA_VERSION}`,
+                  `OPENCLAW_STATE_SCHEMA_VERSION = ${schemaVersion}`,
+                )
+                .replaceAll(
+                  /^[ \t]*"(?:skill_workshop_[a-z_]+|idx_skill_workshop_[a-z_]+)",\r?\n/gmu,
+                  (line) => (options.preWorkshop ? "" : line),
+                ),
               loader: "ts",
             }));
           }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -44,12 +44,13 @@ import {
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
 
-const dirs = createTempDirTracker();
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-  dirs.cleanup();
-});
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 function fileHash(file: string) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }

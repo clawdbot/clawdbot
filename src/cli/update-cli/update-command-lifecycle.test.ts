@@ -223,6 +223,35 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
+  it("keeps explicitly unset candidate selectors absent and restores the caller on failure", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "caller-profile");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
+    const failure = new Error("candidate phase failed");
+    let observed: NodeJS.ProcessEnv | undefined;
+    try {
+      await expect(
+        withOwnedManagedUpdateEnv(
+          {
+            ...process.env,
+            OPENCLAW_PROFILE: undefined,
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          },
+          async () => {
+            await Promise.resolve();
+            observed = { ...process.env };
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(observed).not.toHaveProperty("OPENCLAW_PROFILE");
+      expect(observed).not.toHaveProperty("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE");
+      expect(process.env.OPENCLAW_PROFILE).toBe("caller-profile");
+      expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",

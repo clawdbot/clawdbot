@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { reopenPackageUpdateTransaction } from "../../infra/package-update-recovery.js";
+import type { ManagedServiceNativeHandoff } from "../../infra/update-managed-service-native-control.js";
 import { createUpdateRecoveryCheckpointAdapter } from "../../infra/update-run-recovery-checkpoint.js";
+import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import { createUpdateRecoveryCheckpointReplay } from "../../infra/update-run-recovery-replay.js";
 import type { UpdateRecoveryReadinessReceipt } from "../../infra/update-run-recovery-schema.js";
@@ -20,6 +22,8 @@ import type { UpdateCommandOptions } from "./shared.js";
 export type UpdateCommandRecovery = Parameters<typeof createUpdateRecoveryPackageHooks>[0] & {
   /** Rechecks final lifecycle readiness, not merely stored proof or a claim ID. */
   assertReady: () => void;
+  /** Same-process transport admitted before recovery creation; never serialize. */
+  managedNativeHandoff?: ManagedServiceNativeHandoff;
   /**
    * Executor-owned PUBLICATION interval with live lease rebinding, not capture
    * exclusion. No default: the capture-only owner must never be adapted here.
@@ -174,8 +178,7 @@ export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
           intent.resourceId !== expected.checkpoint?.ref.checkpointId ||
           expected.nativeManager?.effects.at(-1)?.state === "intent" ||
           (expected.nativeManager &&
-            !(expected.nativeManager.effects.at(-1)?.after ?? expected.nativeManager.original)
-              .stopped)
+            !currentUpdateRecoveryNativeFacts(expected.nativeManager).stopped)
         ) {
           throw new UpdateCommandRecoveryPendingError(
             "Reconcile restore intent before preparation.",

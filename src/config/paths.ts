@@ -7,7 +7,9 @@ import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
+import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
 import type { OpenClawConfig } from "./types.js";
+export { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
 
 /**
  * Nix mode detection: When OPENCLAW_NIX_MODE=1, the gateway is running under Nix.
@@ -22,9 +24,6 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export let isNixMode = resolveIsNixMode();
 
-// Support the remaining legacy pre-rebrand state dir.
-const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
-const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
@@ -34,10 +33,6 @@ export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(profile && profile.toLowerCase() !== "default");
 }
 
-function resolveDefaultHomeDir(): string {
-  return resolveRequiredHomeDir(process.env, os.homedir);
-}
-
 function resolveSystemAccountHomeDir(): string {
   return os.userInfo().homedir;
 }
@@ -45,58 +40,6 @@ function resolveSystemAccountHomeDir(): string {
 /** Build a homedir thunk that respects OPENCLAW_HOME for the given env. */
 function envHomedir(env: NodeJS.ProcessEnv): () => string {
   return () => resolveRequiredHomeDir(env, os.homedir);
-}
-
-function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
-}
-
-function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), NEW_STATE_DIRNAME);
-}
-
-export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return legacyStateDirs(homedir);
-}
-
-export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return newStateDir(homedir);
-}
-
-/**
- * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via OPENCLAW_STATE_DIR.
- * Default: ~/.openclaw
- */
-export function resolveStateDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = envHomedir(env),
-): string {
-  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, env, effectiveHomedir);
-  }
-  const newDir = newStateDir(effectiveHomedir);
-  if (isFastTestRuntimeEnv(env)) {
-    return newDir;
-  }
-  const legacyDirs = legacyStateDirs(effectiveHomedir);
-  const hasNew = fs.existsSync(newDir);
-  if (hasNew) {
-    return newDir;
-  }
-  const existingLegacy = legacyDirs.find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  if (existingLegacy) {
-    return existingLegacy;
-  }
-  return newDir;
 }
 
 function normalizePathForComparison(candidate: string): string {
@@ -122,7 +65,7 @@ export function isDefaultStateDir(
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (
     normalizePathForComparison(resolveStateDir(env, effectiveHomedir)) ===
-    normalizePathForComparison(newStateDir(effectiveHomedir))
+    normalizePathForComparison(resolveNewStateDir(effectiveHomedir))
   );
 }
 
@@ -395,7 +338,10 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  const defaultDirs = [
+    resolveNewStateDir(effectiveHomedir),
+    ...resolveLegacyStateDirs(effectiveHomedir),
+  ];
   for (const dir of defaultDirs) {
     candidates.push(path.join(dir, CONFIG_FILENAME));
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));

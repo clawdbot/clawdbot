@@ -201,6 +201,8 @@ export async function startLaunchAgent({
   stdout,
   env,
   onMutation,
+  assertCurrent,
+  preserveAutoStart,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
@@ -211,12 +213,17 @@ export async function startLaunchAgent({
   await assertNoSystemLaunchDaemonOwnership(label);
 
   // Enable is an independent mutation; audit it even if the later launch fails.
-  const enable = await execLaunchctl(["enable", serviceTarget]);
-  const enabled = enable.code === 0;
-  if (enabled) {
-    reportMutation("enable");
+  let enabled = false;
+  if (!preserveAutoStart) {
+    assertCurrent?.();
+    const enable = await execLaunchctl(["enable", serviceTarget]);
+    enabled = enable.code === 0;
+    if (enabled) {
+      reportMutation("enable");
+    }
   }
 
+  assertCurrent?.();
   let start = await execLaunchctl(["kickstart", serviceTarget]);
   if (isLaunchctlNotLoaded(start)) {
     await bootstrapLaunchAgentOrThrow({
@@ -225,9 +232,11 @@ export async function startLaunchAgent({
       plistPath,
       actionHint: "openclaw gateway start",
       onMutation: reportMutation,
-      skipEnable: enabled,
+      skipEnable: preserveAutoStart || enabled,
+      assertCurrent,
     });
     // Loading does not start demand-only jobs. Without -k, an auto-started job is left running.
+    assertCurrent?.();
     start = await execLaunchctl(["kickstart", serviceTarget]);
   }
   if (start.code !== 0) {

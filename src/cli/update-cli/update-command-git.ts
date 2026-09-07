@@ -533,15 +533,17 @@ export async function updateGitInstall(params: {
               activateGitRoot: updateRoot,
               onTransaction: params.onTransaction,
               prepareRecovery: params.prepareRecovery,
-              postVerifyStep: (root) =>
-                runPackageUpdateDoctor({
-                  ...params,
-                  // Inspection is deferred until the Git target is known; read
-                  // its admitted service profile when backup and Doctor run.
-                  managedServiceEnv: params.getManagedServiceEnv(),
-                  root,
-                  timeoutMs: effectiveTimeout,
-                }),
+              ...(params.prepareRecovery
+                ? {}
+                : {
+                    postVerifyStep: (root: string) =>
+                      runPackageUpdateDoctor({
+                        ...params,
+                        managedServiceEnv: params.getManagedServiceEnv(),
+                        root,
+                        timeoutMs: effectiveTimeout,
+                      }),
+                  }),
             });
           }
         : undefined,

@@ -170,7 +170,10 @@ export async function runScheduledTaskOrThrow(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
   onMutation?: () => void;
+  assertCurrent?: () => void;
+  allowFallback?: boolean;
 }): Promise<ScheduledTaskActivation> {
+  params.assertCurrent?.();
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
@@ -181,8 +184,8 @@ export async function runScheduledTaskOrThrow(params: {
   ) {
     return "scheduled-task";
   }
-  if (!shouldManageGatewayListenerPort(params.env)) {
-    await launchFallbackTaskScript(params.env);
+  if (params.allowFallback !== false && !shouldManageGatewayListenerPort(params.env)) {
+    await launchFallbackTaskScript(params.env, undefined, params.assertCurrent);
     return "direct-fallback";
   }
   throw new Error(
@@ -275,7 +278,7 @@ export async function suspendScheduledTaskAutoStartForUpdate(
 
 export async function resumeScheduledTaskAutoStartAfterUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
-  options?: { beforeMutation?: () => Promise<void> },
+  options?: { beforeMutation?: () => Promise<void>; assertCurrent?: () => void },
 ): Promise<boolean> {
   return withGatewayServiceOperationLock(env, async () =>
     changeScheduledTaskEnabledState({ env, enabled: true, ...options }),
@@ -349,16 +352,30 @@ export async function startScheduledTask({
   stdout,
   env,
   onMutation,
+  assertCurrent,
+  preserveAutoStart,
 }: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   if (await shouldControlStartupEntry(effectiveEnv)) {
-    await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
+    if (preserveAutoStart) {
+      throw new Error(
+        "Captured Scheduled Task registration is unavailable; refusing login-item fallback.",
+      );
+    }
+    await startStartupEntry(
+      effectiveEnv,
+      stdout,
+      () => reportMutation("startup-entry-start"),
+      assertCurrent,
+    );
     return;
   }
   const taskName = resolveTaskName(effectiveEnv);
   await runScheduledTaskOrThrow({
     taskName,
+    assertCurrent,
+    allowFallback: preserveAutoStart !== true,
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
     onMutation: () => reportMutation("schtasks-start"),

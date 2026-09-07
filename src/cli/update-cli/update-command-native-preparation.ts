@@ -1,21 +1,20 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { withConfigWriteLock } from "../../config/write-lock.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
-import { inspectCheckpointFile } from "../../infra/update-checkpoint-files.js";
-import { reopenUpdateCheckpointPreimages } from "../../infra/update-checkpoint.js";
+import { activateManagedServiceUpdateHandoff } from "../../infra/update-managed-service-handoff.js";
+import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import {
   recordUpdateRecoveryNativeIntent,
   recordUpdateRecoveryNativeObservation,
 } from "../../infra/update-run-recovery-native.js";
 import { assertUpdateRecoveryPreimages } from "../../infra/update-run-recovery-preimage.js";
 import { assertExactUpdateRecoveryClaim } from "../../infra/update-run-recovery.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
 import {
   UpdateCommandRecoveryPendingError,
   type UpdateCommandRecovery,
 } from "./update-command-recovery.js";
+import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
 type NativeEffect = (assertCurrent: () => void) => Promise<void>;
 export type UpdateCommandNativePreparation = {
@@ -37,48 +36,13 @@ export async function withUpdateCommandNativePreparation<T>(
 ): Promise<T> {
   const recovery = params.recovery;
   const initial = recovery.getRecord();
-  const { source, preimages } = initial;
-  if (!source || !preimages || !initial.nativeManager) {
+  if (!initial.nativeManager) {
     throw new UpdateCommandRecoveryPendingError(
       "Native preparation requires bound original state.",
     );
   }
-  const artifactRoot = path.join(
-    path.dirname(source.stateDir),
-    `.${path.basename(source.stateDir)}-update-checkpoints`,
-  );
-  return await withGatewayServiceOperationLock(params.env, async (assertNative) => {
-    const assertCurrent = () => {
-      assertNative();
-      recovery.fence.assertCurrent();
-    };
-    const fence = { assertCurrent };
-    assertExactUpdateRecoveryClaim(initial, fence, recovery.options);
-    const original = await reopenUpdateCheckpointPreimages(preimages.ref, {
-      artifactRoot,
-      binding: preimages.binding,
-    });
-    assertExactUpdateRecoveryClaim(initial, fence, recovery.options);
-    const configFiles = original.manifest.resources
-      .filter((r) => r.kind === "config")
-      .map((r) => r.sourcePath)
-      .filter((file) => file !== source.configPath)
-      .toSorted();
-    const files = [source.configPath, ...configFiles];
-    const definitionPaths = original.manifest.resources
-      .filter((r) => r.kind === "service")
-      .map((r) => r.sourcePath);
-    const verifySources = async () => {
-      for (const resource of original.manifest.resources) {
-        const current = await inspectCheckpointFile(resource.sourcePath);
-        assertCurrent();
-        if (!isDeepStrictEqual(current, resource.sourceState)) {
-          throw new UpdateCommandRecoveryPendingError(
-            "Original source changed before native preparation.",
-          );
-        }
-      }
-    };
+  return await withUpdateCommandSourceOwnership(params, async (source) => {
+    const { assertCurrent, verifySources, artifactRoot, definitionPaths } = source;
     const effects = new Set<Promise<void>>();
     let accepting = false;
     let active = true;
@@ -105,7 +69,7 @@ export async function withUpdateCommandNativePreparation<T>(
             throw new UpdateCommandRecoveryPendingError("Native original binding was lost.");
           }
           const prior = manager.effects.at(-1);
-          const before = prior?.after ?? manager.original;
+          const before = currentUpdateRecoveryNativeFacts(manager);
           const target =
             action === "suppress"
               ? { ...before, enabled: false }
@@ -177,55 +141,71 @@ export async function withUpdateCommandNativePreparation<T>(
       // Retain settled rejections too: a caught effect is still a failed native interval.
       return await pending;
     };
-    const lockNext = async (index: number): Promise<T> => {
-      const file = files[index];
-      if (file !== undefined) {
-        return await withConfigWriteLock(file, () => lockNext(index + 1), params.env);
-      }
-      assertExactUpdateRecoveryClaim(initial, fence, recovery.options);
-      await verifySources();
-      accepting = true;
-      const [outcome] = await Promise.allSettled([
-        Promise.resolve().then(() =>
-          operation({
-            stop: (effect) => apply("stop", effect),
-            suppress: (effect) => apply("suppress", effect),
-          }),
-        ),
-      ]);
-      accepting = false;
-      // Join admitted native work before releasing config/include locks. The
-      // outer daemon lock alone cannot retain these inner source owners.
-      const failures: unknown[] = [];
-      while (effects.size) {
-        const batch = [...effects];
-        effects.clear();
-        for (const result of await Promise.allSettled(batch)) {
-          if (result.status === "rejected") {
-            failures.push(result.reason);
-          }
+    accepting = true;
+    const [outcome] = await Promise.allSettled([
+      Promise.resolve().then(() =>
+        operation({
+          stop: (effect) => apply("stop", effect),
+          suppress: (effect) => apply("suppress", effect),
+        }),
+      ),
+    ]);
+    accepting = false;
+    // Join admitted native work before releasing config/include locks. The
+    // outer daemon lock alone cannot retain these inner source owners.
+    const failures: unknown[] = [];
+    while (effects.size) {
+      const batch = [...effects];
+      effects.clear();
+      for (const result of await Promise.allSettled(batch)) {
+        if (result.status === "rejected") {
+          failures.push(result.reason);
         }
       }
-      active = false;
-      if (failures.length) {
-        throw new UpdateCommandRecoveryPendingError(
-          "Native work did not settle under source ownership.",
-          {
-            cause: new AggregateError(
-              outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
-            ),
-          },
-        );
-      }
-      if (outcome.status === "rejected") {
-        throw outcome.reason instanceof Error
-          ? outcome.reason
-          : new UpdateCommandRecoveryPendingError("Native preparation failed.", {
-              cause: outcome.reason,
-            });
-      }
-      return outcome.value;
-    };
-    return await lockNext(0);
+    }
+    active = false;
+    if (failures.length) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Native work did not settle under source ownership.",
+        {
+          cause: new AggregateError(
+            outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
+          ),
+        },
+      );
+    }
+    if (outcome.status === "rejected") {
+      throw outcome.reason instanceof Error
+        ? outcome.reason
+        : new UpdateCommandRecoveryPendingError("Native preparation failed.", {
+            cause: outcome.reason,
+          });
+    }
+    return outcome.value;
   });
+}
+
+/** The managed helper transports effects; the original updater retains each
+ * intent, source lock and independent native readback through the response.
+ */
+export async function activateHandoff(
+  opts: UpdateCommandOptions,
+  timeoutMs?: number,
+): Promise<boolean> {
+  if (!opts.recovery) {
+    return await activateManagedServiceUpdateHandoff();
+  }
+  const admission = opts.recovery.managedNativeHandoff;
+  if (!admission) {
+    if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
+      throw new UpdateCommandRecoveryPendingError(
+        "Native helper was not admitted before recovery.",
+      );
+    }
+    return false;
+  }
+  return await withUpdateCommandNativePreparation(
+    { recovery: opts.recovery, env: opts.run?.env ?? process.env, timeoutMs },
+    (native) => activateManagedServiceUpdateHandoff({ native, admission }),
+  );
 }

@@ -12,6 +12,7 @@ import {
 } from "./update-run-recovery-schema.js";
 import {
   validateUpdateRecoveryDatabaseBinding,
+  validateUpdateRecoveryDatabaseBindingAtPath,
   type UpdateRecoveryDatabaseBinding,
 } from "./update-run-recovery.js";
 
@@ -29,7 +30,7 @@ export type UpdateRecoveryPublicationLocation = {
  * or an arbitrary older revision. It is never returned as an executable claim.
  * All other rows/schema/implicit rowids remain bound by the original plan digest.
  */
-export function validateUpdateRecoveryPublicationDatabase(
+function validateUpdateRecoveryPublicationDatabase(
   db: DatabaseSync,
   params: UpdateRecoveryPublicationLocation,
 ): void {
@@ -77,6 +78,13 @@ export function validateUpdateRecoveryPublicationDatabaseAtPath(
   params: UpdateRecoveryPublicationLocation,
   options: OpenClawStateDatabaseOptions,
 ): void {
+  if (params.role === "live-restored") {
+    const expected = UpdateRecoveryRecordSchema.parse(params.expected);
+    if (!expected.publication || !expected.restore?.planSha256) {
+      throw new UpdateRecoveryConflictError();
+    }
+    return validateUpdateRecoveryDatabaseBindingAtPath(expected, params.stagedBinding, options);
+  }
   const found = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
     validateUpdateRecoveryPublicationDatabase(db, params);
     return true;

@@ -57,7 +57,10 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
-    runSystemctl = (args) => execSystemctl(args, env);
+    runSystemctl = (args) => {
+      params.assertCurrent?.();
+      return execSystemctl(args, env);
+    };
   } else {
     await assertSystemdAvailable(env);
     if (params.action !== "stop") {
@@ -68,6 +71,7 @@ async function runSystemdServiceAction(params: {
   if (params.action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
+    params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
   }
   params.assertCurrent?.();
@@ -83,12 +87,14 @@ export async function startSystemdService({
   stdout,
   env,
   onMutation,
+  assertCurrent,
 }: GatewayServiceControlArgs): Promise<void> {
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "start",
+    assertCurrent,
     label: "Started systemd service",
     onMutation: () => reportMutation("systemctl-start"),
   });
@@ -115,12 +121,14 @@ export async function restartSystemdService({
   stdout,
   env,
   onMutation,
+  assertCurrent,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "restart",
+    assertCurrent,
     label: "Restarted systemd service",
     onMutation: () => reportMutation("systemctl-restart"),
   });

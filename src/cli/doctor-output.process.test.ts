@@ -93,7 +93,7 @@ function runDoctor(params: {
 }
 
 describe("Doctor report process output", () => {
-  it("refuses an unfenced schema bump before CLI debug capture can write state", () => {
+  it("refuses an unfenced schema bump without publication metadata before CLI debug capture can write state", () => {
     const root = tempDirs.make("openclaw-doctor-update-schema-");
     const configPath = path.join(root, "openclaw.json");
     const env = { OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_CONFIG_PATH: configPath };
@@ -103,7 +103,7 @@ describe("Doctor report process output", () => {
     closeOpenClawStateDatabaseForTest();
     const legacy = new DatabaseSync(shared);
     legacy.exec(
-      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};`,
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}; DROP TABLE config_machine_state;`,
     );
     legacy.close();
     const databaseBefore = fs.readFileSync(shared);

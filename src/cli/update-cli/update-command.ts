@@ -103,13 +103,20 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       });
     });
   }
-  const run = await withUpdateAdmissionReporting(inputOpts, () =>
-    admitUpdateCommandRun({
-      opts: inputOpts,
-      root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
-      invocationCwd,
-    }),
-  );
+  const admission = {
+    opts: inputOpts,
+    root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+    invocationCwd,
+    timeoutMs: prepared.timeoutMs,
+  };
+  const resumed = await withUpdateAdmissionReporting(inputOpts, async () => {
+    const { resumePendingUpdateCommand } = await import("./update-command-pending-replay.js");
+    return await resumePendingUpdateCommand(admission);
+  });
+  if (resumed) {
+    return;
+  }
+  const run = await withUpdateAdmissionReporting(inputOpts, () => admitUpdateCommandRun(admission));
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
     ...prepared.controlPlaneUpdateSentinelMeta,
@@ -700,17 +707,19 @@ async function updateCommandInternal(
     previousSchemaVersions: execution.previousSchemaVersions,
     previousVerified: execution.previousVerified,
   };
-  const rollbackBlockedReason = await inspectActivatedUpdateState({
-    result,
-    root,
-    packageUpdateNodeRunner,
-    schemaVersions: execution.schemaVersions,
-    candidateSchemaVersions: execution.candidateSchemaVersions,
-    config: finalizationConfigSnapshot.config,
-    env: ownedManagedUpdateContext?.env ?? run.env,
-  });
+  const rollbackBlockedReason = opts.recovery
+    ? undefined
+    : await inspectActivatedUpdateState({
+        result,
+        root,
+        packageUpdateNodeRunner,
+        schemaVersions: execution.schemaVersions,
+        candidateSchemaVersions: execution.candidateSchemaVersions,
+        config: finalizationConfigSnapshot.config,
+        env: ownedManagedUpdateContext?.env ?? run.env,
+      });
   run.executorFence?.assertCurrent();
-  if (rollbackBlockedReason) {
+  if (opts.recovery || rollbackBlockedReason) {
     // A migrated database belongs to the candidate runtime. The old process
     // must not reopen it, including during error reporting or outer cleanup.
     recoveryState.ledgerHandoffOwned = true;

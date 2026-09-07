@@ -23,7 +23,6 @@ import {
   type CodeModeSettlementMode,
   type CodeModeWorkerResult,
   type PendingBridgeRequest,
-  type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import {
   activeRuns,
@@ -41,7 +40,7 @@ import {
   removeExpiredRuns,
   reserveActiveRunSlot,
   resumingRunIds,
-  settledBridgeRequestsInCompletionOrder,
+  takeSettledBridgeRequests,
   storeSnapshotState,
   telemetry,
   waitForPendingBridgeSettlement,
@@ -92,7 +91,7 @@ export async function runCodeModeExec(params: {
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
   const approvalWait = observeAgentRunApprovalWait(params.ctx);
-  const owner = createCodeModeRunOwner(params.ctx);
+  const owner = createCodeModeRunOwner(params.ctx, config);
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
@@ -276,6 +275,7 @@ async function settleCodeModeResult(params: {
     pending.push(
       ...createPendingBridgeStates(newPendingRequests, {
         config: params.config,
+        inbox: params.owner.inbox,
         runtime: params.runtime,
         catalogProjection: params.catalogProjection,
         namespaceRuntime: params.namespaceRuntime,
@@ -369,27 +369,30 @@ async function settleCodeModeResult(params: {
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
       // attached to their original bridge ids across the restored snapshot.
-      const settledRequests: SettledBridgeRequest[] =
-        settledBridgeRequestsInCompletionOrder(pending);
+      const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       // The resumed guest inherits only the remaining shared budget as its
       // QuickJS interrupt deadline; the extra host margin is watchdog grace,
       // not extra guest run time.
-      result = await runCodeModeWorker(
-        {
-          kind: "resume",
-          snapshot: result.snapshot,
-          config: {
-            ...params.config,
-            timeoutMs: resumeBudgetMs,
+      try {
+        result = await runCodeModeWorker(
+          {
+            kind: "resume",
+            snapshot: result.snapshot,
+            config: {
+              ...params.config,
+              timeoutMs: resumeBudgetMs,
+            },
+            settledRequests: delivery.requests,
+            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
           },
-          settledRequests,
-          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-        },
-        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        params.signal,
-      );
+          resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+          undefined,
+          params.signal,
+        );
+      } finally {
+        delivery.release();
+      }
       output.append(result.output);
       if (result.status === "waiting") {
         cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
@@ -542,30 +545,33 @@ export async function runWait(params: {
       );
     }
 
-    const settledRequests: SettledBridgeRequest[] = settledBridgeRequestsInCompletionOrder(
-      state.pending,
-    );
     const pending = state.pending.filter((entry) => !entry.settled);
     // Keep the run's existing slot reserved while its live sibling calls and
     // snapshot move through the worker; a new exec must not claim this slot.
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
+    const delivery = takeSettledBridgeRequests(state.pending);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.
-    const result = await runCodeModeWorker(
-      {
-        kind: "resume",
-        snapshot: state.snapshot,
-        config: {
-          ...state.config,
-          timeoutMs: resumeBudgetMs,
+    let result: CodeModeWorkerResult;
+    try {
+      result = await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshot: state.snapshot,
+          config: {
+            ...state.config,
+            timeoutMs: resumeBudgetMs,
+          },
+          settledRequests: delivery.requests,
+          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
         },
-        settledRequests,
-        pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-      },
-      resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-      undefined,
-      signal,
-    );
+        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        undefined,
+        signal,
+      );
+    } finally {
+      delivery.release();
+    }
     state.output.append(result.output);
     return await settleCodeModeResult({
       owner: state.owner,

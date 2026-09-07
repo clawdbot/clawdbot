@@ -44,11 +44,54 @@ import {
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
+  type UpdateCommandOptions,
 } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
+import { beginUpdateCommandStartup } from "./update-command-startup.js";
 
 const CLI_NAME = resolveCliName();
+
+/** Resolve only at the validated staged boundary, after the normal CLI acquires
+ * its executor. Saved capability data alone never grants startup authority. */
+export function selectUpdateCommandStartup(
+  params: {
+    opts: UpdateCommandOptions;
+    root: string;
+    installKind: "git" | "package" | "unknown";
+    updateInstallKind: "git" | "package" | "unknown";
+    shouldRestart: boolean;
+    updateStepTimeoutMs: number;
+    packageUpdateNodeRunner?: string;
+  },
+  context: {
+    env: NodeJS.ProcessEnv;
+    checkpointContinuation: boolean;
+    servingManagedService: boolean;
+  },
+): PreparePackageRecovery | undefined {
+  if (
+    !context.checkpointContinuation ||
+    !context.servingManagedService ||
+    !params.shouldRestart ||
+    params.installKind !== "package" ||
+    params.updateInstallKind !== "package" ||
+    params.opts.recovery ||
+    !params.opts.run?.executorFence
+  ) {
+    return undefined;
+  }
+  return (source) =>
+    beginUpdateCommandStartup({
+      opts: params.opts,
+      root: params.root,
+      env: context.env,
+      source,
+      managedService: true,
+      timeoutMs: params.updateStepTimeoutMs,
+      nodeRunner: params.packageUpdateNodeRunner,
+    }).then(({ hooks }) => hooks);
+}
 
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
@@ -225,6 +268,7 @@ export async function runPackageInstallUpdate(
       honorPackageRoot: params.honorPackageRoot === true,
     });
   }
+  const durablePackageLayout = installTarget.manager === "npm";
   const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
@@ -256,7 +300,11 @@ export async function runPackageInstallUpdate(
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
     recovery: params.recovery,
-    prepareRecovery: params.prepareRecovery,
+    // Shared-project pnpm/Bun transactions keep their existing owner. Their
+    // retained-root layout is not the sealed package transaction used here.
+    get prepareRecovery() {
+      return durablePackageLayout ? params.prepareRecovery : undefined;
+    },
     installTarget,
     installSpec,
     packageName,
@@ -270,7 +318,14 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root) => runPackageUpdateDoctor({ ...params, root }),
+    // Durable startup captures the original state before activation. Its fresh
+    // candidate owns Doctor and after-image binding; the old process must not
+    // launch a mutation child between package publication and that handoff.
+    get postVerifyStep() {
+      return (durablePackageLayout && params.prepareRecovery) || params.recovery
+        ? undefined
+        : (root: string) => runPackageUpdateDoctor({ ...params, root });
+    },
   });
 
   const afterBuildId = packageUpdate.activePackageRoot

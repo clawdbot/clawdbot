@@ -1716,7 +1716,7 @@ async function createOllamaTestStream(params: {
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] & Record<string, unknown>;
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -3328,9 +3328,58 @@ describe("createOllamaStreamFn", () => {
 
   it.each([
     {
+      name: "applies native Ollama runtime sampling overrides",
+      options: { topP: 0.7, seed: 42, frequencyPenalty: -0.5, presencePenalty: 1.25 },
+      expected: { top_p: 0.7, seed: 42, frequency_penalty: -0.5, presence_penalty: 1.25 },
+    },
+    {
+      name: "preserves zero native Ollama runtime sampling overrides",
+      options: { topP: 0, seed: 0, frequencyPenalty: 0, presencePenalty: 0 },
+      expected: { top_p: 0, seed: 0, frequency_penalty: 0, presence_penalty: 0 },
+    },
+    {
+      name: "preserves native Ollama model sampling defaults without runtime overrides",
+      options: {
+        topP: undefined,
+        seed: undefined,
+        frequencyPenalty: undefined,
+        presencePenalty: undefined,
+      },
+      expected: { top_p: 0.9, seed: 7, frequency_penalty: 0.5, presence_penalty: 0.75 },
+    },
+  ])("$name", async ({ options, expected }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: {
+          params: {
+            temperature: 0.8,
+            top_p: 0.9,
+            seed: 7,
+            frequency_penalty: 0.5,
+            presence_penalty: 0.75,
+          },
+        },
+        options,
+      },
+      ({ body }) => {
+        expect(body.options).toMatchObject(expected);
+      },
+    );
+  });
+
+  it.each([
+    {
       name: "sets top_p=1 for native Ollama greedy sampling requests",
       params: { num_ctx: 4096, top_p: 0.9, thinking: false },
       temperature: 0,
+      expectedTopP: 1,
+    },
+    {
+      name: "normalizes runtime topP for native Ollama greedy sampling requests",
+      params: { top_p: 0.9 },
+      temperature: 0,
+      topP: 0.6,
       expectedTopP: 1,
     },
     {
@@ -3345,9 +3394,9 @@ describe("createOllamaStreamFn", () => {
       temperature: 0.2,
       expectedTopP: 0.9,
     },
-  ])("$name", async ({ params, temperature, expectedTopP }) => {
+  ])("$name", async ({ params, temperature, topP, expectedTopP }) => {
     await expectSuccessfulOllamaRequest(
-      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature } },
+      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature, topP } },
       ({ body }) => {
         const options = requireRecord(body.options, "Ollama sampling options");
         expect(options.temperature).toBe(temperature);

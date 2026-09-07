@@ -2,13 +2,22 @@ import fs from "node:fs/promises";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { completeUpdateCommandCandidate } from "../cli/update-cli/update-command-candidate-completion.js";
+import type { CandidateContinuation } from "../cli/update-cli/update-command-candidate-process.js";
+import {
+  acceptUpdateCommandCandidate,
+  runUpdateCommandCandidateMutations,
+} from "../cli/update-cli/update-command-candidate.js";
 import { withDelegatedUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "../cli/update-cli/update-command-migrated.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
-import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandFinalizedRecoveryFailure,
+} from "../cli/update-cli/update-command-result.js";
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -28,6 +37,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        candidateMutation: "checkpoint-owned-v1",
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -65,7 +75,8 @@ async function finalizeInput(
   if (
     !transferredRun ||
     "executorFence" in transferredRun ||
-    (input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
+    (!input.recoveryHandoff &&
+      input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
     throw new Error("Candidate finalization requires its migrated update run.");
@@ -86,6 +97,57 @@ async function finalizeInput(
       : {}),
   };
   executorFence?.assertCurrent();
+  if (input.recoveryHandoff) {
+    if (!executorFence) {
+      throw new Error("Durable candidate requires live delegated ownership.");
+    }
+    const params = { ...input.params, opts: { ...input.params.opts, run } };
+    await acceptUpdateCommandCandidate({
+      handoff: input.recoveryHandoff,
+      finalization: params,
+      fence: executorFence,
+      moduleUrl: import.meta.url,
+    });
+    const next = await runUpdateCommandCandidateMutations(params, input.bufferedSteps);
+    if (next) {
+      const response: CandidateContinuation = {
+        executorDelegation: "pid-start-v1",
+        candidateContinuation: next,
+        result: params.result,
+      };
+      executorFence.assertCurrent();
+      await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+      executorFence.assertCurrent();
+      return;
+    }
+    // Durable completion owns recovery, restoration and terminal output. Never
+    // fall through to the legacy Windows or parent package compensation paths.
+    let result;
+    let exitCode = 0;
+    try {
+      result = await completeUpdateCommandCandidate(params);
+    } catch (error) {
+      if (!(error instanceof UpdateCommandFinalizedRecoveryFailure)) {
+        throw error;
+      }
+      result = error.result;
+      exitCode = error.exitCode;
+    }
+    executorFence.assertCurrent();
+    const terminal = getUpdateRun(run.runId, { env: run.env });
+    if (!terminal || terminal.status === "running") {
+      throw new Error("Candidate recovery remains nonterminal.");
+    }
+    const response: MigratedUpdateFinalizationResult = {
+      result,
+      exitCode,
+      terminalRunId: run.runId,
+      executorDelegation: "pid-start-v1",
+    };
+    await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+    executorFence.assertCurrent();
+    return;
+  }
   for (const step of input.bufferedSteps) {
     executorFence?.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });

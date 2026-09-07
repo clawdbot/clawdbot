@@ -117,19 +117,25 @@ See [Release channels](/install/development-channels) for channel semantics.
 
 ### Updating from 2026.9.2 across a schema bump
 
-When the target release needs a newer shared-state or registered agent database
-schema, its Doctor refuses an update driven by OpenClaw 2026.9.2 before applying
-repairs. That release introduced the update ledger but still accesses it with old
-code after running the target's Doctor. Migrating first would leave the updater
-unable to finish or safely restore the previous release.
+Updates driven by OpenClaw 2026.9.2 can cross a shared-state schema bump normally.
+The target applies the migration content while retaining the old published
+schema version, so the old updater can finish its ledger writes and final
+report. Doctor explains that schema content is applied and version publication
+is deferred. The new Gateway runs on the migrated content during this interval.
 
-The refusal reports the on-disk and target schema versions and, when readable,
-the driving updater version. Let the failed update finish restoring the previous
-package. OpenClaw 2026.9.2 treats any failed post-install verification as unsafe
-for an automatic restart and leaves the Gateway service stopped; run
-`openclaw gateway start` to bring the previous release back on its untouched
-database, then run the manual update from a shell outside the Gateway. Replace
-`<target>` with the exact target version from the refusal:
+Publication waits until every affected update run has been terminal for at least
+five minutes. A running row that has not changed for more than 30 minutes counts
+as abandoned for this purpose. The Gateway watcher publishes after the deadline;
+a later database open can also publish it. See the precise timing and residual
+old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+If an agent database also needs migration, required state metadata is missing,
+or the state-content migration fails, Doctor instead reports
+`update-schema-bump-unfenced` with database versions and manual update commands.
+Let the failed update finish restoring the previous package. OpenClaw 2026.9.2
+leaves the Gateway service stopped after failed post-install verification. Run
+the manual update from a shell outside the Gateway, replacing `<target>` with
+the exact target version from the refusal:
 
 ```bash
 openclaw gateway stop
@@ -143,14 +149,11 @@ omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
 command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
 `bun add -g --trust openclaw@<target>`.
 
-Same-schema updates continue normally. Earlier updaters, including 2026.9.1,
-do not reopen shared state after Doctor and can cross schema bumps without this
-refusal. Later transactional updaters fence old ledger access and hand completion
-to the candidate, including 2026.9.3 prereleases. The guard requires an active update ledger run from an affected
-updater; a missing table or no running row preserves the earlier update behavior.
-The guard does not undo an earlier migration; if the database is already newer
+Same-schema updates, earlier ledger-less updaters such as 2026.9.1, and fenced
+transactional updaters from 2026.9.3 onward keep their existing behavior. The
+fallback does not undo an earlier migration; if the database is already newer
 than the restored package, install a compatible target and finish Doctor before
-starting the Gateway. See [Database schemas](/reference/database-schemas).
+starting the Gateway.
 
 ### From chat
 
@@ -709,9 +712,39 @@ For manual recovery, start with a code-only rollback only after checking that
 the older release can read the current state. Restoring state discards changes
 made after the backup.
 
+### Automatic checkpoint recovery
+
+A supported npm package update of an owned, running managed Gateway retains a
+package/checkpoint pair when the validated candidate advertises the checkpoint
+continuation contract. It captures original config and service files before
+suppression, then seals the shared database, affected agent databases,
+config/includes and inventoried plugin resources while stopped under live writer
+exclusion. Workspaces and undeclared external resources are not covered.
+
+Candidate Doctor, config and plugin mutations are owned and their after-images
+are recorded. On failure, recovery can restore both the retained code and matching
+state even after schema migration. It refuses conflicting operator edits, unknown
+or changed native identities, lost ownership, and inconsistent publication
+artifacts instead of overwriting them. Sealed interrupted publication can be
+reconciled by the next `openclaw update` invocation before ordinary update writes.
+Other unresolved recovery remains pending with diagnostics.
+
+Success or rollback requires a fresh running-service observation, runtime/boot-bound
+Gateway handshake, and HTTP 200 readiness, not inference or a saved receipt. A
+successful rollback preserves the original failure and returns a nonzero exit.
+The current pair is retained until a later verified serving update supersedes it.
+Unverifiable or interrupted retirement preserves the remaining material and stays
+pending; do not remove those artifacts to force a clean status.
+
+This serving-recovery path does not apply to `--no-restart`, absent or stopped
+services, Git checkouts, shared-project pnpm/Bun installs, or candidates without
+the continuation contract. These keep their existing behavior and the narrower
+compatibility rules below. Automatic recovery is not a substitute for an independent
+verified backup.
+
 ### Automatic schema-neutral rollback
 
-If a newly activated package fails verification, `openclaw update` compares the
+For update paths outside checkpoint recovery, if a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
 Databases first created during activation or verification are
@@ -768,9 +801,10 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy, but it does not
-create a full state recovery point. Before a significant update, create one
-explicitly:
+`openclaw update` preserves an automatic pre-update config copy. Supported serving
+updates also retain the bounded checkpoint described above, but other update paths
+do not create a state recovery point. Before a significant update, create an
+independent verified backup explicitly:
 
 ```bash
 mkdir -p ~/Backups/openclaw

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -18,6 +18,7 @@ import {
   reopenUpdateCheckpointPreimages,
 } from "./update-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { defineUpdateRecoveryMutationImageTests } from "./update-run-recovery-mutation-image.test-support.js";
 import {
   assertUpdateRecoveryPreimages,
   bindUpdateRecoveryPreimages,
@@ -36,7 +37,14 @@ import {
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
 
-const dirs = createTempDirTracker();
+export type RecoveryAfterImageFixture = Awaited<ReturnType<typeof fixture>>;
+
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const fence = { assertCurrent() {} }; // The test owns every source and writer.
 async function fixture() {
   const root = dirs.make("recovery-after-image-");
@@ -109,11 +117,8 @@ async function fixture() {
 
 export function defineUpdateRecoveryArtifactTests() {
   describe("artifact recovery", () => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      dirs.cleanup();
-    });
     describe("durable after-image binding", () => {
+      defineUpdateRecoveryMutationImageTests(fixture, fence);
       it("retains exact owner-reopened intervals across reopen, handoff, and reclaim without exposing artifacts in history", async () => {
         const f = await fixture();
         let record = bindUpdateRecoveryAfterImage(f.record, f.input, fence, f.options);

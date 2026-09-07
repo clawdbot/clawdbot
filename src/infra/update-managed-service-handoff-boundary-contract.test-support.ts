@@ -19,6 +19,13 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   cancelDuringValidation?: boolean;
   cancelAtActivation?: "requester" | "inspection";
   runnerFallback?: boolean;
+  nativePreparation?:
+    | "complete"
+    | "refuse-stop"
+    | "timeout-stop"
+    | "fail-preparation"
+    | "fail-persistence-ack"
+    | "fail-commit-ack";
   revokeWhileValidating?: boolean;
   replaceLedgerWriter?: boolean;
   beforeParkNotice?: "acknowledged" | "stalled" | "rejected";

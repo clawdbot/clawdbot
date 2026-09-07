@@ -80,14 +80,31 @@ import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
   cfg: OpenClawConfig,
-  options: ConfigWriteOptions,
+  writeOptions: ConfigWriteOptions,
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
   const { deps, configPath } = context;
+  let options = writeOptions;
+  const sourceGuard = captureConfigWriteLockGuard(configPath);
+  if (sourceGuard) {
+    const original = options;
+    options = {
+      ...options,
+      assertConfigPathForWrite: () => {
+        sourceGuard();
+        original.assertConfigPathForWrite?.();
+      },
+      beforeCommit: async () => {
+        await original.beforeCommit?.();
+        sourceGuard();
+      },
+    };
+  }
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -475,6 +492,8 @@ export async function writeConfigFileFromContext(
       options.assertConfigPathForWrite?.();
     } catch (error) {
       try {
+        // A post-publication refusal cannot grant a stale executor compensation.
+        sourceGuard?.();
         await rollbackConfigFileWriteIfUnchanged({
           configPath,
           previousSnapshot: snapshot,
@@ -554,6 +573,7 @@ export async function writeConfigFileFromContext(
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
       [configWritePostCommitRollback]: () => {
+        sourceGuard?.();
         restoreConfigSnapshotAuditRecord({
           env: deps.env,
           homedir: deps.homedir,
@@ -572,6 +592,18 @@ export async function writeConfigFileFromContext(
       },
     };
   } catch (error) {
+    try {
+      sourceGuard?.();
+    } catch (ownershipError) {
+      if (ownershipError === error) {
+        throw error;
+      }
+      throw new AggregateError(
+        [error, ownershipError],
+        "Config write failed after source ownership changed",
+        { cause: ownershipError },
+      );
+    }
     await appendWriteAudit("failed", error);
     throw error;
   }

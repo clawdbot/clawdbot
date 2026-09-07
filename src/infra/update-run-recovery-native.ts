@@ -8,6 +8,7 @@ import {
   RecoveryNativeIdentitySchema,
   RecoveryNativeObservationSchema,
   validNativeTransition,
+  currentUpdateRecoveryNativeFacts,
   type UpdateRecoveryNativeAction,
   type UpdateRecoveryNativeFacts,
   type UpdateRecoveryNativeIdentity,
@@ -194,6 +195,9 @@ export async function recordUpdateRecoveryNativeIntent(
     action: UpdateRecoveryNativeAction;
     target: UpdateRecoveryNativeFacts;
     observe: Observe;
+    /** Correlate the native start with its boot observation in the SAME commit.
+     * This is an intent only; neither native readback nor this field is readiness. */
+    restart?: { runtime: "candidate" | "previous"; resourceId: string };
   },
   fence: UpdateRecoveryFence,
   options: OpenClawStateDatabaseOptions = {},
@@ -205,11 +209,83 @@ export async function recordUpdateRecoveryNativeIntent(
   assertExecutingClaim(record);
   const manager = record.nativeManager;
   const prior = manager?.effects.at(-1);
-  if (!manager || record.terminal || record.effects.some((effect) => effect.state === "intent")) {
+  const paired = record.effects.find((effect) => effect.effectId === effectId);
+  const restart = input.restart;
+  const sameRestart = Boolean(
+    restart &&
+    prior?.effectId === effectId &&
+    paired &&
+    paired === record.effects.at(-1) &&
+    paired.kind === "service-restart" &&
+    paired.runtime === restart.runtime &&
+    paired.resourceId === restart.resourceId,
+  );
+  const pendingRestart = record.effects.at(-1);
+  const dispatched = manager?.effects.find(
+    (effect) => effect.effectId === pendingRestart?.effectId,
+  );
+  // After independent start readback, restore only the original disabled job
+  // policy while the separate boot observation is still pending. No other native
+  // transition may cross the restart barrier and no boot identity is synthesized.
+  const restoringStartedTaskPolicy =
+    !restart &&
+    action === "restore" &&
+    (manager?.identity.platform === "win32" || manager?.identity.platform === "darwin") &&
+    manager.original.enabled === false &&
+    pendingRestart?.kind === "service-restart" &&
+    pendingRestart.state === "intent" &&
+    dispatched?.action === "restore" &&
+    dispatched.state === "observed" &&
+    dispatched.before.stopped &&
+    !dispatched.after.stopped &&
+    dispatched.after.enabled === true &&
+    (prior === dispatched || (prior?.effectId === effectId && prior.action === "restore")) &&
+    isDeepStrictEqual(target, { ...dispatched.after, enabled: false });
+  const failureQuiescence = Boolean(
+    record.primaryFailure &&
+    record.checkpoint &&
+    !restart &&
+    (action === "suppress" || action === "stop"),
+  );
+  const quiescingUnverifiedStart =
+    failureQuiescence &&
+    pendingRestart?.kind === "service-restart" &&
+    dispatched?.action === "restore" &&
+    dispatched.state === "observed" &&
+    dispatched.before.stopped &&
+    !dispatched.after.stopped;
+  if (
+    !manager ||
+    record.terminal ||
+    record.effects.some(
+      (effect) =>
+        effect.state === "intent" &&
+        !(sameRestart && effect === paired) &&
+        !(restoringStartedTaskPolicy && effect === pendingRestart) &&
+        !(quiescingUnverifiedStart && effect === pendingRestart),
+    ) ||
+    (paired && !sameRestart)
+  ) {
+    throw new UpdateRecoveryConflictError();
+  }
+  if (
+    restart &&
+    (!record.checkpoint ||
+      action !== "restore" ||
+      target.stopped ||
+      !target.loaded ||
+      !(prior?.effectId === effectId ? prior.before : observation.facts).stopped ||
+      (!sameRestart &&
+        (restart.runtime === "previous"
+          ? !record.primaryFailure
+          : record.primaryFailure !== null)) ||
+      (prior?.effectId === effectId && !sameRestart))
+  ) {
     throw new UpdateRecoveryConflictError();
   }
   if (prior?.effectId === effectId) {
     if (
+      prior.state === "not-applied" ||
       prior.action !== action ||
       !isDeepStrictEqual(prior.after, target) ||
       (prior.state === "observed" && !isDeepStrictEqual(observation.facts, target))
@@ -227,16 +303,35 @@ export async function recordUpdateRecoveryNativeIntent(
     return { record, status };
   }
   if (
-    !isDeepStrictEqual(observation.facts, prior?.after ?? manager.original) ||
+    !isDeepStrictEqual(observation.facts, currentUpdateRecoveryNativeFacts(manager)) ||
     prior?.state === "intent" ||
     manager.effects.some((effect) => effect.effectId === effectId) ||
+    (action === "enable-for-start" && !record.checkpoint) ||
     (action !== "restore" &&
+      action !== "enable-for-start" &&
+      !failureQuiescence &&
       (record.checkpoint || record.effects.length || record.restore || record.primaryFailure)) ||
-    !validNativeTransition(action, observation.facts, target, manager.original)
+    !validNativeTransition(
+      action,
+      observation.facts,
+      target,
+      manager.original,
+      manager.identity.platform,
+    )
   ) {
     throw new UpdateRecoveryConflictError();
   }
   const next = write(record, fence, options, (current) => {
+    if (restart) {
+      current.effects.push({
+        effectId,
+        kind: "service-restart",
+        resourceId: restart.resourceId,
+        runtime: restart.runtime,
+        state: "intent",
+        observedIdentity: null,
+      });
+    }
     current.nativeManager!.effects.push({
       effectId,
       action,
@@ -268,7 +363,7 @@ export async function recordUpdateRecoveryNativeObservation(
   const { record } = inspected;
   assertExecutingClaim(record);
   const pending = record.nativeManager!.effects.at(-1)!;
-  if (record.terminal || pending.effectId !== effectId) {
+  if (record.terminal || pending.effectId !== effectId || pending.state === "not-applied") {
     throw new UpdateRecoveryConflictError();
   }
   if (inspected.status !== "after" || pending.state === "observed") {
@@ -280,4 +375,78 @@ export async function recordUpdateRecoveryNativeObservation(
     effect.observedRevision = current.revision + 1;
   });
   return { ...inspected, record: next };
+}
+
+/** Called only after admitted native work has settled under its source owner.
+ * An independent before readback resolves an unapplied dispatch, not readiness. */
+export async function recordUpdateRecoveryNativeNotApplied(
+  expected: UpdateRecoveryRevision,
+  effectId: string,
+  observe: Observe,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRecoveryRecord> {
+  const inspected = await inspectUpdateRecoveryNativeManager(expected, observe, fence, options);
+  const { record } = inspected;
+  assertExecutingClaim(record);
+  const pending = record.nativeManager!.effects.at(-1)!;
+  if (
+    !record.primaryFailure ||
+    record.terminal ||
+    pending.effectId !== effectId ||
+    pending.state !== "intent" ||
+    inspected.status !== "before"
+  ) {
+    throw new UpdateRecoveryConflictError();
+  }
+  return write(record, fence, options, (current) => {
+    const entry = current.nativeManager!.effects.at(-1)!;
+    entry.state = "not-applied";
+    entry.observedRevision = current.revision + 1;
+  });
+}
+
+/** Cancel only the outstanding boot intent after fresh, resolved native stop.
+ * No boot ID is manufactured and the original failure remains authoritative. */
+export async function cancelUpdateRecoveryRestart(
+  expected: UpdateRecoveryRevision,
+  observe: Observe,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRecoveryRecord> {
+  const { record, observation } = await inspect(expected, observe, fence, options);
+  assertExecutingClaim(record);
+  const restart = record.effects.at(-1);
+  const manager = record.nativeManager;
+  const last = manager?.effects.at(-1);
+  const startIndex =
+    manager?.effects.findIndex((entry) => entry.effectId === restart?.effectId) ?? -1;
+  const start = manager?.effects[startIndex];
+  if (
+    !record.primaryFailure ||
+    record.terminal ||
+    !manager ||
+    !last ||
+    last.state === "intent" ||
+    !observation.facts.stopped ||
+    !isDeepStrictEqual(observation.facts, currentUpdateRecoveryNativeFacts(manager)) ||
+    restart?.kind !== "service-restart" ||
+    restart.state !== "intent" ||
+    !start ||
+    start.action !== "restore" ||
+    !start.before.stopped ||
+    start.after.stopped ||
+    !(last === start
+      ? last.state === "not-applied"
+      : last.action === "stop" &&
+        last.state === "observed" &&
+        startIndex < manager.effects.length - 1)
+  ) {
+    throw new UpdateRecoveryConflictError();
+  }
+  return write(record, fence, options, (current) => {
+    const entry = current.effects.at(-1)!;
+    entry.state = "cancelled";
+    entry.cancelledByNativeEffectId = last.effectId;
+  });
 }

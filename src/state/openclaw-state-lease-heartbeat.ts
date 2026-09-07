@@ -29,6 +29,7 @@ export function startOpenClawStateLeaseHeartbeat(
     worker = new Worker(url, {
       workerData: {
         path: params.path,
+        existingOnly: params.existingOnly,
         identity: {
           scope: params.identity.scope,
           key: params.identity.key,

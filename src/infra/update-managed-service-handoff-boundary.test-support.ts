@@ -35,6 +35,12 @@ import {
   releaseManagedRepairInference,
 } from "./update-managed-service-handoff-repair.test-support.js";
 import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import {
+  createManagedServiceActivationScript,
+  readNativeState,
+  readSavedFailure,
+} from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
@@ -101,7 +107,7 @@ export function createManagedServiceManagerBoundary({
     const commandTimingsPath = path.join(root, "manager-command-timings.jsonl");
     const recoveryModulePath = path.join(root, "recovery-health.mjs");
     const stateDatabasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root });
-    const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); { const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.consumedNotifications = Number(cleared.changes); fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`;
+    const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); ${managedServiceStateUpdateScript(statePath, "state.consumedNotifications = Number(cleared.changes)")};`;
     if (options?.updaterNotification) {
       openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     }
@@ -112,12 +118,15 @@ export function createManagedServiceManagerBoundary({
     import { createRequire } from "node:module";
     const require = createRequire(import.meta.url);
     export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
-      const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+      ${managedServiceStateUpdateScript(
+        statePath,
+        `
       state.healthProbed = true;
       state.healthProbeCount = (state.healthProbeCount || 0) + 1;
       state.expectedVersion = expectedVersion;
       state.expectedBuildId = expectedBuildId;
-      fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+      `,
+      )};
       ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
       ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
       const fault = ${JSON.stringify(options?.gatewayHealth)};
@@ -255,10 +264,7 @@ export function createManagedServiceManagerBoundary({
             serviceRunning: false, pid: ${parentPid}, readyz: false, settled: false,
             channelsReady: false, pluginErrors: ["candidate plugin failed"],
           });
-          const managerFs = require("node:fs");
-          const managerState = JSON.parse(managerFs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-          managerState.previousGenerationRestored = true;
-          managerFs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(managerState));
+          ${managedServiceStateUpdateScript(statePath, "state.previousGenerationRestored = true")};
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
@@ -296,9 +302,14 @@ export function createManagedServiceManagerBoundary({
               })
             : options.validationResult
               ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-              : options.runnerFallback
-                ? `void (async () => { ${sourceRuntimeImport} const { activateManagedServiceUpdateHandoff } = await import(${JSON.stringify(new URL("./update-managed-service-handoff.ts", import.meta.url).href)}); await activateManagedServiceUpdateHandoff(); ${updaterScript} })().catch((error) => { console.error(error); process.exit(18); });`
-                : `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${updaterScript} }); process.stdout.write("park\\n");`;
+              : createManagedServiceActivationScript({
+                  ...options,
+                  installRoot: root,
+                  runId: run?.runId,
+                  sourceRuntimeImport,
+                  statePath,
+                  updaterScript,
+                });
         updaterScript = `
         const validationFs = require("node:fs");
         const validationStartedAt = Date.now();
@@ -543,7 +554,11 @@ export function createManagedServiceManagerBoundary({
           !options.validationResult &&
           !options.cancelDuringValidation &&
           !options.cancelAtActivation &&
-          !options.revokeWhileValidating;
+          !options.revokeWhileValidating &&
+          options.nativePreparation !== "refuse-stop" &&
+          options.nativePreparation !== "fail-preparation" &&
+          options.nativePreparation !== "fail-persistence-ack" &&
+          options.nativePreparation !== "fail-commit-ack";
         if (activated) {
           await vi.waitFor(
             async () => {
@@ -561,7 +576,8 @@ export function createManagedServiceManagerBoundary({
         if (!options.repair) {
           expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         }
-        await expect(pathExists(updaterPath)).resolves.toBe(activated);
+        const updated = activated && options.nativePreparation !== "timeout-stop";
+        await expect(pathExists(updaterPath)).resolves.toBe(updated);
       } else if (options?.parentExitTimeoutMs !== undefined) {
         const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -642,14 +658,6 @@ export function createManagedServiceManagerBoundary({
         );
         db.close();
       }
-      const contextPath = String(generated.triageContextPath);
-      const savedFailure = (await pathExists(contextPath))
-        ? {
-            path: contextPath,
-            mode: (await fs.stat(contextPath)).mode & 0o777,
-            contents: JSON.parse(await fs.readFile(contextPath, "utf8")),
-          }
-        : null;
       return {
         ...(options?.repair
           ? {
@@ -663,13 +671,10 @@ export function createManagedServiceManagerBoundary({
           .split("\n")
           .filter(Boolean),
         parentSignal: parent.signalCode,
-        state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as Record<
-          string,
-          unknown
-        >,
+        state: await readNativeState(statePath),
         sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
-        savedFailure,
+        savedFailure: await readSavedFailure(String(generated.triageContextPath)),
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))
         ).every((exists) => !exists),
@@ -694,8 +699,7 @@ export function createManagedServiceManagerBoundary({
             process.kill(-updaterPid, "SIGKILL");
           } catch {}
         }
-        // Let the helper reap native commands after their parent exits; killing it
-        // first orphans manager fixtures that can write during directory cleanup.
+        // Reap native commands before helper cleanup so fixtures cannot outlive their directory.
         await parentClosed;
         await helperCompletion;
       }

@@ -21,6 +21,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 const roots: string[] = [];
@@ -106,7 +107,11 @@ function withAbortableMaintenance<T>(
     },
     (maintenance) => {
       assertNoOpenClawAgentDatabaseLeases(maintenance, { env: f.env });
-      return runWithAgentDatabaseMaintenanceAuthority(maintenance, () => run(maintenance));
+      return runWithAgentDatabaseMaintenanceAuthority(
+        maintenance,
+        resolveOpenClawStateSqlitePath(f.env),
+        () => run(maintenance),
+      );
     },
   );
 }

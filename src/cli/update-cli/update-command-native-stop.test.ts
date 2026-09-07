@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,11 +14,16 @@ import {
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { reopenUpdateCheckpoint } from "../../infra/update-checkpoint.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { captureStoppedState } from "./update-command-checkpoint.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
@@ -30,6 +36,9 @@ afterEach(() => {
 });
 
 it.each([
+  "full checkpoint",
+  "checkpoint before stop",
+  "checkpoint changed include",
   "verified stop",
   "unmanaged no service",
   "unmanaged appeared service",
@@ -80,6 +89,7 @@ it.each([
       const entered = createDeferred();
       const release = createDeferred();
       let wroteDuringNativeEffect = false;
+      let foreignBindingError: unknown;
       const stop = vi.fn(async () => {
         atDispatch = loadUpdateRecovery(run.runId, { env });
         effectIds.push(atDispatch?.nativeManager?.effects.at(-1)?.effectId);
@@ -216,12 +226,44 @@ it.each([
                 firstFailure = error;
               });
             }
+            if (scenario === "checkpoint before stop") {
+              await captureStoppedState(opts.recovery, env);
+              throw boundary;
+            }
             await prepare();
+            if (scenario === "checkpoint changed include") {
+              await fs.writeFile(include, '{"port":18790}\n');
+            }
+            if (scenario === "full checkpoint" || scenario === "checkpoint changed include") {
+              if (!opts.recovery) {
+                throw new Error("missing startup recovery");
+              }
+              const outsider = new AsyncResource("foreign-capture-reader");
+              const onRecord = opts.recovery.onRecord;
+              opts.recovery.onRecord = (record) => {
+                if (record.checkpoint) {
+                  try {
+                    outsider.runInAsyncScope(() =>
+                      runOpenClawStateWriteTransaction(() => undefined, { env }),
+                    );
+                  } catch (error) {
+                    foreignBindingError = error;
+                  }
+                }
+                onRecord(record);
+              };
+              try {
+                await captureStoppedState(opts.recovery, env);
+              } finally {
+                outsider.emitDestroy();
+              }
+            }
             throw boundary;
           },
         }).catch((error: unknown) => error);
         if (
           [
+            "full checkpoint",
             "verified stop",
             "unmanaged no service",
             "retry stop intent",
@@ -233,7 +275,7 @@ it.each([
           expect(result).toMatchObject({ cause: { name: "UpdateCommandRecoveryPendingError" } });
         }
         expect(stop).toHaveBeenCalledTimes(
-          unmanaged || scenario === "changed include"
+          unmanaged || ["changed include", "checkpoint before stop"].includes(scenario)
             ? 0
             : scenario === "retry stop intent"
               ? 2
@@ -252,10 +294,12 @@ it.each([
         if (unmanaged) {
           expect(atDispatch).toBeUndefined();
           expect(latest?.nativeManager).toBeUndefined();
-        } else if (scenario === "changed include") {
+        } else if (["changed include", "checkpoint before stop"].includes(scenario)) {
           expect(atDispatch).toBeUndefined();
           expect(latest?.nativeManager?.effects).toEqual([]);
-          expect(await fs.readFile(include, "utf8")).toBe('{"port":18790}\n');
+          expect(await fs.readFile(include, "utf8")).toBe(
+            scenario === "checkpoint before stop" ? '{"port":18789}\n' : '{"port":18790}\n',
+          );
         } else {
           expect(atDispatch?.nativeManager?.effects.at(-1)).toMatchObject({
             action: "stop",
@@ -270,6 +314,44 @@ it.each([
               : "observed",
             after: { stopped: true },
           });
+        }
+        if (scenario === "full checkpoint") {
+          expect(latest?.checkpoint).toBeDefined();
+          expect(String(foreignBindingError)).toContain("state-handles");
+          if (!latest?.checkpoint || !latest.preimages) {
+            throw new Error("missing full checkpoint");
+          }
+          const reopened = await reopenUpdateCheckpoint(latest.checkpoint.ref, {
+            artifactRoot: path.join(home, "..openclaw-update-checkpoints"),
+            binding: latest.checkpoint.binding,
+          });
+          expect(reopened.manifest.preimageRef).toEqual(latest.preimages.ref);
+          expect(reopened.manifest.resources).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                sourcePath: config,
+                kind: "config",
+                sourceBindingValidated: false,
+              }),
+              expect.objectContaining({
+                sourcePath: include,
+                kind: "config",
+                sourceBindingValidated: false,
+              }),
+              expect.objectContaining({
+                sourcePath: definition,
+                kind: "service",
+                sourceBindingValidated: false,
+              }),
+              expect.objectContaining({
+                sourcePath: path.join(home, ".openclaw", "state", "openclaw.sqlite"),
+                kind: "sqlite",
+                artifact: expect.any(String),
+              }),
+            ]),
+          );
+        } else {
+          expect(latest?.checkpoint).toBeUndefined();
         }
         expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
       });

@@ -8,6 +8,7 @@ import type {
 } from "../../infra/package-update-recovery.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { prepareManagedServiceNativeHandoff } from "../../infra/update-managed-service-native-control.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import {
   assertExactUpdateRecoveryClaim,
@@ -96,6 +97,11 @@ export async function beginUpdateCommandStartup(params: {
       "Validated package identity changed before startup.",
     );
   }
+  const managedNativeHandoff = await prepareManagedServiceNativeHandoff({
+    assertCurrent,
+    timeoutMs: params.timeoutMs,
+  });
+  assertCurrent();
   const root = resolveUpdateInstallRoot(source.liveRoot);
   const transactionId = randomUUID();
   const runtime = {
@@ -124,6 +130,7 @@ export async function beginUpdateCommandStartup(params: {
   const recovery: UpdateCommandRecovery = {
     fence,
     options: { env: run.env },
+    managedNativeHandoff,
     getRecord: requireRecord,
     onRecord(next) {
       assertCurrent();
@@ -170,6 +177,9 @@ export async function beginUpdateCommandStartup(params: {
       record = initial;
       opts.recovery = recovery;
       assertExactUpdateRecoveryClaim(initial, fence, { env: run.env });
+      await managedNativeHandoff?.commit(() =>
+        assertExactUpdateRecoveryClaim(initial, fence, { env: run.env }),
+      );
       await captureUpdateCommandPreimages({
         recovery,
         env: params.env,

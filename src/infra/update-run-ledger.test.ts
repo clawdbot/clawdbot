@@ -95,7 +95,9 @@ describe("update run ledger", () => {
       .join(";\n");
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow("Unknown update run");
+    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow(
+      "missing table update_runs",
+    );
     expect(hasLedger()).toBeUndefined();
 
     const created = createUpdateRun({ runId, trigger: "cli" }, options);

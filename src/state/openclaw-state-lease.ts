@@ -3,33 +3,27 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
-import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { loggingState } from "../logging/state.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
-import {
-  createOpenClawStateLeaseExclusion,
-  type OpenClawStatePublicationOperation,
-} from "./openclaw-state-lease-exclusion.js";
+import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
+import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
+import {
+  assertExistingLeasePublicationSchema,
+  readLeaseDatabase,
+  resolveLeaseDatabasePath,
+  withLeaseWriteTransaction,
+  type OpenClawStateLeaseDatabase,
+} from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
-
-type OpenClawStateLeaseDatabase = {
-  scope: "shared";
-  options?: OpenClawStateDatabaseOptions;
-};
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -46,27 +40,7 @@ type OpenClawStateLeaseOptions = {
   operationLabel?: string;
 };
 
-export type OpenClawStateLeaseContext = {
-  signal: AbortSignal;
-  /** Drain the heartbeat and capture while the original durable lease remains live. */
-  withDatabaseFileExclusion?<T>(
-    this: void,
-    operation: (assertCurrent: () => void) => Promise<T>,
-    bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
-  ): Promise<T>;
-  /** Distinct checkpoint publication window. All effects/reconciliation precede
-   * rebind/renewal; failure disables ordinary cleanup on unverified canonical data. */
-  withDatabaseFilePublication?<T>(
-    this: void,
-    operation: OpenClawStatePublicationOperation<T>,
-  ): Promise<T>;
-  /** Renew or verify independent renewal before another blocking phase. */
-  renew?(): void;
-  /** Verify that this exact owner holds a non-expired lease at this instant. */
-  assertOwned(): void;
-  /** Verify ownership using the caller's active write transaction. */
-  assertOwnedInTransaction(database: DatabaseSync): void;
-};
+export type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 
 type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
@@ -92,7 +66,6 @@ const ACQUIRE_BACKOFF = {
   jitter: 0.25,
 } as const;
 const MIN_LEASE_MS = 1_000;
-const LEASE_DB_BUSY_TIMEOUT_MS = 0;
 const RELEASE_RETRY_TIMEOUT_MS = 2_000;
 const processExitLeaseCleanups = new Set<() => void>();
 let processExitListenerInstalled = false;
@@ -177,6 +150,9 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   if (database.scope !== "shared") {
     throw invalidInput("state lease database scope must be shared");
   }
+  if (database.schemaPolicy !== undefined && database.schemaPolicy !== "existing") {
+    throw invalidInput("state lease schema policy is invalid");
+  }
   const leaseLabel =
     options.leaseLabel === undefined
       ? "state lease"
@@ -201,22 +177,6 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
     leaseLabel,
     operationLabel,
   };
-}
-
-function withLeaseWriteTransaction<T>(
-  database: OpenClawStateLeaseDatabase,
-  operationLabel: string,
-  operation: (db: DatabaseSync) => T,
-  busyTimeoutMs = LEASE_DB_BUSY_TIMEOUT_MS,
-): T {
-  const stateDatabase = openOpenClawStateDatabase(database.options);
-  const run = () =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => operation(db),
-      { ...database.options, database: stateDatabase },
-      { operationLabel, busyTimeoutMs },
-    );
-  return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
 }
 
 type LeaseIdentity = {
@@ -278,10 +238,7 @@ function verifyLeaseOwnership(
     if (!params.database) {
       throw new Error("state lease ownership check requires a database");
     }
-    return assertLeaseOwnedInDatabase(
-      openOpenClawStateDatabase(params.database.options).db,
-      params,
-    );
+    return readLeaseDatabase(params.database, (db) => assertLeaseOwnedInDatabase(db, params));
   } catch (error) {
     if (error instanceof OpenClawStateLeaseError) {
       throw error;
@@ -525,7 +482,8 @@ export async function withOpenClawStateLease<T>(
     }
     if (fileExclusion.assertIfExcluded()) {
       if (transaction) {
-        throw invalidInput("a file-excluded lease cannot authorize a write transaction");
+        fileExclusion.assertMutationCurrent();
+        assertLeaseOwnedInDatabase(transaction, identity);
       }
       return;
     }
@@ -556,7 +514,8 @@ export async function withOpenClawStateLease<T>(
   };
   const startWorker = async (expiresAt: number) => {
     const started = startOpenClawStateLeaseHeartbeat({
-      path: openOpenClawStateDatabase(validated.database.options).path,
+      path: resolveLeaseDatabasePath(validated.database),
+      existingOnly: validated.database.schemaPolicy === "existing",
       identity,
       leaseMs: validated.leaseMs,
       heartbeatMs,
@@ -587,21 +546,34 @@ export async function withOpenClawStateLease<T>(
     }
   };
   const fileExclusion = createOpenClawStateLeaseExclusion({
-    databasePath: () => openOpenClawStateDatabase(validated.database.options).path,
+    databasePath: () => resolveLeaseDatabasePath(validated.database),
     assertActive,
     readExpiry: (databasePath) => {
-      const current = openOpenClawStateDatabase(validated.database.options);
-      if (current.path !== databasePath) {
+      if (resolveLeaseDatabasePath(validated.database) !== databasePath) {
         throw invalidInput("state lease database path changed during exclusion");
       }
-      return assertLeaseOwnedInDatabase(current.db, identity);
+      return readLeaseDatabase(validated.database, (db) =>
+        assertLeaseOwnedInDatabase(db, identity),
+      );
+    },
+    readMutationExpiry: (databasePath) => {
+      const expiresAt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => assertLeaseOwnedInDatabase(db, identity),
+        { ...validated.database.options, path: databasePath },
+      );
+      if (expiresAt === undefined) {
+        throw invalidInput("mutated state database is absent");
+      }
+      return expiresAt;
     },
     readPublicationExpiry: (databasePath) => {
       const expiresAt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
         ({ db }) => {
           // A retained reader accepting the payload does not allow this executor
           // to migrate it merely to renew a lease. Refuse incompatible reopen.
-          if (!isOpenClawStateSchemaFastPathEligible(db, databasePath)) {
+          if (validated.database.schemaPolicy === "existing") {
+            assertExistingLeasePublicationSchema(db, databasePath);
+          } else if (!isOpenClawStateSchemaFastPathEligible(db, databasePath)) {
             throw invalidInput("published state database requires startup repair before rebind");
           }
           return assertLeaseOwnedInDatabase(db, identity);
@@ -656,6 +628,7 @@ export async function withOpenClawStateLease<T>(
           withDatabaseFileExclusion: (operation, bindCaptured) =>
             fileExclusion.run(operation, bindCaptured),
           withDatabaseFilePublication: (operation) => fileExclusion.runPublication(operation),
+          withDatabaseFileMutation: (operation) => fileExclusion.runMutation(operation),
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,

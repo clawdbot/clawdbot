@@ -27,6 +27,7 @@ import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
@@ -51,6 +52,10 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
+
+const sqliteHostPlatform = process.platform;
+const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
+const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -617,6 +622,7 @@ vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks)
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
+const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
@@ -1868,6 +1874,13 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Native-service platform simulations do not change the actual SQLite VFS.
+    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
+      existingHostUri(file, sqliteHostPlatform),
+    );
+    vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
+      immutableHostUri(file, sqliteHostPlatform),
+    );
     vi.spyOn(updateTempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorTmp);
     // Cache the real host process identity before cases spoof the native service
     // platform. Lease ownership still uses the production PID/start checks.
@@ -2077,6 +2090,7 @@ describe("update-cli", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
     if (tempDirsToCleanup.size === 0) {
       return;
     }
@@ -7816,6 +7830,74 @@ describe("update-cli", () => {
         }
       } else {
         expect(unattendedRepair).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["owned-running", "no-restart", "stopped", "legacy-target"] as const)(
+    "selects durable startup at the registered CLI package boundary (%s)",
+    async (mode) => {
+      const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
+      mockFileBackedPathExists();
+      mockRunningManagedGateway([
+        process.execPath,
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
+      if (mode === "stopped") {
+        serviceReadRuntime.mockResolvedValue({ status: "stopped" });
+      }
+      const validate = requireValue(
+        candidateValidation.getMockImplementation(),
+        "candidate validation",
+      );
+      candidateValidation.mockImplementation(async (options) => ({
+        ...(await validate(options)),
+        checkpointContinuation: mode !== "legacy-target",
+      }));
+      const packageOwner = await import("./update-cli/update-command-package.js");
+      let admittedRun: string | undefined;
+      const selectStartup = packageOwner.selectUpdateCommandStartup;
+      const begin = vi.fn(
+        async (
+          opts: Parameters<typeof updateCommand>[0],
+          source: Parameters<NonNullable<ReturnType<typeof selectStartup>>>[0],
+        ) => {
+          // The real selector and package owner must admit this callback after the
+          // actual executor is acquired. Stop before persistence or native effects.
+          opts.run?.executorFence?.assertCurrent();
+          expect(opts.run?.executorFence).toBeDefined();
+          expect(source.liveRoot).toBe(root);
+          expect(source.stageRoot).not.toBe(root);
+          expect(source.previous?.version).toBe("1.0.0");
+          expect(source.candidate.version).toBe("9999.0.0");
+          admittedRun = opts.run?.runId;
+          throw new Error("startup-boundary-observed");
+        },
+      );
+      vi.spyOn(packageOwner, "selectUpdateCommandStartup").mockImplementation((params, context) => {
+        const selected = selectStartup(params, context);
+        return selected ? (source) => begin(params.opts, source) : undefined;
+      });
+      const outcome = await invokeUpdateCli({
+        yes: true,
+        json: true,
+        restart: mode !== "no-restart",
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      if (mode === "owned-running") {
+        expect(begin).toHaveBeenCalledOnce();
+        expect(admittedRun).toBeDefined();
+        expect(outcome).toBeInstanceOf(Error);
+        expect(doctorCommandCall()).toBeUndefined();
+        expect(serviceStop).not.toHaveBeenCalled();
+      } else {
+        expect(begin).not.toHaveBeenCalled();
+        expect(candidateValidation).toHaveBeenCalled();
+        expect(doctorCommandCall()).toBeDefined();
       }
     },
   );

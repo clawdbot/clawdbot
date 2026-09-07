@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withOpenClawStateReplayPublication } from "../state/openclaw-state-publication.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { reopenUpdateCheckpointRestorePlan } from "./update-checkpoint-restore.js";
 import { createUpdateRecoveryCheckpointAdapter } from "./update-run-recovery-checkpoint.js";
@@ -27,6 +28,96 @@ type Fixture = {
 
 export function registerPublicationWriteTests(fixture: () => Promise<Fixture>) {
   describe("canonical publication write aperture", () => {
+    it.each(["displaced", "revoked", "writer-active"])(
+      "replays without opening or renewing a displaced canonical family (%s)",
+      async (mode) => {
+        const f = await fixture();
+        const expected = f.adapter.record;
+        closeOpenClawStateDatabaseForTest();
+        fs.renameSync(f.file, f.displacedPath);
+        const displaced = fs.readFileSync(f.displacedPath);
+        const plan = fs.readFileSync(expected.restore!.planPath);
+        let checked = false;
+        let writes = 0;
+        const operation = withOpenClawStateReplayPublication(
+          {
+            databasePath: f.file,
+            assertCurrent: f.adapterParams.fence.assertCurrent,
+            async assertWritersStopped() {
+              expect(fs.existsSync(f.file)).toBe(false);
+              expect(() => openOpenClawStateDatabase(f.options)).toThrow();
+              expect(fs.existsSync(f.file)).toBe(false);
+              checked = true;
+              if (mode === "writer-active") {
+                throw new Error("live writer prevents publication");
+              }
+              if (mode === "revoked") {
+                f.loseFence();
+              }
+            },
+          },
+          async (assertCurrent, bindPublishedRecord) => {
+            expect(checked).toBe(true);
+            const driver = createUpdateRecoveryCheckpointReplay({
+              ...f.adapterParams,
+              expected,
+              fence: { assertCurrent },
+              bindPublishedRecord: async (publication, write) =>
+                bindPublishedRecord(publication, (assertOwned) => {
+                  writes++;
+                  return write(assertOwned);
+                }),
+              async prepareCanonicalWrite() {
+                assertCurrent();
+                expect(fs.existsSync(f.file)).toBe(true);
+                expect(() => openOpenClawStateDatabase(f.options)).toThrow();
+              },
+              async closeCanonicalDatabase() {
+                closeOpenClawStateDatabaseForTest();
+              },
+            });
+            const result = await driver.replay();
+            if (result.status !== "verified") {
+              throw new Error("Replay did not verify publication");
+            }
+            const progress = result.record.restore!;
+            if (!progress.planSha256) {
+              throw new Error("Replay returned an unsealed plan");
+            }
+            return {
+              result,
+              publication: {
+                artifactRoot: f.adapterParams.artifactRoot,
+                binding: result.record.checkpoint!.binding,
+                planRef: {
+                  restoreId: progress.restoreId,
+                  checkpointId: progress.checkpointId,
+                  planPath: progress.planPath,
+                  planSha256: progress.planSha256,
+                },
+                recoveryRecord: result.record,
+              },
+            };
+          },
+        );
+        if (mode === "displaced") {
+          const result = await operation;
+          expect(result.status).toBe("verified");
+          expect(result.record.claimId).not.toBe(expected.claimId);
+          expect(writes).toBe(4);
+          expect(loadUpdateRecovery(expected.runId, f.options)).toEqual(result.record);
+        } else {
+          await expect(operation).rejects.toThrow(
+            mode === "revoked" ? "lost exclusion" : "live writer",
+          );
+          expect(writes).toBe(0);
+          expect(fs.existsSync(f.file)).toBe(false);
+        }
+        expect(fs.readFileSync(f.displacedPath)).toEqual(displaced);
+        expect(fs.readFileSync(expected.restore!.planPath)).toEqual(plan);
+      },
+    );
+
     it("replays using the real physical owner aperture for every synchronous CAS", async () => {
       const f = await fixture();
       const held = acquireOpenClawStateDatabaseFileExclusion(f.file);

@@ -2000,6 +2000,7 @@ function buildLegacyStateMigrationSteps(
         migrateLegacySkillWorkshopProposals({
           config: params.sessionConfig ?? params.config,
           env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+          retireMissingDrafts: isDoctor,
         }),
       ),
       runWithoutFileDetection: true,

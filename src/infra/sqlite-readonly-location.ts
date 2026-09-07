@@ -1,6 +1,7 @@
 // Prepares consistent private SQLite read-only snapshots.
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -14,7 +15,10 @@ import {
 } from "./sqlite-private-directory.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { withSqliteSourceHandle, withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
-import { hasStateDatabaseSourceExclusion } from "./state-database-coordinator.js";
+import {
+  hasStateDatabaseSourceExclusion,
+  prepareStateDatabaseMutationSnapshot,
+} from "./state-database-coordinator.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -607,6 +611,17 @@ export async function prepareSqliteReadOnlyLocation(
   let stagingRoot: string | undefined;
   try {
     options.signal?.throwIfAborted();
+    const ownedSnapshot = prepareStateDatabaseMutationSnapshot(pathname);
+    if (ownedSnapshot) {
+      const prepared = await ownedSnapshot;
+      try {
+        options.signal?.throwIfAborted();
+        return prepared;
+      } catch (error) {
+        prepared.cleanup();
+        throw error;
+      }
+    }
     if (hasStateDatabaseSourceExclusion(pathname)) {
       const prepared = options.preserveSourceArtifacts
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
@@ -661,4 +676,31 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(pathname: string, sta
   return withSqliteSourceHandle(pathname, () =>
     prepareReadOnlySourceSyncInProcess(pathname, stagingRoot),
   );
+}
+
+/** Snapshot the lifecycle owner's already-open native connection. Opening or
+ * closing another source descriptor could release its process-wide POSIX locks.
+ * Only the private destination is opened/closed here; the source owner retains it. */
+export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
+  database: DatabaseSync,
+  assertCurrent: () => void,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  assertCurrent();
+  if (!database.isOpen || database.isTransaction) {
+    throw new Error("SQLite inspection requires an open owner outside a transaction");
+  }
+  const directory = await createSqliteSnapshotStagingDirectory();
+  try {
+    assertCurrent();
+    if (!database.isOpen || database.isTransaction) {
+      throw new Error("SQLite inspection requires an open owner outside a transaction");
+    }
+    const location = path.join(directory, "database.sqlite");
+    await requireNodeSqlite().backup(database, resolveSqliteFilesystemPath(location));
+    assertCurrent();
+    return adoptPreparedLocation(location, directory);
+  } catch (error) {
+    removeTempDirectory(directory);
+    throw error;
+  }
 }

@@ -107,12 +107,12 @@ const manifestSchema = z
 
 export type UpdateCheckpointBinding = z.infer<typeof bindingSchema>;
 /** Facts retained by a mutation owner at its write boundary, not sampled during rollback. */
-export type UpdateCheckpointSourceBinding = {
+type UpdateCheckpointSourceBinding = {
   sourcePath: string;
   state: CheckpointFileState | null;
 };
 export type UpdateCheckpointResource = z.infer<typeof resourceSchema>;
-export type UpdateCheckpointManifest = z.infer<typeof manifestSchema>;
+type UpdateCheckpointManifest = z.infer<typeof manifestSchema>;
 export type ReopenedUpdateCheckpoint = {
   ref: UpdateCheckpointRef;
   manifest: UpdateCheckpointManifest;
@@ -221,7 +221,7 @@ function assertResourceBoundaries(
 }
 
 /** Data retained by the lifecycle owner before independent writers can resume. */
-export type UpdateCheckpointPreimageInput = {
+type UpdateCheckpointPreimageInput = {
   checkpointRef: UpdateCheckpointRef;
   postMutationSources: readonly UpdateCheckpointSourceBinding[];
 };
@@ -623,13 +623,32 @@ async function retireCheckpoint(
   access: UpdateCheckpointAccess & { assertSuperseded: () => void },
   purpose: "checkpoint" | "preimage",
 ): Promise<void> {
+  UpdateCheckpointRefSchema.parse(ref);
+  absolutePath.parse(access.artifactRoot);
+  const directory = path.join(access.artifactRoot, ref.checkpointId);
+  if (ref.manifestPath !== path.join(directory, "manifest.json")) {
+    throw new Error("Checkpoint retirement is outside its bound artifact root");
+  }
+  access.assertSuperseded();
+  access.assertQuiescent();
   try {
     await fs.lstat(ref.manifestPath);
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return;
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
     }
-    throw error;
+    try {
+      await fs.lstat(directory);
+    } catch (missing) {
+      if (hasNodeErrorCode(missing, "ENOENT")) {
+        return;
+      }
+      throw missing;
+    }
+    // A missing manifest cannot authenticate residual files for deletion.
+    throw new Error("Checkpoint retirement is incomplete; residual material is preserved", {
+      cause: error,
+    });
   }
   await reopenCheckpoint(ref, access, purpose);
   access.assertSuperseded();

@@ -31,11 +31,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
-import {
-  completePromptCacheObservation,
-  type PromptCacheBreak,
-  type PromptCacheChange,
-} from "../prompt-cache-observability.js";
+import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   type ProviderPromptState,
@@ -97,7 +93,6 @@ type StreamSettleResult = {
   currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   successfulNestedToolNames: string[];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
   promptCache: EmbeddedRunAttemptResult["promptCache"];
 };
@@ -132,8 +127,7 @@ export async function settleEmbeddedAttemptStream(input: {
   prePromptMessageCount: number;
   nestedToolActivities: readonly NestedToolActivity[];
   cache: {
-    observabilityEnabled: boolean;
-    changesForTurn: PromptCacheChange[] | null;
+    getObservation?: () => PromptCacheRequestObservation | undefined;
     retention: PromptCacheRetention;
   };
   shouldFlushForContextEngine: boolean;
@@ -283,7 +277,6 @@ export async function settleEmbeddedAttemptStream(input: {
   let currentAttemptAssistant: AssistantMessage | undefined;
   let currentAttemptCompletedAssistant: AssistantMessage | undefined;
   let attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  let cacheBreak: PromptCacheBreak | null = null;
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
@@ -337,14 +330,6 @@ export async function settleEmbeddedAttemptStream(input: {
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
     attemptUsage = subscription.getUsageTotals();
-    cacheBreak = input.cache.observabilityEnabled
-      ? completePromptCacheObservation({
-          sessionId: attempt.sessionId,
-          promptCacheKey: attempt.promptCacheKey,
-          sessionKey: attempt.sessionKey,
-          usage: attemptUsage,
-        })
-      : null;
     const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
@@ -361,22 +346,6 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const promptCacheObservation =
-      input.cache.observabilityEnabled &&
-      (cacheBreak || input.cache.changesForTurn || typeof attemptUsage?.cacheRead === "number")
-        ? {
-            broke: Boolean(cacheBreak),
-            ...(typeof cacheBreak?.previousCacheRead === "number"
-              ? { previousCacheRead: cacheBreak.previousCacheRead }
-              : {}),
-            ...(typeof cacheBreak?.cacheRead === "number"
-              ? { cacheRead: cacheBreak.cacheRead }
-              : typeof attemptUsage?.cacheRead === "number"
-                ? { cacheRead: attemptUsage.cacheRead }
-                : {}),
-            changes: cacheBreak?.changes ?? input.cache.changesForTurn,
-          }
-        : undefined;
     const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
       provider: attempt.provider,
       modelId: attempt.modelId,
@@ -384,7 +353,7 @@ export async function settleEmbeddedAttemptStream(input: {
     promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
-      observation: promptCacheObservation,
+      observation: input.cache.getObservation?.(),
       lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
         lastCallUsage,
         assistantTimestamp: usageAssistant?.timestamp,
@@ -431,7 +400,6 @@ export async function settleEmbeddedAttemptStream(input: {
       ),
     ],
     attemptUsage,
-    cacheBreak,
     lastCallUsage,
     promptCache,
   };

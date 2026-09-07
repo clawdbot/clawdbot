@@ -9,6 +9,3 @@ export const UPDATE_RECOVERY_KEY_END = "update.recovery/";
  * keys/payloads in the namespace still belong here and must fail that validation.
  * All other machine-state rows remain subject to normal preservation/conflict checks.
  */
-export function isUpdateRecoveryMachineStateKey(stateKey: unknown): stateKey is string {
-  return typeof stateKey === "string" && stateKey.startsWith(UPDATE_RECOVERY_KEY_PREFIX);
-}

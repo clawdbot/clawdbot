@@ -46,7 +46,6 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
-  renderSessionRunSpinner,
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
@@ -207,13 +206,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     attentionLabel || (activeRunLabel && unreadLabel)
       ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
       : "";
-  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
-    running: false,
+    running,
+    queued,
     badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -247,9 +246,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       }
       <span class="nav-item__text">${t("nav.home")}</span>
       ${
-        running || outboxAttentionCount > 0 || hasComposerDraft
+        outboxAttentionCount > 0 || hasComposerDraft
           ? html`<span class="nav-item__state sidebar-home-session-states">
-              ${running ? renderSessionRunSpinner(true, queued) : nothing}
               ${renderSessionRowBadges({
                 outboxAttentionCount,
                 hasComposerDraft,

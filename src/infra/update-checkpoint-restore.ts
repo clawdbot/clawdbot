@@ -18,6 +18,7 @@ import {
 } from "./update-checkpoint-files.js";
 import {
   assertSqliteFamilyClosed,
+  isAbsentUpdateCheckpointRestoreResource,
   sameIdentity,
   reopenUpdateCheckpointRestorePlan,
   type RestoreResource,
@@ -46,9 +47,6 @@ import {
 export { prepareUpdateCheckpointRestore } from "./update-checkpoint-prepare.js";
 export {
   reopenUpdateCheckpointRestorePlan,
-  UpdateCheckpointRestorePlanIdentitySchema,
-  UpdateCheckpointRestorePlanRefSchema,
-  type UpdateCheckpointRestorePlanIdentity,
   type UpdateCheckpointRestorePlanRef,
 } from "./update-checkpoint-plan.js";
 
@@ -118,6 +116,16 @@ async function observeResource(
   ref: UpdateCheckpointRestorePlanRef,
   record?: UpdateRecoveryRecord,
 ) {
+  if (resource.before === null && resource.after === null) {
+    return {
+      observed: isAbsentUpdateCheckpointRestoreResource(resource)
+        ? ("after" as const)
+        : ("conflict" as const),
+      current: null,
+      displaced: null,
+      staged: null,
+    };
+  }
   const parent = path.dirname(resource.sourcePath);
   if (
     (await fs.realpath(parent)) !== parent ||
@@ -326,6 +334,15 @@ export async function restoreUpdateCheckpointResource(
     // No effects have begun. Do not include arbitrary executor error contents
     // or turn failures after displacement/publication into this safe outcome.
     return { ...observation, status: "unavailable", reason: "quiescence-unavailable" };
+  }
+  if (resource.before === null && resource.after === null) {
+    const absent = isAbsentUpdateCheckpointRestoreResource(resource);
+    assertCurrent();
+    return {
+      ...observation,
+      observed: absent ? "after" : "conflict",
+      status: absent ? "already-applied" : "conflict",
+    };
   }
   if (resource.sqlite) {
     for (const file of [

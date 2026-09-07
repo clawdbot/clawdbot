@@ -1,3 +1,4 @@
+import { platform } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
@@ -115,7 +116,7 @@ export async function readUpdateCommandNativeObservation(params: {
   };
   let identity: UpdateRecoveryNativeIdentity;
   let loaded: boolean;
-  if (process.platform === "darwin") {
+  if (platform() === "darwin") {
     identity = {
       ...binding,
       platform: "darwin",
@@ -123,7 +124,7 @@ export async function readUpdateCommandNativeObservation(params: {
       label: resolveLaunchAgentLabel(state.env),
     };
     loaded = state.loadState.status === "loaded";
-  } else if (process.platform === "linux") {
+  } else if (platform() === "linux") {
     const native = state.runtime?.systemd;
     const unitName = `${resolveSystemdServiceName(state.env)}.service`;
     if (
@@ -139,7 +140,7 @@ export async function readUpdateCommandNativeObservation(params: {
     // runtime inspection proves loaded, independently of is-enabled policy.
     identity = { ...binding, platform: "linux", scope: "user", unitName, uid: native.managerUid };
     loaded = true;
-  } else if (process.platform === "win32") {
+  } else if (platform() === "win32") {
     if (state.loadState.status !== "loaded") {
       throw unavailable();
     }

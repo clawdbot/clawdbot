@@ -1940,6 +1940,18 @@ openclaw-chat-video-player {
   list-style: none;
 }
 
+.chat-swarm__group--completed .chat-swarm__summary {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 44px;
+  margin: -10px -12px;
+  padding: 10px 12px;
+}
+
+.chat-swarm__group--completed .chat-swarm__counts {
+  white-space: nowrap;
+}
+
 .chat-swarm__summary::-webkit-details-marker {
   display: none;
 }

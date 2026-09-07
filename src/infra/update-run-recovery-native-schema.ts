@@ -52,13 +52,18 @@ export const RecoveryNativeObservationSchema = z.strictObject({
   identity: RecoveryNativeIdentitySchema,
   facts: RecoveryNativeFactsSchema,
 });
-export const RecoveryNativeActionSchema = z.enum(["suppress", "stop", "restore"]);
+export const RecoveryNativeActionSchema = z.enum([
+  "suppress",
+  "stop",
+  "restore",
+  "enable-for-start",
+]);
 const effect = z.strictObject({
   effectId: z.uuid(),
   action: RecoveryNativeActionSchema,
   before: RecoveryNativeFactsSchema,
   after: RecoveryNativeFactsSchema,
-  state: z.enum(["intent", "observed"]),
+  state: z.enum(["intent", "observed", "not-applied"]),
   intentRevision: revision,
   observedRevision: revision.optional(),
 });
@@ -77,17 +82,24 @@ export const RecoveryNativeManagerSchema = z
       if (
         !isDeepStrictEqual(entry.before, previous) ||
         ids.has(entry.effectId) ||
+        (entry.state === "not-applied" && isDeepStrictEqual(entry.before, entry.after)) ||
         entry.intentRevision <= last ||
         (entry.state === "intent"
           ? entry.observedRevision !== undefined || index !== manager.effects.length - 1
           : entry.observedRevision === undefined ||
             entry.observedRevision <= entry.intentRevision) ||
-        !validNativeTransition(entry.action, entry.before, entry.after, manager.original)
+        !validNativeTransition(
+          entry.action,
+          entry.before,
+          entry.after,
+          manager.original,
+          manager.identity.platform,
+        )
       ) {
         ctx.addIssue({ code: "custom", message: "Invalid native manager effect history" });
       }
       ids.add(entry.effectId);
-      previous = entry.after;
+      previous = entry.state === "not-applied" ? entry.before : entry.after;
       last = entry.observedRevision ?? entry.intentRevision;
     }
   });
@@ -102,7 +114,23 @@ export function validNativeTransition(
   before: UpdateRecoveryNativeFacts,
   after: UpdateRecoveryNativeFacts,
   original: UpdateRecoveryNativeFacts,
+  platform: UpdateRecoveryNativeIdentity["platform"],
 ): boolean {
+  if (action === "enable-for-start") {
+    // Windows /Run and launchd bootstrap refuse disabled jobs. This is not
+    // restored policy: only the captured running-but-disabled job may borrow enablement.
+    return (
+      (platform === "win32" || platform === "darwin") &&
+      original.exists &&
+      original.loaded &&
+      !original.stopped &&
+      original.enabled === false &&
+      before.exists &&
+      before.stopped &&
+      before.enabled === false &&
+      isDeepStrictEqual(after, { ...before, enabled: true })
+    );
+  }
   if (action === "restore") {
     if (!before.exists || !original.exists) {
       return isDeepStrictEqual(after, original);
@@ -120,4 +148,13 @@ export function validNativeTransition(
   return action === "suppress"
     ? after.enabled === false && before.loaded === after.loaded && before.stopped === after.stopped
     : after.stopped && after.enabled === before.enabled && (!after.loaded || before.loaded);
+}
+
+/** A rejected, settled native dispatch preserves its target as history but its
+ * fresh before observation is the current fact. It is never a boot receipt. */
+export function currentUpdateRecoveryNativeFacts(
+  manager: z.infer<typeof RecoveryNativeManagerSchema>,
+): UpdateRecoveryNativeFacts {
+  const last = manager.effects.at(-1);
+  return last?.state === "not-applied" ? last.before : (last?.after ?? manager.original);
 }

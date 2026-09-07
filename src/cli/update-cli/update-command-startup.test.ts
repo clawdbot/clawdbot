@@ -10,6 +10,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { beginUpdateCommandStartup } from "./update-command-startup.js";
@@ -76,36 +77,60 @@ it("persists the actual staged runtime before the native preparation boundary", 
   });
 });
 
-it("does not create an orphan recovery row when preparation loses its acknowledgement", async () => {
-  const base = await fs.realpath(dirs.make("startup-ack-"));
-  const privateRoot = path.join(base, "control");
-  await fs.mkdir(privateRoot, { mode: 0o700 });
-  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(privateRoot);
-  const fixture = await createPackageSwapFixture(base);
-  const env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state-root") };
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
-    env,
-  };
-  const opts: UpdateCommandOptions = { run };
-  const stop = vi.fn(async () => undefined);
-  await withUpdateCommandExecutor(run.runId, async (executor) => {
-    run.executorFence = await executor.enter(fixture.packageRoot);
-    const result = await swapStagedPackageInstall({
-      ...fixture.params,
-      prepareRecovery: async (source) => {
-        await beginUpdateCommandStartup({ opts, root: fixture.packageRoot, env, source });
-        throw new Error("acknowledgement lost");
-      },
-      beforeActivate: stop,
+it.each(["lost preparation acknowledgement", "unsupported native helper"])(
+  "does not create an orphan recovery row: %s",
+  async (scenario) => {
+    const base = await fs.realpath(dirs.make("startup-ack-"));
+    const privateRoot = path.join(base, "control");
+    await fs.mkdir(privateRoot, { mode: 0o700 });
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(privateRoot);
+    const fixture = await createPackageSwapFixture(base);
+    const env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state-root") };
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const opts: UpdateCommandOptions = { run };
+    const stop = vi.fn(async () => undefined);
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(fixture.packageRoot);
+      const result = await swapStagedPackageInstall({
+        ...fixture.params,
+        prepareRecovery: async (source) => {
+          if (scenario === "unsupported native helper") {
+            const originalWrite = process.stdout.write.bind(process.stdout);
+            const pipe = vi.spyOn(process.stdout, "write").mockImplementation((...args) => {
+              if (args[0] === "native-v1\n") {
+                queueMicrotask(() => {
+                  process.stdin.emit("data", Buffer.from("parked\n"));
+                });
+                return true;
+              }
+              return originalWrite(...args);
+            });
+            try {
+              return (
+                await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, () =>
+                  beginUpdateCommandStartup({ opts, root: fixture.packageRoot, env, source }),
+                )
+              ).hooks;
+            } finally {
+              pipe.mockRestore();
+            }
+          }
+          await beginUpdateCommandStartup({ opts, root: fixture.packageRoot, env, source });
+          throw new Error("acknowledgement lost");
+        },
+        beforeActivate: stop,
+      });
+      expect(result.status).toBe("failed");
+      expect(stop).not.toHaveBeenCalled();
+      expect(loadUpdateRecovery(run.runId, { env })).toBeUndefined();
+      expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+      expect(await fs.stat(fixture.params.stage.packageRoot)).toBeDefined();
     });
-    expect(result.status).toBe("failed");
-    expect(stop).not.toHaveBeenCalled();
-    expect(loadUpdateRecovery(run.runId, { env })).toBeUndefined();
-    expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
-    expect(await fs.stat(fixture.params.stage.packageRoot)).toBeDefined();
-  });
-});
+  },
+);
 
 it.each(["live", "candidate"] as const)(
   "refuses changed %s package identity before persistence or native preparation",
@@ -248,4 +273,61 @@ it("reopens the complete package descriptor after its durable acknowledgement is
     expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
     expect(await fs.stat(fixture.params.stage.packageRoot)).toBeDefined();
   });
+});
+
+it("commits helper takeover only after the complete initial package row is persisted", async () => {
+  const base = await fs.realpath(dirs.make("startup-native-commit-"));
+  const control = path.join(base, "control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  const fixture = await createPackageSwapFixture(base);
+  const env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") };
+  const run: NonNullable<UpdateCommandOptions["run"]> = {
+    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+    env,
+  };
+  const opts: UpdateCommandOptions = { run };
+  const observed: Array<{ command: string; record: ReturnType<typeof loadUpdateRecovery> }> = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  const pipe = vi.spyOn(process.stdout, "write").mockImplementation((...args) => {
+    if (args[0] === "native-v1\n" || args[0] === "native-commit\n") {
+      const command = args[0];
+      observed.push({ command, record: loadUpdateRecovery(run.runId, { env }) });
+      queueMicrotask(() =>
+        process.stdin.emit(
+          "data",
+          Buffer.from(command === "native-v1\n" ? "native-v1:systemd\n" : "native-committed\n"),
+        ),
+      );
+      return true;
+    }
+    return originalWrite(...args);
+  });
+  try {
+    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, () =>
+      withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(fixture.packageRoot);
+        const result = await swapStagedPackageInstall({
+          ...fixture.params,
+          prepareRecovery: async (source) =>
+            (await beginUpdateCommandStartup({ opts, root: fixture.packageRoot, env, source }))
+              .hooks,
+          beforeActivate: async () => {
+            throw new Error("test stops before native effects");
+          },
+        }).catch((error: unknown) => error);
+        expect(result).toBeInstanceOf(Error);
+      }),
+    );
+  } finally {
+    pipe.mockRestore();
+  }
+  expect(observed.map((entry) => entry.command)).toEqual(["native-v1\n", "native-commit\n"]);
+  expect(observed[0]?.record).toBeUndefined();
+  expect(observed[1]?.record?.package?.descriptor).toMatchObject({
+    liveRoot: fixture.packageRoot,
+    stageRoot: fixture.params.stage.packageRoot,
+  });
+  expect(observed[1]?.record?.preimages).toBeUndefined();
+  expect(opts.recovery?.getRecord().preimages).toBeDefined();
 });

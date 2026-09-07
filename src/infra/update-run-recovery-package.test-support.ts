@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
 import {
@@ -28,7 +28,7 @@ import {
   bindUpdateRecoveryCheckpoint,
   bindUpdateRecoveryAfterImage,
   loadUpdateRecovery,
-  loadUpdateRecoveries,
+  inspectUpdateRecoveries,
   assertNoPendingUpdateRecovery,
   claimUpdateRecovery,
   prepareUpdateRecoveryHandoff,
@@ -40,7 +40,12 @@ import {
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
 
-const dirs = createTempDirTracker();
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const fence = { assertCurrent() {} };
 
 async function generation(root: string, version: string) {
@@ -255,8 +260,6 @@ export function defineUpdateRecoveryPackageTests() {
   describe("package recovery", () => {
     afterEach(() => {
       vi.restoreAllMocks();
-      closeOpenClawStateDatabaseForTest();
-      dirs.cleanup();
     });
     describe("typed package recovery and atomic retained-pair selection", () => {
       it("rejects a terminal record before native running state is restored", async () => {
@@ -577,7 +580,8 @@ export function defineUpdateRecoveryPackageTests() {
           fs.readFile(path.join(selected.package!.descriptor.backupRoot, "package.json"), "utf8"),
         ).resolves.toContain("2.0.0");
         expect(
-          loadUpdateRecoveries(b.options)
+          inspectUpdateRecoveries(b.options)
+            .map(({ record }) => record)
             .filter((record) => record.retainedPair?.state === "selected")
             .map((record) => record.runId),
         ).toEqual([b.run.runId]);

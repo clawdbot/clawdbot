@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 import { checkpointContentMatches } from "./update-checkpoint-files.js";
 import { checkpointPluginIndexMutationsMatch } from "./update-checkpoint-plugin-index.js";
 import {
@@ -59,20 +60,73 @@ export const UpdateCheckpointRestorePlanIdentitySchema = z
 export type UpdateCheckpointRestorePlanIdentity = z.infer<
   typeof UpdateCheckpointRestorePlanIdentitySchema
 >;
-export const UpdateCheckpointRestorePlanRefSchema =
-  UpdateCheckpointRestorePlanIdentitySchema.extend({
-    planSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  }).strict();
+const UpdateCheckpointRestorePlanRefSchema = UpdateCheckpointRestorePlanIdentitySchema.extend({
+  planSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+}).strict();
 export type UpdateCheckpointRestorePlanRef = z.infer<typeof UpdateCheckpointRestorePlanRefSchema>;
 type RestorePlan = z.infer<typeof planSchema>;
 export type RestoreResource = RestorePlan["resources"][number];
 export function assertSqliteFamilyClosed(file: string): void {
   for (const suffix of ["-wal", "-shm", "-journal"]) {
-    if (fsSync.existsSync(`${file}${suffix}`)) {
-      throw new Error(`SQLite writers/readers must close before checkpoint publication: ${file}`);
+    try {
+      fsSync.lstatSync(`${file}${suffix}`);
+    } catch (error) {
+      if (hasNodeErrorCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
     }
+    throw new Error(`SQLite writers/readers must close before checkpoint publication: ${file}`);
   }
 }
+/** A sealed absence-to-absence resource has no filesystem publication. Verify
+ * the source/family is still absent and existing ancestors are canonical; never
+ * create missing agent directories merely to acknowledge this no-op. */
+export function isAbsentUpdateCheckpointRestoreResource(
+  resource: Pick<RestoreResource, "sourcePath" | "stageDirectory" | "sqlite">,
+): boolean {
+  const exists = (file: string) => {
+    try {
+      fsSync.lstatSync(file);
+      return true;
+    } catch (error) {
+      if (hasNodeErrorCode(error, "ENOENT")) {
+        return false;
+      }
+      throw error;
+    }
+  };
+  for (const initial of [path.dirname(resource.sourcePath), resource.stageDirectory]) {
+    let parent = initial;
+    for (;;) {
+      if (exists(parent)) {
+        if (!fsSync.lstatSync(parent).isDirectory() || fsSync.realpathSync(parent) !== parent) {
+          return false;
+        }
+        break;
+      }
+      const next = path.dirname(parent);
+      if (next === parent) {
+        return false;
+      }
+      parent = next;
+    }
+  }
+  for (const file of [
+    resource.sourcePath,
+    path.join(resource.stageDirectory, "replacement"),
+    path.join(resource.stageDirectory, "displaced"),
+  ]) {
+    if (exists(file)) {
+      return false;
+    }
+    if (resource.sqlite) {
+      assertSqliteFamilyClosed(file);
+    }
+  }
+  return true;
+}
+
 export function sameIdentity(
   left: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number },
   right: fsSync.Stats,

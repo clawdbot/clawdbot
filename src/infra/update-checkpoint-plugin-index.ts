@@ -18,7 +18,7 @@ export const UpdateCheckpointPluginIndexMutationSchema = z
       .string()
       .refine((value) => path.isAbsolute(value) && path.normalize(value) === value),
     before: rowSchema.nullable(),
-    after: rowSchema,
+    after: rowSchema.nullable(),
   })
   .strict();
 export type UpdateCheckpointPluginIndexMutation = z.infer<

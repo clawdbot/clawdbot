@@ -1,9 +1,12 @@
 // Covers the SQLite WAL-reset corruption safety floor.
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   openNodeSqliteDatabase,
+  resolveExistingSqliteFileUri,
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
@@ -65,6 +68,29 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
 }
 
 describe("node SQLite locations", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  it("writes existing URI-escaped paths but never creates a missing database", () => {
+    const pathname = path.join(dirs.make("sqlite-existing-uri-"), "state ?#%.sqlite");
+    const uri = resolveExistingSqliteFileUri(pathname);
+    expect(() => openNodeSqliteDatabase(uri)).toThrow();
+    expect(fs.existsSync(pathname)).toBe(false);
+    const initial = openNodeSqliteDatabase(pathname);
+    initial.exec("CREATE TABLE retained(value TEXT) STRICT");
+    initial.close();
+    const existing = openNodeSqliteDatabase(uri);
+    try {
+      existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
+      expect(existing.prepare("SELECT value FROM retained").all()).toEqual([{ value: "written" }]);
+    } finally {
+      existing.close();
+    }
+  });
+  it("preserves Windows long paths in non-creating writable URIs", () => {
+    const pathname = String.raw`C:\deep state\openclaw.sqlite`;
+    expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
+      `file:${encodeURIComponent(path.win32.toNamespacedPath(pathname))}?mode=rw`,
+    );
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

@@ -43,7 +43,7 @@ export type ModelAuthStatusProvider = {
   profiles: ModelAuthStatusProfile[];
   /** Explicit stored/config priority. Omitted when selection is automatic. */
   profileOrder?: string[];
-  /** True when the priority is a stored override that can be reset. */
+  /** True when the selected agent owns a stored priority override that can be reset. */
   profileOrderStored?: boolean;
   /** Present when configuration, rather than the auth store, owns priority. */
   profileOrderLocked?: "auth-config" | "provider-config";
@@ -90,4 +90,6 @@ export type ModelAuthLogoutResult = {
 export type ModelAuthOrderSetResult = {
   provider: string;
   profileIds: string[] | null;
+  /** The order was saved, but its runtime publication could not complete. */
+  warning?: string;
 };

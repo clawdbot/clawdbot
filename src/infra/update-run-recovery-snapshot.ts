@@ -1,7 +1,17 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
+import {
+  encodeUpdateRecovery,
+  UpdateRecoveryConflictError,
+  type UpdateRecoveryRecord,
+} from "./update-run-recovery-schema.js";
+import { requireRevision } from "./update-run-recovery-store.js";
+import type { UpdateRecoveryDatabaseBinding } from "./update-run-recovery.js";
 
 /** Path spelling does not distinguish a disposable copy from a hard-linked live DB. */
 export function assertSeparateUpdateRecoveryDatabases(
@@ -50,7 +60,7 @@ function serializeRow(row: Record<string, SQLOutputValue>): string {
  * The caller separately validates the one active operational row in full. Page
  * layout is deliberately not identity: an authorized progress write changes it.
  */
-export function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): string {
+function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): string {
   const hash = createHash("sha256");
   const schema = db
     .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
@@ -87,4 +97,46 @@ export function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): s
     hash.update(JSON.stringify([name, rows.toSorted()]));
   }
   return hash.digest("hex");
+}
+
+export function assertExactRecovery(db: DatabaseSync, expected: UpdateRecoveryRecord): void {
+  const { raw } = requireRevision(db, expected);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+      .selectFrom("config_machine_state")
+      .select("updated_at_ms")
+      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
+  );
+  if (raw !== encodeUpdateRecovery(expected) || row?.updated_at_ms !== expected.updatedAtMs) {
+    throw new UpdateRecoveryConflictError();
+  }
+}
+
+/**
+ * Read-only snapshot; use an artifact-preserving handle BEFORE claim/admission.
+ * No schema migration, WAL setup, cleanup, or general runtime open occurs here.
+ * Every other row is bound, including all history and unrelated machine state.
+ */
+export function readUpdateRecoveryDatabaseBinding(
+  db: DatabaseSync,
+  expected: UpdateRecoveryRecord,
+): UpdateRecoveryDatabaseBinding {
+  const ownsRead = !db.isTransaction;
+  if (ownsRead) {
+    db.exec("BEGIN"); // sqlite-allow-raw -- One consistent read-only snapshot.
+  }
+  try {
+    assertExactRecovery(db, expected);
+    assertSqliteIntegrity(db, "update recovery database binding");
+    return {
+      runId: expected.runId,
+      transactionId: expected.transactionId,
+      sha256: digestUpdateRecoveryDatabase(db, expected.runId),
+    };
+  } finally {
+    if (ownsRead) {
+      db.exec("ROLLBACK"); // sqlite-allow-raw -- Close read snapshot without writes.
+    }
+  }
 }

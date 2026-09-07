@@ -14,6 +14,7 @@ import {
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
+import { retireSupersededUpdateCommandPair } from "./update-command-retirement.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
@@ -95,6 +96,9 @@ export async function finishDurableUpdate(
       );
     }
     await finalizeUpdateCommandRecovery(opts, status);
+    if (status === "succeeded") {
+      await retireSupersededUpdateCommandPair(opts.recovery);
+    }
     assertUpdateCommandRecovery(opts);
     result = completeUpdateCommandRun(
       { ...params.result, durationMs: Math.max(0, Date.now() - params.startedAt) },

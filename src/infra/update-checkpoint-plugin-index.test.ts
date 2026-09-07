@@ -9,6 +9,7 @@ import {
   reopenUpdateCheckpointRestorePlan,
   restoreUpdateCheckpointResource,
 } from "./update-checkpoint-restore.js";
+import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import {
   captureUpdateCheckpoint,
   reopenUpdateCheckpoint,
@@ -36,6 +37,7 @@ async function fixture(absent = false) {
     await fs.mkdtemp(path.join(os.tmpdir(), "checkpoint-plugin-row-")),
   );
   roots.push(root);
+  const runtime = await buildCheckpointReaderRuntime(path.join(root, "package"));
   const stateDir = path.join(root, "live");
   await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
   const file = path.join(stateDir, "state", "openclaw.sqlite");
@@ -48,7 +50,12 @@ async function fixture(absent = false) {
     }
   };
   sql(
-    "PRAGMA user_version=1; CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL); INSERT INTO config_machine_state VALUES('operator','before',1); CREATE TABLE work(id INTEGER PRIMARY KEY, text TEXT)",
+    `BEGIN IMMEDIATE; ${runtime.schema}
+     PRAGMA user_version=${runtime.schemaVersion};
+     INSERT INTO schema_meta(meta_key,role,schema_version,created_at,updated_at)
+     VALUES('primary','global',${runtime.schemaVersion},1,1);
+     INSERT INTO config_machine_state VALUES('operator','before',1);
+     CREATE TABLE work(id INTEGER PRIMARY KEY, text TEXT); COMMIT;`,
   );
   if (!absent) {
     sql("INSERT INTO config_machine_state VALUES('plugins.installedIndex','old',1)");
@@ -59,11 +66,7 @@ async function fixture(absent = false) {
       runId: "row-test",
       stateDir,
       configPath: path.join(stateDir, "config.json"),
-      fromRuntime: {
-        root: path.join(root, "package"),
-        version: "2026.8.1",
-        nodePath: process.execPath,
-      },
+      fromRuntime: runtime.runtime,
     },
     assertQuiescent() {},
   };

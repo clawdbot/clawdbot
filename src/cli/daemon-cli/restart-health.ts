@@ -39,11 +39,7 @@ export {
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
-export type {
-  GatewayPortHealthSnapshot,
-  GatewayRestartSnapshot,
-  GatewayRestartWaitOutcome,
-} from "./restart-health.types.js";
+export type { GatewayRestartSnapshot } from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;

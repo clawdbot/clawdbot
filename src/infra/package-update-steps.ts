@@ -1173,6 +1173,9 @@ export async function runGlobalPackageUpdateSteps(params: {
           );
         }
         const recovery = params.recovery;
+        // Candidate validation can select durable startup. Pin that decision at
+        // this boundary rather than evaluating it before its live owner exists.
+        const prepareRecovery = params.prepareRecovery;
         const swap = await swapStagedPackageInstall({
           timeoutMs: params.timeoutMs,
           stage: stagedInstall,
@@ -1184,11 +1187,11 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
-          prepareRecovery: params.prepareRecovery
+          prepareRecovery: prepareRecovery
             ? async (source) => {
                 // Startup persistence may commit before its acknowledgement fails.
                 recoveryOwnsStage = true;
-                return await params.prepareRecovery!(source);
+                return await prepareRecovery(source);
               }
             : undefined,
           recovery: recovery

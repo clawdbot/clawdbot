@@ -10,7 +10,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { isSqliteLockError, runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -642,7 +642,16 @@ export function configureSqliteWalMaintenance(
   // the event loop have starved channel sockets in production (#83712).
   const runIncrementalVacuum = (): void => {
     try {
-      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
+      // Page limits do not bound lock waits; service worker commit requests before taking the lock.
+      runSqliteImmediateTransactionSync(
+        db,
+        () => db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`),
+        {
+          busyTimeoutMs: options.busyTimeoutMs,
+          databaseLabel: options.databaseLabel ?? options.databasePath,
+          operationLabel: "incremental-vacuum",
+        },
+      );
     } catch (error) {
       options.onCheckpointError?.(error);
     }

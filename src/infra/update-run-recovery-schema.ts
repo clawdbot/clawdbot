@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { RecoveryNativeManagerSchema } from "./update-run-recovery-native-schema.js";
+import {
+  RecoveryNativeManagerSchema,
+  currentUpdateRecoveryNativeFacts,
+} from "./update-run-recovery-native-schema.js";
 import {
   RecoveryPackageStateSchema,
   RecoveryPackageEffectSchema,
@@ -55,6 +58,7 @@ const UpdateRecoveryEffectSchema = z
     effectId: z.uuid(),
     kind: z.enum([
       "package-activation",
+      "runtime-mutation",
       "checkpoint-restore",
       "package-restore",
       "service-restart",
@@ -62,12 +66,21 @@ const UpdateRecoveryEffectSchema = z
     ]),
     resourceId: exactText,
     runtime: z.enum(["candidate", "previous"]),
-    state: z.enum(["intent", "observed"]),
+    state: z.enum(["intent", "observed", "cancelled"]),
+    cancelledByNativeEffectId: z.uuid().optional(),
     package: RecoveryPackageEffectSchema.optional(),
     // Revalidated resource/lifecycle identity from its owner, never phase alone.
     observedIdentity: exactText.nullable(),
   })
-  .refine((effect) => (effect.state === "observed") === (effect.observedIdentity !== null));
+  .refine(
+    (effect) =>
+      (effect.state === "observed") === (effect.observedIdentity !== null) &&
+      (effect.state === "cancelled"
+        ? effect.kind === "service-restart" &&
+          !effect.package &&
+          effect.cancelledByNativeEffectId !== undefined
+        : effect.cancelledByNativeEffectId === undefined),
+  );
 
 export const UpdateRecoveryRestoreProgressSchema = z
   .strictObject({
@@ -250,7 +263,7 @@ const recoveryInspectionRecordSchema = z
       ctx.addIssue({ code: "custom", message: "Terminal and verification receipts differ" });
     }
     const native = record.nativeManager;
-    const nativeFinal = native?.effects.at(-1)?.after ?? native?.original;
+    const nativeFinal = native ? currentUpdateRecoveryNativeFacts(native) : undefined;
     if (
       native &&
       (!record.preimages ||
@@ -260,6 +273,7 @@ const recoveryInspectionRecordSchema = z
         native.identity.configPath !== record.source.configPath ||
         native.identity.profile !== record.source.profile ||
         native.boundAtRevision > record.revision ||
+        (!record.primaryFailure && native.effects.some((entry) => entry.state === "not-applied")) ||
         native.effects.some(
           (entry) => (entry.observedRevision ?? entry.intentRevision) > record.revision,
         ) ||
@@ -269,6 +283,7 @@ const recoveryInspectionRecordSchema = z
             (effect) =>
               effect.state === "intent" &&
               (effect.kind === "package-activation" ||
+                effect.kind === "runtime-mutation" ||
                 effect.kind === "package-restore" ||
                 effect.kind === "checkpoint-restore"),
           )) ||
@@ -313,6 +328,36 @@ const recoveryInspectionRecordSchema = z
       ctx.addIssue({ code: "custom", message: "Package transaction differs from recovery" });
     }
     for (const effect of record.effects) {
+      if (effect.state === "cancelled") {
+        const startIndex =
+          native?.effects.findIndex((entry) => entry.effectId === effect.effectId) ?? -1;
+        const stopIndex =
+          native?.effects.findIndex(
+            (entry) => entry.effectId === effect.cancelledByNativeEffectId,
+          ) ?? -1;
+        const start = native?.effects[startIndex];
+        const stopped = native?.effects[stopIndex];
+        const cancelledBeforeStart =
+          stopIndex === startIndex && stopped?.state === "not-applied" && stopped.before.stopped;
+        const stoppedAfterStart =
+          stopIndex > startIndex &&
+          stopped?.action === "stop" &&
+          stopped.state === "observed" &&
+          stopped.after.stopped;
+        if (
+          !record.primaryFailure ||
+          !start ||
+          start.action !== "restore" ||
+          !start.before.stopped ||
+          start.after.stopped ||
+          !(cancelledBeforeStart || stoppedAfterStart)
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            message: "Cancelled restart requires resolved native quiescence",
+          });
+        }
+      }
       if (
         effect.package &&
         (effect.package.intent.effectId !== effect.effectId ||
@@ -506,10 +551,7 @@ export function parseUpdateRecoveryCheckpoint(
   record: UpdateRecoveryRecord,
   input: NonNullable<UpdateRecoveryRecord["checkpoint"]>,
 ): NonNullable<UpdateRecoveryRecord["checkpoint"]> {
-  if (
-    record.nativeManager &&
-    !(record.nativeManager.effects.at(-1)?.after ?? record.nativeManager.original).stopped
-  ) {
+  if (record.nativeManager && !currentUpdateRecoveryNativeFacts(record.nativeManager).stopped) {
     throw new Error("Full checkpoint binding requires an observed native stop");
   }
   const captured = checkpoint.parse(input);

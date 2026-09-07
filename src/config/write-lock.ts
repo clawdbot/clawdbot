@@ -12,24 +12,95 @@ const CONFIG_MUTATION_LOCK_OPTIONS = {
   stale: 30_000,
 } as const;
 
-type LockScope = { active: boolean; pending: Set<Promise<unknown>> };
+type LockScope = {
+  active: boolean;
+  accepting: boolean;
+  pending: Set<Promise<unknown>>;
+  assertCurrent?: () => void;
+};
 const activeConfigMutationLocks = new AsyncLocalStorage<{
   paths: Map<string, LockScope>;
   current: LockScope;
 }>();
 const configMutationQueue = new KeyedAsyncQueue();
 
+/** Capture the live source owner, not merely the fact that a lock was once held. */
+export function captureConfigWriteLockGuard(pathname: string): (() => void) | undefined {
+  const context = activeConfigMutationLocks.getStore();
+  const guarded = [...new Set(context?.paths.values())].filter((scope) => scope.assertCurrent);
+  if (!guarded.length) {
+    return undefined;
+  }
+  const target = context?.paths.get(path.resolve(pathname));
+  return () => {
+    if (!target?.active || !target.assertCurrent) {
+      throw new Error("Config write has no live source ownership for this path.");
+    }
+    for (const scope of guarded) {
+      if (!scope.active) {
+        throw new Error("Config write source ownership has closed.");
+      }
+      scope.assertCurrent?.();
+    }
+  };
+}
+
+async function runConfigLockScope<T>(
+  configPath: string,
+  fn: () => Promise<T>,
+  assertCurrent?: () => void,
+): Promise<T> {
+  const scope: LockScope = { active: true, accepting: true, pending: new Set(), assertCurrent };
+  const paths = new Map(activeConfigMutationLocks.getStore()?.paths);
+  paths.set(configPath, scope);
+  try {
+    return await activeConfigMutationLocks.run({ paths, current: scope }, async () => {
+      try {
+        assertCurrent?.();
+        return await fn();
+      } finally {
+        scope.accepting = false;
+        // Admitted writes retain their source lock until settlement, including
+        // detached children. The captured guard still checks the real executor.
+        while (scope.pending.size > 0) {
+          await Promise.allSettled(scope.pending);
+        }
+      }
+    });
+  } finally {
+    scope.active = false;
+  }
+}
+
 export async function withConfigWriteLock<T>(
   pathname: string,
   fn: () => Promise<T>,
   env?: NodeJS.ProcessEnv,
+  assertCurrent?: () => void,
 ): Promise<T> {
   const configPath = path.resolve(pathname);
   assertConfigWriteAllowedInCurrentMode({ configPath, env });
   const inherited = activeConfigMutationLocks.getStore();
+  const guardedParent = [...(inherited?.paths.entries() ?? [])].find(
+    ([, scope]) => scope.assertCurrent,
+  );
+  const parentGuard = guardedParent ? captureConfigWriteLockGuard(guardedParent[0]) : undefined;
+  if (parentGuard && !inherited?.current.accepting) {
+    throw new Error("Config write source admission has closed.");
+  }
+  const guard = assertCurrent
+    ? () => {
+        parentGuard?.();
+        assertCurrent();
+      }
+    : captureConfigWriteLockGuard(configPath);
+  guard?.();
   const inheritedScope = inherited?.paths.get(configPath);
   if (inheritedScope?.active) {
-    const running = Promise.resolve().then(fn);
+    const running = Promise.resolve().then(() => {
+      captureConfigWriteLockGuard(configPath)?.();
+      return guard ? runConfigLockScope(configPath, fn, guard) : fn();
+    });
     inheritedScope.pending.add(running);
     try {
       return await running;
@@ -41,31 +112,9 @@ export async function withConfigWriteLock<T>(
   await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
   return await configMutationQueue
     .enqueue(configPath, async () => {
-      const scope: LockScope = { active: false, pending: new Set() };
-      const paths = new Map(inherited?.paths);
-      paths.set(configPath, scope);
-      try {
-        return await activeConfigMutationLocks.run(
-          { paths, current: scope },
-          async () =>
-            await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, async () => {
-              scope.active = true;
-              try {
-                return await fn();
-              } finally {
-                // Reentrant work may be detached from fn. Keep its actual writes inside
-                // the same lock, including children it admits while settling.
-                while (scope.pending.size > 0) {
-                  await Promise.allSettled(scope.pending);
-                }
-                scope.active = false;
-              }
-            }),
-        );
-      } finally {
-        // Detached async work retains its ALS context, but cannot retain a released lock.
-        scope.active = false;
-      }
+      return await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, () =>
+        runConfigLockScope(configPath, fn, guard),
+      );
     })
     .catch(async (error: unknown) => {
       if (!(await isPermissionErrorInDirectory(error, configDir))) {
@@ -79,6 +128,7 @@ export async function withConfigWriteLock<T>(
 }
 
 export function markActiveConfigMutationPath(configPath: string): void {
+  captureConfigWriteLockGuard(configPath)?.();
   const scope = activeConfigMutationLocks.getStore();
   if (scope?.current.active) {
     scope.paths.set(path.resolve(configPath), scope.current);

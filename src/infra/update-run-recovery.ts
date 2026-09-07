@@ -27,19 +27,17 @@ import {
   parseUpdateRecoveryCheckpoint,
   sealUpdateRecoveryPublication,
   UpdateRecoveryRestoreProgressSchema,
-  type UpdateRecoveryInspection,
-  type UpdateRecoveryAfterImage,
   type UpdateRecoveryRestoreProgress,
   type UpdateRecoveryEffect,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import {
   assertSeparateUpdateRecoveryDatabases,
-  digestUpdateRecoveryDatabase,
+  assertExactRecovery,
+  readUpdateRecoveryDatabaseBinding,
 } from "./update-run-recovery-snapshot.js";
 import {
   readRecoveries,
-  inspectRecoveries,
   writeRecovery,
   requireRevision,
   mutateRecovery,
@@ -52,10 +50,10 @@ export {
 } from "./update-run-recovery-schema.js";
 export type {
   UpdateRecoveryRecord,
-  UpdateRecoveryAfterImage,
   UpdateRecoveryEffect,
   UpdateRecoveryRestoreProgress,
 } from "./update-run-recovery-schema.js";
+export { inspectUpdateRecoveries } from "./update-run-recovery-store.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
 
 /** Current executor-held exclusion, never deserialized. CAS does not authorize effects. */
@@ -68,24 +66,8 @@ export type UpdateRecoveryRevision = Pick<
 /** Correlation only. The receiving runtime must independently reacquire authority. */
 export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
 
-/** Private read-only compatibility surface for diagnostics and retained-pair
- * inspection. Legacy receipts remain exact historical evidence, never authority.
- * Execution loaders below deliberately reject them instead of upgrading them. */
-export function inspectUpdateRecoveries(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRecoveryInspection[] {
-  return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) => inspectRecoveries(db),
-      options,
-    ) ?? []
-  );
-}
-
 /** Must run before general database open, admission writes, or runtime migration. */
-export function loadUpdateRecoveries(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRecoveryRecord[] {
+function loadUpdateRecoveries(options: OpenClawStateDatabaseOptions = {}): UpdateRecoveryRecord[] {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => readRecoveries(db),
@@ -224,7 +206,7 @@ export function bindUpdateRecoveryCheckpoint(
  */
 export function bindUpdateRecoveryAfterImage(
   expected: UpdateRecoveryRevision,
-  input: Omit<UpdateRecoveryAfterImage, "boundAtRevision">,
+  input: Parameters<typeof appendUpdateRecoveryAfterImage>[1],
   fence: UpdateRecoveryFence,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRecoveryRecord {
@@ -233,6 +215,10 @@ export function bindUpdateRecoveryAfterImage(
     fence,
     (record) => appendUpdateRecoveryAfterImage(record, input),
     options,
+    false,
+    false,
+    false,
+    "existing-schema",
   );
 }
 
@@ -259,7 +245,7 @@ export function claimUpdateRecovery(
 }
 
 /** Recheck this together with live exclusion immediately before an external effect. */
-export function assertUpdateRecoveryClaim(
+function assertUpdateRecoveryClaim(
   expected: UpdateRecoveryRevision,
   fence: UpdateRecoveryFence,
   options: OpenClawStateDatabaseOptions = {},
@@ -301,6 +287,7 @@ export function prepareUpdateRecoveryHandoff(
     false,
     false,
     true,
+    "existing-schema",
   );
   return {
     record,
@@ -342,6 +329,9 @@ export function acceptUpdateRecoveryHandoff(
     },
     options,
     true,
+    false,
+    false,
+    "existing-schema",
   );
 }
 /** Commit intent before performing the named external effect. */
@@ -374,12 +364,24 @@ export function recordUpdateRecoveryIntent(
       if (effect.kind === "package-activation" && !record.checkpoint) {
         throw new Error("Package activation requires a durable checkpoint binding");
       }
+      if (
+        effect.kind === "runtime-mutation" &&
+        (!record.checkpoint ||
+          effect.runtime !== "candidate" ||
+          record.handoff?.state !== "accepted")
+      ) {
+        throw new Error("Runtime mutation requires the candidate's accepted checkpoint handoff");
+      }
       record.effects.push({ ...effect, state: "intent", observedIdentity: null });
       if (effect.kind !== "retirement") {
         record.verification = null;
       }
     },
     options,
+    false,
+    false,
+    false,
+    "existing-schema",
   );
 }
 /** Observation comes from the resource owner, including after process death. */
@@ -404,6 +406,10 @@ export function recordUpdateRecoveryObservation(
       effect.observedIdentity = observation.observedIdentity;
     },
     options,
+    false,
+    false,
+    false,
+    "existing-schema",
   );
 }
 /** Keep the primary update failure even if later restoration also fails. */
@@ -424,6 +430,7 @@ export function recordUpdateRecoveryFailure(
     false,
     false,
     true,
+    "existing-schema",
   );
 }
 
@@ -548,48 +555,6 @@ export type UpdateRecoveryDatabaseBinding = {
   transactionId: string;
   sha256: string;
 };
-
-function assertExactRecovery(db: DatabaseSync, expected: UpdateRecoveryRecord): void {
-  const { raw } = requireRevision(db, expected);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<RecoveryDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select("updated_at_ms")
-      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + expected.runId),
-  );
-  if (raw !== encodeUpdateRecovery(expected) || row?.updated_at_ms !== expected.updatedAtMs) {
-    throw new UpdateRecoveryConflictError();
-  }
-}
-
-/**
- * Read-only snapshot; use an artifact-preserving handle BEFORE claim/admission.
- * No schema migration, WAL setup, cleanup, or general runtime open occurs here.
- * Every other row is bound, including all history and unrelated machine state.
- */
-export function readUpdateRecoveryDatabaseBinding(
-  db: DatabaseSync,
-  expected: UpdateRecoveryRecord,
-): UpdateRecoveryDatabaseBinding {
-  const ownsRead = !db.isTransaction;
-  if (ownsRead) {
-    db.exec("BEGIN"); // sqlite-allow-raw -- One consistent read-only snapshot.
-  }
-  try {
-    assertExactRecovery(db, expected);
-    assertSqliteIntegrity(db, "update recovery database binding");
-    return {
-      runId: expected.runId,
-      transactionId: expected.transactionId,
-      sha256: digestUpdateRecoveryDatabase(db, expected.runId),
-    };
-  } finally {
-    if (ownsRead) {
-      db.exec("ROLLBACK"); // sqlite-allow-raw -- Close read snapshot without writes.
-    }
-  }
-}
 
 export function validateUpdateRecoveryDatabaseBinding(
   db: DatabaseSync,

@@ -182,6 +182,12 @@ export class GatewayClient {
     return this.#client.request<T>(method, params, opts);
   }
 
+  /** Current transport state, including CLOSING before the close callback fires.
+   * This is not authentication or readiness evidence on its own. */
+  get connected(): boolean {
+    return this.#client.connected;
+  }
+
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return this.#client.getConnectionMetadata();
   }

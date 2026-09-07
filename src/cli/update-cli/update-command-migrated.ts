@@ -9,10 +9,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
+import type { UpdateRecoveryHandoff } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -20,6 +22,7 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveCliName } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
+import { continueDurableUpdateInFreshProcess } from "./update-command-candidate-process.js";
 import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
@@ -58,16 +61,15 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
     });
-    const sharedVersion = current.find(
-      (entry) => entry.path === resolveOpenClawStateSqlitePath(env),
-    )?.userVersion;
+    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
+    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
     if (
       result.status === "ok" &&
       candidateSchemaVersions &&
       sharedVersion !== candidateSchemaVersions.state
     ) {
-      // Doctor can warn without failing. Startup must not perform a late
-      // migration underneath the previous runtime's ledger writer.
+      // Doctor can warn without failing. Require applied content so startup
+      // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
       result.reason = `${CLI_NAME} doctor`;
       result.steps.push({
@@ -116,6 +118,7 @@ export type MigratedUpdateFinalizationInput = {
     >;
   };
   executor?: UpdateCommandChildGrant;
+  recoveryHandoff?: UpdateRecoveryHandoff;
   bufferedSteps: UpdateRunStep[];
   windowsTaskAutoStartSuspended?: true;
   resultPath: string;
@@ -135,9 +138,7 @@ export async function continueMigratedUpdateInFreshProcess(
   bufferedSteps: UpdateRunStep[],
 ): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
   if (params.opts.recovery) {
-    throw new UpdateCommandRecoveryPendingError(
-      "Durable worker continuation requires a reconciled handoff and fresh executor.",
-    );
+    return await continueDurableUpdateInFreshProcess(params, bufferedSteps);
   }
   const run = params.opts.run;
   if (!run) {

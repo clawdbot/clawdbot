@@ -29,6 +29,7 @@ import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   resolveInstalledPluginIndexInstallOwner,
 } from "./installed-plugin-index-install-owner.js";
+import { prepareInstalledPluginIndexMutation } from "./installed-plugin-index-mutations.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
@@ -197,6 +198,7 @@ function writePersistedInstalledPluginIndexToSqlite(
 ): InstalledPluginIndexWriteReceipt {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = preparePersistedInstalledPluginIndex(index);
+  const publish = prepareInstalledPluginIndexMutation();
   return runOpenClawStateWriteTransaction(({ db, path: databasePath }) => {
     const before = readInstalledPluginIndexRow(db);
     const previousRow = parseInstalledPluginIndexRow(before);
@@ -223,6 +225,7 @@ function writePersistedInstalledPluginIndexToSqlite(
     if (!after) {
       throw new Error("Installed plugin index write did not persist its row");
     }
+    publish?.(db, { databasePath, before: before ?? null, after });
     return {
       previous: previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
       revision,
@@ -259,9 +262,11 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   if (!existsSync(resolveInstalledPluginIndexStorePath(storeOptions))) {
     return false;
   }
-  const restored = runOpenClawStateWriteTransaction(({ db }) => {
+  const publish = prepareInstalledPluginIndexMutation();
+  const restored = runOpenClawStateWriteTransaction(({ db, path: databasePath }) => {
     lease.assertOwnedInTransaction(db);
-    const currentRow = parseInstalledPluginIndexRow(readInstalledPluginIndexRow(db));
+    const before = readInstalledPluginIndexRow(db) ?? null;
+    const currentRow = parseInstalledPluginIndexRow(before ?? undefined);
     const currentRevision = currentRow ? currentRow.revision : null;
     if (currentRevision !== expectedRevision) {
       return false;
@@ -281,6 +286,7 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
       // sqlite-allow-raw: Compiled SQL preserves native deletion in the leased transaction.
       db.prepare(compiled.sql).run(...bind());
     }
+    publish?.(db, { databasePath, before, after: readInstalledPluginIndexRow(db) ?? null });
     return true;
   }, resolveInstalledPluginIndexStateDatabaseOptions(storeOptions));
   // A mismatched revision means another process committed, which also makes

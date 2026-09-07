@@ -113,6 +113,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   actionHint: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
   skipEnable?: boolean;
+  assertCurrent?: () => void;
   // Opt-in for callers that just issued `bootout` on this label. Only those can
   // race a pending teardown, so start/install/recovery paths keep failing fast
   // on an unrelated EIO instead of waiting out the teardown deadline.
@@ -121,6 +122,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
   if (!params.skipEnable) {
+    params.assertCurrent?.();
     const enable = await execLaunchctl(["enable", params.serviceTarget]);
     if (enable.code === 0) {
       params.onMutation?.("enable");
@@ -128,6 +130,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   }
   const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
   for (;;) {
+    params.assertCurrent?.();
     const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
     if (boot.code === 0) {
       params.onMutation?.("bootstrap");

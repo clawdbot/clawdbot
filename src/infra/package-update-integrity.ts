@@ -18,6 +18,10 @@ let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 
+export type PackageRootIntegrityFingerprint =
+  | { kind: "directory"; tree: PackageIntegrityFingerprint }
+  | { kind: "link"; metadata: string[]; target: string };
+
 export async function readPackageVersionIfPresent(
   packageRoot: string | null,
 ): Promise<string | null> {
@@ -315,6 +319,27 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     return { digest: digest.digest("hex"), identity: rootIdentity, version };
   }
 
+  async function rootEntry(
+    root: string,
+    originalRoot = root,
+    expectedKind?: PackageRootIntegrityFingerprint["kind"],
+  ): Promise<PackageRootIntegrityFingerprint> {
+    const stat = await read(() => fs.lstat(root, { bigint: true }));
+    if (expectedKind && expectedKind !== (stat.isSymbolicLink() ? "link" : "directory")) {
+      throw new Error("Package rollback root entry kind changed");
+    }
+    if (!stat.isSymbolicLink()) {
+      return { kind: "directory", tree: await tree(root, originalRoot) };
+    }
+    const target = await read(() => fs.readlink(root));
+    if (!unchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
+      throw new Error("Package rollback link changed while reading");
+    }
+    // npm owns this pointer, not the external checkout it names. A sibling
+    // rename changes ctime but must preserve the link identity and raw target.
+    return { kind: "link", metadata: metadata(stat).slice(0, -1), target };
+  }
+
   async function launcher(file: string): Promise<string> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
     const contents = stat.isSymbolicLink()
@@ -354,5 +379,5 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     return identity(stat);
   }
 
-  return { tree, launcher, exists, entries, directoryIdentity, observe };
+  return { tree, rootEntry, launcher, exists, entries, directoryIdentity, observe };
 }

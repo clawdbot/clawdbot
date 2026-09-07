@@ -98,6 +98,33 @@ async function fixture() {
 }
 
 describe("pre-stop checkpoint preimages", () => {
+  it("refuses manifest-less residual copies after interrupted retirement", async () => {
+    const f = await fixture();
+    const directory = path.dirname(f.checkpointRef.manifestPath);
+    const access = { ...f.access, assertSuperseded() {} };
+    const remove = vi.spyOn(fs, "rm").mockImplementationOnce(async (target) => {
+      expect(target).toBe(directory);
+      await fs.unlink(f.checkpointRef.manifestPath);
+      throw new Error("interrupted checkpoint retirement");
+    });
+    await expect(retireUpdateCheckpointPreimages(f.checkpointRef, access)).rejects.toThrow(
+      "interrupted checkpoint retirement",
+    );
+    remove.mockRestore();
+    const remaining = await fs.readdir(directory);
+    expect(remaining.length).toBeGreaterThan(0);
+    const before = await Promise.all(
+      remaining.map((name) => fs.readFile(path.join(directory, name))),
+    );
+    await expect(retireUpdateCheckpointPreimages(f.checkpointRef, access)).rejects.toThrow(
+      /incomplete|residual/,
+    );
+    expect(await fs.readdir(directory)).toEqual(remaining);
+    expect(
+      await Promise.all(remaining.map((name) => fs.readFile(path.join(directory, name)))),
+    ).toEqual(before);
+  });
+
   it("seals original config/include/service/env bytes and absence after lifecycle mutation", async () => {
     const f = await fixture();
     const request = {

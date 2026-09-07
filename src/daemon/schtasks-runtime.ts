@@ -131,6 +131,7 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
 export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const scriptPath = resolveTaskScriptPath(env);
   const command =
@@ -144,6 +145,7 @@ export async function launchFallbackTaskScript(
         ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
         : command.programArguments;
     const { child } = await spawnWithFallback({
+      assertCurrent,
       argv: programArguments,
       options: {
         cwd: command.workingDirectory || undefined,
@@ -183,6 +185,7 @@ export async function launchFallbackTaskScript(
     throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
   }
   const { child } = await spawnWithFallback({
+    assertCurrent,
     // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
     argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {
@@ -421,8 +424,9 @@ export async function startStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  await launchFallbackTaskScript(env);
+  await launchFallbackTaskScript(env, undefined, assertCurrent);
   onMutation?.();
   stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }
