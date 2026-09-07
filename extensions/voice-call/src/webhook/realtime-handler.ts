@@ -29,7 +29,6 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
-import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
@@ -365,6 +364,19 @@ function appendRecentTalkEventMetadata(
   call.metadata = metadata;
 }
 
+// The declared 2026.9.2 host has no WebSocket SDK subpath. Keep these two
+// rejection statuses local until that host leaves the supported plugin API range.
+function rejectRealtimeUpgrade(socket: Duplex, status: 401 | 503): void {
+  const reason = status === 401 ? "Unauthorized" : "Service Unavailable";
+  try {
+    // Reused HTTP sockets can buffer writes; destroy only after the response flushes.
+    socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`, () => socket.destroy());
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
+}
+
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
@@ -439,7 +451,7 @@ export class RealtimeCallHandler {
     // HTTP no longer owns socket errors after handing off an upgrade.
     socket.once("error", () => socket.destroy());
     if (this.closing) {
-      rejectWebSocketUpgrade(socket, { status: 503 });
+      rejectRealtimeUpgrade(socket, 503);
       return;
     }
 
@@ -447,7 +459,7 @@ export class RealtimeCallHandler {
     const token = url.pathname.split("/").pop() ?? null;
     const callerMeta = token ? this.consumeStreamToken(token) : null;
     if (!callerMeta) {
-      rejectWebSocketUpgrade(socket, { status: 401 });
+      rejectRealtimeUpgrade(socket, 401);
       return;
     }
 
