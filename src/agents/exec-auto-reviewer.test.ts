@@ -510,6 +510,98 @@ describe("createModelExecAutoReviewer", () => {
     });
   });
 
+  it("retries once with minimal reasoning when the endpoint requires reasoning", async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce({
+        role: "assistant",
+        content: [],
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "openai/gpt-oss-safeguard-20b",
+        stopReason: "error",
+        errorMessage: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      })
+      .mockResolvedValueOnce({
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ decision: "allow", risk: "low", rationale: "read-only" }),
+          },
+        ],
+      });
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          selection: {
+            provider: "openrouter",
+            modelId: "openai/gpt-oss-safeguard-20b",
+            agentDir: "/agent",
+          },
+          model: {
+            provider: "openrouter",
+            id: "openai/gpt-oss-safeguard-20b",
+            api: "openai-completions",
+          },
+          auth: { apiKey: "key", mode: "env" },
+        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await expect(reviewer(input)).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "read-only",
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[0]?.[0]?.options).not.toHaveProperty("reasoning");
+    expect(complete.mock.calls[1]?.[0]?.options).toMatchObject({ reasoning: "minimal" });
+  });
+
+  it("does not retry a reasoning-constraint failure more than once", async () => {
+    const errorMessage = "400 Reasoning is mandatory for this endpoint and cannot be disabled.";
+    const complete = vi.fn(async () => ({
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "openrouter",
+      model: "openai/gpt-oss-safeguard-20b",
+      stopReason: "error",
+      errorMessage,
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          selection: {
+            provider: "openrouter",
+            modelId: "openai/gpt-oss-safeguard-20b",
+            agentDir: "/agent",
+          },
+          model: {
+            provider: "openrouter",
+            id: "openai/gpt-oss-safeguard-20b",
+            api: "openai-completions",
+          },
+          auth: { apiKey: "key", mode: "env" },
+        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await expect(reviewer(input)).resolves.toEqual({
+      decision: "ask",
+      risk: "unknown",
+      rationale: `exec reviewer completion failed: ${errorMessage}`,
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { name: "terminal controls", message: "first\n\u001b[31msecond\u001b[0m\u202e" },
     { name: "operating-system commands", message: "first\u001b]0;hidden title\u0007second" },
