@@ -15,6 +15,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
       "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
       "extensions/codex/src/app-server/run-attempt.continuity-media.test.ts",
+      "extensions/codex/src/app-server/run-attempt.durable-context.test.ts",
       "extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts",
       "extensions/codex/src/app-server/run-attempt.generation-finalization.test.ts",
       "extensions/codex/src/app-server/run-attempt.hooks.test.ts",

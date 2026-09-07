@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  markCronJobWaitingForHeartbeat,
+  resetCronActiveJobs,
+} from "../cron/active-jobs.js";
 import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
@@ -154,6 +159,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
           params.activeCronJobId && params.activeCronJobId !== params.owningCronJobId
             ? markCronJobActive(params.activeCronJobId)
             : undefined;
+        const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
+          owningCronJobMarker,
+          params.owningCronLaneTaskMarker,
+        );
         let result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
         try {
           result = await runHeartbeatOnce({
@@ -163,10 +172,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
             source: params.source,
             intent: params.intent,
             ...(params.source ? { sessionKey } : {}),
-            ...(owningCronJobMarker ? { owningCronJobMarker } : {}),
-            ...(params.owningCronLaneTaskMarker
-              ? { owningCronLaneTaskMarker: params.owningCronLaneTaskMarker }
-              : {}),
             deps: {
               getReplyFromConfig: getReplySpy,
               telegram: sendTelegram,
@@ -184,6 +189,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
             },
           });
         } finally {
+          releaseHeartbeatWait();
           if (params.activeCronJobId && unrelatedCronJobMarker) {
             clearCronJobActive(params.activeCronJobId, unrelatedCronJobMarker);
           }

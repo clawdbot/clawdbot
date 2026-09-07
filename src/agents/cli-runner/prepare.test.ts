@@ -3136,8 +3136,17 @@ describe("prepareCliRunContext", () => {
           },
         });
 
-        expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
-          expect.objectContaining({ requireExplicitMessageTarget: true }),
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            context: expect.objectContaining({ requireExplicitMessageTarget: true }),
+          }),
+        );
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
+          }),
         );
         expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
         expect(first.messageToolPolicyHash).toBeDefined();

@@ -404,7 +404,7 @@ export async function gatherDispatchRequest(
     preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
     allowActiveQueueResolution,
-    agentId: sessionAgentId,
+    agentId: operationSessionStoreEntry.agentId ?? sessionAgentId,
     cfg,
     ctx,
     dispatcher,

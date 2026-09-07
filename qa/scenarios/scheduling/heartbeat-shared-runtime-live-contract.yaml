@@ -3,6 +3,14 @@ scenario:
   id: heartbeat-shared-runtime-live-contract
   surface: cron
   category: automation.heartbeat
+  coverage:
+    primary:
+      - automation.manual-cron-runs
+      - automation.chat-announce-delivery
+    secondary:
+      - automation.heartbeat-scheduling
+      - automation.wake-and-cooldown-handling
+      - gateway.task-and-automation-apis
   gatewayConfigPatch:
     logging:
       consoleStyle: json

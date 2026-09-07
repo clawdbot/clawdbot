@@ -73,10 +73,13 @@ describe("ACP routed delivery custody", () => {
     "keeps generated and confirmed block order through a selective fallback (routed=%s)",
     async (routed) => {
       const controller = new AbortController();
+      const notDispatched = new PlatformMessageNotDispatchedError("offline", { cause: undefined });
+      const attempts: Array<{ kind: string; text?: string }> = [];
       const dispatcher = createReplyDispatcher({
         deliver: async (payload, info) => {
+          attempts.push({ kind: info.kind, text: payload.text });
           if (info.kind === "block" && payload.text === "B") {
-            throw new PlatformMessageNotDispatchedError("offline", { cause: undefined });
+            throw notDispatched;
           }
           return { visibleReplySent: true };
         },
@@ -84,7 +87,12 @@ describe("ACP routed delivery custody", () => {
       if (routed) {
         deliveryMocks.routeReply
           .mockResolvedValueOnce({ ok: true, delivered: true })
-          .mockResolvedValueOnce({ ok: false, delivered: false, queueCustody: "released" })
+          .mockResolvedValueOnce({
+            ok: false,
+            delivered: false,
+            queueCustody: "released",
+            cause: notDispatched,
+          })
           .mockResolvedValueOnce({ ok: true, delivered: true });
       }
       const coordinator = createVisibleChatAcpCoordinator(
@@ -105,6 +113,18 @@ describe("ACP routed delivery custody", () => {
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
 
+      expect(
+        routed
+          ? deliveryMocks.routeReply.mock.calls.map(([call]) => ({
+              kind: call.replyKind,
+              text: call.payload.text,
+            }))
+          : attempts,
+      ).toEqual([
+        { kind: "block", text: "A" },
+        { kind: "block", text: "B" },
+        { kind: "final", text: "B" },
+      ]);
       expect(coordinator.getAccumulatedTranscriptText()).toBe("A\nB");
       controller.abort();
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("A\nB");
@@ -156,7 +176,14 @@ describe("ACP routed delivery custody", () => {
     const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
     await coordinator.deliver("block", { text: "Earlier block." }, { skipTts: true });
     deliveryMocks.routeReply
-      .mockResolvedValueOnce({ ok: false, delivered: false, queueCustody: "released" })
+      .mockResolvedValueOnce({
+        ok: false,
+        delivered: false,
+        queueCustody: "released",
+        cause: new PlatformMessageNotDispatchedError("caption was not dispatched", {
+          cause: undefined,
+        }),
+      })
       .mockResolvedValueOnce({ ok: true, delivered: true });
     await coordinator.deliver(
       "final",
@@ -166,6 +193,24 @@ describe("ACP routed delivery custody", () => {
       }),
       { skipTts: true },
     );
+    expect(
+      deliveryMocks.routeReply.mock.calls.map(([call]) => ({
+        kind: call.replyKind,
+        payload: call.payload,
+      })),
+    ).toEqual([
+      { kind: "block", payload: { text: "Earlier block." } },
+      {
+        kind: "final",
+        payload: {
+          text: "Explicit final.",
+          mediaUrl: "https://example.test/final.ogg",
+          spokenText: "Explicit final.",
+          ttsSupplement: { spokenText: "Explicit final." },
+        },
+      },
+      { kind: "final", payload: { text: "Explicit final." } },
+    ]);
     expect(coordinator.getAccumulatedTranscriptText()).toBe("Explicit final.");
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
       "Explicit final.",
@@ -238,41 +283,64 @@ describe("ACP routed delivery custody", () => {
     },
   );
 
-  it("still sends a text caption after a released, proven-unsent TTS failure", async () => {
-    deliveryMocks.routeReply.mockResolvedValueOnce({
-      ok: false,
-      delivered: false,
-      queueCustody: "released",
-      error: "voice rejected before dispatch",
-    });
-    const dispatcher = createDispatcher();
-    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
-    const payload = markReplyPayloadAsTtsSupplement({
-      text: "hello",
-      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
-      audioAsVoice: true,
-    });
+  it.each([true, false])(
+    "retries released TTS only with no-send proof, provenUnsent=%s",
+    async (provenUnsent) => {
+      deliveryMocks.routeReply.mockResolvedValueOnce({
+        ok: false,
+        delivered: false,
+        queueCustody: "released",
+        error: "voice delivery failed",
+        ...(provenUnsent
+          ? {
+              cause: new PlatformMessageNotDispatchedError("voice rejected before dispatch", {
+                cause: undefined,
+              }),
+            }
+          : {}),
+      });
+      const dispatcher = createDispatcher();
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
+      const payload = markReplyPayloadAsTtsSupplement({
+        text: "hello",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      });
 
-    await expect(coordinator.deliver("final", payload, { skipTts: true })).resolves.toBe(true);
+      await expect(coordinator.deliver("final", payload, { skipTts: true })).resolves.toBe(true);
 
-    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(2);
-    expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ payload }),
-    );
-    expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ payload: { text: "hello" }, replyKind: "final" }),
-    );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
-    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
-    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
-    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
-  });
+      if (!provenUnsent) {
+        expect(deliveryMocks.routeReply).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ payload, replyKind: "final" }),
+        );
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+        expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
+        expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+        expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+        expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+        await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+        return;
+      }
+      expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(2);
+      expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ payload }),
+      );
+      expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ payload: { text: "hello" }, replyKind: "final" }),
+      );
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
+      expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+      expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+      expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+      expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
+    },
+  );
 
   it.each([{ isCommentary: true }, { isReasoning: true }, { isStatusNotice: true }] as const)(
     "keeps pending non-answer custody separate from the answer (%j)",

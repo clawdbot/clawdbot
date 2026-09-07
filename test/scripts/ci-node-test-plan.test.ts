@@ -1753,6 +1753,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
       "src/commands/doctor-heartbeat-scratch-migration.test.ts",
       "src/commands/doctor-heartbeat-session-target.test.ts",
+      "src/commands/doctor-heartbeat-source-archive.test.ts",
       "src/commands/doctor-heartbeat-task-migration.test.ts",
       "src/commands/doctor-session-canonical-keys.memory.test.ts",
       "src/commands/doctor-session-canonical-keys.retention.test.ts",
