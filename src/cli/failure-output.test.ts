@@ -23,6 +23,7 @@ describe("formatCliJsonFailure", () => {
       },
     ];
     const error = new UpdateSchemaRefusalError(databases, "2026.9.2", {
+      targetVersion: "2026.9.4",
       cause: new Error("content migration failed"),
     });
     expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({

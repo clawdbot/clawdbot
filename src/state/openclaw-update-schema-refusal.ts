@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { VERSION } from "../version.js";
 
 export type UpdateSchemaRefusalDatabase = {
   kind: "state" | "agent";
@@ -12,17 +11,18 @@ export type UpdateSchemaRefusalDatabase = {
 /** An unfenced updater needs a manual update when safe publication deferral is unavailable. */
 export class UpdateSchemaRefusalError extends Error {
   readonly code = "update-schema-bump-unfenced";
-  readonly targetVersion = VERSION;
+  readonly targetVersion: string;
   readonly commands: string[];
 
   constructor(
     readonly databases: readonly UpdateSchemaRefusalDatabase[],
     readonly updaterVersion: string,
-    options: { cause?: unknown } = {},
+    options: { targetVersion: string; cause?: unknown },
   ) {
+    const { targetVersion } = options;
     const commands = [
       "openclaw gateway stop",
-      `npm install -g openclaw@${VERSION} --allow-scripts=openclaw`,
+      `npm install -g openclaw@${targetVersion} --allow-scripts=openclaw`,
       "openclaw doctor --fix",
       "openclaw gateway start",
     ];
@@ -41,10 +41,11 @@ export class UpdateSchemaRefusalError extends Error {
         reason +
         " The blocked schema change was not applied. Let the updater restore the previous package, then update manually: " +
         `${commands.join(" && ")}. ` +
-        `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`,
+        `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${targetVersion}; Bun: bun add -g --trust openclaw@${targetVersion}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`,
       options,
     );
     this.name = "UpdateSchemaRefusalError";
+    this.targetVersion = targetVersion;
     this.commands = commands;
   }
 }

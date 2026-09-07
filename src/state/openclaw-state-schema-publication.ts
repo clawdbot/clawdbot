@@ -3,8 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -15,6 +15,11 @@ const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 const TERMINAL_GRACE_MS = 5 * 60_000;
 const ABANDONED_RUN_MS = 30 * 60_000;
 type PublicationDatabase = Pick<DB, "config_machine_state" | "update_runs">;
+// Admission also runs on cached reads. Retain the SQL, never the content version.
+const contentVersionQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>>
+>();
 
 export type StateSchemaPublicationBlocker = {
   runId: string;
@@ -34,13 +39,17 @@ export function readStateSchemaContentVersion(db: DatabaseSync): number {
   if (!tableExists(db, "config_machine_state")) {
     return published;
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<PublicationDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select("value_json")
-      .where("state_key", "=", CONTENT_VERSION_KEY),
-  );
+  let query = contentVersionQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync(db, () =>
+      getNodeSqliteKysely<PublicationDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", CONTENT_VERSION_KEY),
+    );
+    contentVersionQueries.set(db, query);
+  }
+  const row = query().rows[0];
   if (!row) {
     return published;
   }

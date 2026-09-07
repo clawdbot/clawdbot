@@ -515,7 +515,7 @@ export function runStateSchemaMigrationTransaction<T>(
             },
           ],
           blocker.updaterVersion,
-          { cause },
+          { targetVersion: VERSION, cause },
         );
       }
     },

@@ -14,6 +14,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+import { VERSION } from "../version.js";
 
 async function readDrivingUpdater(): Promise<
   { version: string; canDeferStateSchema: boolean } | undefined
@@ -78,7 +79,9 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   if (blockedMigrations.length === 0) {
     return;
   }
-  const error = new UpdateSchemaRefusalError(blockedMigrations, updater.version);
+  const error = new UpdateSchemaRefusalError(blockedMigrations, updater.version, {
+    targetVersion: VERSION,
+  });
   if (options.json) {
     writeRuntimeJson(options.runtime, formatCliJsonFailure(error));
     exitCliAfterOutput(options.runtime, 1);
