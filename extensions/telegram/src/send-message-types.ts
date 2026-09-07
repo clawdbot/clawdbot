@@ -68,7 +68,8 @@ export type TelegramApiCallOpts = Pick<
 export type TelegramThreadedSendOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
 
-export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
+export type TelegramMessageActionOpts = TelegramApiCallOpts &
+  Pick<TelegramSendOpts, "signal" | "assertPlatformSendAuthorized"> & { notify?: boolean };
 
 export type TelegramSendResult = {
   messageId: string;

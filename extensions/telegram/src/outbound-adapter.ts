@@ -396,6 +396,8 @@ export async function sendTelegramPayloadMessages(params: {
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
       gatewayClientScopes: params.baseOpts.gatewayClientScopes,
+      signal: params.baseOpts.signal,
+      assertPlatformSendAuthorized: params.baseOpts.assertPlatformSendAuthorized,
       verbose: false,
     });
     if (!reactionResult.ok) {

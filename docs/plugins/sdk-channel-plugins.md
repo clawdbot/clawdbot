@@ -426,6 +426,19 @@ through the outbound/message adapter. Use `actions.handleAction(...)` for send
 only as a compatibility fallback for payloads that cannot be serialized and
 retried.
 
+For send actions, preserve the trusted context's `onPlatformSendDispatch`,
+`assertDirectAdapterHandoff`, and `skipQueue` when calling
+`sendDurableMessageBatch(...)`. These fields come from the host, not action
+arguments. Await the dispatch callback before each physical send, then call
+the synchronous assertion after preparation or throttling waits and immediately
+before platform I/O. A closed owner must stop every remaining send.
+
+`skipQueue: true` keeps sends tied to a live run out of replayable recovery.
+The separate `deliveryRetryOwner` field controls who handles failed delivery;
+it does not extend the run's authority. Operator sends retain normal durable
+queueing. Do not serialize either authority callback or expose these fields in
+the model-facing action schema.
+
 ### Session conversation grammar
 
 If your platform stores extra scope inside conversation ids, keep that parsing

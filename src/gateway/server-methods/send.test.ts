@@ -1460,6 +1460,7 @@ describe("gateway send mirroring", () => {
       // queue row replayable is what duplicated the send (#124279), and marking
       // a reporting-only caller would strand its row instead (#100979).
       expect(lastDispatchChannelMessageActionCall()?.deliveryRetryOwner).toBe(expected);
+      expect(lastDispatchChannelMessageActionCall()?.skipQueue).toBe(isAgentRuntime);
     },
   );
 
@@ -1529,45 +1530,125 @@ describe("gateway send mirroring", () => {
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
-  it("does not send or queue after delegated authority closes during delivery preflight", async () => {
-    const enteredDelivery = createDeferred<null>();
-    const resumeDelivery = createDeferred<null>();
-    const platformSend = vi.fn();
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
-        enteredDelivery.resolve(null);
-        await resumeDelivery.promise;
-        await params.onPlatformSendDispatch?.();
-        platformSend();
-        return [{ channel: "slack", messageId: "must-not-send" }];
-      },
-    );
-    let authorityActive = true;
-    const context = {
-      ...makeContext(),
-      validateAgentRuntimeApprovalAuthority: () => authorityActive,
-    } as GatewayRequestContext;
-    const request = runSendWithClient(
-      {
-        channel: "slack",
-        to: "channel:C1",
-        message: "must not escape",
-        sessionKey: "agent:main:slack:channel:C1",
-        idempotencyKey: "idem-send-delivery-authority-race",
-      },
-      agentRuntimeClient("agent:main:slack:channel:C1"),
-      context,
-    );
-    await enteredDelivery.promise;
-    authorityActive = false;
-    resumeDelivery.resolve(null);
+  it.each([false, true])(
+    "keeps Telegram plugin action sends bound to their live owner (close during first send: %s)",
+    async (closeDuringFirstSend) => {
+      const { telegramMessageActions } =
+        await import("../../../extensions/telegram/runtime-api.js");
+      const { dispatchChannelMessageAction } = await vi.importActual<
+        typeof import("../../channels/plugins/message-action-dispatch.js")
+      >("../../channels/plugins/message-action-dispatch.js");
+      const plugin = registerMessageActionPlugin({ registrySuffix: "telegram-live-owner" });
+      plugin.actions = telegramMessageActions;
+      mocks.dispatchChannelMessageAction.mockImplementationOnce(dispatchChannelMessageAction);
+      const firstSendStarted = createDeferred<void>();
+      const releaseFirstSend = createDeferred<void>();
+      const physicalSends: string[] = [];
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: {
+          onPlatformSendDispatch?: () => Promise<void>;
+          assertDirectAdapterHandoff?: () => void;
+        }) => {
+          const results = [];
+          for (const messageId of ["album", "last-photo"]) {
+            await params.onPlatformSendDispatch?.();
+            params.assertDirectAdapterHandoff?.();
+            physicalSends.push(messageId);
+            if (messageId === "album") {
+              firstSendStarted.resolve();
+              await releaseFirstSend.promise;
+            }
+            results.push({ channel: "telegram", messageId, chatId: "12345" });
+          }
+          return results;
+        },
+      );
+      let authorityActive = true;
+      const sessionKey = "agent:main:telegram:direct:12345";
+      const request = runMessageActionRequest(
+        {
+          channel: "telegram",
+          action: "send",
+          params: {
+            to: "12345",
+            message: "photos",
+            mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+          },
+          sessionKey,
+          idempotencyKey: `telegram-live-owner-${closeDuringFirstSend}`,
+        },
+        agentRuntimeClient(sessionKey),
+        {
+          ...makeContext(),
+          getRuntimeConfig: () => ({ channels: { telegram: { botToken: "123456:fixture" } } }),
+          validateAgentRuntimeApprovalAuthority: () => authorityActive,
+        },
+      );
+      await firstSendStarted.promise;
+      authorityActive = !closeDuringFirstSend;
+      releaseFirstSend.resolve();
+      const { respond } = await request;
 
-    const { respond } = await request;
-    expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
-    expect(deliveryCall()?.skipQueue).toBe(true);
-    expect(platformSend).not.toHaveBeenCalled();
-  });
+      expect(physicalSends).toEqual(closeDuringFirstSend ? ["album"] : ["album", "last-photo"]);
+      expect(deliveryCall()?.skipQueue).toBe(true);
+      expect(firstRespondCall(respond)[0]).toBe(!closeDuringFirstSend);
+      if (closeDuringFirstSend) {
+        expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      }
+    },
+  );
+
+  it.each(["dispatch", "handoff"])(
+    "does not send or queue after delegated authority closes during delivery preflight (%s)",
+    async (boundary) => {
+      const enteredDelivery = createDeferred<null>();
+      const resumeDelivery = createDeferred<null>();
+      const platformSend = vi.fn();
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: {
+          onPlatformSendDispatch?: () => Promise<void>;
+          assertDirectAdapterHandoff?: () => void;
+        }) => {
+          if (boundary === "handoff") {
+            await params.onPlatformSendDispatch?.();
+          }
+          enteredDelivery.resolve(null);
+          await resumeDelivery.promise;
+          if (boundary === "dispatch") {
+            await params.onPlatformSendDispatch?.();
+          }
+          params.assertDirectAdapterHandoff?.();
+          platformSend();
+          return [{ channel: "slack", messageId: "must-not-send" }];
+        },
+      );
+      let authorityActive = true;
+      const context = {
+        ...makeContext(),
+        validateAgentRuntimeApprovalAuthority: () => authorityActive,
+      } as GatewayRequestContext;
+      const request = runSendWithClient(
+        {
+          channel: "slack",
+          to: "channel:C1",
+          message: "must not escape",
+          sessionKey: "agent:main:slack:channel:C1",
+          idempotencyKey: "idem-send-delivery-authority-race",
+        },
+        agentRuntimeClient("agent:main:slack:channel:C1"),
+        context,
+      );
+      await enteredDelivery.promise;
+      authorityActive = false;
+      resumeDelivery.resolve(null);
+
+      const { respond } = await request;
+      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expect(deliveryCall()?.skipQueue).toBe(true);
+      expect(platformSend).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not send after turn capability closes while delegated authority remains active", async () => {
     const enteredDelivery = createDeferred<null>();
@@ -4591,39 +4672,47 @@ describe("gateway send mirroring", () => {
       expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     });
 
-    it("fences canonical outbound send when runtime authority closes during preparation", async () => {
-      let authorityActive = true;
-      const platformSend = vi.fn();
-      mocks.deliverOutboundPayloads.mockImplementationOnce(
-        async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
-          authorityActive = false;
-          await params.onPlatformSendDispatch?.();
-          platformSend();
-          return [{ channel: "twitch", messageId: "must-not-send" }];
-        },
-      );
-      const sessionKey = "agent:main:twitch:group:explicit-room";
-      const { respond } = await runMessageActionRequest(
-        {
-          channel: "twitch",
-          action: "send",
-          params: { to: "explicit-room", message: "must not escape" },
-          sessionKey,
-          idempotencyKey: "canonical-send-authority-race",
-        },
-        agentRuntimeClient(sessionKey),
-        {
-          ...makeContext(),
-          validateAgentRuntimeApprovalAuthority: () => authorityActive,
-        } as GatewayRequestContext,
-      );
+    it.each(["dispatch", "handoff"])(
+      "fences canonical outbound send at %s when runtime authority closes",
+      async (boundary) => {
+        let authorityActive = true;
+        const platformSend = vi.fn();
+        mocks.deliverOutboundPayloads.mockImplementationOnce(
+          async (params: {
+            onPlatformSendDispatch?: () => Promise<void>;
+            assertDirectAdapterHandoff?: () => void;
+          }) => {
+            authorityActive = boundary !== "dispatch";
+            await params.onPlatformSendDispatch?.();
+            authorityActive = false;
+            params.assertDirectAdapterHandoff?.();
+            platformSend();
+            return [{ channel: "twitch", messageId: "must-not-send" }];
+          },
+        );
+        const sessionKey = "agent:main:twitch:group:explicit-room";
+        const { respond } = await runMessageActionRequest(
+          {
+            channel: "twitch",
+            action: "send",
+            params: { to: "explicit-room", message: "must not escape" },
+            sessionKey,
+            idempotencyKey: "canonical-send-authority-race",
+          },
+          agentRuntimeClient(sessionKey),
+          {
+            ...makeContext(),
+            validateAgentRuntimeApprovalAuthority: () => authorityActive,
+          } as GatewayRequestContext,
+        );
 
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
-      expect(deliveryCall()?.skipQueue).toBe(true);
-      expect(platformSend).not.toHaveBeenCalled();
-      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    });
+        expect(firstRespondCall(respond)[0]).toBe(false);
+        expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+        expect(deliveryCall()?.skipQueue).toBe(true);
+        expect(platformSend).not.toHaveBeenCalled();
+        expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("falls back once to canonical outbound poll delivery when plugin actions decline", async () => {

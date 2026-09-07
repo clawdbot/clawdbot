@@ -300,12 +300,16 @@ describe("telegramOutbound", () => {
 
   it("applies reaction-only payloads without sending empty Telegram text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    const controller = new AbortController();
+    const assertDirectAdapterHandoff = vi.fn();
 
     const result = await telegramOutbound.sendPayload!({
       cfg: {} as never,
       to: "12345",
       text: "",
       replyToId: "777",
+      signal: controller.signal,
+      assertDirectAdapterHandoff,
       payload: {
         channelData: {
           telegram: {
@@ -321,6 +325,8 @@ describe("telegramOutbound", () => {
       verbose: false,
       accountId: undefined,
       gatewayClientScopes: undefined,
+      signal: controller.signal,
+      assertPlatformSendAuthorized: assertDirectAdapterHandoff,
     });
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
     expect(result).toEqual({
