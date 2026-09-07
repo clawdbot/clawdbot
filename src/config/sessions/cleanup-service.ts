@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { resolveCronSessionRetentionMs } from "../../cron/session-retention.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
@@ -13,6 +14,7 @@ import {
   type SessionCleanupSummary,
   type SessionsCleanupFailure,
 } from "./cleanup-result.js";
+import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
 import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
@@ -389,6 +391,11 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
+  const tombstoneRemnants = await sweepTombstonedCronRunRemnantsForStore({
+    target: params.target,
+    retentionMs: resolveCronSessionRetentionMs(params.cfg.cron),
+    dryRun: true,
+  });
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -416,6 +423,7 @@ async function previewStoreCleanup(params: {
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
+    (tombstoneRemnants?.candidates ?? 0) > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
     (diskBudget?.removedFiles ?? 0) > 0 ||
     diskBudgetPreview.wouldMutate;
@@ -435,6 +443,7 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
     unreferencedArtifacts,
+    tombstoneRemnants,
     diskBudget,
     wouldMutate,
   };
@@ -567,6 +576,14 @@ export async function runSessionsCleanup(params: {
                 freedBytes: 0,
                 olderThanMs: maintenance.pruneAfterMs,
               });
+        const appliedTombstoneRemnants =
+          mode === "warn"
+            ? null
+            : await sweepTombstonedCronRunRemnantsForStore({
+                target,
+                retentionMs: resolveCronSessionRetentionMs(cfg.cron),
+                dryRun: false,
+              });
         const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
           agentId: target.agentId,
           storePath: target.storePath,
@@ -601,12 +618,14 @@ export async function runSessionsCleanup(params: {
           pruned: lifecycleResult.pruned,
           capped: lifecycleResult.capped,
           unreferencedArtifacts,
+          tombstoneRemnants: appliedTombstoneRemnants,
           diskBudget: appliedDiskBudget,
           wouldMutate:
             lifecycleResult.removedEntries > 0 ||
             lifecycleResult.archived > 0 ||
             maintenanceRemovedEntries > 0 ||
             unreferencedArtifacts.removedFiles > 0 ||
+            (appliedTombstoneRemnants?.removedNodes ?? 0) > 0 ||
             (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
             (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
             // Checkpoint/incremental-vacuum reclamation mutates the store

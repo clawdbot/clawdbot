@@ -1,6 +1,5 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -17,8 +16,7 @@ import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-ac
 import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
-
-const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
+import { resolveCronSessionRetentionMs } from "./session-retention.js";
 
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
@@ -27,30 +25,6 @@ const lastSweepAtMsByTarget = new Map<string, number>();
 
 function reaperTargetKey(agentId: string, storePath: string): string {
   return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
-}
-
-/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
-function resolveRetentionMs(cronConfig?: CronConfig): number | null {
-  if (cronConfig?.sessionRetention === false) {
-    return null; // pruning disabled
-  }
-  const raw = cronConfig?.sessionRetention;
-  if (typeof raw === "string" && raw.trim()) {
-    try {
-      const ms = parseDurationMs(raw.trim(), { defaultUnit: "h" });
-      // A zero retention ("0h") is a disable signal, not "prune everything":
-      // cutoff would equal now and the next sweep would delete every cron run
-      // session. Negative durations never get here (the parser rejects them);
-      // the <= 0 check stays defensive.
-      if (ms <= 0) {
-        return null;
-      }
-      return ms;
-    } catch {
-      return DEFAULT_RETENTION_MS;
-    }
-  }
-  return DEFAULT_RETENTION_MS;
 }
 
 type ReaperResult = {
@@ -106,7 +80,7 @@ export async function sweepCronRunSessions(params: {
   nowMs?: number;
   log: Logger;
 }): Promise<ReaperResult> {
-  const retentionMs = resolveRetentionMs(params.cronConfig);
+  const retentionMs = resolveCronSessionRetentionMs(params.cronConfig);
   if (retentionMs === null) {
     return { swept: false, pruned: 0 };
   }

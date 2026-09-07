@@ -21,6 +21,7 @@ describe("serializeSessionCleanupResult", () => {
           modelRunPruned: 0,
           pruned: 0,
           capped: 0,
+          tombstoneRemnants: null,
           unreferencedArtifacts: {
             scannedFiles: 0,
             removedFiles: 0,

@@ -193,6 +193,11 @@ function renderStoreDryRunPlan(params: {
       `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
     );
   }
+  if (params.summary.tombstoneRemnants?.candidates) {
+    params.runtime.log(
+      `Would sweep tombstoned cron-run remnants: ${params.summary.tombstoneRemnants.candidates}`,
+    );
+  }
   if (params.summary.diskBudget) {
     params.runtime.log(
       `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
@@ -251,6 +256,11 @@ function renderAppliedSummaries(params: {
     if (summary.unreferencedArtifacts?.removedFiles) {
       params.runtime.log(
         `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,
+      );
+    }
+    if (summary.tombstoneRemnants?.removedNodes) {
+      params.runtime.log(
+        `Swept tombstoned cron-run remnants: ${summary.tombstoneRemnants.removedNodes}`,
       );
     }
   }

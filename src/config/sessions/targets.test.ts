@@ -300,8 +300,10 @@ describe("resolveSessionStoreTargets", () => {
         agents: { entries: { ops: { default: true }, other: {} } },
       };
       const diagnostics: string[] = [];
+      // Both configured claimants share this physical database, so the surviving
+      // target records them for multi-agent sweeps.
       expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
-        { agentId: "ops", storePath },
+        { agentId: "ops", storePath, sharedOwnerAgentIds: ["ops", "other"] },
       ]);
       expect(diagnostics).toEqual([
         `Session store target collision at ${storePath}: owner "main" selected by database-path; ignored owner(s): "other".`,
@@ -460,7 +462,7 @@ describe("resolveSessionStoreTargets", () => {
       };
 
       expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env })).toEqual([
-        { agentId: "main", storePath },
+        { agentId: "main", storePath, sharedOwnerAgentIds: ["main", "ops"] },
       ]);
     });
   });

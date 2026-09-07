@@ -33,6 +33,7 @@ test.each([
       pruned: 0,
       capped: 0,
       unreferencedArtifacts: { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs: 0 },
+      tombstoneRemnants: null,
       diskBudget: null,
       wouldMutate: true,
       applied: true,

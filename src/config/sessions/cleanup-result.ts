@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SessionTombstoneSweepResult } from "./cleanup-tombstones.js";
 import type {
   SessionDiskBudgetSweepResult,
   SessionUnreferencedArtifactSweepResult,
@@ -23,6 +24,7 @@ export type SessionCleanupSummary = {
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
+  tombstoneRemnants: SessionTombstoneSweepResult | null;
   diskBudget: SessionDiskBudgetSweepResult | null;
   wouldMutate: boolean;
   applied?: true;

@@ -74,7 +74,9 @@ it("projects shared rows under their logical owner while retaining the physical 
 
     for (const configuredAgentsOnly of [false, true]) {
       const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
-      expect(combined.durableTargets).toEqual([{ agentId: "main", storePath }]);
+      expect(combined.durableTargets).toEqual([
+        { agentId: "main", storePath, sharedOwnerAgentIds: ["main", "ops", "worker"] },
+      ]);
       expect(
         [...combined.targetsBySessionKey.values()].map(({ storeTarget }) => storeTarget),
       ).toEqual([
