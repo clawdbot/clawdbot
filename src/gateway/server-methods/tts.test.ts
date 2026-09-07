@@ -2,9 +2,13 @@
  * Tests for text-to-speech gateway methods and provider error envelopes.
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
+import { MAX_AUDIO_BYTES } from "@openclaw/media-core/constants";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 
@@ -51,6 +55,8 @@ const mocks = vi.hoisted(() => ({
     voiceCompatible: false,
   })),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig:
@@ -369,6 +375,68 @@ describe("ttsHandlers", () => {
       message: 'Error: Unknown TTS provider "bad".',
     });
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
+  });
+
+  it("returns tts.convert audio inline only when requested", async () => {
+    const audio = Buffer.from("gateway-inline-tts-audio");
+    const audioPath = path.join(tempDirs.make("openclaw-tts-inline-"), "speech.mp3");
+    await fs.writeFile(audioPath, audio);
+    mocks.textToSpeech.mockResolvedValueOnce({
+      success: true,
+      audioPath,
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await expectDefined(
+      ttsHandlers["tts.convert"],
+      'ttsHandlers["tts.convert"] test invariant',
+    )({
+      params: { text: "hello", includeAudio: true },
+      respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      audioPath,
+      audioBase64: audio.toString("base64"),
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
+  });
+
+  it("rejects tts.convert inline audio above the transfer limit", async () => {
+    const audioPath = path.join(tempDirs.make("openclaw-tts-inline-limit-"), "speech.mp3");
+    const handle = await fs.open(audioPath, "w");
+    await handle.truncate(MAX_AUDIO_BYTES + 1);
+    await handle.close();
+    mocks.textToSpeech.mockResolvedValueOnce({
+      success: true,
+      audioPath,
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await expectDefined(
+      ttsHandlers["tts.convert"],
+      'ttsHandlers["tts.convert"] test invariant',
+    )({
+      params: { text: "hello", includeAudio: true },
+      respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
+    } as never);
+
+    expectGatewayErrorResponse(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: `Error: TTS audio exceeds the ${MAX_AUDIO_BYTES} byte inline transfer limit.`,
+    });
   });
 
   it("tts.speak returns the synthesized clip inline with provider metadata", async () => {

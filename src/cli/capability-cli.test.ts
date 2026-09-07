@@ -3649,13 +3649,68 @@ describe("capability cli", () => {
     expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
   });
 
-  it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
+  it("writes remote gateway TTS output from inline audio", async () => {
     const gatewayConnection = await import("../gateway/connection-details.js");
     vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
       url: "wss://gateway.example.com",
       urlSource: "config gateway.remote.url",
       message: "Gateway target: wss://gateway.example.com",
     });
+    const audio = Buffer.from("remote-tts-audio");
+    mocks.callGateway.mockResolvedValueOnce({
+      audioPath: "/tmp/gateway-tts.mp3",
+      audioBase64: audio.toString("base64"),
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    } as never);
+    const outputPath = path.join(tempDirs.make("openclaw-remote-tts-output-"), "speech.mp3");
+
+    await runCapability(
+      "tts",
+      "convert",
+      "--gateway",
+      "--text",
+      "hello",
+      "--output",
+      outputPath,
+      "--json",
+    );
+
+    expect(firstGatewayCall()?.params?.includeAudio).toBe(true);
+    expect(await fs.readFile(outputPath)).toEqual(audio);
+    expect(firstJsonOutput()?.outputs).toEqual([
+      { path: outputPath, format: "mp3", voiceCompatible: false },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "missing",
+      audioBase64: undefined,
+      message: "did not return inline TTS audio; update the Gateway",
+    },
+    {
+      name: "malformed",
+      audioBase64: "not-base64!",
+      message: "returned invalid inline TTS audio",
+    },
+  ])("preserves remote TTS output when inline audio is $name", async ({ audioBase64, message }) => {
+    const gatewayConnection = await import("../gateway/connection-details.js");
+    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
+      url: "wss://gateway.example.com",
+      urlSource: "config gateway.remote.url",
+      message: "Gateway target: wss://gateway.example.com",
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      audioPath: "/tmp/gateway-tts.mp3",
+      audioBase64,
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    } as never);
+    const outputPath = path.join(tempDirs.make("openclaw-remote-tts-invalid-"), "speech.mp3");
+    await fs.writeFile(outputPath, "existing-speech");
 
     await expect(
       runCapability(
@@ -3665,12 +3720,13 @@ describe("capability cli", () => {
         "--text",
         "hello",
         "--output",
-        "hello.mp3",
+        outputPath,
         "--json",
       ),
     ).rejects.toThrow("exit 1");
 
-    expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+    expectRuntimeErrorContains(message);
+    expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
   });
 
   it.each(["local", "gateway"] as const)(
@@ -3729,6 +3785,9 @@ describe("capability cli", () => {
         ).rejects.toThrow("exit 1");
 
         expectRuntimeErrorContains("injected TTS copy failure");
+        if (transport === "gateway") {
+          expect(firstGatewayCall()?.params?.includeAudio).toBeUndefined();
+        }
         expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
         expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
         if (process.platform !== "win32") {

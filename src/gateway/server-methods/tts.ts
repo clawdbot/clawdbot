@@ -1,4 +1,6 @@
 // Gateway RPC handlers for text-to-speech status, preferences, and conversion.
+import fs from "node:fs/promises";
+import { MAX_AUDIO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -6,6 +8,7 @@ import {
   validateTtsSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 import {
   assertSecretOwnerAvailable,
   SecretSurfaceUnavailableError,
@@ -40,6 +43,32 @@ function yieldBeforeTtsStatusSetup(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+async function readInlineTtsAudio(audioPath: string): Promise<string> {
+  const handle = await fs.open(audioPath, "r");
+  try {
+    // Base64 expansion keeps the default audio cap below the 25 MiB Gateway
+    // frame ceiling while leaving room for the response envelope.
+    let audio: Buffer | null = null;
+    try {
+      audio = await readFileDescriptorBounded(handle.fd, MAX_AUDIO_BYTES);
+    } catch (error) {
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+    }
+    if (audio === null) {
+      // Keep filesystem implementation details out of the remote error envelope.
+      throw new Error(`TTS audio exceeds the ${MAX_AUDIO_BYTES} byte inline transfer limit.`);
+    }
+    if (audio.length === 0) {
+      throw new Error("TTS audio output is empty");
+    }
+    return audio.toString("base64");
+  } finally {
+    await handle.close();
+  }
 }
 
 function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
@@ -140,6 +169,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
       const voiceId = normalizeOptionalString(params.voiceId);
+      const includeAudio = params.includeAudio === true;
       let overrides;
       try {
         // Explicit provider/model/voice requests are validated before synthesis
@@ -162,8 +192,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
         disableFallback: Boolean(overrides.provider || modelId || voiceId),
       });
       if (result.success && result.audioPath) {
+        const audioBase64 = includeAudio ? await readInlineTtsAudio(result.audioPath) : undefined;
         respond(true, {
           audioPath: result.audioPath,
+          ...(audioBase64 ? { audioBase64 } : {}),
           provider: result.provider,
           outputFormat: result.outputFormat,
           voiceCompatible: result.voiceCompatible,
