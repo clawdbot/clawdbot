@@ -68,6 +68,15 @@ Reject a pending device pairing request.
 openclaw devices reject <requestId>
 ```
 
+### `openclaw devices join-code`
+
+Mint a single-use node onboarding URL.
+
+```bash
+openclaw devices join-code
+openclaw devices join-code --json
+```
+
 ### `openclaw devices remove <deviceId>`
 
 Remove one paired device entry.

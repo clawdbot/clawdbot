@@ -88,6 +88,7 @@ type SessionChangedEventInfo = {
   runId: string | null;
   clientRunId: string | null;
   hasActiveRun: boolean | null;
+  activeRunIds?: string[] | null;
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
@@ -321,6 +322,7 @@ function recordValue(record: Record<string, unknown>, key: string): unknown {
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
   return value === "running" ||
+    value === "queued" ||
     value === "done" ||
     value === "failed" ||
     value === "killed" ||
@@ -359,6 +361,9 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
         : null;
   const updatedAt = recordValue(source, "updatedAt");
   const thinkingLevel = recordValue(source, "thinkingLevel");
+  const activeRunIds = Object.hasOwn(source, "activeRunIds")
+    ? recordValue(source, "activeRunIds")
+    : recordValue(event, "activeRunIds");
   return [
     {
       key,
@@ -382,6 +387,11 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
         stringValue(recordValue(source, "clientRunId")) ??
         null,
       hasActiveRun,
+      activeRunIds:
+        activeRunIds === null ||
+        (Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string"))
+          ? activeRunIds
+          : undefined,
       status:
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),
