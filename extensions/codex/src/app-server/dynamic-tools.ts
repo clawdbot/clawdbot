@@ -1391,9 +1391,15 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 function convertToolContents(
-  content: Array<TextContent | ImageContent>,
+  rawContent: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  // Redact each complete text block before budgeting so truncation cannot leave an
+  // unredactable credential fragment. Image blocks keep their bytes; the storage-oriented
+  // whole-result branch of sanitizeToolResult would drop them.
+  const content = rawContent.map((item) =>
+    item.type === "text" ? { ...item, text: sanitizeToolResult(item.text) } : item,
+  );
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
