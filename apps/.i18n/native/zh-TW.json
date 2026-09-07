@@ -347,6 +347,7 @@
     "native.android.3881e845a4e699c7": "手機可連線至 Gateway",
     "native.android.38b7fdfac0cbc42d": "連線至您的 Gateway，即可檢視機器螢幕。",
     "native.android.38d6822dd682b6d0": "重新命名",
+    "native.android.38f8652367c9ef99": "無法重新整理模型。先前的選擇維持不變。請點選「重新整理」以重試。",
     "native.android.394e03a10a4c572d": "連線至 Gateway 以檢視提供者",
     "native.android.39785345ba2c3bff": "未知",
     "native.android.3981fcbf350402fd": "技能工作坊的提案操作需要 operator.admin 權限範圍。",
