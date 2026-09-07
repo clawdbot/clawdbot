@@ -32,6 +32,7 @@ extension OpenClawChatViewModel {
         projected.hasActiveRun = nil
         projected.activeRunIds = nil
         projected.hasActiveSubagentRun = nil
+        projected.hasActiveSubagentDescendantRun = nil
         if wasActive {
             projected.startedAt = nil
             projected.status = nil

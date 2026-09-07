@@ -178,6 +178,7 @@ private func lifecycleSessionEntry(
     status: String,
     hasActiveRun: Bool,
     activeRunIds: [String]?,
+    hasActiveSubagentDescendantRun: Bool? = nil,
     startedAt: Double? = nil,
     endedAt: Double? = nil,
     runtimeMs: Double? = nil,
@@ -206,6 +207,7 @@ private func lifecycleSessionEntry(
         status: status,
         hasActiveRun: hasActiveRun,
         activeRunIds: activeRunIds,
+        hasActiveSubagentDescendantRun: hasActiveSubagentDescendantRun,
         startedAt: startedAt,
         endedAt: endedAt,
         runtimeMs: runtimeMs)
@@ -3432,6 +3434,41 @@ struct ChatViewModelTests {
         #expect(viewModel.pendingRunCount == 0)
         #expect(viewModel.streamingAssistantText == nil)
         #expect(viewModel.canSend)
+    }
+
+    @Test @MainActor func `lifecycle snapshots merge descendant activity with presence semantics`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var existing = sessionEntry(key: "main", updatedAt: 1)
+        existing.hasActiveSubagentDescendantRun = true
+        viewModel.sessions = [existing]
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            phase: "end",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 2,
+                status: "done",
+                hasActiveRun: false,
+                activeRunIds: [],
+                hasActiveSubagentDescendantRun: false))))
+
+        #expect(viewModel.currentSessionEntry()?.hasActiveSubagentDescendantRun == false)
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            phase: "start",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 3,
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: ["run-next"],
+                hasActiveSubagentDescendantRun: true))))
+
+        #expect(viewModel.currentSessionEntry()?.hasActiveSubagentDescendantRun == true)
     }
 
     @Test @MainActor func `terminal lifecycle retires matching pending run despite stale snapshot`() {

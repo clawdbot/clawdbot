@@ -132,6 +132,8 @@ export function buildGatewaySessionEventFields(params: {
     lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
+    // Explicit false keeps descendant-only archive eligibility from going stale.
+    hasActiveSubagentDescendantRun: sessionRow.hasActiveSubagentDescendantRun ?? false,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,

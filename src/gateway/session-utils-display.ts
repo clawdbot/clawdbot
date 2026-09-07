@@ -81,9 +81,9 @@ export function projectGatewaySessionRunState(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
-  const hasActiveSubagentRun =
-    liveSubagentRunActive ||
-    (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
+  const activeSubagentDescendantCount =
+    rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key);
+  const hasActiveSubagentRun = liveSubagentRunActive || activeSubagentDescendantCount > 0;
   const persistedSessionStatus = entry?.status;
   const persistedSessionEndedAt = entry?.endedAt;
   const persistedSessionStartedAt = entry?.startedAt;
@@ -130,11 +130,20 @@ export function projectGatewaySessionRunState(params: {
     : undefined;
   const fields: Pick<
     GatewaySessionRow,
-    "status" | "subagentRunState" | "hasActiveSubagentRun" | "startedAt" | "endedAt" | "runtimeMs"
+    | "status"
+    | "subagentRunState"
+    | "hasActiveSubagentRun"
+    | "hasActiveSubagentDescendantRun"
+    | "startedAt"
+    | "endedAt"
+    | "runtimeMs"
   > = {
     status: subagentRun ? subagentStatus : entry?.status,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
+    // Emit an explicit false so clients can distinguish a current Gateway with
+    // no live descendants from a legacy Gateway that does not expose this fact.
+    hasActiveSubagentDescendantRun: activeSubagentDescendantCount > 0,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,

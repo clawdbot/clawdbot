@@ -1295,9 +1295,13 @@ describe("session list subagent metadata", () => {
     const main = result.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toEqual([parentKey]);
     expect(main?.hasActiveSubagentRun).toBe(true);
-    expect(result.sessions.find((session) => session.key === parentKey)?.hasActiveSubagentRun).toBe(
-      true,
-    );
+    expect(main?.hasActiveSubagentDescendantRun).toBe(true);
+    const parent = result.sessions.find((session) => session.key === parentKey);
+    expect(parent?.hasActiveSubagentRun).toBe(true);
+    expect(parent?.hasActiveSubagentDescendantRun).toBe(true);
+    expect(
+      result.sessions.find((session) => session.key === childKey)?.hasActiveSubagentDescendantRun,
+    ).toBe(false);
   });
 
   test("falls back to persisted subagent timing after run archival", async () => {
