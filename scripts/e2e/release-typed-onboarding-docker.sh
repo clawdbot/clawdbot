@@ -3,12 +3,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
-openclaw_resolve_frozen_core_harness_capabilities "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"
+SCENARIO_PATH="$ROOT_DIR/scripts/e2e/lib/release-typed-onboarding/scenario.sh"
+if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
+  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/release-typed-onboarding/scenario.sh; then
+  # A frozen package is qualified by its own shipped onboarding journey. Do not
+  # overlay later companion-plugin setup onto the selected package's config.
+  SCENARIO_PATH="$TARGET_ROOT_DIR/scripts/e2e/lib/release-typed-onboarding/scenario.sh"
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-typed-onboarding-e2e" OPENCLAW_RELEASE_TYPED_ONBOARDING_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_TYPED_ONBOARDING_E2E_SKIP_BUILD:-0}"
@@ -50,6 +58,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE=$OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
   -i "$IMAGE_NAME" bash scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
   docker_e2e_print_log "$run_log"
   exit 1
