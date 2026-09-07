@@ -10,9 +10,12 @@ export function resolveTelegramMediaMaxBytes(params: {
   mediaMaxMb?: number;
   fallbackMediaMaxMb?: number;
 }): number {
-  const mediaMaxMb = [params.mediaMaxMb, params.fallbackMediaMaxMb].find(
-    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
-  );
+  const mediaMaxMb =
+    typeof params.mediaMaxMb === "number" &&
+    Number.isFinite(params.mediaMaxMb) &&
+    params.mediaMaxMb >= 0
+      ? params.mediaMaxMb
+      : params.fallbackMediaMaxMb;
   return (
     resolveChannelMediaMaxBytes({
       cfg: params.cfg,

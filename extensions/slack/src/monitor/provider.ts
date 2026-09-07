@@ -404,10 +404,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       cfg,
       accountId: account.accountId,
       resolveChannelLimitMb: () =>
-        [opts.mediaMaxMb, slackCfg.mediaMaxMb].find(
-          (value): value is number =>
-            typeof value === "number" && Number.isFinite(value) && value > 0,
-        ),
+        typeof opts.mediaMaxMb === "number" &&
+        Number.isFinite(opts.mediaMaxMb) &&
+        opts.mediaMaxMb >= 0
+          ? opts.mediaMaxMb
+          : slackCfg.mediaMaxMb,
     }) ?? 20 * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);

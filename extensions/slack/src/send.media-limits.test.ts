@@ -115,7 +115,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: async (request: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
       expect(request.url).toBe("https://files.slack.com/upload");
-      provider.uploaded.push(Buffer.from(request.init?.body as Uint8Array));
+      const uploaded = await new Response(request.init?.body).arrayBuffer();
+      provider.uploaded.push(Buffer.from(uploaded));
       return { response: new Response(null, { status: 200 }), release: async () => {} };
     },
   };
@@ -208,6 +209,7 @@ describe("Slack configured limits on real local files", () => {
       agentMediaMaxMb: 0.1 / (1024 * 1024),
       accepted: false,
     },
+    { mediaMaxMb: 30.1, override: 0, agentMediaMaxMb: undefined, accepted: false },
     { mediaMaxMb: undefined, override: undefined, agentMediaMaxMb: undefined, accepted: true },
   ])(
     "carries the monitor-selected limit ($mediaMaxMb, $override, $agentMediaMaxMb) to an Enterprise upload",
