@@ -8,6 +8,7 @@ import {
   resolveGatewayProfileSuffix,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
+  resolveGatewaySystemdServiceNameCandidates,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 
@@ -33,6 +34,23 @@ describe("resolveGatewaySystemdServiceName", () => {
   it("returns profile-specific service name when profile is set", () => {
     const result = resolveGatewaySystemdServiceName("dev");
     expect(result).toBe("openclaw-gateway-dev");
+  });
+});
+
+describe("resolveGatewaySystemdServiceNameCandidates", () => {
+  it("includes current default and legacy bare openclaw", () => {
+    expect(resolveGatewaySystemdServiceNameCandidates()).toEqual(["openclaw-gateway", "openclaw"]);
+    expect(resolveGatewaySystemdServiceNameCandidates("default")).toEqual([
+      "openclaw-gateway",
+      "openclaw",
+    ]);
+  });
+
+  it("includes current and legacy names for a named profile", () => {
+    expect(resolveGatewaySystemdServiceNameCandidates("lisa")).toEqual([
+      "openclaw-gateway-lisa",
+      "openclaw-lisa",
+    ]);
   });
 });
 

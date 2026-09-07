@@ -985,6 +985,129 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
   });
 
+  it("findInstalledSystemdGatewayScope refuses marker-owned units from another profile", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("default profile does not adopt an unrelated named-profile marker unit", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "default",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("default profile without OPENCLAW_PROFILE also refuses unrelated marker units", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("default profile does not adopt arbitrary custom marker units without override", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "my-custom-gateway.service",
+        detail: "unit: /etc/systemd/system/my-custom-gateway.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope accepts legacy openclaw-<profile> system unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-lisa.service" });
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+    });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-lisa.service",
+      unitPath: "/etc/systemd/system/openclaw-lisa.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope honors OPENCLAW_SYSTEMD_UNIT for Node unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-node.service" });
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+    });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-node.service",
+      unitPath: "/etc/systemd/system/openclaw-node.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope honors OPENCLAW_SYSTEMD_UNIT for custom user unit", async () => {
+    mockUnitFileLayout({ user: true, system: false });
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "lisa",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-lisa",
+    });
+    expect(result?.scope).toBe("user");
+    expect(result?.unitName).toBe("openclaw-gateway-lisa.service");
+    expect(result?.unitPath).toContain("/.config/systemd/user/openclaw-gateway-lisa.service");
+  });
+
+  it("explicit OPENCLAW_SYSTEMD_UNIT does not adopt an unrelated profile unit", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-darlene.service",
+        detail: "unit: /etc/systemd/system/openclaw-darlene.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+    });
+    expect(result).toBeNull();
+  });
+
   it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([

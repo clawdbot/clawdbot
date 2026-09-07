@@ -6,7 +6,10 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { resolveGatewaySystemdServiceName } from "./constants.js";
+import {
+  resolveGatewaySystemdServiceName,
+  resolveGatewaySystemdServiceNameCandidates,
+} from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import type {
@@ -39,6 +42,21 @@ export function resolveSystemdServiceName(env: GatewayServiceEnv): string {
     return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
   }
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+}
+
+/**
+ * Unit-base names to probe for an installed gateway (or node/custom) service.
+ *
+ * When OPENCLAW_SYSTEMD_UNIT is set, only that explicit identity is used so
+ * Node (`openclaw-node`) and operator-custom units keep working. Without an
+ * override, use gateway profile candidates (current + legacy openclaw-<profile>).
+ */
+export function resolveInstalledSystemdServiceNameCandidates(env: GatewayServiceEnv): string[] {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return [override.endsWith(".service") ? override.slice(0, -".service".length) : override];
+  }
+  return resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE);
 }
 
 export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
