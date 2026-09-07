@@ -177,6 +177,10 @@ function hasMessageSpecificFilters(options: AuditListCommandOptions): boolean {
   );
 }
 
+function hasActivityOnlyFilters(options: AuditListCommandOptions): boolean {
+  return options.kind === "skill_selection" || options.status === "observed";
+}
+
 function validateAuditFilter(
   value: string | undefined,
   flag: string,
@@ -249,6 +253,12 @@ async function queryAuditActivity(
     if (hasMessageSpecificFilters(options)) {
       throw new Error(
         "The connected Gateway does not support message audit filters. Upgrade the Gateway to use --kind message, --direction, or --channel.",
+        { cause: error },
+      );
+    }
+    if (hasActivityOnlyFilters(options)) {
+      throw new Error(
+        "The connected Gateway does not support skill-selection audit records. Upgrade the Gateway to use --kind skill_selection or --status observed.",
         { cause: error },
       );
     }

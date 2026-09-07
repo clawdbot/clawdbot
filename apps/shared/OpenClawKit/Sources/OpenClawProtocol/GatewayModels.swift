@@ -25588,9 +25588,172 @@ public enum SessionMoveTarget: Codable, Sendable {
     }
 }
 
+public struct AuditActivityEventV1SkillSelection: Codable, Sendable {
+    public let eventtype: String
+    public let schemaversion: Int
+    public let eventid: String
+    public let sequence: Int
+    public let sourcesequence: Int
+    public let occurredat: Int
+    public let redaction: String
+    public let actor: [String: AnyCodable]
+    public let agentid: String
+    public let sessionkey: String?
+    public let sessionid: String?
+    public let runid: String
+    public let kind: String
+    public let action: String
+    public let status: String
+    public let selectedskill: String
+
+    public init(
+        schemaversion: Int,
+        eventid: String,
+        sequence: Int,
+        sourcesequence: Int,
+        occurredat: Int,
+        actor: [String: AnyCodable],
+        agentid: String,
+        sessionkey: String? = nil,
+        sessionid: String? = nil,
+        runid: String,
+        selectedskill: String
+    )
+    {
+        self.eventtype = "skill_selection"
+        self.schemaversion = schemaversion
+        self.eventid = eventid
+        self.sequence = sequence
+        self.sourcesequence = sourcesequence
+        self.occurredat = occurredat
+        self.redaction = "metadata_only"
+        self.actor = actor
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.runid = runid
+        self.kind = "skill_selection"
+        self.action = "skill.selection.observed"
+        self.status = "observed"
+        self.selectedskill = selectedskill
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case eventtype = "eventType"
+        case schemaversion = "schemaVersion"
+        case eventid = "eventId"
+        case sequence
+        case sourcesequence = "sourceSequence"
+        case occurredat = "occurredAt"
+        case redaction
+        case actor
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case runid = "runId"
+        case kind
+        case action
+        case status
+        case selectedskill = "selectedSkill"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["eventType", "schemaVersion", "eventId", "sequence", "sourceSequence", "occurredAt", "redaction", "actor", "agentId", "sessionKey", "sessionId", "runId", "kind", "action", "status", "selectedSkill"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for AuditActivityEventV1SkillSelection: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedEventtype = try container.decode(String.self, forKey: .eventtype)
+        guard decodedEventtype == "skill_selection" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .eventtype,
+                in: container,
+                debugDescription: "Expected eventType to equal skill_selection"
+            )
+        }
+        self.eventtype = "skill_selection"
+        self.schemaversion = try container.decode(Int.self, forKey: .schemaversion)
+        self.eventid = try container.decode(String.self, forKey: .eventid)
+        self.sequence = try container.decode(Int.self, forKey: .sequence)
+        self.sourcesequence = try container.decode(Int.self, forKey: .sourcesequence)
+        self.occurredat = try container.decode(Int.self, forKey: .occurredat)
+        let decodedRedaction = try container.decode(String.self, forKey: .redaction)
+        guard decodedRedaction == "metadata_only" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .redaction,
+                in: container,
+                debugDescription: "Expected redaction to equal metadata_only"
+            )
+        }
+        self.redaction = "metadata_only"
+        self.actor = try container.decode([String: AnyCodable].self, forKey: .actor)
+        self.agentid = try container.decode(String.self, forKey: .agentid)
+        self.sessionkey = try container.decodeIfPresent(String.self, forKey: .sessionkey)
+        self.sessionid = try container.decodeIfPresent(String.self, forKey: .sessionid)
+        self.runid = try container.decode(String.self, forKey: .runid)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "skill_selection" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal skill_selection"
+            )
+        }
+        self.kind = "skill_selection"
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "skill.selection.observed" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal skill.selection.observed"
+            )
+        }
+        self.action = "skill.selection.observed"
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "observed" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal observed"
+            )
+        }
+        self.status = "observed"
+        self.selectedskill = try container.decode(String.self, forKey: .selectedskill)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("skill_selection", forKey: .eventtype)
+        try container.encode(schemaversion, forKey: .schemaversion)
+        try container.encode(eventid, forKey: .eventid)
+        try container.encode(sequence, forKey: .sequence)
+        try container.encode(sourcesequence, forKey: .sourcesequence)
+        try container.encode(occurredat, forKey: .occurredat)
+        try container.encode("metadata_only", forKey: .redaction)
+        try container.encode(actor, forKey: .actor)
+        try container.encode(agentid, forKey: .agentid)
+        try container.encodeIfPresent(sessionkey, forKey: .sessionkey)
+        try container.encodeIfPresent(sessionid, forKey: .sessionid)
+        try container.encode(runid, forKey: .runid)
+        try container.encode("skill_selection", forKey: .kind)
+        try container.encode("skill.selection.observed", forKey: .action)
+        try container.encode("observed", forKey: .status)
+        try container.encode(selectedskill, forKey: .selectedskill)
+    }
+}
+
 public enum AuditActivityEventV1: Codable, Sendable {
     case agentRun(AuditActivityAgentRunV1)
     case toolAction(AuditActivityToolActionV1)
+    case skillSelection(AuditActivityEventV1SkillSelection)
     case inboundMessage(AuditActivityInboundMessageV1)
     case outboundMessage(AuditActivityOutboundMessageV1)
 
@@ -25604,6 +25767,7 @@ public enum AuditActivityEventV1: Codable, Sendable {
         switch discriminator {
         case "agent_run": self = try .agentRun(AuditActivityAgentRunV1(from: decoder))
         case "tool_action": self = try .toolAction(AuditActivityToolActionV1(from: decoder))
+        case "skill_selection": self = try .skillSelection(AuditActivityEventV1SkillSelection(from: decoder))
         case "inbound_message": self = try .inboundMessage(AuditActivityInboundMessageV1(from: decoder))
         case "outbound_message": self = try .outboundMessage(AuditActivityOutboundMessageV1(from: decoder))
         default:
@@ -25619,6 +25783,7 @@ public enum AuditActivityEventV1: Codable, Sendable {
         switch self {
         case .agentRun(let value): try value.encode(to: encoder)
         case .toolAction(let value): try value.encode(to: encoder)
+        case .skillSelection(let value): try value.encode(to: encoder)
         case .inboundMessage(let value): try value.encode(to: encoder)
         case .outboundMessage(let value): try value.encode(to: encoder)
         }

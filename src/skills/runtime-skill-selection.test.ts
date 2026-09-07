@@ -30,13 +30,30 @@ describe("runtime skill selection marker", () => {
     });
   });
 
-  it("rejects invalid skill names before audit persistence", () => {
-    expect(() =>
-      buildRuntimeSkillSelectionMarker({
-        skillName: "../secret",
-        skillSource: "workspace",
-        activation: "read",
-      }),
-    ).toThrow("skill selection audit requires a stable skill name");
+  it("sanitizes skill names with unsafe characters for audit storage", () => {
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "Daily Brief",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(marker.selectedSkill).toBe("Daily-Brief");
+  });
+
+  it("sanitizes path-like skill names for audit storage", () => {
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "../secret",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(marker.selectedSkill).toBe("..-secret");
+  });
+
+  it("returns unknown for empty skill names", () => {
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "   ",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(marker.selectedSkill).toBe("unknown");
   });
 });

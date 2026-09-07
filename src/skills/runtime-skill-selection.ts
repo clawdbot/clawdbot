@@ -21,12 +21,16 @@ function cleanOptionalString(value: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function assertSkillName(value: string): string {
+/**
+ * Sanitize a skill name into a safe form for audit storage.
+ * Skill names like "Daily Brief" are valid at runtime but contain characters
+ * (spaces) that are not safe for audit field values. We replace unsafe
+ * characters with hyphens and truncate to 128 chars.
+ */
+function sanitizeSkillName(value: string): string {
   const trimmed = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(trimmed)) {
-    throw new Error("skill selection audit requires a stable skill name");
-  }
-  return trimmed;
+  const safe = trimmed.replace(/[^A-Za-z0-9._-]/gu, "-").replace(/^-+|-+$/g, "");
+  return safe.slice(0, 128) || "unknown";
 }
 
 export function buildRuntimeSkillSelectionMarker(params: {
@@ -45,7 +49,7 @@ export function buildRuntimeSkillSelectionMarker(params: {
     sessionKey: cleanOptionalString(params.sessionKey),
     sessionId: cleanOptionalString(params.sessionId),
     runId: cleanOptionalString(params.runId),
-    selectedSkill: assertSkillName(params.skillName),
+    selectedSkill: sanitizeSkillName(params.skillName),
     selectionSource: "observed_runtime",
     selectionConfidence: "observed",
     selectionRule: "tool_invocation",
