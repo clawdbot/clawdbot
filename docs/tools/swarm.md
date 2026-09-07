@@ -377,7 +377,10 @@ explicit count when more groups are active. Each card displays at most 64 marker
 and 64 child details; its counts include every accepted group member.
 
 The latest completed group's counts remain visible after the children finish,
-including when the parent fails before writing its final response. These are
+including when the parent fails before writing its final response. Groups whose
+children all succeed use a compact completion row; activate the row to expand
+child details and the final-response reminder. Running, queued, and failed groups
+keep their visible status markers and counts. These are
 child outcomes, not confirmation that the parent produced a synthesis. Counts
 come from retained collector records, so reloading the page or cleaning up a
 child session does not reduce the reported total. They expire with the existing

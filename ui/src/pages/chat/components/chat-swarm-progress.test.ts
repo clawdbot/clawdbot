@@ -386,7 +386,10 @@ describe("chat Swarm progress", () => {
         { sessionKey: `agent:main:${raw}`, agentId: "main", count: 3 },
       ]) {
         render(renderChatSwarmProgress({ ...target, sessions }), container);
-        expect(container.textContent).toContain(`${target.count} of ${target.count}`);
+        expect(container.querySelector("summary")?.textContent).toContain(
+          `${target.count} completed`,
+        );
+        expect(container.textContent).toContain("Child details are unavailable");
       }
       render(renderChatSwarmProgress({ sessionKey: raw, sessions }), container);
       expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();

@@ -68,6 +68,89 @@ it("loads a bounded current-work query independently of chat, people, and recenc
 });
 
 it.each([false, true])(
+  "publishes usable snapshots while new work keeps starting (refresh: %s)",
+  async (refresh) => {
+    vi.useFakeTimers();
+    const { client, request, controller } = setup();
+    try {
+      if (refresh) {
+        request.mockResolvedValueOnce(listing([]));
+        controller.load(client, "current");
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const responses = Array.from({ length: 4 }, () => createDeferred<SessionsListResult>());
+      for (const response of responses) {
+        request.mockReturnValueOnce(response.promise);
+      }
+      controller.load(client, "current", refresh ? "refresh" : "query");
+      const observed: Array<GatewaySessionRow[] | undefined> = [];
+      for (let round = 0; round < 3; round += 1) {
+        const transient = {
+          key: `agent:work:transient-${round}`,
+          agentId: "work",
+          sessionId: `transient-session-${round}`,
+          runId: `transient-run-${round}`,
+          updatedAt: 200 + round * 2,
+        };
+        controller.invalidate({
+          ...transient,
+          hasActiveRun: true,
+          activeRunIds: [transient.runId],
+          status: "running",
+        });
+        responses[round]!.resolve(listing([active]));
+        await vi.advanceTimersByTimeAsync(0);
+        observed.push(controller.result?.sessions);
+        // This short turn finishes before the next snapshot captures membership.
+        controller.invalidate({
+          ...transient,
+          updatedAt: transient.updatedAt + 1,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        });
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      expect(controller.incomplete).toBe(true);
+      responses[3]!.resolve(listing([active]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.result?.sessions).toEqual([active]);
+      expect(controller.loading).toBe(false);
+      expect(observed).toEqual([[active], [active], [active]]);
+      expect(request).toHaveBeenCalledTimes(refresh ? 5 : 4);
+    } finally {
+      controller.hostDisconnected();
+    }
+  },
+);
+
+it("keeps an incomplete empty snapshot loading and permits retry after catch-up fails", async () => {
+  vi.useFakeTimers();
+  const { client, request, controller } = setup();
+  try {
+    const pending = createDeferred<SessionsListResult>();
+    request.mockReturnValueOnce(pending.promise).mockRejectedValueOnce(new Error("Unavailable"));
+    controller.load(client, "current");
+    controller.invalidate({ ...active, updatedAt: 200 });
+    pending.resolve(listing([]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.result?.sessions).toEqual([]);
+    expect(controller.incomplete).toBe(true);
+    expect(controller.loading).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(controller.error).toBe("Unavailable");
+    expect(controller.loading).toBe(false);
+    controller.load(client, "current", "retry");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.error).toBeUndefined();
+    expect(controller.result?.sessions).toEqual([active]);
+    expect(controller.incomplete).toBe(false);
+  } finally {
+    controller.hostDisconnected();
+  }
+});
+
+it.each([false, true])(
   "does not resurrect completed work after a stale snapshot (another turn: %s)",
   async (anotherTurn) => {
     vi.useFakeTimers();
@@ -130,6 +213,7 @@ it("retires current work on disconnect and only accepts the replacement query", 
     controller.load(client, "current", "refresh");
     controller.load(null, null);
     expect(controller.result).toBeUndefined();
+    expect(controller.incomplete).toBe(false);
     request.mockResolvedValue(listing([]));
     controller.load(client, "current");
     stale.resolve(listing([active]));
@@ -207,6 +291,12 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
       controller.invalidate({ ...replacement, runId: "next-run", activeRunIds });
       expect(controller.result?.sessions).toEqual([replacement]);
       controller.invalidate({
+        ...active,
+        key: "agent:work:another-session",
+        sessionId: "another-session",
+        updatedAt: 200,
+      });
+      controller.invalidate({
         key: active.key,
         agentId: active.agentId,
         sessionId: active.sessionId,
@@ -218,6 +308,8 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
       });
       expect(controller.result?.sessions).toEqual([replacement]);
       stale.resolve(listing([active]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.result?.sessions).toEqual([replacement]);
       await vi.advanceTimersByTimeAsync(200);
       expect(controller.result?.sessions).toEqual([replacement]);
       expect(request).toHaveBeenCalledTimes(3);

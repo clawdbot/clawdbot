@@ -160,6 +160,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       await assertOpenClawDatabasesReady({
         env: process.env,
         operation: "doctor",
+        onDeferredSchemaPublication: (publication) => effectiveRuntime.log(publication.message),
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
           env: process.env,
         }),

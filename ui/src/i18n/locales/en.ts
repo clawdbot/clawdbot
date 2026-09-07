@@ -3199,6 +3199,7 @@ export const en: TranslationMap & {
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
       finished: "{done} completed · {failed} failed",
+      completed: "{done} completed",
       childOutcome: "Child runs finished. Check the conversation for the final response.",
       details: "Child details",
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
