@@ -1430,7 +1430,8 @@ mktemp() {
 }
 
 tail() {
-  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  [[ "$#" = "3" && "$1" = "-c" && "$2" = "65536" && -p "$3" ]] || return 1
+  printf "%s %s\\n" "$1" "$2" >"$TMPDIR/tail-seen"
   /usr/bin/tail "$@"
 }
 
@@ -1447,15 +1448,15 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = before\\ Docker* ]]
-[[ "$stderr" = *"NanoCPUs can not be set"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
-[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
-[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = before\\ Docker* ]] || exit 1
+[[ "$stderr" = *"NanoCPUs can not be set"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
+test "$(<"$TMPDIR/tail-seen")" = "-c 65536"
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]] || exit 1
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]] || exit 1
 `,
     },
     {
@@ -1484,10 +1485,10 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"No such image: cgroup-helper"* ]]
-[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"No such image: cgroup-helper"* ]] || exit 1
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
@@ -1507,9 +1508,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/st
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1533,9 +1534,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDI
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1568,11 +1569,11 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"controller pids is not available"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"controller pids is not available"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
