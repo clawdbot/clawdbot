@@ -502,6 +502,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.workshop.autonomous.mode":
     'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs weekly review of Workshop-owned skills using ordinary file edits. Default: "auto".',
+  "skills.workshop.model":
+    "Provider/model ref or alias used for background Skill Workshop reviews (the experience review after deep turns and history scans). Defaults to the reviewed turn's own model, which keeps prompt-cache affinity on that provider. Point it at a cheaper or hosted model to keep review traffic off a local inference server; an unresolvable ref logs a warning and falls back to the default.",
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveHeartbeatPromptCore } from "../../auto-reply/heartbeat.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { toErrorObject } from "../../infra/errors.js";
@@ -41,6 +40,7 @@ import {
   resolveSkillWorkshopModelContextTokens,
   resolveSkillWorkshopProjectionBudgets,
 } from "./model-context-budget.js";
+import { resolveSkillWorkshopReviewModel } from "./review-model.js";
 import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
@@ -213,7 +213,10 @@ async function runSkillHistoryScanCore(
     }
     eligible = resumedCandidates;
   }
-  const modelRef = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
+  const modelRef = resolveSkillWorkshopReviewModel({
+    config: params.config,
+    agentId: params.agentId,
+  });
   const resolvedModel =
     eligible.length > 0
       ? (

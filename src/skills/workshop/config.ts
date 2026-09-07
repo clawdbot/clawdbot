@@ -11,6 +11,8 @@ type SkillWorkshopConfig = {
   approvalPolicy: "pending" | "auto";
   maxPending: number;
   maxSkillBytes: number;
+  /** Configured review model ref; undefined keeps the reviewed run's model. */
+  model?: string;
 };
 
 const DEFAULT_CONFIG: SkillWorkshopConfig = {
@@ -39,6 +41,10 @@ function readApprovalPolicy(value: unknown, fallback: SkillWorkshopConfig["appro
   return value === "pending" || value === "auto" ? value : fallback;
 }
 
+function readModelRef(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
   const raw = asNullableRecord(config?.skills?.workshop) ?? {};
   const autonomous = asNullableRecord(raw.autonomous) ?? {};
@@ -49,5 +55,6 @@ export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorksh
     approvalPolicy: readApprovalPolicy(raw.approvalPolicy, DEFAULT_CONFIG.approvalPolicy),
     maxPending: readInteger(raw.maxPending, DEFAULT_CONFIG.maxPending, 1, 200),
     maxSkillBytes: readInteger(raw.maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes, 1024, 200_000),
+    ...(readModelRef(raw.model) ? { model: readModelRef(raw.model) } : {}),
   };
 }

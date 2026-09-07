@@ -5,7 +5,6 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveProviderToolPolicyEntry } from "../../agents/provider-tool-policy.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import type { ToolPolicyFilterEvent } from "../../agents/tool-policy-pipeline.js";
@@ -13,6 +12,7 @@ import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../../config/types.tools.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveSkillWorkshopReviewModel } from "./review-model.js";
 
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
@@ -231,7 +231,7 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     return null;
   }
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
-  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const model = resolveSkillWorkshopReviewModel({ config: params.config, agentId });
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
     agentId,

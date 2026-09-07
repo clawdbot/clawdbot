@@ -30,6 +30,7 @@ import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepar
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { resolvePromptSessionIdentity } from "./prompt-session-identity.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
@@ -106,6 +107,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
+  const promptSessionIdentity = resolvePromptSessionIdentity(attempt);
   const {
     runtimeChannel,
     runtimeCapabilities,
@@ -122,8 +124,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
       ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
       : {}),
-    sessionKey: attempt.sessionKey,
-    sessionId: attempt.sessionId,
+    // The Runtime section must render the identity the prompt prefix is shared with.
+    sessionKey: promptSessionIdentity.sessionKey,
+    sessionId: promptSessionIdentity.sessionId,
     model: `${attempt.provider}/${attempt.modelId}`,
     channel: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,

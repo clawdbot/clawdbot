@@ -616,6 +616,7 @@ describe("experience review maintenance", () => {
           cleanupBundleMcpOnRunEnd: true,
           terminalReplyExpectation: "optional",
           promptCacheKey: foregroundPromptCacheKey,
+          promptSessionIdentity: { sessionId: "foreground-session", sessionKey: "agent:main:main" },
           sandboxSessionKey: "agent:main:main",
           sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review_/u),
           sessionKey: expect.stringMatching(
@@ -861,5 +862,68 @@ describe("experience review maintenance", () => {
       content: expect.stringContaining("Keep this manual revision pending"),
     });
     expect(inspected?.record.autonomousCapture).toBeUndefined();
+  });
+});
+
+describe("skill experience review model routing", () => {
+  it("keeps the foreground model and auth profile by default", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-model-workspace-");
+    const agentDir = await tempDirs.make("openclaw-experience-model-agent-dir-");
+    runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+    await runSkillExperienceReview({
+      ctx: {
+        runId: "foreground-run",
+        sessionId: "foreground-session",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+        authProfileId: "openai-user",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
+      },
+      config: {
+        agents: { entries: { main: { default: true, agentDir } } },
+        skills: { workshop: { autonomous: { mode: "propose" as const } } },
+      },
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-test",
+        authProfileId: "openai-user",
+        authProfileIdSource: "user",
+      }),
+    );
+  });
+
+  it("routes the review to skills.workshop.model without the foreground auth profile", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-model-workspace-");
+    const agentDir = await tempDirs.make("openclaw-experience-model-agent-dir-");
+    runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+    await runSkillExperienceReview({
+      ctx: {
+        runId: "foreground-run",
+        sessionId: "foreground-session",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+        authProfileId: "openai-user",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
+      },
+      config: {
+        agents: { entries: { main: { default: true, agentDir } } },
+        skills: {
+          workshop: {
+            autonomous: { mode: "propose" as const },
+            model: "openrouter/deepseek/deepseek-v4",
+          },
+        },
+      },
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openrouter", model: "deepseek/deepseek-v4" }),
+    );
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
   });
 });
