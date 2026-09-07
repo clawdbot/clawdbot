@@ -1035,21 +1035,10 @@ extension TalkModeRuntime {
         func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
             ElevenLabsTTSRequest(
                 text: input.cleanedText,
+                directive: input.directive,
                 modelId: modelId,
                 outputFormat: outputFormat,
-                speed: TalkTTSValidation.resolveSpeed(
-                    speed: input.directive?.speed,
-                    rateWPM: input.directive?.rateWPM),
-                stability: TalkTTSValidation.validatedStability(
-                    input.directive?.stability,
-                    modelId: modelId),
-                similarity: TalkTTSValidation.validatedUnit(input.directive?.similarity),
-                style: TalkTTSValidation.validatedUnit(input.directive?.style),
-                speakerBoost: input.directive?.speakerBoost,
-                seed: TalkTTSValidation.validatedSeed(input.directive?.seed),
-                normalize: ElevenLabsTTSClient.validatedNormalize(input.directive?.normalize),
-                language: input.language,
-                latencyTier: TalkTTSValidation.validatedLatencyTier(input.directive?.latencyTier))
+                language: input.language)
         }
 
         let request = makeRequest(outputFormat: outputFormat)
