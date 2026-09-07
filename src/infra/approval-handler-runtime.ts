@@ -5,6 +5,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -23,7 +24,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
 import { createChannelNativeApprovalRuntime } from "./approval-native-runtime.js";
-import { normalizeApprovalRequest } from "./approval-types.js";
+import { normalizeApprovalRequest, type ApprovalRequestInput } from "./approval-types.js";
 import {
   buildExpiredApprovalView,
   buildPendingApprovalView,
@@ -324,6 +325,7 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   label: string;
   clientDisplayName: string;
   cfg: OpenClawConfig;
+  getRequestConfig?: (request: ApprovalRequestInput) => OpenClawConfig;
   gatewayUrl?: string;
   eventKinds?: readonly ChannelApprovalKind[];
   channel?: string;
@@ -427,6 +429,7 @@ export function createChannelApprovalHandler<
     label: adapter.runtime.label,
     clientDisplayName: adapter.runtime.clientDisplayName,
     cfg: adapter.runtime.cfg,
+    getRequestConfig: adapter.runtime.getRequestConfig,
     gatewayUrl: adapter.runtime.gatewayUrl,
     eventKinds: adapter.runtime.eventKinds,
     channel: adapter.runtime.channel,
@@ -475,11 +478,26 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     const normalizedRequest = normalizeApprovalRequest(request);
     return nativeRuntime.resolveApprovalKind?.(normalizedRequest) ?? normalizedRequest.approvalKind;
   };
-  const baseContext: ChannelApprovalCapabilityHandlerContext = {
-    cfg: params.cfg,
+  const gatewayRuntime = getGatewayNativeApprovalRuntime();
+  const createContext = (): ChannelApprovalCapabilityHandlerContext => ({
+    cfg: gatewayRuntime ? gatewayRuntime.getRuntimeConfig() : params.cfg,
     accountId: params.accountId,
     gatewayUrl: params.gatewayUrl,
     context: params.context,
+  });
+  const requestContexts = new WeakMap<
+    ApprovalRequestInput["request"],
+    ChannelApprovalCapabilityHandlerContext
+  >();
+  const getRequestContext = (request: ApprovalRequestInput) => {
+    let context = requestContexts.get(request.request);
+    if (!context) {
+      // Normalization preserves the payload identity, so selection, delivery, and
+      // cleanup share the admitted config snapshot even when the wrapper changes.
+      context = createContext();
+      requestContexts.set(request.request, context);
+    }
+    return context;
   };
   return createChannelApprovalHandler<WrappedPendingEntry, unknown, WrappedPendingContent>({
     runtime: {
@@ -488,6 +506,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       channel: params.channel,
       channelLabel: params.channelLabel,
       cfg: params.cfg,
+      getRequestConfig: (request) => getRequestContext(request).cfg,
       accountId: params.accountId,
       gatewayUrl: params.gatewayUrl,
       eventKinds: nativeRuntime.eventKinds,
@@ -495,11 +514,11 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       ...(nativeRuntime.resolveApprovalKind
         ? { resolveApprovalKind: nativeRuntime.resolveApprovalKind }
         : {}),
-      isConfigured: () => nativeRuntime.availability.isConfigured(baseContext),
+      isConfigured: () => nativeRuntime.availability.isConfigured(createContext()),
       shouldHandle: (request) => {
         const approvalKind = resolveApprovalKind(request);
         return nativeRuntime.availability.shouldHandle({
-          ...baseContext,
+          ...getRequestContext(request),
           request,
           approvalKind,
         });
@@ -512,7 +531,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         return {
           view,
           payload: await nativeRuntime.presentation.buildPendingPayload({
-            ...baseContext,
+            ...getRequestContext(request),
             request,
             approvalKind,
             nowMs,
@@ -524,7 +543,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     transport: {
       prepareTarget: async ({ plannedTarget, request, approvalKind, pendingContent }) => {
         return await nativeRuntime.transport.prepareTarget({
-          ...baseContext,
+          ...getRequestContext(request),
           plannedTarget,
           request,
           approvalKind,
@@ -540,7 +559,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         pendingContent,
       }) => {
         const entry = await nativeRuntime.transport.deliverPending({
-          ...baseContext,
+          ...getRequestContext(request),
           plannedTarget,
           preparedTarget,
           request,
@@ -559,7 +578,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           // would violate its contract without a binding, so route cleanup
           // through the optional cancelDelivered hook, which takes the entry.
           await nativeRuntime.interactions?.cancelDelivered?.({
-            ...baseContext,
+            ...getRequestContext(request),
             entry,
             request,
             approvalKind,
@@ -567,7 +586,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           return null;
         }
         const binding = await nativeRuntime.interactions?.bindPending?.({
-          ...baseContext,
+          ...getRequestContext(request),
           entry,
           request,
           approvalKind,
@@ -577,7 +596,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         if (stopped) {
           if (binding !== undefined && binding !== null) {
             await nativeRuntime.interactions?.unbindPending?.({
-              ...baseContext,
+              ...getRequestContext(request),
               entry,
               binding,
               request,
@@ -589,7 +608,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
             // from both deliverPending and bindPending (e.g. Matrix) drain it
             // via the binding branch above; this branch covers the rest.
             await nativeRuntime.interactions?.cancelDelivered?.({
-              ...baseContext,
+              ...getRequestContext(request),
               entry,
               request,
               approvalKind,
@@ -614,7 +633,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     lifecycle: {
       onDeliveryError: ({ error, plannedTarget, request, approvalKind, pendingContent }) => {
         nativeRuntime.observe?.onDeliveryError?.({
-          ...baseContext,
+          ...getRequestContext(request),
           error,
           plannedTarget,
           request,
@@ -631,7 +650,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         pendingContent,
       }) => {
         nativeRuntime.observe?.onDuplicateSkipped?.({
-          ...baseContext,
+          ...getRequestContext(request),
           plannedTarget,
           preparedTarget,
           request,
@@ -649,7 +668,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         entry,
       }) => {
         nativeRuntime.observe?.onDelivered?.({
-          ...baseContext,
+          ...getRequestContext(request),
           plannedTarget,
           preparedTarget,
           request,
@@ -671,7 +690,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           runEntry: async (wrapped) => {
             if (wrapped.binding !== undefined) {
               await nativeRuntime.interactions?.unbindPending?.({
-                ...baseContext,
+                ...getRequestContext(request),
                 entry: wrapped.entry,
                 binding: wrapped.binding,
                 request,
@@ -679,7 +698,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               });
             }
             const result = await nativeRuntime.presentation.buildResolvedResult({
-              ...baseContext,
+              ...getRequestContext(request),
               request,
               resolved,
               view,
@@ -687,7 +706,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
             });
             await applyApprovalFinalAction({
               nativeRuntime,
-              baseContext,
+              baseContext: getRequestContext(request),
               wrapped,
               request,
               approvalKind,
@@ -697,7 +716,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           },
         });
         nativeRuntime.observe?.onFinalized?.({
-          ...baseContext,
+          ...getRequestContext(request),
           request,
           approvalKind,
           phase: "resolved",
@@ -715,7 +734,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           runEntry: async (wrapped) => {
             if (wrapped.binding !== undefined) {
               await nativeRuntime.interactions?.unbindPending?.({
-                ...baseContext,
+                ...getRequestContext(request),
                 entry: wrapped.entry,
                 binding: wrapped.binding,
                 request,
@@ -723,14 +742,14 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               });
             }
             const result = await nativeRuntime.presentation.buildExpiredResult({
-              ...baseContext,
+              ...getRequestContext(request),
               request,
               view,
               entry: wrapped.entry,
             });
             await applyApprovalFinalAction({
               nativeRuntime,
-              baseContext,
+              baseContext: getRequestContext(request),
               wrapped,
               request,
               approvalKind,
@@ -740,7 +759,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           },
         });
         nativeRuntime.observe?.onFinalized?.({
-          ...baseContext,
+          ...getRequestContext(request),
           request,
           approvalKind,
           phase: "expired",
@@ -757,7 +776,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
             entries: activeRequest.entries,
             request: activeRequest.request,
             approvalKind: activeRequest.approvalKind,
-            baseContext,
+            baseContext: getRequestContext(activeRequest.request),
             nativeRuntime,
             log,
           });

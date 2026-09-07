@@ -247,6 +247,12 @@ export function createGatewayInstanceRuntime(
       },
     },
     nativeApprovals: {
+      getRuntimeConfig: () => {
+        if (closed) {
+          throw new Error("Gateway instance approval runtime is closed");
+        }
+        return options.getContext().getRuntimeConfig();
+      },
       request: async <T>(
         method: GatewayNativeApprovalMethod,
         payload: Record<string, unknown>,

@@ -1,6 +1,13 @@
 // Covers approval handler runtime adapter creation and lazy wiring.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability,
@@ -10,6 +17,8 @@ import {
   createApprovalNativeRuntimeAdapterStubs,
   type ApprovalNativeRuntimeAdapterStubParams,
 } from "./approval-handler.test-helpers.js";
+import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
+import { doesApprovalRequestSelectChannelAccount } from "./approval-request-account-binding.js";
 import type { NormalizedApprovalRequest } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
@@ -90,6 +99,18 @@ function createTestApprovalHandler(capability: ApprovalCapability) {
   });
 }
 
+function createApprovalGatewayRuntime(getRuntimeConfig: () => OpenClawConfig) {
+  const routeCoordinator = createApprovalNativeRouteCoordinator();
+  onTestFinished(() => routeCoordinator.close());
+  return {
+    getRuntimeConfig,
+    request: vi.fn().mockResolvedValue([]),
+    requestRoute: vi.fn(),
+    routeCoordinator,
+    subscribe: vi.fn<GatewayNativeApprovalRuntime["subscribe"]>(() => () => {}),
+  };
+}
+
 type ApprovalHandlerRuntime = NonNullable<Awaited<ReturnType<typeof createTestApprovalHandler>>>;
 
 function expectApprovalRuntime(
@@ -107,6 +128,215 @@ function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
 }
 
 describe("createChannelApprovalHandlerFromCapability", () => {
+  it("checks the current Gateway config before its initial subscription", async () => {
+    const initial: OpenClawConfig = {};
+    const next: OpenClawConfig = { gateway: { publicOrigin: "https://current.example.com" } };
+    let current = initial;
+    const gatewayRuntime = createApprovalGatewayRuntime(() => current);
+    const capability = makeNativeApprovalCapability();
+    const isConfigured = vi.fn(({ cfg }: { cfg: OpenClawConfig }) => cfg === next);
+    capability.nativeRuntime!.availability.isConfigured = isConfigured;
+    const runtime = expectApprovalRuntime(
+      await withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+        createChannelApprovalHandlerFromCapability({
+          ...TEST_HANDLER_PARAMS,
+          capability,
+          cfg: initial,
+        }),
+      ),
+    );
+    onTestFinished(() => runtime.stop());
+
+    current = next;
+    await runtime.start();
+
+    expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ cfg: next }));
+    expect(gatewayRuntime.subscribe).toHaveBeenCalledOnce();
+  });
+
+  it.each(["exec", "system-agent"] as const)(
+    "pins an admitted %s request through delayed delivery and resolution",
+    async (approvalKind) => {
+      const initial: OpenClawConfig = { gateway: { publicOrigin: "https://admitted.example.com" } };
+      let current = initial;
+      const gatewayRuntime = createApprovalGatewayRuntime(() => current);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const deliverPending = vi.fn().mockResolvedValue({ messageId: "pinned" });
+      const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
+      const capability = makeNativeApprovalCapability({
+        eventKinds: [approvalKind],
+        deliverPending,
+        buildResolvedResult,
+      });
+      capability.nativeRuntime!.presentation.buildPendingPayload = async ({ cfg }) => {
+        entered.resolve();
+        await release.promise;
+        return { text: cfg.gateway?.publicOrigin };
+      };
+      const runtime = expectApprovalRuntime(
+        await withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+          createChannelApprovalHandlerFromCapability({
+            ...TEST_HANDLER_PARAMS,
+            capability,
+            cfg: initial,
+          }),
+        ),
+      );
+      onTestFinished(async () => {
+        release.resolve();
+        await runtime.stop();
+      });
+      await runtime.start();
+      const subscriber = gatewayRuntime.subscribe.mock.calls[0]?.[0];
+      if (!subscriber) {
+        throw new Error("Expected Gateway approval subscription");
+      }
+      const request =
+        approvalKind === "exec"
+          ? makeExecApprovalRequest("exec:admitted")
+          : {
+              approvalKind: "system-agent" as const,
+              id: "system-agent:admitted",
+              createdAtMs: Date.now(),
+              expiresAtMs: Date.now() + 60_000,
+              request: {
+                title: "OpenClaw change",
+                description: "Restart Gateway",
+                command: "Restart Gateway",
+                proposalHash: "a".repeat(64),
+                sessionId: "test-session",
+                allowedDecisions: ["allow-once", "deny"] as const,
+              },
+            };
+      expect(subscriber.shouldHandle(request)).toBe(true);
+      current = { gateway: { publicOrigin: "https://later.example.com" } };
+      subscriber.onRequested(request);
+      await withTestTimeout(entered.promise, 1_000, "approval presentation did not start");
+      current = {};
+      release.resolve();
+      await vi.waitFor(() => expect(deliverPending).toHaveBeenCalledOnce());
+      await runtime.handleResolved({ id: request.id, decision: "deny", ts: Date.now() });
+
+      expect(deliverPending).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: initial,
+          pendingPayload: { text: "https://admitted.example.com" },
+        }),
+      );
+      expect(buildResolvedResult).toHaveBeenCalledWith(expect.objectContaining({ cfg: initial }));
+    },
+  );
+
+  it.each(["runtime", "isolated"] as const)(
+    "uses the applicable %s config for a new approval after publication",
+    async (ownership) => {
+      const initial: OpenClawConfig = { gateway: { publicOrigin: "https://before.example.com" } };
+      const isolated: OpenClawConfig = {
+        gateway: { publicOrigin: "https://isolated.example.com" },
+      };
+      const next: OpenClawConfig = { gateway: { publicOrigin: "https://after.example.com" } };
+      let current = initial;
+      const gatewayRuntime = createApprovalGatewayRuntime(() => current);
+      setRuntimeConfigSnapshot(initial, initial);
+      onTestFinished(clearRuntimeConfigSnapshot);
+      const capability = makeNativeApprovalCapability();
+      const pendingPayload = vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
+        text: `${cfg.gateway?.publicOrigin}/approve`,
+      }));
+      capability.nativeRuntime!.presentation.buildPendingPayload = pendingPayload;
+      const runtime = expectApprovalRuntime(
+        await withGatewayNativeApprovalRuntime(
+          ownership === "runtime" ? gatewayRuntime : undefined,
+          () =>
+            createChannelApprovalHandlerFromCapability({
+              ...TEST_HANDLER_PARAMS,
+              capability,
+              cfg: ownership === "runtime" ? initial : isolated,
+            }),
+        ),
+      );
+      onTestFinished(() => runtime.stop());
+
+      setRuntimeConfigSnapshot(next, next);
+      current = next;
+      await runtime.handleRequested(makeExecApprovalRequest(`exec:${ownership}`));
+
+      expect(pendingPayload).toHaveBeenCalledOnce();
+      expect(pendingPayload.mock.results[0]?.value).toEqual({
+        text: `${ownership === "runtime" ? next.gateway?.publicOrigin : isolated.gateway?.publicOrigin}/approve`,
+      });
+    },
+  );
+
+  it.each(["exec", "plugin"] as const)(
+    "selects the new native account after %s forwarding targets hot-apply",
+    async (approvalKind) => {
+      const configForAccount = (accountId: string): OpenClawConfig => ({
+        approvals: {
+          [approvalKind]: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "test", accountId, to: "approver" }],
+          },
+        },
+      });
+      const initial = configForAccount("first");
+      let current = initial;
+      const gatewayRuntime = createApprovalGatewayRuntime(() => current);
+      setRuntimeConfigSnapshot(initial, initial);
+      onTestFinished(clearRuntimeConfigSnapshot);
+      const deliveries: string[] = [];
+      const runtimes = await Promise.all(
+        ["first", "second"].map(async (accountId) => {
+          const capability = makeNativeApprovalCapability({
+            eventKinds: [approvalKind],
+            shouldHandle: ({ cfg, request }) =>
+              doesApprovalRequestSelectChannelAccount({
+                cfg,
+                request,
+                channel: "test",
+                accountId,
+                defaultAccountId: "first",
+                eligibleAccountIds: ["first", "second"],
+              }),
+            deliverPending: async () => {
+              deliveries.push(accountId);
+              return { messageId: accountId };
+            },
+          });
+          const runtime = expectApprovalRuntime(
+            await withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+              createChannelApprovalHandlerFromCapability({
+                ...TEST_HANDLER_PARAMS,
+                cfg: initial,
+                accountId,
+                capability,
+              }),
+            ),
+          );
+          onTestFinished(() => runtime.stop());
+          await runtime.start();
+          return runtime;
+        }),
+      );
+      const next = configForAccount("second");
+      setRuntimeConfigSnapshot(next, next);
+      current = next;
+      const request: ExecApprovalRequest | PluginApprovalRequest = {
+        ...makeExecApprovalRequest(`${approvalKind}:changed-target`),
+        ...(approvalKind === "exec"
+          ? { approvalKind, request: { command: "echo hi" } }
+          : { approvalKind, request: { title: "Plugin action", description: "Allow action" } }),
+      };
+      for (const runtime of runtimes) {
+        await runtime.handleRequested(request);
+      }
+
+      expect(deliveries).toEqual(["second"]);
+    },
+  );
+
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
       createChannelApprovalHandlerFromCapability({

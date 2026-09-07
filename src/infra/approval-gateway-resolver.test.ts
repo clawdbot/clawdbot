@@ -34,6 +34,7 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
 function withApprovalAccountContext<T>(run: () => T): T {
   return withGatewayNativeApprovalRuntime(
     {
+      getRuntimeConfig: () => ({}),
       request: async <TResult>(method: string, params: Record<string, unknown>) =>
         (await hoisted.clientRequest(method, params)) as TResult,
       requestRoute: vi.fn(),
@@ -199,6 +200,7 @@ describe("resolveApprovalOverGateway", () => {
     const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const result = await withGatewayNativeApprovalRuntime(
       {
+        getRuntimeConfig: () => ({}),
         request: request as GatewayNativeApprovalRuntime["request"],
         requestRoute: vi.fn(),
         routeCoordinator: {} as never,
@@ -250,6 +252,7 @@ describe("resolveApprovalOverGateway", () => {
     const injectedRequest = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const scopedRequest = vi.fn();
     const runtime = {
+      getRuntimeConfig: () => ({}),
       request: async <T>(): Promise<T> => {
         scopedRequest();
         throw new Error("unexpected scoped approval request");

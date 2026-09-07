@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
@@ -48,6 +49,23 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it("reads approval config from its live instance and rejects access after close", () => {
+    let config: OpenClawConfig = {};
+    const context = createContext();
+    context.getRuntimeConfig = () => config;
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    onTestFinished(() => runtime.close());
+    expect(runtime.nativeApprovals.getRuntimeConfig()).toBe(config);
+    config = { gateway: { publicOrigin: "https://current.example.com" } };
+    expect(runtime.nativeApprovals.getRuntimeConfig()).toBe(config);
+    runtime.close();
+    expect(() => runtime.nativeApprovals.getRuntimeConfig()).toThrow("approval runtime is closed");
+  });
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {

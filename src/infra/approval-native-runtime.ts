@@ -161,6 +161,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     TPendingContent,
     TRequest
   > & {
+    getRequestConfig?: (request: ApprovalRequestInput) => OpenClawConfig;
     channel?: string;
     channelLabel?: string;
     accountId?: string | null;
@@ -205,7 +206,7 @@ export function createChannelNativeApprovalRuntime<
     shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
       classifyApprovalRequestChannelRoute({
-        cfg: adapter.cfg,
+        cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
         request,
         channel: adapter.channel ?? "",
       }),
@@ -295,7 +296,7 @@ export function createChannelNativeApprovalRuntime<
           nowMs: nowMs(),
         });
         const deliveryResult = await deliverApprovalRequestViaChannelNativePlan({
-          cfg: adapter.cfg,
+          cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
           accountId: adapter.accountId,
           approvalKind,
           request,

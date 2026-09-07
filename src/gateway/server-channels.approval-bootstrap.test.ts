@@ -130,6 +130,7 @@ describe("server-channels approval bootstrap", () => {
     const channelRuntime = createRuntimeChannel();
     const stopApprovalBootstrap = vi.fn(async () => {});
     const nativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
       request: vi.fn(),
       requestRoute: vi.fn(),
       routeCoordinator: {} as never,

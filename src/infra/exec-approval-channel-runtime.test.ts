@@ -385,6 +385,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const shouldHandle = vi.fn(() => true);
     const deliverRequested = vi.fn(async (approval: ExecApprovalRequest) => [{ id: approval.id }]);
     const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
       request: request as GatewayNativeApprovalRuntime["request"],
       requestRoute: vi.fn(),
       routeCoordinator: {} as never,
