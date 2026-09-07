@@ -51,6 +51,13 @@ openclaw logs --follow
 - Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
+### SQLite session writes
+
+Failed SQLite session writes include a bounded, redacted `error` summary in
+their structured file-log record, with cause and error-code details when
+available. Long summaries are truncated; the record retains its write timing
+and store fields.
+
 ### Slow cron list pages
 
 A cron list page taking at least one second emits `cron: slow list page` through
