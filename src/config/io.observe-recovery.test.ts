@@ -673,6 +673,186 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("loadConfig records accepted hand-authored edits so a later clobber keeps them", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      // Read 1: the product wrote the baseline (meta stamped) and its backup.
+      await seedConfigBackup(configPath, recoverableCoreConfig);
+      io.loadConfig();
+      expect(
+        JSON.parse(String(readConfigHealthRow(home, configPath)?.last_known_good_json)).hasMeta,
+      ).toBe(true);
+
+      // Read 2: the operator hand-edits the file (drops `meta`, adds channels).
+      // The edit stays live with only a warning and must still advance the
+      // accepted baseline; otherwise the next clobber compares against the
+      // stale product fingerprint and can restore pre-edit bytes.
+      await writeConfigRaw(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+      io.loadConfig();
+      const baseline = JSON.parse(
+        String(readConfigHealthRow(home, configPath)?.last_known_good_json),
+      );
+      expect(baseline.hasMeta).toBe(false);
+      expectWarnContaining(warn, "missing-meta-vs-last-good");
+      expectSuspiciousIncludes(await readLastObserveEvent(auditPath), "missing-meta-vs-last-good");
+
+      // Read 3: a recognized clobber must not restore the pre-edit `.bak`.
+      await writeClobberedUpdateChannel(configPath);
+      io.loadConfig();
+
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(clobberedUpdateChannelRaw);
+      expectWarnContaining(warn, "accepted baseline is hand-authored");
+      expectWarnNotContaining(warn, "Config auto-restored from");
+    });
+  });
+
+  it("read snapshots record accepted hand-authored edits so a later clobber keeps them", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+      expect(
+        JSON.parse(String(readConfigHealthRow(home, configPath)?.last_known_good_json)).hasMeta,
+      ).toBe(true);
+
+      await writeConfigRaw(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+      expect(
+        JSON.parse(String(readConfigHealthRow(home, configPath)?.last_known_good_json)).hasMeta,
+      ).toBe(false);
+      expectWarnContaining(warn, "missing-meta-vs-last-good");
+
+      await writeClobberedUpdateChannel(configPath);
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobberedUpdateChannelRaw);
+      expectWarnContaining(warn, "accepted baseline is hand-authored");
+      expectWarnNotContaining(warn, "Config auto-restored from");
+    });
+  });
+
+  it("loadConfig restores a promoted accepted baseline when no backup exists", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      const handAuthored = { update: { channel: "beta" }, gateway: { mode: "local" } };
+      // Read 1: a fresh hand-authored config is accepted, and Gateway promotes
+      // those exact bytes to the retained `.last-good`. No `.bak` ever exists.
+      await seedConfig(configPath, handAuthored);
+      io.loadConfig();
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, handAuthored),
+        logger: deps.logger,
+      });
+      expect(await fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      await expectPathMissing(`${configPath}.bak`);
+
+      // Read 2: a recognized clobber with no `.bak` — the retained `.last-good`
+      // is the only verified copy of the operator's config.
+      await writeClobberedUpdateChannel(configPath);
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+      const observe = (await readObserveEvents(auditPath)).at(-1);
+      expect(observe?.restoredFromBackup).toBe(true);
+      expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("read snapshots restore a promoted accepted baseline when no backup exists", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const handAuthored = { update: { channel: "beta" }, gateway: { mode: "local" } };
+      await seedConfig(configPath, handAuthored);
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, handAuthored),
+        logger: deps.logger,
+      });
+      await writeClobberedUpdateChannel(configPath);
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+    });
+  });
+
+  it("loadConfig restores a promoted accepted baseline when the backup is unparsable", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const handAuthored = { update: { channel: "beta" }, gateway: { mode: "local" } };
+      await seedConfig(configPath, handAuthored);
+      io.loadConfig();
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, handAuthored),
+        logger: deps.logger,
+      });
+      // The backup predates the hand-authored baseline and is not even
+      // parsable; it must not gate recovery from the verified `.last-good`.
+      await fsp.writeFile(`${configPath}.bak`, "{ broken", "utf-8");
+      await writeClobberedUpdateChannel(configPath);
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+    });
+  });
+
+  it("read snapshots restore a promoted accepted baseline when the backup is unparsable", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps } = makeDeps(home);
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const handAuthored = { update: { channel: "beta" }, gateway: { mode: "local" } };
+      await seedConfig(configPath, handAuthored);
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+      await promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: await makeSnapshot(configPath, handAuthored),
+        logger: deps.logger,
+      });
+      await fsp.writeFile(`${configPath}.bak`, "{ broken", "utf-8");
+      await writeClobberedUpdateChannel(configPath);
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(
+        `${JSON.stringify(handAuthored, null, 2)}\n`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from last-good: ${configPath}`);
+    });
+  });
+
   it("loadConfig skips health observation when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });

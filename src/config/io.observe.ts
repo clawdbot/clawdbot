@@ -15,7 +15,10 @@ import {
   readConfigHealthEntry,
   updateConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
+import {
+  isAcceptedConfigRead,
+  resolveConfigObserveSuspiciousReasons,
+} from "./io.observe-suspicious.js";
 import { resolveConfigSnapshotHash } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
@@ -122,7 +125,26 @@ export async function observeConfigSnapshot(
     return;
   }
   const signature = `${current.hash}:${suspicious.join(",")}`;
+  // An accepted read (valid, no recoverable anomaly — e.g. a hand-authored
+  // config missing `meta`) is the operator's live state, so its bytes advance
+  // the accepted baseline even though the warning stays. Leaving the stale
+  // pre-edit fingerprint in place would let a later recognized clobber restore
+  // over the accepted settings.
+  const observedEntry: ConfigHealthEntry = isAcceptedConfigRead({
+    valid: snapshot.valid,
+    suspicious,
+  })
+    ? { ...entry, lastKnownGood: current }
+    : entry;
   if (entry.lastObservedSuspiciousSignature === signature) {
+    // Already warned about this exact content; only a pending baseline advance
+    // still needs bookkeeping.
+    if (observedEntry !== entry && !sameFingerprint(entry.lastKnownGood, current)) {
+      writeConfigHealthStateToStore(
+        deps,
+        updateConfigHealthEntry(healthState, snapshot.path, observedEntry),
+      );
+    }
     return;
   }
   const backup =
@@ -141,7 +163,7 @@ export async function observeConfigSnapshot(
     }),
   });
   healthState = updateConfigHealthEntry(healthState, snapshot.path, {
-    ...entry,
+    ...observedEntry,
     lastObservedSuspiciousSignature: signature,
   });
   writeConfigHealthStateToStore(deps, healthState);
@@ -175,7 +197,26 @@ export function observeConfigSnapshotSync(
     return;
   }
   const signature = `${current.hash}:${suspicious.join(",")}`;
+  // An accepted read (valid, no recoverable anomaly — e.g. a hand-authored
+  // config missing `meta`) is the operator's live state, so its bytes advance
+  // the accepted baseline even though the warning stays. Leaving the stale
+  // pre-edit fingerprint in place would let a later recognized clobber restore
+  // over the accepted settings.
+  const observedEntry: ConfigHealthEntry = isAcceptedConfigRead({
+    valid: snapshot.valid,
+    suspicious,
+  })
+    ? { ...entry, lastKnownGood: current }
+    : entry;
   if (entry.lastObservedSuspiciousSignature === signature) {
+    // Already warned about this exact content; only a pending baseline advance
+    // still needs bookkeeping.
+    if (observedEntry !== entry && !sameFingerprint(entry.lastKnownGood, current)) {
+      writeConfigHealthStateToStore(
+        deps,
+        updateConfigHealthEntry(healthState, snapshot.path, observedEntry),
+      );
+    }
     return;
   }
   const backup =
@@ -194,7 +235,7 @@ export function observeConfigSnapshotSync(
     }),
   });
   healthState = updateConfigHealthEntry(healthState, snapshot.path, {
-    ...entry,
+    ...observedEntry,
     lastObservedSuspiciousSignature: signature,
   });
   writeConfigHealthStateToStore(deps, healthState);

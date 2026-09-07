@@ -21,9 +21,13 @@ import {
   readConfigHealthEntry,
   updateConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
+import {
+  isRecoverableConfigReadSuspiciousReason,
+  resolveConfigObserveSuspiciousReasons,
+} from "./io.observe-suspicious.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import type {
+  ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
   NormalizedConfigIoDeps,
   PrepareConfigRecoveryCandidate,
@@ -219,17 +223,6 @@ function resolveSuspiciousSignature(
   return `${current.hash}:${suspicious.join(",")}`;
 }
 
-// `missing-meta-vs-last-good` is intentionally excluded from auto-restore: the
-// writer always stamps `meta`, so a valid config lacking it was hand-authored,
-// and restoring would silently revert a read-only load. Observe warns.
-function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
-  return (
-    reason === "gateway-mode-missing-vs-last-good" ||
-    reason === "update-channel-only-root" ||
-    reason.startsWith("size-drop-vs-last-good:")
-  );
-}
-
 function resolveConfigReadRecoveryContext(params: {
   current: ConfigHealthFingerprint;
   parsed: unknown;
@@ -412,53 +405,34 @@ function* recoverSuspiciousConfigRead(
   }
   const { suspicious, suspiciousSignature } = recoveryContext;
   const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
-  if (!backupRaw) {
-    return returnOriginalConfigRead(params);
-  }
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  if (!backupParse) {
-    return returnOriginalConfigRead(params);
-  }
-  const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const prepared = (yield {
-    sync: () => params.prepareBackup(backupCandidate),
-    async: () => params.prepareBackup(backupCandidate),
-  }) as ConfigRecoveryCandidatePreparation;
-  if (!prepared.ok) {
-    return returnOriginalConfigRead(params);
-  }
-  const preparedCandidate = prepared.candidate;
-  // Eligibility must describe the approved backup bytes, never an older healthy config.
-  const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
-  let backup = createConfigHealthFingerprint({
-    raw: backupRaw,
-    parsed: backupParse.parsed,
-    stat: backupStat,
-  });
-  if (!backup.gatewayMode) {
-    return returnOriginalConfigRead(params);
-  }
+  const backupParse = backupRaw ? parseBackupConfigRaw(deps, backupRaw) : null;
   // A metadata-free accepted baseline can only be hand-authored (product
   // writers always stamp `meta`), so a `.bak` holding different bytes predates
   // the operator's file and restoring it would silently revert that config.
   // Recovery therefore prefers the retained `.last-good` payload when Gateway
   // promoted one and its hash still matches the accepted baseline; without a
   // verified copy the state stays on the explicit doctor path.
-  let restoreSourceRaw = backupRaw;
-  let restoreSourcePath = backupPath;
-  let restoreSourceContext = "backup restore";
-  let restoredSourceLabel = "backup";
-  let preparedCandidateFinal = preparedCandidate;
-  if (
-    entry.lastKnownGood?.hash &&
-    !entry.lastKnownGood.hasMeta &&
-    backup.hash !== entry.lastKnownGood.hash
-  ) {
+  const baseline = entry.lastKnownGood;
+  // Source selection needs only the retained baseline's hash, so it happens
+  // before any source-specific preparation: an unusable `.bak` must not gate
+  // access to a verified `.last-good` payload promoted for these exact bytes.
+  const preferLastGoodSource = Boolean(
+    baseline?.hash &&
+    !baseline.hasMeta &&
+    (!backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline.hash),
+  );
+  let restoreSourceRaw: string;
+  let restoreSourcePath: string;
+  let restoreSourceContext: string;
+  let restoredSourceLabel: string;
+  let backup: ConfigHealthFingerprint;
+  let preparedCandidateFinal: ConfigRecoveryCandidate;
+  if (preferLastGoodSource && baseline?.hash) {
     const lastGoodSource = yield* prepareLastGoodRecoverySource({
       deps,
       prepareBackup: params.prepareBackup,
       lastGoodPath: resolveLastKnownGoodConfigPath(configPath),
-      baselineHash: entry.lastKnownGood.hash,
+      baselineHash: baseline.hash,
     });
     if (!lastGoodSource) {
       deps.logger.warn(
@@ -472,6 +446,33 @@ function* recoverSuspiciousConfigRead(
     restoredSourceLabel = "last-good";
     backup = lastGoodSource.fingerprint;
     preparedCandidateFinal = lastGoodSource.candidate;
+  } else {
+    if (!backupRaw || !backupParse) {
+      return returnOriginalConfigRead(params);
+    }
+    const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
+    const prepared = (yield {
+      sync: () => params.prepareBackup(backupCandidate),
+      async: () => params.prepareBackup(backupCandidate),
+    }) as ConfigRecoveryCandidatePreparation;
+    if (!prepared.ok) {
+      return returnOriginalConfigRead(params);
+    }
+    // Eligibility must describe the approved backup bytes, never an older healthy config.
+    const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
+    backup = createConfigHealthFingerprint({
+      raw: backupRaw,
+      parsed: backupParse.parsed,
+      stat: backupStat,
+    });
+    if (!backup.gatewayMode) {
+      return returnOriginalConfigRead(params);
+    }
+    restoreSourceRaw = backupRaw;
+    restoreSourcePath = backupPath;
+    restoreSourceContext = "backup restore";
+    restoredSourceLabel = "backup";
+    preparedCandidateFinal = prepared.candidate;
   }
   if (params.allowBackupRecovery) {
     const allowed = (yield {
