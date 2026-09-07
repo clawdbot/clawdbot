@@ -192,6 +192,105 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("passes normalized runtime metadata after stale auto-detected metadata recovery", async () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+      createTool: ({ runtimeMetadata }) => ({
+        description: "firecrawl",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          runtimeProviderConfigured: runtimeMetadata?.providerConfigured,
+          runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+        }),
+      }),
+    });
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    const runtimeWebFetch: RuntimeWebFetchMetadata = {
+      providerSource: "auto-detect",
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+      diagnostics: [],
+    };
+
+    const webFetch = requireResolvedWebFetch(
+      resolveWebFetchDefinition({
+        config: {},
+        runtimeWebFetch,
+        preferRuntimeProviders: true,
+      }),
+    );
+
+    expect(webFetch.provider.id).toBe("firecrawl");
+    await expect(
+      webFetch.definition.execute({
+        url: "https://example.com",
+        extractMode: "markdown",
+        maxChars: 1000,
+      }),
+    ).resolves.toEqual({
+      url: "https://example.com",
+      extractMode: "markdown",
+      maxChars: 1000,
+      runtimeProviderConfigured: undefined,
+      runtimeSelectedProvider: "firecrawl",
+      runtimeSelectedProviderKeySource: undefined,
+    });
+    expect(runtimeWebFetch.selectedProvider).toBe("removed-provider");
+    expect(runtimeWebFetch.selectedProviderKeySource).toBe("missing");
+  });
+
+  it.each(["", "unknown-provider", "firecrawl"])(
+    "keeps explicit provider %j authoritative over valid runtime metadata",
+    (providerId) => {
+      resolveRuntimeWebFetchProvidersMock.mockReturnValue([createFirecrawlProvider()]);
+
+      const resolved = resolveWebFetchDefinition({
+        config: {},
+        providerId,
+        preferRuntimeProviders: true,
+        runtimeWebFetch: {
+          providerSource: "auto-detect",
+          selectedProvider: "firecrawl",
+          selectedProviderKeySource: "env",
+          diagnostics: [],
+        },
+      });
+
+      expect(resolved?.provider.id ?? null).toBe(providerId === "firecrawl" ? "firecrawl" : null);
+    },
+  );
+
+  it("does not replace an unavailable configured runtime provider with auto-detect", () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+    });
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    const runtimeWebFetch: RuntimeWebFetchMetadata = {
+      providerConfigured: "removed-provider",
+      providerSource: "configured",
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+      diagnostics: [],
+    };
+
+    expect(
+      resolveWebFetchDefinition({
+        config: {},
+        runtimeWebFetch,
+        preferRuntimeProviders: true,
+      }),
+    ).toBeNull();
+    expect(runtimeWebFetch).toEqual({
+      providerConfigured: "removed-provider",
+      providerSource: "configured",
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+      diagnostics: [],
+    });
+  });
+
   it("auto-detects providers from provider-declared env vars", () => {
     const provider = createFirecrawlProvider();
     resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);

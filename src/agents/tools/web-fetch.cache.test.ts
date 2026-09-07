@@ -63,7 +63,7 @@ describe.each(["direct", "provider fallback"])("web_fetch %s cache", (source) =>
       if (initialTtl > 0) {
         expect((await tool.execute("cached", args)).details).toMatchObject({ cached: true });
       }
-      expect(networkCalls).toBe(1);
+      expect(networkCalls).toBe(source === "direct" || initialTtl === 0 ? 1 : 2);
 
       setTtl(0);
       for (const freshBody of ["fresh body", "newest body"]) {
@@ -72,7 +72,7 @@ describe.each(["direct", "provider fallback"])("web_fetch %s cache", (source) =>
         expect(result.details).toMatchObject({ text: expect.stringContaining(freshBody) });
         expect(result.details).not.toHaveProperty("cached");
       }
-      expect(networkCalls).toBe(3);
+      expect(networkCalls).toBe(source === "provider fallback" && initialTtl > 0 ? 4 : 3);
       expect(providerExecute).toHaveBeenCalledTimes(source === "direct" ? 0 : 3);
 
       // Disabled requests neither replace another caller's entry nor insert their own.
@@ -82,7 +82,9 @@ describe.each(["direct", "provider fallback"])("web_fetch %s cache", (source) =>
       expect(enabled.details).toMatchObject({
         text: expect.stringContaining(initialTtl > 0 ? "original body" : "after re-enable"),
       });
-      expect(networkCalls).toBe(initialTtl > 0 ? 3 : 4);
+      expect(networkCalls).toBe(
+        source === "direct" ? (initialTtl > 0 ? 3 : 4) : initialTtl > 0 ? 5 : 4,
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

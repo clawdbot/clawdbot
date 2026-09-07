@@ -129,7 +129,7 @@ describe("web_fetch provider cancellation", () => {
       expect.soft(outcome).toEqual([{ status: "rejected", reason }]);
       assert(isRecord(fresh.details));
       expect(cached.details).toEqual({ ...fresh.details, cached: true });
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(source === "provider" ? 2 : 1);
       expect(execute).toHaveBeenCalledTimes(source === "provider" ? 1 : 0);
     },
   );
@@ -191,7 +191,7 @@ describe("web_fetch provider cancellation", () => {
 
       expect.soft(cancelled).toEqual({ status: "rejected", reason });
       expect.soft(fresh.details).not.toHaveProperty("cached");
-      expect.soft(fetch).toHaveBeenCalledTimes(2);
+      expect.soft(fetch).toHaveBeenCalledTimes(source === "direct" ? 2 : 3);
       expect.soft(execute).toHaveBeenCalledTimes(source === "direct" ? 0 : 2);
       assert(isRecord(fresh.details));
       expect(cached.details).toEqual({ ...fresh.details, cached: true });

@@ -250,19 +250,40 @@ export function resolveWebFetchDefinition(
   if (providers.length === 0) {
     return null;
   }
-  const providerId =
-    options?.providerId ??
-    resolveConfiguredWebFetchProviderId({ fetch, providers }) ??
-    runtimeWebFetch?.selectedProvider ??
-    resolveAutoWebFetchProviderId({ config: options?.config, fetch, providers });
-  const provider = providers.find((entry) => entry.id === providerId);
+  const configuredProviderId = resolveConfiguredWebFetchProviderId({ fetch, providers });
+  const explicitProviderId = options?.providerId ?? configuredProviderId;
+  const runtimeProviderId = runtimeWebFetch?.selectedProvider;
+  // Even an empty explicit override is authoritative; do not execute a different provider.
+  const selectedProviderId = explicitProviderId ?? runtimeProviderId;
+  let provider = providers.find((entry) => entry.id === selectedProviderId);
+  let didFallbackFromUnavailableRuntimeProvider = false;
+  if (!provider && explicitProviderId === undefined) {
+    const runtimeProviderIsConfigured = runtimeWebFetch?.providerSource === "configured";
+    if (!runtimeProviderIsConfigured) {
+      const autoProviderId = resolveAutoWebFetchProviderId({
+        config: options?.config,
+        fetch,
+        providers,
+      });
+      provider = providers.find((entry) => entry.id === autoProviderId);
+      didFallbackFromUnavailableRuntimeProvider = Boolean(runtimeProviderId && provider);
+    }
+  }
   if (!provider) {
     return null;
   }
+  const normalizedRuntimeMetadata =
+    didFallbackFromUnavailableRuntimeProvider && runtimeWebFetch
+      ? {
+          ...runtimeWebFetch,
+          selectedProvider: provider.id,
+          selectedProviderKeySource: undefined,
+        }
+      : runtimeWebFetch;
   const definition = provider.createTool({
     config: options?.config,
     fetchConfig: fetch as Record<string, unknown> | undefined,
-    runtimeMetadata: runtimeWebFetch,
+    runtimeMetadata: normalizedRuntimeMetadata,
   });
   return definition ? { provider, definition } : null;
 }

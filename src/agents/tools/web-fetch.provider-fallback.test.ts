@@ -414,6 +414,127 @@ describe("web_fetch provider fallback normalization", () => {
     expect(secondDetails.cached).toBeUndefined();
   });
 
+  it("does not replay an auto-recovered provider result for a configured unavailable provider", async () => {
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("network failed");
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+    resolveWebFetchDefinitionMock.mockImplementation(
+      ({ runtimeWebFetch }: { runtimeWebFetch?: { providerSource?: string } }) =>
+        runtimeWebFetch?.providerSource === "auto-detect"
+          ? {
+              provider: { id: "firecrawl" },
+              definition: {
+                description: "firecrawl",
+                parameters: {},
+                execute: async () => ({ text: "recovered firecrawl body" }),
+              },
+            }
+          : null,
+    );
+    const tool = createWebFetchTool({
+      config: {} as OpenClawConfig,
+      sandboxed: false,
+      lateBindRuntimeConfig: true,
+    });
+    const url = "https://example.com/recovered-provider-cache-scope";
+
+    runtimeState.activeSecretsRuntimeSnapshot = {
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 15 } } },
+      },
+    };
+    runtimeState.activeRuntimeWebToolsMetadata = {
+      fetch: {
+        providerSource: "auto-detect",
+        selectedProvider: "removed-provider",
+        diagnostics: [],
+      },
+      diagnostics: [],
+    };
+    const recovered = await tool?.execute?.("auto-recovered-provider", { url });
+    const recoveredDetails = recovered?.details as
+      | { externalContent?: { provider?: string } }
+      | undefined;
+    expect(recoveredDetails?.externalContent?.provider).toBe("firecrawl");
+
+    runtimeState.activeSecretsRuntimeSnapshot = {
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "removed-provider",
+              cacheTtlMinutes: 15,
+            },
+          },
+        },
+      },
+    };
+    runtimeState.activeRuntimeWebToolsMetadata = {
+      fetch: {
+        providerConfigured: "removed-provider",
+        providerSource: "configured",
+        selectedProvider: "removed-provider",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      diagnostics: [],
+    };
+
+    await expect(tool?.execute?.("configured-unavailable-provider", { url })).rejects.toThrow(
+      "network failed",
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(resolveWebFetchDefinitionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("tries direct fetch before reusing a provider fallback cache entry", async () => {
+    const directFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network failed"))
+      .mockResolvedValueOnce(
+        new Response("direct body", {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+      );
+    global.fetch = withFetchPreconnect(directFetch);
+    const providerExecute = vi.fn(async () => ({ text: "fallback body" }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 15 } } },
+      } as OpenClawConfig,
+      sandboxed: false,
+      runtimeWebFetch: {
+        providerConfigured: "firecrawl",
+        providerSource: "configured",
+        selectedProvider: "firecrawl",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+    const url = "https://example.com/direct-recovery-after-fallback";
+
+    const first = await tool?.execute?.("provider-fallback-first", { url });
+    const second = await tool?.execute?.("direct-recovery-second", { url });
+    const firstDetails = first?.details as { externalContent?: { provider?: string } };
+    const secondDetails = second?.details as { cached?: boolean; text?: string };
+
+    expect(firstDetails.externalContent?.provider).toBe("firecrawl");
+    expect(secondDetails.text).toContain("direct body");
+    expect(secondDetails.cached).toBeUndefined();
+    expect(directFetch).toHaveBeenCalledTimes(2);
+    expect(providerExecute).toHaveBeenCalledTimes(1);
+  });
+
   it("late-binds direct request headers and partitions the cache by the refreshed values", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response("# Routed", {
