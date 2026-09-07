@@ -427,6 +427,13 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
   }
+  if (
+    userVersion < 17 &&
+    tableExists(db, "worker_environments") &&
+    !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
+  ) {
+    migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

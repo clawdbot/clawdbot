@@ -8,8 +8,8 @@ import {
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../worker/node-workspace-deadlines.js";
 
-export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const commandLog = createSubsystemLogger("node-host/worker-workspace");
 
 /** Environment for node-owned workspace commands: pinned HOME, no credential prompts. */
@@ -41,7 +41,7 @@ export async function runWorkspaceCommand(params: {
     cwd: params.workspaceDir,
     baseEnv: workspaceCommandEnv(params.homeDir),
     ...(params.input === undefined ? {} : { input: params.input }),
-    timeoutMs: TRANSFER_TIMEOUT_MS,
+    timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
     signal: params.signal,
     maxOutputBytes,
     maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
@@ -61,10 +61,17 @@ export async function captureManifest(params: {
   manifestHome: string;
   baseCommit: string | null;
   referenceManifestRef: string;
+  baseManifestRef?: string;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
-}): Promise<string> {
-  const memoMode = params.hashMemo !== undefined;
+}) {
+  const hashMemo = params.hashMemo ?? new Map<string, string>();
+  // Verification seeds both accepted and original paths so a recreated file cannot
+  // disappear behind a new ignore rule. Fresh staging has no published base yet.
+  const priorRefs = [
+    params.referenceManifestRef,
+    ...(params.baseManifestRef ? [params.baseManifestRef] : []),
+  ];
   const stdout = (
     await runWorkspaceCommand({
       workspaceDir: params.workspaceDir,
@@ -76,27 +83,24 @@ export async function captureManifest(params: {
         params.workspaceDir,
         params.baseCommit ?? "",
         params.baseCommit ? "eligible" : "all",
-        params.referenceManifestRef.slice("sha256:".length),
-        ...(memoMode ? ["memo-v1"] : []),
+        ...new Set(priorRefs.map((ref) => ref.slice("sha256:".length))),
+        "memo-v1",
       ],
-      ...(params.hashMemo === undefined
-        ? {}
-        : {
-            input: serializeRemoteWorkspaceHashMemo(params.hashMemo),
-            // The memo round-trip returns up to the memo byte cap on stdout.
-            maxOutputBytes: MAX_WORKSPACE_HASH_MEMO_BYTES + 128 * 1024,
-          }),
+      input: serializeRemoteWorkspaceHashMemo(hashMemo),
+      // The local child can return the memo; the node RPC returns only capture facts.
+      maxOutputBytes: MAX_WORKSPACE_HASH_MEMO_BYTES + 128 * 1024,
       signal: params.signal,
     })
   ).trim();
-  if (params.hashMemo === undefined) {
-    return stdout;
-  }
   const envelope = parseRemoteWorkspaceManifestEnvelope(stdout);
-  replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, envelope.memo);
+  replaceWorkerWorkspaceHashMemoEntries(hashMemo, envelope.memo);
   commandLog.debug("node worker manifest capture completed", {
     workspaceDir: params.workspaceDir,
     ...envelope.metrics,
   });
-  return envelope.manifestRef;
+  return {
+    version: envelope.version,
+    manifestRef: envelope.manifestRef,
+    metrics: envelope.metrics,
+  };
 }

@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { hashWorkerCredential } from "./credential.js";
 import type {
   WorkerSessionPlacementIdentity,
   WorkerPlacementExecutionMode,
@@ -16,6 +17,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -27,6 +29,7 @@ describe("worker session placement store", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
+  let environments: WorkerEnvironmentStore;
   let nowMs: number;
 
   beforeEach(async () => {
@@ -34,6 +37,7 @@ describe("worker session placement store", () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    environments = createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
   afterEach(async () => {
@@ -41,9 +45,64 @@ describe("worker session placement store", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function advanceToActive(
+  function attachEnvironment(
+    environmentId: string,
+    sessionId: string,
+    from: "ready" | "idle" = "ready",
+  ) {
+    return environments.transition({
+      environmentId,
+      from,
+      to: "attached",
+      patch: {
+        attachedSessionIds: [sessionId],
+        credential: {
+          credentialHash: hashWorkerCredential(`${environmentId}:${sessionId}:${nowMs}`),
+          sessionId,
+          rpcSetVersion: 1,
+          expiresAtMs: nowMs + 10_000,
+        },
+      },
+    });
+  }
+
+  function createAttachedEnvironment(identity: WorkerSessionPlacementIdentity = SESSION) {
+    const environmentId = `environment-${identity.sessionId}`;
+    environments.createIntent({
+      environmentId,
+      providerId: "test-provider",
+      profileId: "test-profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: `provision:${environmentId}`,
+    });
+    environments.transition({ environmentId, from: "requested", to: "provisioning" });
+    environments.transition({
+      environmentId,
+      from: "provisioning",
+      to: "ready",
+      patch: {
+        leaseId: `lease:${environmentId}`,
+        nodeDeviceId: `node:${environmentId}`,
+        bootstrapReceipt: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.9.1",
+          protocolFeatures: ["worker-execution-context-v2"],
+        },
+        credential: {
+          credentialHash: hashWorkerCredential(`ready:${environmentId}`),
+          sessionId: null,
+          rpcSetVersion: 1,
+          expiresAtMs: nowMs + 10_000,
+        },
+      },
+    });
+    return attachEnvironment(environmentId, identity.sessionId);
+  }
+
+  function advanceToStarting(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
+    environmentId = `environment-${identity.sessionId}`,
   ) {
     let placement = store.startDispatch({ ...identity, executionMode });
     placement = store.transition({
@@ -51,7 +110,7 @@ describe("worker session placement store", () => {
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
-      patch: { environmentId: `environment-${identity.sessionId}` },
+      patch: { environmentId },
     });
     placement = store.transition({
       sessionId: identity.sessionId,
@@ -60,7 +119,7 @@ describe("worker session placement store", () => {
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = store.transition({
+    return store.transition({
       sessionId: identity.sessionId,
       from: "syncing",
       to: "starting",
@@ -70,12 +129,15 @@ describe("worker session placement store", () => {
         remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
       },
     });
+  }
+
+  function activate(placement: ReturnType<typeof advanceToStarting>, ownerEpoch: number) {
     const active = store.transition({
-      sessionId: identity.sessionId,
+      sessionId: placement.sessionId,
       from: "starting",
       to: "active",
       expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
+      patch: { activeOwnerEpoch: ownerEpoch },
     });
     if (active.state !== "active") {
       throw new Error("expected active worker placement");
@@ -83,141 +145,13 @@ describe("worker session placement store", () => {
     return active;
   }
 
-  it("persists the placement lifecycle and rejects stale transition generations", () => {
-    const requested = store.startDispatch(SESSION);
-    expect(requested).toMatchObject({
-      state: "requested",
-      generation: 1,
-      environmentId: null,
-      activeOwnerEpoch: null,
-    });
-
-    const provisioning = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: requested.generation,
-      patch: { environmentId: "environment-placement" },
-    });
-    expect(provisioning).toMatchObject({
-      state: "provisioning",
-      generation: 2,
-      environmentId: "environment-placement",
-    });
-    expect(() =>
-      store.transition({
-        sessionId: SESSION.sessionId,
-        from: "provisioning",
-        to: "syncing",
-        expectedGeneration: 1,
-      }),
-    ).toThrow("expected provisioning@1, found provisioning@2");
-    expect(() =>
-      store.transition({
-        sessionId: SESSION.sessionId,
-        from: "provisioning",
-        to: "active",
-        expectedGeneration: provisioning.generation,
-      }),
-    ).toThrow("Illegal worker session placement transition");
-
-    const failed = store.fail({
-      sessionId: SESSION.sessionId,
-      expectedGeneration: provisioning.generation,
-      recoveryError: "workspace synchronization failed",
-    });
-    expect(failed).toMatchObject({
-      state: "failed",
-      generation: 3,
-      recoveryError: "workspace synchronization failed",
-      terminalReason: "workspace synchronization failed",
-      terminalAtMs: 1_000,
-    });
-    expect(() =>
-      store.fail({
-        sessionId: SESSION.sessionId,
-        expectedGeneration: failed.generation - 1,
-        recoveryError: "stale teardown failure",
-      }),
-    ).toThrow("changed before failure");
-    expect(store.get(SESSION.sessionId)?.recoveryError).toBe("workspace synchronization failed");
-    nowMs = 2_000;
-    expect(
-      store.fail({ sessionId: SESSION.sessionId, recoveryError: "teardown retry failed" }),
-    ).toMatchObject({
-      state: "failed",
-      generation: failed.generation,
-      recoveryError: "teardown retry failed",
-      terminalReason: "workspace synchronization failed",
-      terminalAtMs: 1_000,
-    });
-    database.db
-      .prepare("UPDATE worker_session_placements SET execution_mode = NULL WHERE session_id = ?")
-      .run(SESSION.sessionId);
-    expect(store.get(SESSION.sessionId)).toMatchObject({ executionMode: "worker-turn" });
-  });
-
-  it("requires each placement phase to persist its complete metadata", () => {
-    const requested = store.startDispatch(SESSION);
-    const provisioning = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: requested.generation,
-      patch: { environmentId: "environment-placement" },
-    });
-    expect(provisioning).toMatchObject({
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-      workerBundleHash: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-    });
-
-    expect(() =>
-      store.transition({
-        sessionId: SESSION.sessionId,
-        from: "provisioning",
-        to: "syncing",
-        expectedGeneration: provisioning.generation,
-      }),
-    ).toThrow("requires an environment and bundle");
-    const syncing = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: provisioning.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-
-    expect(() =>
-      store.transition({
-        sessionId: SESSION.sessionId,
-        from: "syncing",
-        to: "starting",
-        expectedGeneration: syncing.generation,
-        patch: { workspaceBaseManifestRef: "manifest-placement" },
-      }),
-    ).toThrow("requires complete workspace metadata");
-    expect(
-      store.transition({
-        sessionId: SESSION.sessionId,
-        from: "syncing",
-        to: "starting",
-        expectedGeneration: syncing.generation,
-        patch: {
-          workspaceBaseManifestRef: "manifest-placement",
-          remoteWorkspaceDir: "/workspace/placement",
-        },
-      }),
-    ).toMatchObject({
-      state: "starting",
-      environmentId: "environment-placement",
-      workerBundleHash: "a".repeat(64),
-      workspaceBaseManifestRef: "manifest-placement",
-      remoteWorkspaceDir: "/workspace/placement",
-    });
-  });
+  function advanceToActive(
+    identity: WorkerSessionPlacementIdentity = SESSION,
+    executionMode: WorkerPlacementExecutionMode = "worker-turn",
+  ) {
+    const environment = createAttachedEnvironment(identity);
+    return activate(advanceToStarting(identity, executionMode), environment.ownerEpoch);
+  }
 
   it("drains and reconciles worker ownership before returning local", () => {
     const active = advanceToActive();

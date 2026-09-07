@@ -49,6 +49,73 @@ describe("sessions.dispatch authorization", () => {
     }
   });
 
+  it.each([
+    ["sessions.dispatch", "operator.admin", true],
+    ["sessions.dispatch", "operator.write", false],
+    ["sessions.dispatch", null, false],
+    ["sessions.move", "operator.admin", true],
+    ["sessions.move", "operator.write", false],
+    ["sessions.move", null, false],
+  ] as const)(
+    "derives %s setup authority from authenticated scope %s",
+    async (method, scope, setupAuthorized) => {
+      mocks.resolveTarget.mockReturnValue(
+        makeSessionTarget({
+          sessionId,
+          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+        }),
+      );
+      mocks.findLiveByOwner.mockReturnValue({
+        id: "worktree-1",
+        ownerKind: "session",
+        ownerId: sessionKey,
+        path: "/repo/worktree",
+      });
+      const placement = activePlacement();
+      const dispatch = vi.fn().mockResolvedValue(placement);
+      const move = vi.fn().mockResolvedValue(placement);
+      const context = makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch, move },
+        workerSessionPlacementService: {
+          getMany: () => new Map(method === "sessions.move" ? [[sessionId, placement]] : []),
+        },
+      });
+      const handler = getSessionDispatchHandler(method);
+      const respond = vi.fn();
+      await handler({
+        req: { type: "req", id: `setup-${method}-${scope}`, method },
+        params: {
+          key: sessionKey,
+          ...(method === "sessions.dispatch"
+            ? { profileId: "test" }
+            : {
+                expected: {
+                  generation: placement.generation,
+                  environmentId: placement.environmentId,
+                  ownerEpoch: placement.activeOwnerEpoch,
+                },
+                target: { kind: "profile", profileId: "test" },
+              }),
+        },
+        respond,
+        context,
+        client: scope
+          ? ({ connect: { scopes: [scope] } } as Parameters<
+              typeof handleGatewayRequest
+            >[0]["client"])
+          : null,
+        isWebchatConnect: () => false,
+      });
+
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+      expect(method === "sessions.dispatch" ? dispatch : move).toHaveBeenCalledWith(
+        expect.objectContaining({ setupAuthorized }),
+        expect.any(Function),
+        undefined,
+      );
+    },
+  );
+
   it("requires admin before resolving a configured project profile", async () => {
     mocks.resolveTarget.mockReturnValue(
       makeSessionTarget({
@@ -126,15 +193,6 @@ describe("sessions.dispatch authorization", () => {
 
     const adminRespond = await request("operator.admin");
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
-      ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
-      { timeoutMs: 4_000 },
-    );
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "mapped" }),
-      expect.any(Function),
-      expect.any(Function),
-    );
     expect(adminRespond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -144,6 +202,15 @@ describe("sessions.dispatch authorization", () => {
         placement: expect.objectContaining({ state: "active" }),
       }),
       undefined,
+    );
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
+      ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
+      { timeoutMs: 4_000 },
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "mapped", setupAuthorized: true }),
+      expect.any(Function),
+      expect.any(Function),
     );
   });
 });

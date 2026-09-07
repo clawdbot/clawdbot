@@ -55,6 +55,7 @@ export async function applyNodeRepositoryCheckpoint(params: {
     currentManifestRef: params.currentManifestRef,
     base: params.base,
     current: params.current,
+    acceptance: { kind: "reconcile" },
     journal: {
       load: () => journal,
       begin: (next) => {

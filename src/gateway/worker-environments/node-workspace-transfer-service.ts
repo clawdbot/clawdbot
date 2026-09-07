@@ -69,6 +69,8 @@ type UploadOperation = {
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
   uploaded?: NodeWorkspaceTransferUpload;
+  abortController: AbortController;
+  receiving?: Promise<{ manifestRef: string }>;
 };
 
 type TransferContext = {
@@ -405,6 +407,7 @@ export function createNodeWorkspaceTransferService(options: {
         baseManifestRef,
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
+        abortController: new AbortController(),
       };
       return token;
     },
@@ -424,6 +427,26 @@ export function createNodeWorkspaceTransferService(options: {
       }
       context.upload = undefined;
       return operation.uploaded;
+    },
+
+    async discardUpload(environmentId: string, token: string): Promise<void> {
+      const context = contexts.get(environmentId);
+      const operation = context?.upload;
+      if (!context || !operation || operation.token !== token) {
+        return;
+      }
+      // Discard relinquishes this upload's result custody. Ordinary revoke must
+      // retain completed results until takeUpload transfers them to its caller.
+      context.upload = undefined;
+      operation.abortController.abort(new Error("Node workspace upload discarded"));
+      await operation.receiving?.catch((error: unknown) => {
+        if (error !== operation.abortController.signal.reason) {
+          throw error;
+        }
+      });
+      if (operation.uploaded) {
+        await fsp.rm(operation.uploaded.stagingRoot, { recursive: true, force: true });
+      }
     },
 
     getSnapshot(
@@ -500,7 +523,9 @@ export function createNodeWorkspaceTransferService(options: {
       const capability = authorization.capability;
       return capability.direction === "download" && capability.signal
         ? AbortSignal.any([signal, capability.signal])
-        : signal;
+        : capability.direction === "upload"
+          ? AbortSignal.any([signal, capability.abortController.signal])
+          : signal;
     },
 
     snapshot(authorization: TransferAuthorization): NodeWorkspaceTransferSnapshot | undefined {
@@ -581,51 +606,55 @@ export function createNodeWorkspaceTransferService(options: {
       ) {
         throw new Error("Workspace transfer upload owner is unavailable");
       }
-      const assertCurrent = () => {
-        params.signal.throwIfAborted();
-        assertAuthorizationCurrent(authorization);
-      };
-      let uploaded: NodeWorkspaceTransferUpload | undefined;
-      try {
-        uploaded = await readNodeWorkspaceUpload({
-          request: params.request,
-          baseManifestRef: operation.baseManifestRef,
-          temporaryRoot: authorization.context.temporaryRoot,
-          signal: params.signal,
-          assertCurrent,
-          isAuthorized: () => authorizationCurrent(authorization),
-        });
-        assertCurrent();
-        const context = authorization.context;
-        if (context.localPath && !context.snapshots.has(uploaded.baseManifestRef)) {
-          if (context.baseCommit !== uploaded.base.baseCommit) {
-            await context.pack?.catch(() => undefined);
-            assertCurrent();
-            context.pack = undefined;
-            context.baseCommit = uploaded.base.baseCommit;
-          }
-          // Reconnect may snapshot newer local files. Retain the authenticated original
-          // base before upload-token revocation; accepted publication needs its exact pack.
-          context.snapshots.set(uploaded.baseManifestRef, {
-            manifest: uploaded.base,
-            manifestRef: uploaded.baseManifestRef,
-            rawManifest: uploaded.baseRaw,
-            root: context.localPath,
+      const signal = AbortSignal.any([params.signal, operation.abortController.signal]);
+      operation.receiving = (async () => {
+        const assertCurrent = () => {
+          signal.throwIfAborted();
+          assertAuthorizationCurrent(authorization);
+        };
+        let uploaded: NodeWorkspaceTransferUpload | undefined;
+        try {
+          uploaded = await readNodeWorkspaceUpload({
+            request: params.request,
+            baseManifestRef: operation.baseManifestRef,
+            temporaryRoot: authorization.context.temporaryRoot,
+            signal,
+            assertCurrent,
+            isAuthorized: () => authorizationCurrent(authorization),
           });
-          context.currentManifestRef = uploaded.baseManifestRef;
+          assertCurrent();
+          const context = authorization.context;
+          if (context.localPath && !context.snapshots.has(uploaded.baseManifestRef)) {
+            if (context.baseCommit !== uploaded.base.baseCommit) {
+              await context.pack?.catch(() => undefined);
+              assertCurrent();
+              context.pack = undefined;
+              context.baseCommit = uploaded.base.baseCommit;
+            }
+            // Reconnect may snapshot newer local files. Retain the authenticated original
+            // base before upload-token revocation; accepted publication needs its exact pack.
+            context.snapshots.set(uploaded.baseManifestRef, {
+              manifest: uploaded.base,
+              manifestRef: uploaded.baseManifestRef,
+              rawManifest: uploaded.baseRaw,
+              root: context.localPath,
+            });
+            context.currentManifestRef = uploaded.baseManifestRef;
+          }
+          operation.uploaded = uploaded;
+          operation.state = "completed";
+          return { manifestRef: uploaded.currentManifestRef };
+        } catch (error) {
+          if (uploaded) {
+            await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+          }
+          if (authorization.context.upload === operation) {
+            authorization.context.upload = undefined;
+          }
+          throw error;
         }
-        operation.uploaded = uploaded;
-        operation.state = "completed";
-        return { manifestRef: uploaded.currentManifestRef };
-      } catch (error) {
-        if (uploaded) {
-          await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
-        }
-        if (authorization.context.upload === operation) {
-          authorization.context.upload = undefined;
-        }
-        throw error;
-      }
+      })();
+      return await operation.receiving;
     },
 
     async verifyBlob(params: { path: string; size: number; sha256: string }): Promise<boolean> {

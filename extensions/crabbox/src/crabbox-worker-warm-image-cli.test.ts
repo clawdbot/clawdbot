@@ -34,14 +34,17 @@ afterEach(() => {
 function pendingCapture(): WarmProfileRecord {
   const now = Date.now();
   return {
-    version: 2,
+    version: 3,
     allocations: {},
     image: {
       checkpointId: "chk_last_good",
       kind: "native",
       state: "available",
       createdAtMs: now - 86_400_000,
-      lastUsedAtMs: now,
+      preparationKey: null,
+      cacheKey: null,
+      purpose: null,
+      lastDemandAtMs: now,
     },
     operation: {
       type: "capture",
@@ -61,6 +64,53 @@ async function runCli(...args: string[]) {
 }
 
 describe("Crabbox warm-image CLI", () => {
+  it.each([
+    { preparationKey: "a".repeat(64), demandAtMs: null, imageGeneration: null },
+    { preparationKey: null, demandAtMs: 1 },
+    {
+      preparationKey: null,
+      demandAtMs: 1,
+      imageGeneration: { checkpointId: "chk_retained", createdAtMs: -1 },
+    },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, cacheKey: undefined },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, purpose: undefined },
+    { preparationKey: null, demandAtMs: 1, imageGeneration: null, purpose: "reserve" },
+    {
+      preparationKey: null,
+      demandAtMs: 1,
+      imageGeneration: null,
+      cacheKey: "c".repeat(64),
+      purpose: "session",
+    },
+  ])(
+    "rejects incomplete preparation metadata without rewriting retained ownership: %j",
+    async (metadata) => {
+      const raw = createPluginStateSyncKeyedStoreForTests<unknown>("crabbox", {
+        namespace: "warm-images",
+        maxEntries: 128,
+        overflowPolicy: "reject-new",
+      });
+      const record = {
+        version: 3,
+        allocations: {
+          cbx_retained: Object.fromEntries(
+            Object.entries({
+              choice: { kind: "checkpoint", checkpointId: "chk_retained" },
+              machineClass: "standard",
+              phase: "pending",
+              cacheKey: null,
+              purpose: null,
+              ...metadata,
+            }).filter(([, value]) => value !== undefined),
+          ),
+        },
+      };
+      raw.register("profile", record);
+      await expect(runCli("--json")).rejects.toThrow("preparation state is invalid");
+      expect(raw.lookup("profile")).toEqual(record);
+    },
+  );
+
   it("recovers a legacy allocation only after acknowledgment of the exact unchanged row", async () => {
     const legacy = createPluginStateSyncKeyedStoreForTests<{ machineClass: string }>("crabbox", {
       namespace: "warm-leases",
@@ -104,7 +154,10 @@ describe("Crabbox warm-image CLI", () => {
           checkpointId: "chk_last_good",
           state: "available",
           createdAtMs: record.image!.createdAtMs,
-          lastUsedAtMs: record.image!.lastUsedAtMs,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: record.image!.lastDemandAtMs,
           allocations: {},
           capture: {
             selector: SELECTOR,

@@ -6,7 +6,10 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
+import {
+  createNodeWorkerRepositoryPreparation,
+  type NodeWorkerRepositoryExec,
+} from "./node-worker-repository-preparation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -66,9 +69,22 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
     sessionId: "session-1",
     generation: 1,
   };
-  const repository = createNodeWorkerRepositoryPreparation((command) =>
-    runtime.exec({ ...identity, ...command, argv: [...command.argv] }),
-  );
+  const execute = (
+    targetRuntime: NodeWorkerWorkspaceRuntime,
+    command: Parameters<NodeWorkerRepositoryExec>[0],
+  ) =>
+    targetRuntime.exec({
+      ...identity,
+      argv: [...command.argv],
+      input: command.input,
+      timeoutMs: command.timeoutMs,
+      resetWorkspace: command.resetWorkspace,
+      transfer: command.transfer,
+      seed: command.seed,
+      capture: command.capture,
+      skillResources: command.skillResources?.operation,
+    });
+  const repository = createNodeWorkerRepositoryPreparation((command) => execute(runtime, command));
   const source = { origin: pathToFileURL(origin).href, commit };
 
   const prepared = await repository.prepareRepository(source);
@@ -126,7 +142,7 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   const replacementCommands: string[][] = [];
   const restored = await createNodeWorkerRepositoryPreparation((command) => {
     replacementCommands.push([...command.argv]);
-    return replacement.exec({ ...identity, ...command, argv: [...command.argv] });
+    return execute(replacement, command);
   }).prepareRepository(source, manifestRef);
   expect(restored.kind).toBe("prepared");
   if (restored.kind !== "prepared") {

@@ -567,8 +567,21 @@ struct PortGuardianRecordStoreTests {
     func `supported and newer Node schema versions open or fail closed`() throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
+        let packageURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("package.json")
+        let package = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: packageURL)) as? [String: Any])
+        let openclaw = try #require(package["openclaw"] as? [String: Any])
+        let schemaVersions = try #require(openclaw["schemaVersions"] as? [String: Any])
+        let currentSchemaVersion = try #require(schemaVersions["state"] as? Int)
+        try #require(currentSchemaVersion >= 4)
 
-        for version in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] {
+        for version in 4...currentSchemaVersion {
             let databaseURL = fixture.root.appendingPathComponent("supported-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             let store = try PortGuardianRecordStore(databaseURL: databaseURL)
@@ -580,12 +593,19 @@ struct PortGuardianRecordStoreTests {
             #expect(try store.records() == [record])
         }
 
-        for version in [17, 99] {
+        for version in [currentSchemaVersion + 1, currentSchemaVersion + 100] {
             let databaseURL = fixture.root.appendingPathComponent("newer-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
+            try Self.execute(databaseURL, """
+            INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42);
+            """)
             #expect(throws: PortGuardianStoreError.self) {
                 try PortGuardianRecordStore(databaseURL: databaseURL)
             }
+            #expect(try Self.scalarInt(databaseURL, "PRAGMA user_version") == Int64(version))
+            #expect(try Self.scalarInt(
+                databaseURL,
+                "SELECT COUNT(*) FROM macos_port_guardian_records WHERE pid = 4242 AND port = 18789") == 1)
         }
     }
 

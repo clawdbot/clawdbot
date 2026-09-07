@@ -430,7 +430,9 @@ export async function prepareNodeHostRuntime(params?: {
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
       const workerWorkspace =
         preparedContainerWorkspace ??
-        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
+        (workerRunsEnabled
+          ? new NodeWorkerWorkspaceRuntime({ env, ephemeral: params?.ephemeral })
+          : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;

@@ -1,7 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -857,7 +860,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const release = vi.fn();
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       afterReconcile: () => {
@@ -923,7 +926,9 @@ test.each(["worker-turn", "remote-exec"] as const)(
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const harness = createHarness(placementStore, { verifyFails: true });
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+      verifyFails: true,
+    });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");
     const deleted = await directSessionReq(
@@ -963,7 +968,7 @@ test("sessions.delete retains reclaimed placement when runtime cleanup fails bef
     entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(placementStore, {
+  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });

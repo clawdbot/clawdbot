@@ -417,6 +417,21 @@ describe("worker turn launcher failure recovery", () => {
         throw new Error("unexpected provisioning interruption");
       }),
       supportsProviderExecutionMode: vi.fn(() => true),
+      prepareProjectIntent: vi.fn(async () => {
+        throw new Error("unexpected project preparation");
+      }),
+      assertPreparedIntentCurrent: vi.fn(() => {
+        throw new Error("unexpected project preparation validation");
+      }),
+      bindPreparedWorkspace: vi.fn(async () => {
+        throw new Error("unexpected prepared workspace binding");
+      }),
+      getPreparedCandidates: vi.fn(() => {
+        throw new Error("unexpected prepared worker selection");
+      }),
+      schedulePreparedRefill: vi.fn(() => {
+        throw new Error("unexpected prepared worker refill");
+      }),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(() => true),

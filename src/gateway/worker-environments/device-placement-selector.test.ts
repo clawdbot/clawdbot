@@ -53,6 +53,7 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
+      workspaceManifest: 1,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],

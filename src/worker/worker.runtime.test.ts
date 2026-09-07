@@ -58,6 +58,7 @@ import {
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -66,6 +67,7 @@ import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "./launch-descriptor.js";
+import type { NodeWorkerStartupMessage } from "./node-supervisor-protocol.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -1074,6 +1076,9 @@ describe("worker runtime", () => {
     const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
     await mkdir(promptDir);
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    for (const name of ["SOUL.md", "IDENTITY.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]) {
+      await writeFile(path.join(workspaceDir, name), "unused-workspace-context");
+    }
     await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
     await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
     await writeFile(literalPrompt, "unrequested-file-contents");
@@ -1081,7 +1086,17 @@ describe("worker runtime", () => {
       launch.assignment.systemPrompt = literalPrompt;
     }
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFileFollowingParents");
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      expect(
+        openedFiles.mock.calls
+          .map(([params]) => params.absolutePath)
+          .filter((filePath) => path.dirname(filePath) === workspaceDir),
+      ).toEqual([path.join(workspaceDir, "AGENTS.md")]);
+    } finally {
+      openedFiles.mockRestore();
+    }
 
     const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
     expect(prompt).toContain("prepared-worker-context");
@@ -1432,6 +1447,54 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker admission rejected");
     expect(gateway.connectionCount).toBe(1);
   });
+
+  it.each([false, true])(
+    "reports startup boundaries once across admission retries, with observer failure=%s",
+    async (observerFails) => {
+      const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
+      const connectionModule = await import("./worker-connection.js");
+      const originalFactory = connectionModule.createWorkerConnection;
+      const factory = vi
+        .spyOn(connectionModule, "createWorkerConnection")
+        .mockImplementation((options) =>
+          originalFactory({
+            ...options,
+            admissionTimeoutMs: 25,
+            reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+          }),
+        );
+      const events: NodeWorkerStartupMessage[] = [];
+      try {
+        await expect(
+          runWorkerDescriptor(launch, {
+            onStartup: (event) => {
+              events.push(event);
+              if (observerFails) {
+                throw new Error("diagnostic sink unavailable");
+              }
+            },
+          }),
+        ).resolves.toMatchObject({ status: "completed" });
+        expect(gateway.connectionCount).toBeGreaterThanOrEqual(2);
+        expect(events.map((event) => event.phase)).toEqual([
+          "connection-start",
+          "transport-open",
+          "hello-ready",
+          "first-inference",
+        ]);
+        for (const event of events) {
+          expect(event).toMatchObject({
+            runId: launch.assignment.runId,
+            turnId: launch.assignment.turnId,
+          });
+        }
+        const times = events.map((event) => event.workerTimeMs);
+        expect(times).toEqual(times.toSorted((a, b) => a - b));
+      } finally {
+        factory.mockRestore();
+      }
+    },
+  );
 
   it.each(["initial admission", "running turn"] as const)(
     "marks only an initial admission deadline as safe to re-arm: %s",

@@ -1,19 +1,29 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import {
+  supportsWorkerExecutionContextLaunch,
+  verifyWorkerAdmissionHandshake,
+} from "./admission.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import type {
-  PlacementFailureActions,
-  WorkerActivationBarrier,
-  WorkerActiveDispatchPlacement,
-  WorkerDispatchEnvironmentService,
-  WorkerDispatchPlacement,
-  WorkerDispatchPlacementStore,
-  WorkerProvisioningDispatchPlacement,
+import {
+  isPendingProvisioningEnvironment,
+  requireProvisionedEnvironment,
+  type PlacementFailureActions,
+  type WorkerActivationBarrier,
+  type WorkerActiveDispatchPlacement,
+  type WorkerDispatchEnvironmentService,
+  type WorkerDispatchPlacement,
+  type WorkerDispatchPlacementStore,
+  type WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import {
+  readWorkerProjectPreparation,
+  type WorkerProviderPreparedIntent,
+} from "./preparation-identity.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
@@ -47,56 +57,16 @@ export type WorkerNodePlacementAuthority = (
   requirement: DevicePlacementRequirement,
 ) => boolean;
 
-function isPendingProvisioningEnvironment(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-  environmentId: string | null,
-): boolean {
-  return (
-    environment?.environmentId === environmentId &&
-    environment.destroyRequestedAtMs === null &&
-    (environment.state === "requested" ||
-      environment.state === "provisioning" ||
-      environment.state === "bootstrapping")
-  );
-}
-
-function requireProvisionedEnvironment(
-  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
-  expectedEnvironmentId: string,
-  executionMode: WorkerPlacementDispatchRequest["executionMode"],
-  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
-): { environmentId: string; ownerEpoch: number; bundleHash: string } {
-  if (
-    (environment.state !== "ready" && environment.state !== "idle") ||
-    environment.environmentId !== expectedEnvironmentId ||
-    environment.destroyRequestedAtMs !== null ||
-    !environment.bootstrapReceipt ||
-    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
-  ) {
-    throw new Error(
-      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
-    );
-  }
-  if (
-    (environment.profileSnapshot.executionMode !== undefined &&
-      environment.profileSnapshot.executionMode !== executionMode) ||
-    (executionMode === "worker-turn" &&
-      environment.profileSnapshot.executionMode !== undefined &&
-      !environment.nodeDeviceId) ||
-    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
-  ) {
-    throw new Error("Worker environment does not support the placement's exact execution mode");
-  }
-  return {
-    environmentId: environment.environmentId,
-    ownerEpoch: environment.ownerEpoch,
-    bundleHash: environment.bootstrapReceipt.bundleHash,
-  };
-}
+type WorkerNodePlacementAdmission = {
+  node: NodeWorkerSupervisorNodeProof;
+  requirement: DevicePlacementRequirement;
+};
 
 export function createWorkerPlacementDispatchStartup(options: {
   placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService & Pick<WorkerEnvironmentService, "recordError">;
+  environments: WorkerDispatchEnvironmentService &
+    Pick<WorkerEnvironmentService, "recordError"> &
+    Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
   isShuttingDown?: () => boolean;
   failure: PlacementFailureActions;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
@@ -111,6 +81,55 @@ export function createWorkerPlacementDispatchStartup(options: {
   ) => void;
 }) {
   const { environments, failure, placements } = options;
+
+  const createDispatchEnvironment = (
+    request: WorkerPlacementDispatchRequest,
+    idempotencyKey: string,
+    projectPath: string | undefined,
+    signal?: AbortSignal,
+    preparedIntent?: WorkerProviderPreparedIntent,
+  ) =>
+    request.inheritedProfile
+      ? environments.createFromProfileSnapshot(
+          {
+            profileId: request.profileId,
+            providerId: request.inheritedProfile.providerId,
+            profileSnapshot: request.inheritedProfile.profileSnapshot,
+          },
+          idempotencyKey,
+          request.machineClass,
+          request.executionMode,
+          projectPath,
+          signal,
+          preparedIntent,
+        )
+      : environments.create(
+          request.profileId,
+          idempotencyKey,
+          request.machineClass,
+          request.executionMode,
+          projectPath,
+          signal,
+          preparedIntent,
+        );
+
+  const validateCloudNodeCommands = (request: WorkerPlacementDispatchRequest) => {
+    if (
+      !request.deviceId &&
+      request.devicePlacement?.requiredNodeCommands.length &&
+      environments.requiresNodeEnrollment?.(request.profileId, request.inheritedProfile?.providerId)
+    ) {
+      const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig());
+      const deniedCommand = request.devicePlacement.requiredNodeCommands.find(
+        (command) => !allowlist.has(command),
+      );
+      if (deniedCommand) {
+        throw new Error(
+          `cloud worker node command ${deniedCommand} is not enabled; add it to gateway.nodes.commands.allow and approve the command on the node`,
+        );
+      }
+    }
+  };
 
   const retainInterruptedProvisioning = (
     owned: WorkerDispatchPlacement,
@@ -159,9 +178,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     request: WorkerPlacementDispatchRequest,
     environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
     admittedNode?: NodeWorkerSupervisorNodeProof,
-  ): Promise<
-    { node: NodeWorkerSupervisorNodeProof; requirement: DevicePlacementRequirement } | undefined
-  > => {
+  ): Promise<WorkerNodePlacementAdmission | undefined> => {
     const deviceId = environment.nodeDeviceId;
     if (!deviceId) {
       return undefined;
@@ -192,6 +209,93 @@ export function createWorkerPlacementDispatchStartup(options: {
     return { node: eligibility.node, requirement };
   };
 
+  const bindPreparedPlacement = async (params: {
+    request: WorkerPlacementDispatchRequest;
+    placement: WorkerDispatchPlacement;
+    intent: WorkerProviderPreparedIntent;
+    assertCurrent: () => void;
+  }) => {
+    const preparation = readWorkerProjectPreparation(params.intent.profileSnapshot.project);
+    if (!preparation || params.intent.preparationKey !== preparation.key) {
+      return undefined;
+    }
+    const assertCurrent = () => {
+      params.assertCurrent();
+      environments.assertPreparedIntentCurrent(params.request.profileId, params.intent);
+    };
+    assertCurrent();
+    const expectedBuild = {
+      bundleHash: preparation.artifacts.workerBundleHash,
+      openclawVersion: preparation.artifacts.openclawVersion,
+      protocolFeatures: preparation.artifacts.protocolFeatures,
+    };
+    for (const environment of environments.getPreparedCandidates(params.intent)) {
+      if (
+        !environment.nodeDeviceId ||
+        !environment.leaseId ||
+        !environment.bootstrapReceipt ||
+        !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) ||
+        !verifyWorkerAdmissionHandshake(environment.bootstrapReceipt, expectedBuild)
+      ) {
+        continue;
+      }
+      let admittedNode: Awaited<ReturnType<typeof requireNodePlacementEligibility>>;
+      try {
+        admittedNode = await requireNodePlacementEligibility(params.request, environment);
+      } catch {
+        // An unavailable spare is a capacity miss; cancellation or revoked request authority is not.
+        assertCurrent();
+        continue;
+      }
+      assertCurrent();
+      const remainsSelectable = () =>
+        environments
+          .getPreparedCandidates(params.intent)
+          .some(
+            (candidate) =>
+              candidate.environmentId === environment.environmentId &&
+              candidate.ownerEpoch === environment.ownerEpoch,
+          );
+      if (
+        !admittedNode ||
+        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement) ||
+        !remainsSelectable()
+      ) {
+        continue;
+      }
+      const { node, requirement } = admittedNode;
+      const placement = placements.bindPreparedEnvironment({
+        sessionId: params.request.sessionId,
+        sessionKey: params.request.sessionKey,
+        agentId: params.request.agentId,
+        executionMode: params.request.executionMode,
+        expectedGeneration: params.placement.generation,
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+        providerId: params.intent.providerId,
+        profileId: params.request.profileId,
+        preparationKey: preparation.key,
+        nodeDeviceId: environment.nodeDeviceId,
+        leaseId: environment.leaseId,
+        bundleHash: expectedBuild.bundleHash,
+        assertCurrent: () => {
+          assertCurrent();
+          // Pool policy can change while node admission waits; recheck it at consumption.
+          if (!remainsSelectable()) {
+            throw new Error("Prepared worker is no longer available under the current pool policy");
+          }
+          if (!options.isCurrentNodePlacement?.(node, requirement)) {
+            throw new Error("Prepared worker lost its current node authority before binding");
+          }
+        },
+      });
+      if (placement) {
+        return { placement, environment, admittedNode };
+      }
+    }
+    return undefined;
+  };
+
   const continueProvisionedDispatch = async (params: {
     request: WorkerPlacementDispatchRequest;
     placement: WorkerDispatchPlacement;
@@ -202,6 +306,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     authorize?: WorkerPlacementAuthorization;
     signal?: AbortSignal;
     recovery?: true;
+    admittedNode?: WorkerNodePlacementAdmission;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
@@ -214,7 +319,8 @@ export function createWorkerPlacementDispatchStartup(options: {
       request.executionMode,
       environments,
     );
-    const admittedNode = await requireNodePlacementEligibility(request, params.environment);
+    const admittedNode =
+      params.admittedNode ?? (await requireNodePlacementEligibility(request, params.environment));
     // Provisioning and transport setup yield; revoked callers must not attach or upload.
     params.signal?.throwIfAborted();
     params.authorize?.();
@@ -230,10 +336,46 @@ export function createWorkerPlacementDispatchStartup(options: {
     });
     options.reportTransition(params.onTransition, placement);
     params.signal?.throwIfAborted();
+    const syncingPlacement = placement;
+    const assertAttachmentCurrent = () => {
+      params.signal?.throwIfAborted();
+      params.authorize?.();
+      const current = placements.get(request.sessionId);
+      if (
+        current?.state !== "syncing" ||
+        current.generation !== syncingPlacement.generation ||
+        current.sessionKey !== request.sessionKey ||
+        current.agentId !== request.agentId ||
+        current.executionMode !== request.executionMode ||
+        current.environmentId !== provisioned.environmentId ||
+        current.turnClaim !== null
+      ) {
+        throw new Error("Prepared workspace lost its exact placement authority before binding");
+      }
+      if (
+        admittedNode &&
+        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
+      ) {
+        throw new Error("Prepared worker lost its current node authority before attachment");
+      }
+    };
     const credential = await environments.attachSession({
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      ...(params.environment.preparation
+        ? {
+            placementBinding: {
+              sessionId: request.sessionId,
+              sessionKey: request.sessionKey,
+              agentId: request.agentId,
+              executionMode: request.executionMode,
+              generation: placement.generation,
+              preparationKey: params.environment.preparation.key,
+              assertCurrent: assertAttachmentCurrent,
+            },
+          }
+        : {}),
     });
     params.signal?.throwIfAborted();
     params.authorize?.();
@@ -273,8 +415,9 @@ export function createWorkerPlacementDispatchStartup(options: {
         return attachedEnvironment;
       };
       const assertSyncOwner = () => {
-        params.signal?.throwIfAborted();
-        params.authorize?.();
+        // Prepared binding and either workspace source share the same live node,
+        // placement and attached environment authority across transport awaits.
+        assertAttachmentCurrent();
         requireAttachedEnvironment();
         const current = placements.get(request.sessionId);
         if (
@@ -287,6 +430,20 @@ export function createWorkerPlacementDispatchStartup(options: {
           throw new Error("Worker workspace preparation lost its exact placement owner");
         }
       };
+      const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
+      if (preparation) {
+        await environments.bindPreparedWorkspace({
+          environmentId: provisioned.environmentId,
+          ownerEpoch,
+          sessionId: request.sessionId,
+          sessionKey: request.sessionKey,
+          preparationKey: preparation.key,
+          cacheKey: preparation.cacheKey,
+          signal: params.signal,
+          assertCurrent: assertSyncOwner,
+        });
+        assertSyncOwner();
+      }
       const synced =
         params.workspace.kind === "repository"
           ? await syncSessionRepositoryWorkspace({
@@ -308,6 +465,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 ...(project ? { projectKey: project.key } : {}),
               },
               sessionId: request.sessionId,
+              sessionKey: request.sessionKey,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
             });
@@ -374,6 +532,11 @@ export function createWorkerPlacementDispatchStartup(options: {
         options.onActivated?.(request);
       } catch {
         // Maintenance scheduling cannot overturn a durable placement activation.
+      }
+      try {
+        environments.schedulePreparedRefill(provisioned.environmentId);
+      } catch {
+        // Capacity maintenance cannot turn a successfully activated session into a failed dispatch.
       }
       return activePlacement;
     } finally {
@@ -549,6 +712,9 @@ export function createWorkerPlacementDispatchStartup(options: {
   };
 
   return {
+    bindPreparedPlacement,
+    createDispatchEnvironment,
+    validateCloudNodeCommands,
     validateDevicePlacement,
     continueProvisionedDispatch,
     retainInterruptedProvisioning,

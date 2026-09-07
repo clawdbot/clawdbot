@@ -74,6 +74,36 @@ describe("worker environment service", () => {
     });
   });
 
+  it.each([
+    { transport: "ssh", sharedHost: false },
+    { transport: "ssh", sharedHost: true },
+    { transport: "ssh", sharedHost: undefined },
+    { transport: "node", sharedHost: false },
+    { transport: "node", sharedHost: true },
+    { transport: "node", sharedHost: undefined },
+  ])(
+    "preserves host isolation for $transport leases (sharedHost: $sharedHost)",
+    async ({ transport, sharedHost }) => {
+      const leaseId = `lease-${transport}-${sharedHost}`;
+      const lease: WorkerLease = {
+        leaseId,
+        ...(transport === "ssh" ? { ssh: support.SSH_ENDPOINT } : { node: { deviceId: leaseId } }),
+        ...(sharedHost === undefined ? {} : { sharedHost }),
+      };
+      const workerService = support.createService(
+        support.createProvider({ provision: async () => lease }),
+        {
+          ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+        },
+      );
+      await expect(workerService.create("development", leaseId)).resolves.toMatchObject({
+        state: "ready",
+        leaseId,
+        sharedHost: sharedHost === true,
+      });
+    },
+  );
+
   it("requires explicit placement modes before provider allocation", async () => {
     const provision = vi.fn(support.createProvider().provision);
     const provider = support.createProvider({ supportedExecutionModes: undefined, provision });

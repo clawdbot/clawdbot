@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 
 type WorkspaceHashMetrics = {
   contentHashCount: number;
@@ -28,6 +28,15 @@ type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
 };
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
+// A memo describes the inventory, not the changed-file reconciliation journal.
+// Bound parser work by the smallest valid tuple that can fit its existing byte budget.
+export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = Math.min(
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  Math.floor(
+    (MAX_WORKSPACE_HASH_MEMO_BYTES - 1) /
+      (Buffer.byteLength(JSON.stringify(["worker:0:0:0:0:0", "0".repeat(64)])) + 1),
+  ),
+);
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
@@ -40,7 +49,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
       .array(
         z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
       )
-      .max(MAX_RECONCILIATION_ENTRIES),
+      .max(MAX_WORKSPACE_HASH_MEMO_ENTRIES),
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
@@ -55,10 +64,22 @@ const remoteWorkspaceManifestEnvelopeSchema = z
 
 export type RemoteWorkspaceManifestEnvelope = z.infer<typeof remoteWorkspaceManifestEnvelopeSchema>;
 
+const remoteWorkspaceManifestCaptureSchema = remoteWorkspaceManifestEnvelopeSchema.omit({
+  memo: true,
+});
+
+/** Node-owned caches stay on the node; only bounded capture facts cross its RPC. */
+export function parseRemoteWorkspaceManifestCapture(stdout: string) {
+  return remoteWorkspaceManifestCaptureSchema.parse(JSON.parse(stdout));
+}
+
 /** Parses and validates a memo-v1 capture response from the remote manifest script. */
 export function parseRemoteWorkspaceManifestEnvelope(
   stdout: string,
 ): RemoteWorkspaceManifestEnvelope {
+  if (Buffer.byteLength(stdout) > MAX_WORKSPACE_HASH_MEMO_BYTES) {
+    throw new Error("Workspace hash memo envelope exceeds its byte limit");
+  }
   return remoteWorkspaceManifestEnvelopeSchema.parse(JSON.parse(stdout));
 }
 
@@ -166,7 +187,6 @@ export function takeWorkspaceHashMemo(
 /** Self-contained for the node script; preserve the largest hashes within both wire limits. */
 export function selectWorkerWorkspaceHashMemoEntries(
   memo: ReadonlyMap<string, string>,
-  maxEntries: number,
   maxBytes: number,
 ): Array<[string, string]> {
   const compareIdentity = ([left]: [string, string], [right]: [string, string]) =>
@@ -178,7 +198,7 @@ export function selectWorkerWorkspaceHashMemoEntries(
   const selected: Array<[string, string]> = [];
   let bytes = 2;
   for (const { entry } of candidates) {
-    if (selected.length === maxEntries) {
+    if (selected.length === MAX_WORKSPACE_HASH_MEMO_ENTRIES) {
       break;
     }
     const entryBytes = Buffer.byteLength(JSON.stringify(entry)) + (selected.length > 0 ? 1 : 0);
@@ -191,13 +211,30 @@ export function selectWorkerWorkspaceHashMemoEntries(
 }
 
 export function serializeRemoteWorkspaceHashMemo(memo: WorkspaceHashMemo): string {
-  return JSON.stringify(
-    selectWorkerWorkspaceHashMemoEntries(
-      memo,
-      MAX_RECONCILIATION_ENTRIES,
-      MAX_WORKSPACE_HASH_MEMO_BYTES,
-    ),
+  return JSON.stringify(selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_BYTES));
+}
+
+/** Self-contained for the node script; the SSH cap includes metadata and its newline. */
+export function serializeRemoteWorkspaceManifestEnvelope(
+  manifestRef: string,
+  memo: ReadonlyMap<string, string>,
+  metrics: RemoteWorkspaceHashMetrics,
+): string {
+  const envelope: RemoteWorkspaceManifestEnvelope = {
+    version: 1,
+    manifestRef,
+    memo: [],
+    metrics: { ...metrics, memoTruncatedCount: memo.size },
+  };
+  // The maximum possible truncation count reserves at least as many digits as
+  // the final count. Keep the empty array's brackets inside the memo budget.
+  const overhead = Buffer.byteLength(JSON.stringify(envelope)) + 1 - 2;
+  envelope.memo = selectWorkerWorkspaceHashMemoEntries(
+    memo,
+    MAX_WORKSPACE_HASH_MEMO_BYTES - overhead,
   );
+  envelope.metrics.memoTruncatedCount = memo.size - envelope.memo.length;
+  return `${JSON.stringify(envelope)}\n`;
 }
 
 export function recordRemoteWorkspaceHashMetrics(

@@ -1876,6 +1876,25 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   provider_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   profile_snapshot_json TEXT NOT NULL,
+  last_activated_at_ms INTEGER,
+  preparation_key TEXT,
+  preparation_demand_at_ms INTEGER,
+  preparation_expires_at_ms INTEGER,
+  preparation_consumed_at_ms INTEGER CHECK (
+    (preparation_key IS NULL AND preparation_demand_at_ms IS NULL
+      AND preparation_expires_at_ms IS NULL AND preparation_consumed_at_ms IS NULL)
+    OR
+    (preparation_key IS NOT NULL AND length(preparation_key) = 64
+      AND preparation_key NOT GLOB '*[^0-9a-f]*'
+      AND preparation_demand_at_ms IS NOT NULL
+      AND preparation_demand_at_ms BETWEEN 0 AND 9007199254740991
+      AND preparation_expires_at_ms IS NOT NULL
+      AND preparation_expires_at_ms > preparation_demand_at_ms
+      AND preparation_expires_at_ms <= 9007199254740991
+      AND (preparation_consumed_at_ms IS NULL
+        OR (preparation_consumed_at_ms >= preparation_demand_at_ms
+          AND preparation_consumed_at_ms < preparation_expires_at_ms)))
+  ),
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
   node_setup_id TEXT,
@@ -1923,6 +1942,47 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
 
 CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
   ON worker_environments(state_changed_at_ms, environment_id);
+
+-- A dedicated node registers its fixed build paths before ready, then binds
+-- them once. The environment belongs to the Gateway's separate database.
+CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (
+  preparation_key TEXT NOT NULL PRIMARY KEY CHECK (
+    length(preparation_key) = 64 AND preparation_key NOT GLOB '*[^0-9a-f]*'
+  ),
+  cache_key TEXT NOT NULL CHECK (
+    length(cache_key) = 64 AND cache_key NOT GLOB '*[^0-9a-f]*'
+  ),
+  gateway_namespace TEXT NOT NULL CHECK (length(gateway_namespace) > 0),
+  workspace_dir TEXT NOT NULL UNIQUE CHECK (length(workspace_dir) > 0),
+  home_dir TEXT NOT NULL CHECK (length(home_dir) > 0),
+  source_manifest_ref TEXT NOT NULL CHECK (
+    length(source_manifest_ref) = 71 AND substr(source_manifest_ref, 1, 7) = 'sha256:'
+      AND substr(source_manifest_ref, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  state TEXT NOT NULL CHECK (state IN ('available', 'bound', 'retiring', 'retired')),
+  environment_id TEXT NOT NULL CHECK (length(environment_id) > 0),
+  session_id TEXT,
+  session_key TEXT,
+  owner_epoch INTEGER CHECK (owner_epoch BETWEEN 1 AND 9007199254740991),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  bound_at_ms INTEGER CHECK (bound_at_ms BETWEEN created_at_ms AND 9007199254740991),
+  retired_at_ms INTEGER CHECK (
+    retired_at_ms BETWEEN coalesce(bound_at_ms, created_at_ms) AND 9007199254740991
+  ),
+  CHECK (
+    (session_id IS NULL AND session_key IS NULL AND owner_epoch IS NULL AND bound_at_ms IS NULL)
+    OR
+    (session_id IS NOT NULL AND length(session_id) > 0
+      AND session_key IS NOT NULL AND length(session_key) > 0
+      AND owner_epoch IS NOT NULL AND bound_at_ms IS NOT NULL)
+  ),
+  CHECK (
+    (state = 'available' AND bound_at_ms IS NULL AND retired_at_ms IS NULL)
+    OR (state = 'bound' AND bound_at_ms IS NOT NULL AND retired_at_ms IS NULL)
+    OR (state = 'retiring' AND retired_at_ms IS NULL)
+    OR (state = 'retired' AND retired_at_ms IS NOT NULL)
+  )
+) STRICT;
 
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.

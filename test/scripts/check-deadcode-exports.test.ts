@@ -1,6 +1,7 @@
 // Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import path from "node:path";
+import { globSync } from "tinyglobby";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
@@ -97,8 +98,14 @@ describe("check-deadcode-exports", () => {
       expect(fs.existsSync(executionPath), executionPath).toBe(true);
       expect(rootEntries, executionPath).toContain(`${executionPath}!`);
     }
-    expect(rootEntries).toContain(
-      "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
+    const fixtureEntries = rootEntries.filter((entry) =>
+      entry.startsWith("test/e2e/qa-lab/runtime/fixtures/"),
+    );
+    expect(globSync(fixtureEntries.map((entry) => entry.replace(/!$/, "")))).toEqual(
+      expect.arrayContaining([
+        "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js",
+        "test/e2e/qa-lab/runtime/fixtures/prepared-pool-provider/index.js",
+      ]),
     );
   });
 

@@ -168,7 +168,7 @@ describe("Crabbox checkpoint retirement", () => {
       } else if (cleanup === "capacity") {
         for (let index = 0; index < 127; index++) {
           store.register(`reserved-${index}`, {
-            version: 2,
+            version: 3,
             allocations: {},
             operation: {
               type: "capture",
@@ -309,7 +309,7 @@ describe("Crabbox checkpoint retirement", () => {
             image: {
               ...image.value.image!,
               checkpointId: `chk_idle_${index}`,
-              lastUsedAtMs: now + 1,
+              lastDemandAtMs: now + 1,
             },
           });
         }

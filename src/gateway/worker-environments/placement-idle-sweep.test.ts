@@ -15,13 +15,14 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker placement idle suspension", () => {
+  let database: ReturnType<typeof openOpenClawStateDatabase>;
   let nowMs: number;
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
 
   beforeEach(() => {
     nowMs = 1_000;
     const root = tempDirs.make("openclaw-worker-idle-sweep-");
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
@@ -40,7 +41,7 @@ describe("worker placement idle suspension", () => {
       }) => Promise<() => boolean>;
     } = {},
   ) {
-    const harness = createHarness(placements, {
+    const harness = createHarness(database, placements, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       destroyFails: options.destroyFails,

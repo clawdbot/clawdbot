@@ -14,6 +14,46 @@ import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limit
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["before traversal", "during traversal"] as const)(
+  "rejects an empty inventory aborted %s",
+  async (phase) => {
+    const root = await fs.realpath(tempDirs.make("workspace-inventory-empty-abort-"));
+    const controller = new AbortController();
+    const reason = new Error("empty inventory aborted");
+    const entered = createDeferred();
+    const gate = createDeferred();
+    const opendir = fs.opendir.bind(fs);
+    const opened = vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+      const directory = await opendir(...args);
+      entered.resolve();
+      await gate.promise;
+      return directory;
+    });
+    if (phase === "before traversal") {
+      controller.abort(reason);
+      gate.resolve();
+    }
+    const scan = readActualWorkspaceManifestImpl({
+      root,
+      baseCommit: null,
+      signal: controller.signal,
+    });
+    const rejected = expect(scan).rejects.toBe(reason);
+    try {
+      if (phase === "during traversal") {
+        await entered.promise;
+        controller.abort(reason);
+        gate.resolve();
+      }
+      await rejected;
+      expect(opened).toHaveBeenCalledTimes(phase === "before traversal" ? 0 : 1);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([scan, rejected]);
+    }
+  },
+);
+
 it.each(["metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
   async (phase) => {
@@ -71,126 +111,154 @@ it.each(["metadata", "files"] as const)(
   },
 );
 
-it("joins bounded file readers after a workspace file moves outside its root", async () => {
-  const root = await fs.realpath(tempDirs.make("workspace-inventory-readers-"));
-  const outside = await fs.realpath(tempDirs.make("workspace-inventory-outside-"));
-  const files = Array.from({ length: 9 }, (_, index) => `file-${index}.txt`);
-  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
-  await fs.writeFile(path.join(outside, "target.txt"), "outside");
-  const open = fs.open.bind(fs);
-  const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
-  const gatedPaths: string[] = [];
-  const firstClosed = createDeferred();
-  let closed = 0;
-  let releasing = false;
-  const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (!String(args[0]).startsWith(root + path.sep)) {
+it.each(["abort", "symlink replacement"] as const)(
+  "drains concurrent manifest handles before rejecting %s without admitting more files",
+  async (failure) => {
+    const root = await fs.realpath(tempDirs.make("openclaw-manifest-drain-"));
+    const outside = await fs.realpath(tempDirs.make("openclaw-manifest-outside-"));
+    const files = Array.from({ length: 9 }, (_, index) => `file-${index}.txt`);
+    await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+    await fs.writeFile(path.join(outside, "target.txt"), "outside");
+    const controller = new AbortController();
+    const originalOpen = fs.open.bind(fs);
+    const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
+    const gatedPaths: string[] = [];
+    const closed = createDeferred();
+    let closedCount = 0;
+    let releasing = false;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]).startsWith(root + path.sep)) {
+        const originalClose = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await originalClose();
+          closedCount += 1;
+          closed.resolve();
+        });
+        if (!releasing) {
+          const gate = createDeferred();
+          gates.push(gate);
+          gatedPaths.push(String(args[0]));
+          await gate.promise;
+        }
+      }
       return handle;
-    }
-    const close = handle.close.bind(handle);
-    vi.spyOn(handle, "close").mockImplementation(async () => {
-      await close();
-      closed++;
-      firstClosed.resolve();
     });
-    if (!releasing) {
-      const gate = createDeferred();
-      gates.push(gate);
-      gatedPaths.push(String(args[0]));
-      await gate.promise;
+    const scan = readActualWorkspaceManifestImpl({
+      root,
+      baseCommit: null,
+      includePaths: new Set(files),
+      signal: controller.signal,
+    });
+    let settled = false;
+    void scan.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(gates).toHaveLength(4));
+      if (failure === "abort") {
+        controller.abort(new Error("manifest scan aborted"));
+      } else {
+        await fs.rename(gatedPaths[0]!, path.join(outside, "moved.txt"));
+        await fs.symlink(path.join(outside, "target.txt"), gatedPaths[0]!);
+      }
+      gates[0]!.resolve();
+      await closed.promise;
+      expect(settled).toBe(false);
+      expect(open).toHaveBeenCalledTimes(4);
+    } finally {
+      releasing = true;
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await Promise.allSettled([scan]);
     }
-    return handle;
-  });
-  const scan = readActualWorkspaceManifestImpl({
-    root,
-    baseCommit: null,
-    includePaths: new Set(files),
-  });
-  let settled = false;
-  void scan.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  try {
-    await vi.waitFor(() => expect(gates).toHaveLength(4));
-    await fs.rename(gatedPaths[0]!, path.join(outside, "moved.txt"));
-    await fs.symlink(path.join(outside, "target.txt"), gatedPaths[0]!);
-    gates[0]!.resolve();
-    await firstClosed.promise;
-    expect(settled).toBe(false);
-    expect(opened).toHaveBeenCalledTimes(4);
-  } finally {
-    releasing = true;
-    for (const gate of gates) {
-      gate.resolve();
-    }
-    await Promise.allSettled([scan]);
-  }
-  await expect(scan).rejects.toThrow();
-  expect(opened).toHaveBeenCalledTimes(4);
-  expect(closed).toBe(4);
-});
+    await expect(scan).rejects.toThrow();
+    expect(open).toHaveBeenCalledTimes(4);
+    expect(closedCount).toBe(4);
+  },
+);
 
-it("joins the admitted metadata batch and preserves its first error", async () => {
-  const root = await fs.realpath(tempDirs.make("workspace-inventory-metadata-"));
-  const files = Array.from({ length: 9 }, (_, index) => `file-${index}.txt`);
-  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
-  const lstat = fs.lstat.bind(fs);
-  const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
-  const failed = createDeferred();
-  const error = new Error("inventory metadata unavailable");
-  let releasing = false;
-  let started = 0;
-  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    if (String(args[0]).startsWith(root + path.sep)) {
-      const first = started++ === 0;
-      if (!releasing) {
-        const gate = createDeferred();
-        gates.push(gate);
-        await gate.promise;
+it.each(["metadata error", "caller abort"] as const)(
+  "joins admitted metadata after %s without starting another depth or returning a manifest",
+  async (failure) => {
+    const root = await fs.realpath(tempDirs.make("workspace-inventory-metadata-"));
+    await fs.mkdir(path.join(root, "nested"));
+    const files = Array.from({ length: 9 }, (_, index) => `nested/file-${index}.txt`);
+    await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+    const lstat = fs.lstat.bind(fs);
+    const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
+    const completed = createDeferred();
+    const error = new Error("inventory metadata unavailable");
+    const abortError = new Error("manifest scan aborted");
+    const controller = new AbortController();
+    const startedPaths: string[] = [];
+    let releasing = false;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith(root + path.sep)) {
+        const first = startedPaths.length === 0;
+        startedPaths.push(String(args[0]));
+        if (!releasing) {
+          const gate = createDeferred();
+          gates.push(gate);
+          await gate.promise;
+        }
+        if (first) {
+          completed.resolve();
+          if (failure === "metadata error") {
+            throw error;
+          }
+        }
       }
-      if (first) {
-        failed.resolve();
-        throw error;
+      return await lstat(...args);
+    });
+    const opened = vi.spyOn(fs, "open");
+    const scan = readActualWorkspaceManifestImpl({
+      root,
+      baseCommit: null,
+      includePaths: new Set(["nested", ...files]),
+      signal: controller.signal,
+    });
+    let settled = false;
+    void scan.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(gates).toHaveLength(4));
+      if (failure === "caller abort") {
+        controller.abort(abortError);
       }
+      gates[0]!.resolve();
+      await completed.promise;
+      expect(settled).toBe(false);
+      expect(startedPaths).toHaveLength(4);
+      if (failure === "metadata error") {
+        // Cancellation while siblings drain must not replace the first failure.
+        controller.abort(abortError);
+      }
+    } finally {
+      releasing = true;
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await Promise.allSettled([scan]);
     }
-    return await lstat(...args);
-  });
-  const scan = readActualWorkspaceManifestImpl({
-    root,
-    baseCommit: null,
-    includePaths: new Set(files),
-  });
-  let settled = false;
-  void scan.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  try {
-    await vi.waitFor(() => expect(gates).toHaveLength(4));
-    gates[0]!.resolve();
-    await failed.promise;
-    expect(settled).toBe(false);
-    expect(started).toBe(4);
-  } finally {
-    releasing = true;
-    for (const gate of gates) {
-      gate.resolve();
-    }
-    await Promise.allSettled([scan]);
-  }
-  await expect(scan).rejects.toBe(error);
-  expect(started).toBe(4);
-});
+    await expect(scan).rejects.toBe(failure === "caller abort" ? abortError : error);
+    expect(startedPaths).toHaveLength(4);
+    expect(startedPaths).not.toContain(path.join(root, "nested"));
+    expect(opened).not.toHaveBeenCalled();
+  },
+);
 
 it("preserves bottom-up directory membership and canonical output across input orders", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-membership-"));

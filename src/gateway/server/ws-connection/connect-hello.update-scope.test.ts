@@ -420,6 +420,9 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_SKILL_RESOURCES,
+    );
   });
 
   it("includes update details for an operator.read client", async () => {

@@ -60,6 +60,7 @@ export async function startNodeWorkerChild(
     planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     claim: NodeWorkerLaunchClaim;
+    receivedAtMs: number;
     signal?: AbortSignal;
   },
 ): Promise<NodeWorkerLaunchReceipt> {
@@ -82,6 +83,8 @@ export async function startNodeWorkerChild(
     });
   let adapter: NodeWorkerChildAdapter;
   let container: NodeWorkerContainerIdentity | undefined;
+  // Child messages can arrive before transport preparation returns an owner.
+  let startupOwner: NodeWorkerRunningChild | undefined = undefined;
   try {
     const prepared = await prepareNodeWorkerLaunchTransport({
       bundleRoot: context.bundleRoot,
@@ -90,6 +93,17 @@ export async function startNodeWorkerChild(
       input: params.input,
       descriptor: params.descriptor,
       connectionFailure,
+      onStartupMessage: (message) => {
+        if (
+          startupOwner &&
+          context.active.get(startupOwner.launchId) === startupOwner &&
+          !context.isClosed() &&
+          !startupOwner.stopState &&
+          startupOwner.turn?.cancelled === false
+        ) {
+          startupOwner.turn.startup.accept(message);
+        }
+      },
       scrubber,
       store: context.store,
       containerEngine: context.containerEngine,
@@ -136,7 +150,7 @@ export async function startNodeWorkerChild(
   const active = {
     state: "running",
     binding: nodeWorkerEnvironmentBinding(params.input),
-    turn: createNodeWorkerActiveTurn(params.claim),
+    turn: createNodeWorkerActiveTurn(params.claim, params.receivedAtMs),
     retiring: false,
     adapter,
     journalReady,
@@ -149,6 +163,7 @@ export async function startNodeWorkerChild(
     worker,
     ...(container ? { container } : {}),
   } as NodeWorkerRunningChild; // SAFETY: done is assigned synchronously below; observation waits on journalReady before publishing state.
+  startupOwner = active;
   active.done = context.observeChild(active);
   context.active.set(active.launchId, active);
   void active.done.catch(() => undefined);
@@ -200,6 +215,7 @@ export async function startNodeWorkerChild(
       adapter,
       descriptor: params.descriptor,
       container,
+      onStartGateOpened: () => active.turn?.startup.startGateOpened(),
       isCurrent: () =>
         context.active.get(active.launchId) === active &&
         !context.isClosed() &&

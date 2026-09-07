@@ -6,7 +6,8 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import type { WorkerEnvironmentStore } from "./store.js";
 
 type NodePortalBinding = {
   environmentId: string;
@@ -119,7 +120,7 @@ export function createWorkerNodePortalCarrier(options: {
     runtime === capturedRuntime &&
     isNodePortalBindingCurrent(options.store, binding) &&
     node.workerHost.portalStream === NODE_WORKER_PORTAL_STREAM_VERSION &&
-    capturedRuntime.transport.isCurrent(node, false);
+    capturedRuntime.transport.isCurrent(node);
 
   const findCurrentNode = async (
     binding: NodePortalBinding,

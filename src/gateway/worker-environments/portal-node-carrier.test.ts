@@ -11,9 +11,9 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import * as support from "./service.test-support.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 
 function deferredPortalValue<T>() {
   let resolve!: (value: T) => void;

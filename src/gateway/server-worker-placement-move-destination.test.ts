@@ -74,7 +74,7 @@ describe("worker placement move destination owner", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 0 } },
+        workerHost: { enabled: true, capacity: { total: 2, available: 0 }, workspaceManifest: 1 },
         commands: [CODEX_COMMAND],
       },
     }));

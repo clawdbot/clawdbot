@@ -136,6 +136,17 @@ function isAbsoluteHostPath(value: string): boolean {
   return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
 }
 
+function isWorkspacePath(value: unknown): value is string {
+  // Preparation admits 4,096-character paths; identifier limits reject valid workspaces.
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length <= 4_096 &&
+    !value.includes("\0") &&
+    isAbsoluteHostPath(value)
+  );
+}
+
 function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
   return Value.Check(WorkerInferenceOptionsSchema, value);
 }
@@ -299,9 +310,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     hasPermissionMode !== hasContainmentRoot ||
     (hasPermissionMode &&
       (!Value.Check(SessionPermissionModeSchema, value.permissionMode) ||
-        typeof value.workerContainmentRoot !== "string" ||
-        !isIdentifier(value.workerContainmentRoot) ||
-        !isAbsoluteHostPath(value.workerContainmentRoot)))
+        !isWorkspacePath(value.workerContainmentRoot)))
   ) {
     return undefined;
   }
@@ -324,8 +333,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
       })
     ) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
-    !isIdentifier(value.workspaceDir) ||
-    !isAbsoluteHostPath(value.workspaceDir) ||
+    !isWorkspacePath(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
     !Array.isArray(value.initialMessages) ||
     value.initialMessages.length > WORKER_INFERENCE_MAX_CONTEXT_MESSAGES ||

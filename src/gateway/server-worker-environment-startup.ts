@@ -1,18 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
+import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../infra/node-commands.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { WorkerExecutionMode } from "../plugins/types.js";
+import type { WorkerExecutionMode, WorkerProfile } from "../plugins/types.js";
 import {
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeEnvState,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
+import {
+  NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
+  NODE_WORKER_WORKSPACE_RESULT_GRACE_MS,
+} from "../worker/node-workspace-deadlines.js";
+import {
+  parseNodeWorkerPreparedWorkspaceResult,
+  type NodeWorkerPreparedWorkspaceInput,
+} from "../worker/node-workspace-prepared-protocol.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
@@ -296,59 +306,72 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getTransport: () => deviceRuntime.getNodeTransport(),
     transfer: nodeWorkerBundleTransfer,
   });
+  const prepareNodeArtifact = async (profileSnapshot: WorkerProfile, signal?: AbortSignal) => {
+    const mode = profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn";
+    let registry = params.getPluginRegistry();
+    let metadata = getGatewayPluginMetadataSnapshot();
+    let generation = bootstrapProducers.get(mode);
+    if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
+      const [{ createNodeBootstrapArtifactProvider }, { resolveNodeBootstrapPlugins }] =
+        await Promise.all([
+          import("./worker-environments/node-bootstrap-artifact.js"),
+          import("./worker-environments/node-bootstrap-plugins.js"),
+        ]);
+      signal?.throwIfAborted();
+      registry = params.getPluginRegistry();
+      metadata = getGatewayPluginMetadataSnapshot();
+      generation = bootstrapProducers.get(mode);
+      if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
+        const packageRoot = resolveOpenClawPackageRootSync({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        });
+        const runningBuildId = resolveRuntimeServiceBuildId();
+        if (!metadata || !packageRoot || !runningBuildId) {
+          throw new Error(
+            "Cloud node bootstrap requires the running build and plugin inventory; build OpenClaw and restart the Gateway",
+          );
+        }
+        const producer = createNodeBootstrapArtifactProvider({
+          packageRoot,
+          runningBuildId,
+          plugins: resolveNodeBootstrapPlugins({
+            registry,
+            metadata,
+            executionMode: mode,
+          }),
+        });
+        // Reload owns a new inventory; active enrollments pin their old artifact until closure.
+        if (generation) {
+          retireBootstrapProducer(generation.producer);
+        }
+        generation = { registry, metadata, producer };
+        bootstrapProducers.set(mode, generation);
+      }
+    }
+    const artifact = await generation.producer.prepare(signal);
+    return {
+      artifact,
+      assertCurrent: () => {
+        if (
+          bootstrapProducers.get(mode) !== generation ||
+          params.getPluginRegistry() !== generation.registry ||
+          getGatewayPluginMetadataSnapshot() !== generation.metadata
+        ) {
+          throw new Error("Worker preparation artifact generation changed");
+        }
+      },
+    };
+  };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     getLocalTlsFingerprint: () => params.resolveGatewayContext()?.gatewayTlsFingerprint,
     resolveAvailability: deviceRuntime.resolveAvailability,
     transfer: nodeBootstrapTransfer,
-    prepareArtifact: async (record, signal) => {
-      const mode =
-        record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn";
-      let registry = params.getPluginRegistry();
-      let metadata = getGatewayPluginMetadataSnapshot();
-      let generation = bootstrapProducers.get(mode);
-      if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
-        const [{ createNodeBootstrapArtifactProvider }, { resolveNodeBootstrapPlugins }] =
-          await Promise.all([
-            import("./worker-environments/node-bootstrap-artifact.js"),
-            import("./worker-environments/node-bootstrap-plugins.js"),
-          ]);
-        signal?.throwIfAborted();
-        registry = params.getPluginRegistry();
-        metadata = getGatewayPluginMetadataSnapshot();
-        generation = bootstrapProducers.get(mode);
-        if (!generation || generation.registry !== registry || generation.metadata !== metadata) {
-          const packageRoot = resolveOpenClawPackageRootSync({
-            moduleUrl: import.meta.url,
-            argv1: process.argv[1],
-            cwd: process.cwd(),
-          });
-          const runningBuildId = resolveRuntimeServiceBuildId();
-          if (!metadata || !packageRoot || !runningBuildId) {
-            throw new Error(
-              "Cloud node bootstrap requires the running build and plugin inventory; build OpenClaw and restart the Gateway",
-            );
-          }
-          const producer = createNodeBootstrapArtifactProvider({
-            packageRoot,
-            runningBuildId,
-            plugins: resolveNodeBootstrapPlugins({
-              registry,
-              metadata,
-              executionMode: mode,
-            }),
-          });
-          // Reload owns a new inventory; active enrollments pin their old artifact until closure.
-          if (generation) {
-            retireBootstrapProducer(generation.producer);
-          }
-          generation = { registry, metadata, producer };
-          bootstrapProducers.set(mode, generation);
-        }
-      }
-      return await generation.producer.prepare(signal);
-    },
+    prepareArtifact: async (record, signal) =>
+      (await prepareNodeArtifact(record.profileSnapshot, signal)).artifact,
   });
   let executeSessionTool: WorkerSessionToolExecutor = async () => {
     throw new Error("Worker session tools are unavailable");
@@ -363,6 +386,74 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getNodeTransport: () => deviceRuntime.getNodeTransport(),
     warn: (message) => workerEnvironmentLog.warn(message),
   });
+  const invokePreparedWorkspace = async (request: {
+    deviceId: string;
+    input: NodeWorkerPreparedWorkspaceInput;
+    expiresAtMs?: number;
+    signal?: AbortSignal;
+    assertCurrent: () => void;
+  }) => {
+    const { input, signal, assertCurrent } = request;
+    assertCurrent();
+    const transport = deviceRuntime.getNodeTransport();
+    if (!transport) {
+      throw new Error("Prepared workspace node transport is unavailable");
+    }
+    const node = (await racePromiseWithAbortSignal(transport.listCurrentNodes(), signal)).find(
+      (candidate) => candidate.nodeId === request.deviceId,
+    );
+    assertCurrent();
+    if (!node || !transport.isCurrent(node)) {
+      throw new Error("Prepared workspace node protocol is unavailable");
+    }
+    // Registration hashes the project with the existing workspace command budget.
+    // An unused reserve's lifetime still bounds that work; binding only updates its owner.
+    const timeoutMs =
+      input.action === "register"
+        ? Math.max(
+            1,
+            Math.min(
+              NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS + NODE_WORKER_WORKSPACE_RESULT_GRACE_MS,
+              request.expiresAtMs === undefined ? Infinity : request.expiresAtMs - Date.now(),
+            ),
+          )
+        : 30_000;
+    const result = await transport.invoke({
+      node,
+      command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+      params: input,
+      signal,
+      timeoutMs,
+      idempotencyKey: `${input.environmentId}:${input.preparationKey}:${input.action}`,
+      isDispatchAuthorized: () => {
+        assertCurrent();
+        return transport.isCurrent(node);
+      },
+    });
+    assertCurrent();
+    if (!result.ok) {
+      throw new Error(
+        `Prepared workspace ${input.action} failed${result.error?.message ? `: ${result.error.message}` : ""}`,
+      );
+    }
+    const payload = result.payloadJSON
+      ? (JSON.parse(result.payloadJSON) as unknown)
+      : result.payload;
+    const registered = parseNodeWorkerPreparedWorkspaceResult(payload);
+    if (
+      !registered ||
+      registered.gatewayNamespace !== input.gatewayNamespace ||
+      registered.environmentId !== input.environmentId ||
+      registered.preparationKey !== input.preparationKey ||
+      registered.cacheKey !== input.cacheKey ||
+      (input.action === "register" &&
+        (registered.workspaceDir !== input.workspaceDir ||
+          registered.homeDir !== input.homeDir ||
+          registered.sourceManifestRef !== input.sourceManifestRef))
+    ) {
+      throw new Error("Node did not acknowledge the exact prepared workspace");
+    }
+  };
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
@@ -385,6 +476,64 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     prepareInstallation,
     ensureNodeWorkerBundle,
     prepareNodeBootstrap: nodeEnrollment.prepare,
+    prepareNodeArtifacts: async (profileSnapshot, signal) => {
+      const pin = new AbortController();
+      try {
+        const preparedBootstrap = await prepareNodeArtifact(
+          profileSnapshot,
+          signal ? AbortSignal.any([signal, pin.signal]) : pin.signal,
+        );
+        signal?.throwIfAborted();
+        const bootstrap = preparedBootstrap.artifact;
+        preparedBootstrap.assertCurrent();
+        const bundle = await racePromiseWithAbortSignal(prepareInstallation("bundle"), signal);
+        signal?.throwIfAborted();
+        if (bundle.install !== "bundle") {
+          throw new Error("Worker preparation requires a bundle artifact");
+        }
+        return {
+          artifacts: {
+            nodeBootstrapSha256: bootstrap.tarballSha256,
+            enabledPluginIds: [...bootstrap.enabledPluginIds],
+            workerBundleHash: bundle.bundleHash,
+            workerArchiveSha256: bundle.tarballSha256,
+            openclawVersion: bundle.openclawVersion,
+            protocolFeatures: [...bundle.protocolFeatures],
+          },
+          assertCurrent: preparedBootstrap.assertCurrent,
+        };
+      } finally {
+        pin.abort();
+      }
+    },
+    registerPreparedWorkspace: ({ record, deviceId, workspace, assertCurrent, signal }) =>
+      invokePreparedWorkspace({
+        deviceId,
+        assertCurrent,
+        signal,
+        ...(record.preparation?.consumedAtMs === null
+          ? { expiresAtMs: record.preparation.expiresAtMs }
+          : {}),
+        input: {
+          action: "register",
+          gatewayNamespace: nodeWorkerGatewayNamespace,
+          environmentId: record.environmentId,
+          ...workspace,
+        },
+      }),
+    bindPreparedWorkspace: async ({ assertCurrent, signal, ...binding }) => {
+      assertCurrent();
+      const record = params.startup.store.get(binding.environmentId);
+      if (!record?.nodeDeviceId || record.sharedHost !== false) {
+        throw new Error("Prepared workspace requires its dedicated node");
+      }
+      await invokePreparedWorkspace({
+        deviceId: record.nodeDeviceId,
+        assertCurrent,
+        signal,
+        input: { action: "bind", gatewayNamespace: nodeWorkerGatewayNamespace, ...binding },
+      });
+    },
     prepareNodeEnrollment: nodeEnrollment.begin,
     prepareNodeRuntime: nodeEnrollment.prepareRuntime,
     closeNodeRuntime: nodeEnrollment.closeRuntime,

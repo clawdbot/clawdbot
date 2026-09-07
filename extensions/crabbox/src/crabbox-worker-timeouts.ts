@@ -38,6 +38,34 @@ export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 
+export const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
+// Scrubbing and native submission include SSH/coordinator round trips, not image readiness.
+export const WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS = 180_000;
+// Match Crabbox checkpoint create's bounded native wait, and pass it explicitly.
+export const WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS = 45 * 60_000;
+
+export function resolveCrabboxCheckpointCaptureTimeoutMs(provider: string): number {
+  // Crabbox Machine0 stops/restores with separate default 15m windows; Daytona
+  // grants 3m for source recovery after its native wait. Neither is image waiting.
+  const sourceLifecycleMs =
+    provider === "machine0" ? 30 * 60_000 : provider === "daytona" ? 180_000 : 0;
+  return (
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS + sourceLifecycleMs
+  );
+}
+
+export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): number {
+  // Bound collection, verification, missing-image deletion, capacity reclamation,
+  // and predecessor retirement as well as scrub/create; core must await the owner.
+  return (
+    5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
+    resolveCrabboxCheckpointCaptureTimeoutMs(provider) +
+    // Each timed-out command must join its child/tree before core closes the owner.
+    7 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
+  );
+}
+
 // Leave one minute inside the lifecycle cap for process startup and cleanup handoff.
 export const CRABBOX_MACHINE0_READY_WAIT_TIMEOUT = "4m";
 

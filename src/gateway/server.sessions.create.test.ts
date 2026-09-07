@@ -119,6 +119,7 @@ import {
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
@@ -4406,13 +4407,19 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
+  const database = openOpenClawStateDatabase();
   const placements = createWorkerSessionPlacementStore({
-    database: openOpenClawStateDatabase(),
+    database,
   });
   let placement = placements.startDispatch({
     agentId: "main",
     sessionId: "worker-source-session",
     sessionKey: "agent:main:dashboard:worker-source",
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "worker-environment",
+    sessionId: placement.sessionId,
+    ownerEpoch: 7,
   });
   for (const [from, to, patch] of [
     ["requested", "provisioning", { environmentId: "worker-environment" }],

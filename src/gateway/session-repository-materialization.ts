@@ -210,6 +210,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
           const applied = await applyStagedWorkerWorkspace({
             ...snapshot,
             root,
+            acceptance: { kind: "reconcile" },
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
             journal: {

@@ -24,12 +24,12 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createWorkerComputerTransportOwner } from "./computer-transport.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 
 export const COMPUTER_USE: ComputerUseCapabilityDescriptor = {
   contractVersion: 2,
@@ -84,6 +84,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",
     profileSnapshot: { settings: {} },
+    preparation: null,
     provisionOperationId: "provision-1",
     nodeSetupId: null,
     nodeDeviceId: "desktop-node",
@@ -97,6 +98,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
+    lastActivatedAtMs: null,
     idleSinceAtMs: null,
     destroyRequestedAtMs: null,
     state: "attached",

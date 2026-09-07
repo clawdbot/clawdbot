@@ -32,9 +32,8 @@ function permanentHeartbeatFailure(result: SpawnResult): "command" | "provider" 
     /\b(?:unexpected argument|unknown command|unrecognized command)[^\r\n]*\bheartbeat\b/iu.test(
       output,
     ) || /\bheartbeat\b[^\r\n]*\b(?:unknown|unrecognized)\b/iu.test(output);
-  return commandUnknown || (result.termination === "exit" && result.code === 2)
-    ? "command"
-    : undefined;
+  // Exit 2 also reports claim conflicts; only explicit capability errors disable renewal.
+  return commandUnknown ? "command" : undefined;
 }
 
 export function createCrabboxHeartbeatManager(dependencies: {

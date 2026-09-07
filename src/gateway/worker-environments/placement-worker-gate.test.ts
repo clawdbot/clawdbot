@@ -13,6 +13,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -40,6 +41,11 @@ describe("worker session placement gate", () => {
   });
 
   function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: ENVIRONMENT_ID,
+      sessionId: SESSION.sessionId,
+      ownerEpoch: OWNER_EPOCH,
+    });
     let placement = store.startDispatch({ ...SESSION, executionMode });
     placement = store.transition({
       sessionId: SESSION.sessionId,

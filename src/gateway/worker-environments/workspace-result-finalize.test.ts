@@ -10,6 +10,8 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { createResourceCarrier } from "./skill-resource-transfer.test-support.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -18,6 +20,7 @@ import {
   SESSION_ID,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
+  database,
   placements,
   root,
   seedActivePlacement,
@@ -42,9 +45,11 @@ describe("concurrent worker workspace results", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("reports cleanup failure and reclaims the inputs before the next turn without skills", async () => {
-    const remote = path.join(await fs.realpath(root), "remote");
+    const remoteHome = path.join(await fs.realpath(root), "remote");
     const source = path.join(root, "source");
-    await fs.mkdir(remote);
+    await fs.mkdir(remoteHome);
+    const carrier = await createResourceCarrier(remoteHome, "ssh", OWNER_EPOCH);
+    const remote = carrier.workspace;
     await fs.mkdir(path.join(source, "skills", "synthetic"), { recursive: true });
     await fs.writeFile(
       path.join(source, "skills", "synthetic", "SKILL.md"),
@@ -72,7 +77,7 @@ describe("concurrent worker workspace results", () => {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       runWorkspaceCommand: async (command) => {
-        if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
+        if (command.skillResources?.operation.operation === "cleanup" && failCleanup) {
           failCleanup = false;
           return {
             code: 1,
@@ -83,11 +88,7 @@ describe("concurrent worker workspace results", () => {
             termination: "exit",
           };
         }
-        return await runCommandWithTimeout([...command.argv], {
-          cwd: remote,
-          input: command.input,
-          timeoutMs: 5_000,
-        });
+        return await carrier.runWorkspaceCommand({ ...command, timeoutMs: 5_000 });
       },
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
@@ -121,8 +122,11 @@ describe("concurrent worker workspace results", () => {
     expect(placements.listPendingWorkspaceResults()).toEqual([]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
-    const leftovers = await fs.readdir(remote);
-    expect(leftovers).toHaveLength(1);
+    expect(await fs.readdir(remote)).toEqual([]);
+    const leftovers = (await fs.readdir(carrier.home)).filter(
+      (entry) => entry !== path.basename(remote),
+    );
+    expect(leftovers).toEqual([expect.stringMatching(/^\.3\.skill-resources-[a-f0-9]{32}$/)]);
     const nextTurn = turn("cleanup-recovery");
     const nextClaim = placements.claimTurn({
       ...sessionTarget,
@@ -142,6 +146,7 @@ describe("concurrent worker workspace results", () => {
       workspace: { kind: "local", path: root },
       runLocal: async () => {
         expect(await fs.readdir(remote)).toEqual([]);
+        expect(await fs.readdir(carrier.home)).toEqual([path.basename(remote)]);
         executed = true;
         return { meta: { durationMs: 1 } };
       },
@@ -221,6 +226,7 @@ describe("concurrent worker workspace results", () => {
         const identity = { sessionId, sessionKey: `agent:main:${sessionId}`, agentId: "main" };
         const transcriptTarget = { ...sessionTarget, ...identity };
         await upsertSessionEntryCore(transcriptTarget, { sessionId, updatedAt: Date.now() });
+        seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 1 });
         let placement = placements.startDispatch(identity);
         for (const transition of [
           { from: "requested", to: "provisioning", patch: { environmentId } },

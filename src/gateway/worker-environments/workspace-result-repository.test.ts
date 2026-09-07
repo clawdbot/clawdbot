@@ -59,6 +59,19 @@ vi.mock("./worker-github-binding.js", () => ({
   prepareWorkerGitHubBinding: async () => undefined,
 }));
 
+function unusedPreparedAllocation() {
+  const unexpected = () => {
+    throw new Error("Repository checkpoint recovery must not allocate a prepared worker");
+  };
+  return {
+    prepareProjectIntent: vi.fn(async () => unexpected()),
+    assertPreparedIntentCurrent: vi.fn(unexpected),
+    bindPreparedWorkspace: vi.fn(async () => unexpected()),
+    getPreparedCandidates: vi.fn(unexpected),
+    schedulePreparedRefill: vi.fn(unexpected),
+  };
+}
+
 describe("repository workspace result ownership", () => {
   let closeNode: (() => Promise<void>) | undefined;
   beforeEach(setupWorkerTurnLauncherTest);
@@ -137,6 +150,28 @@ describe("repository workspace result ownership", () => {
       env: { PATH: process.env.PATH, HOME: home },
     });
     const ownerSignal = new AbortController().signal;
+    const runWorkspaceCommand: Parameters<
+      typeof createNodeWorkerWorkspaceActions
+    >[0]["runWorkspaceCommand"] = async (command) =>
+      await runtime.exec(
+        {
+          gatewayNamespace: "gateway-repository-results",
+          environmentId: ENVIRONMENT_ID,
+          sessionId: SESSION_ID,
+          generation: OWNER_EPOCH,
+          argv: [...command.argv],
+          sessionKey: command.sessionKey,
+          input: command.input,
+          timeoutMs: command.timeoutMs,
+          resetWorkspace: command.resetWorkspace,
+          transfer: command.transfer,
+          seed: command.seed,
+          capture: command.capture,
+          skillResources: command.skillResources?.operation,
+        },
+        ownerSignal,
+        { url: server.gatewayUrl },
+      );
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
@@ -148,19 +183,8 @@ describe("repository workspace result ownership", () => {
         ownerSignal,
         isOwnerCurrent: () => true,
         workspaceTransfer: service,
-        runWorkspaceCommand: async (command) =>
-          await runtime.exec(
-            {
-              gatewayNamespace: "gateway-repository-results",
-              environmentId: ENVIRONMENT_ID,
-              sessionId: SESSION_ID,
-              generation: OWNER_EPOCH,
-              ...command,
-              argv: [...command.argv],
-            },
-            ownerSignal,
-            { url: server.gatewayUrl },
-          ),
+        runWorkspaceCommand,
+        runResumeWorkspaceCommand: runWorkspaceCommand,
       }),
     };
     const synced = await syncSessionRepositoryWorkspace({
@@ -204,6 +228,7 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      ...unusedPreparedAllocation(),
       get: () => attachedEnvironment(),
       create: vi.fn(async () => attachedEnvironment()),
       createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),
@@ -533,26 +558,6 @@ describe("repository workspace result ownership", () => {
       const owned = f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        const database = openOpenClawStateDatabase();
-        executeSqliteQuerySync(
-          database.db,
-          getNodeSqliteKysely<Pick<DB, "worker_environments">>(database.db)
-            .insertInto("worker_environments")
-            .values({
-              environment_id: owned.placement.environmentId,
-              provider_id: "fixture",
-              profile_id: "development",
-              profile_snapshot_json: "{}",
-              provision_operation_id: "repository-result-move",
-              lease_id: "repository-result-lease",
-              state: "attached",
-              owner_epoch: owned.placement.activeOwnerEpoch,
-              attached_session_ids_json: JSON.stringify([SESSION_ID]),
-              created_at_ms: 1,
-              updated_at_ms: 1,
-              state_changed_at_ms: 1,
-            }),
-        );
         placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
@@ -614,6 +619,7 @@ describe("repository workspace result ownership", () => {
         database: openOpenClawStateDatabase(),
       });
       const environments: WorkerDispatchEnvironmentService = {
+        ...unusedPreparedAllocation(),
         get: () => undefined,
         create: vi.fn(async () => attachedEnvironment()),
         createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),

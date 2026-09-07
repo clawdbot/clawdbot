@@ -99,7 +99,9 @@ function createAdapterFixture(computerContextEpoch?: {
       timestamp: 1,
     },
   });
+  const onFirstInference = vi.fn();
   const options = {
+    onFirstInference,
     client,
     sessionId: "session-1",
     runEpoch: 1,
@@ -108,7 +110,7 @@ function createAdapterFixture(computerContextEpoch?: {
     modelRef,
     computerContextEpoch,
   };
-  return { client, start, stream: createWorkerInferenceStreamAdapter(options) };
+  return { client, start, onFirstInference, stream: createWorkerInferenceStreamAdapter(options) };
 }
 
 it.each([false, true])(
@@ -192,6 +194,7 @@ it("refuses oversized unprocessed images without discarding them", async () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toMatch(/(image|context).*(limit|budget)/i);
     expect(fixture.start).not.toHaveBeenCalled();
+    expect(fixture.onFirstInference).not.toHaveBeenCalled();
     expect(context.messages[0]?.content).toBe(content);
     expect(content.filter((part) => part.type === "image")).toHaveLength(7);
   } finally {
@@ -220,6 +223,7 @@ it("preserves opaque replay and its image history when the mandatory replay cann
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
     expect(fixture.start).not.toHaveBeenCalled();
+    expect(fixture.onFirstInference).not.toHaveBeenCalled();
     expect(JSON.stringify(messages)).toBe(before);
   } finally {
     fixture.client.dispose();
@@ -298,4 +302,27 @@ it("delays worker tool argument previews while preserving exact terminal argumen
     content: [{ type: "toolCall", arguments: terminalArguments }],
   });
   client.dispose();
+});
+
+it("reports only the first submitted inference after preflight, with fresh bounds per turn", async () => {
+  for (let turn = 0; turn < 2; turn += 1) {
+    const fixture = createAdapterFixture();
+    const request = { modelRef, context: { messages: [] }, options: {} };
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      await fixture.stream({ ...request, signal: controller.signal }).result();
+      expect(fixture.onFirstInference).not.toHaveBeenCalled();
+      expect(fixture.start).not.toHaveBeenCalled();
+      await fixture.stream(request).result();
+      await fixture.stream(request).result();
+      expect(fixture.start).toHaveBeenCalledTimes(2);
+      expect(fixture.onFirstInference).toHaveBeenCalledTimes(1);
+      expect(fixture.onFirstInference.mock.invocationCallOrder[0]).toBeLessThan(
+        fixture.start.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      fixture.client.dispose();
+    }
+  }
 });

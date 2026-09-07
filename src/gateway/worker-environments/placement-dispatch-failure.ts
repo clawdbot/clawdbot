@@ -11,7 +11,10 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import type { WorkerPlacementAuthorization } from "./service-contract.js";
+import type {
+  WorkerPlacementAuthorization,
+  WorkerPlacementDispatchRequest,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
@@ -39,6 +42,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
+  | "bindPreparedEnvironment"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
@@ -79,14 +83,19 @@ export type WorkerDispatchPlacementStore = Pick<
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "attachSession"
+  | "assertPreparedIntentCurrent"
+  | "bindPreparedWorkspace"
   | "create"
   | "createFromProfileSnapshot"
   | "destroy"
   | "get"
+  | "getPreparedCandidates"
+  | "prepareProjectIntent"
   | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"
+  | "schedulePreparedRefill"
   | "supportsProviderExecutionMode"
 >;
 
@@ -159,6 +168,53 @@ export function isCurrentActiveWorkerEnvironment(
     // Recovery may reuse only the currently admitted execution-context dialect.
     supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
   );
+}
+
+export function isPendingProvisioningEnvironment(
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+  environmentId: string | null,
+): boolean {
+  return (
+    environment?.environmentId === environmentId &&
+    environment.destroyRequestedAtMs === null &&
+    (environment.state === "requested" ||
+      environment.state === "provisioning" ||
+      environment.state === "bootstrapping")
+  );
+}
+
+export function requireProvisionedEnvironment(
+  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+  expectedEnvironmentId: string,
+  executionMode: WorkerPlacementDispatchRequest["executionMode"],
+  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
+): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+  if (
+    (environment.state !== "ready" && environment.state !== "idle") ||
+    environment.environmentId !== expectedEnvironmentId ||
+    environment.destroyRequestedAtMs !== null ||
+    !environment.bootstrapReceipt ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
+  ) {
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
+  }
+  if (
+    (environment.profileSnapshot.executionMode !== undefined &&
+      environment.profileSnapshot.executionMode !== executionMode) ||
+    (executionMode === "worker-turn" &&
+      environment.profileSnapshot.executionMode !== undefined &&
+      !environment.nodeDeviceId) ||
+    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
+  ) {
+    throw new Error("Worker environment does not support the placement's exact execution mode");
+  }
+  return {
+    environmentId: environment.environmentId,
+    ownerEpoch: environment.ownerEpoch,
+    bundleHash: environment.bootstrapReceipt.bundleHash,
+  };
 }
 
 export function createPlacementFailureActions(deps: {

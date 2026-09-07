@@ -12,6 +12,7 @@ import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-p
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createResourceCarrier } from "./skill-resource-transfer.test-support.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -44,10 +45,11 @@ describe("current attachments in an active remote placement", () => {
   it.each(["worker-turn", "remote-exec"] as const)(
     "keeps later image and PDF originals readable with %s retention",
     async (executionMode) => {
-      const remote = path.join(await realpath(root), "remote");
       const local = path.join(await realpath(root), "local");
       const remoteHome = path.join(await realpath(root), "remote-home");
-      await Promise.all([mkdir(remote), mkdir(local), mkdir(remoteHome)]);
+      await Promise.all([mkdir(local), mkdir(remoteHome)]);
+      const carrier = await createResourceCarrier(remoteHome, "ssh", OWNER_EPOCH);
+      const remote = carrier.workspace;
       for (const directory of [remote, local]) {
         await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
       }
@@ -135,14 +137,10 @@ describe("current attachments in an active remote placement", () => {
               generation: OWNER_EPOCH,
               argv: command.argv,
               input: command.input,
+              skillResources: command.skillResources?.operation,
             }),
           );
-          return await runCommandWithTimeout([...command.argv], {
-            cwd: remote,
-            input: command.input,
-            timeoutMs: 10_000,
-            signal: command.signal,
-          });
+          return await carrier.runWorkspaceCommand({ ...command, timeoutMs: 10_000 });
         }),
         measureLaunchTurn,
         stageAttachments: async (request) => {
@@ -261,6 +259,7 @@ describe("current attachments in an active remote placement", () => {
             base: base.manifest,
             current,
             journal: request.source.journal,
+            acceptance: { kind: "reconcile" },
           });
           workerManifestPaths = JSON.parse(raw).entries.map(
             (entry: { path: string }) => entry.path,
@@ -296,7 +295,14 @@ describe("current attachments in an active remote placement", () => {
       );
       if (executionMode === "remote-exec") {
         const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
-        expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));
+        expect(commands.at(-1)?.[0]).toMatchObject({
+          skillResources: {
+            workspaceDir: remote,
+            generation: OWNER_EPOCH,
+            operation: { operation: "discover" },
+          },
+          input: undefined,
+        });
         // At most one setup, three PDF chunks, and one image chunk.
         expect(commands.length - 1).toBeLessThanOrEqual(5);
       }

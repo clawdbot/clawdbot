@@ -956,6 +956,23 @@ export interface NodeWorkerLaunches {
   worker_start_time: number | null;
 }
 
+export interface NodeWorkerPreparedWorkspaces {
+  bound_at_ms: number | null;
+  cache_key: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_namespace: string;
+  home_dir: string;
+  owner_epoch: number | null;
+  preparation_key: string;
+  retired_at_ms: number | null;
+  session_id: string | null;
+  session_key: string | null;
+  source_manifest_ref: string;
+  state: string;
+  workspace_dir: string;
+}
+
 export interface NodeWorkerTurns {
   completed_at_ms: number | null;
   created_at_ms: number;
@@ -1489,11 +1506,16 @@ export interface WorkerEnvironments {
   destroy_requested_at_ms: number | null;
   environment_id: string;
   idle_since_at_ms: number | null;
+  last_activated_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
   node_device_id: string | null;
   node_setup_id: string | null;
   owner_epoch: Generated<number>;
+  preparation_consumed_at_ms: number | null;
+  preparation_demand_at_ms: number | null;
+  preparation_expires_at_ms: number | null;
+  preparation_key: string | null;
   profile_id: string;
   profile_snapshot_json: string;
   provider_id: string;
@@ -1755,6 +1777,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
+  node_worker_prepared_workspaces: NodeWorkerPreparedWorkspaces;
   node_worker_turns: NodeWorkerTurns;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;

@@ -18,6 +18,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-terminal",
@@ -48,6 +49,11 @@ describe("worker placement terminal persistence", () => {
     environmentId = `environment-${identity.sessionId}`,
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: identity.sessionId,
+      ownerEpoch: 7,
+    });
     let placement = store.startDispatch({ ...identity, executionMode });
     placement = store.transition({
       sessionId: identity.sessionId,
@@ -337,13 +343,13 @@ describe("worker placement terminal persistence", () => {
   it("does not leak terminal diagnostics between sessions sharing an environment", () => {
     const sharedEnvironmentId = "environment-shared";
     advanceToActive(SESSION, sharedEnvironmentId);
+    const { pending } = pendingResult();
     const otherIdentity = {
       sessionId: "session-placement-terminal-other",
       agentId: "main",
       sessionKey: "agent:main:placement-terminal-other",
     };
     const second = advanceToActive(otherIdentity, sharedEnvironmentId);
-    const { pending } = pendingResult();
 
     const failed = store.failWorkspaceResultAndReleaseTurn(
       pending,

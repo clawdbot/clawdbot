@@ -2,7 +2,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveHttpContentEncodings } from "../../infra/http-content-encoding.js";
+import { readWorkspaceTransferBody } from "../../worker/node-workspace-transfer-body.js";
 import { NODE_WORKSPACE_TRANSFER_PATH } from "../../worker/node-workspace-transfer-protocol.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { classifyNodeWorkspaceTransferPath } from "../gateway-http-route-contracts.js";
@@ -17,6 +20,7 @@ import {
   nodeWorkspaceTransferInvalidReason,
   type NodeWorkspaceTransferService,
 } from "./node-workspace-transfer-service.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 
 export type { NodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http-contract.js";
 
@@ -197,11 +201,19 @@ export function createNodeWorkspaceTransferHttpCallback(
           AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
         ]);
         const abortRequest = () => {
+          // A fully read request can already be destroyed while staging still owns
+          // an open response; cancellation must also settle that waiting uploader.
+          if (!res.destroyed) {
+            res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          }
           if (!req.destroyed) {
             req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
           }
         };
         signal.addEventListener("abort", abortRequest, { once: true });
+        if (signal.aborted) {
+          abortRequest();
+        }
         const stillCurrent = () => !signal.aborted && service.isAuthorizationCurrent(authorization);
         try {
           if (route.kind === "manifest" || route.kind === "pack") {
@@ -211,13 +223,37 @@ export function createNodeWorkspaceTransferHttpCallback(
               return;
             }
             if (route.kind === "manifest") {
-              const body = Buffer.from(snapshot.rawManifest);
+              let body: Buffer = Buffer.from(snapshot.rawManifest);
+              const [encoding] = resolveHttpContentEncodings(
+                req.headers["accept-encoding"],
+                new Set(["gzip"]),
+              );
+              if (encoding === "gzip") {
+                body = await pipeline(
+                  [body],
+                  createGzip(),
+                  async (source) =>
+                    await readWorkspaceTransferBody(source, MAX_WORKSPACE_MANIFEST_BYTES),
+                  { signal },
+                );
+              }
+              // Token revocation need not abort the context. Revalidate after zlib
+              // completes, then queue the complete response without another await.
               if (!stillCurrent()) {
+                if (!signal.aborted) {
+                  sendOpaqueNotFound(res);
+                }
+                return;
+              }
+              res.setHeader("Vary", "Accept-Encoding");
+              if (encoding === undefined) {
+                res.writeHead(406).end();
                 return;
               }
               res.writeHead(200, {
                 "content-type": "application/json; charset=utf-8",
                 "content-length": String(body.byteLength),
+                ...(encoding === "gzip" ? { "content-encoding": "gzip" } : {}),
               });
               res.end(body);
               return;

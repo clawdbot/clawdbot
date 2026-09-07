@@ -43,6 +43,7 @@ type WorkerInferenceStreamAdapterOptions = {
   turnId: string;
   modelRef: WorkerInferenceModelRef;
   computerContextEpoch?: ComputerContextEpoch;
+  onFirstInference?: () => void;
 };
 
 type WorkerInferenceStreamRequest = {
@@ -245,6 +246,7 @@ export function createWorkerInferenceStreamAdapter(
   adapter: WorkerInferenceStreamAdapterOptions,
 ): (request: WorkerInferenceStreamRequest) => AssistantMessageEventStreamLike {
   let modelCallSeq = 0;
+  let inferenceStarted = false;
   return (inferenceRequest) => {
     const stream = createAssistantMessageEventStream();
     const partial = emptyAssistantMessage(adapter.modelRef);
@@ -350,6 +352,10 @@ export function createWorkerInferenceStreamAdapter(
       return stream;
     }
     inferenceRequest.signal?.addEventListener("abort", abort, { once: true });
+    if (!inferenceStarted) {
+      inferenceStarted = true;
+      adapter.onFirstInference?.();
+    }
     void adapter.client
       .start(request, {
         onStreamGap: () => {

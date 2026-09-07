@@ -18,13 +18,10 @@ import {
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
+import type { WorkerEnvironmentTransitionPatch } from "./environment-record.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import {
-  createWorkerEnvironmentStore,
-  type WorkerEnvironmentStore,
-  type WorkerEnvironmentTransitionPatch,
-} from "./store.js";
+import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,

@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
 
@@ -351,6 +352,7 @@ async function createWorkerSessionToolTestFixture(
         remoteWorkspaceDir: `/workspace/${session.sessionId}`,
       },
     });
+    seedAttachedPlacementEnvironment(database, session);
     placements.transition({
       sessionId: session.sessionId,
       from: "starting",

@@ -56,6 +56,7 @@ import {
   probeWorkspaceGitMode,
   readTransferredManifest,
   resolveWorkerWorkspaceGitAuthor,
+  resolveWorkerWorkspaceCommandArgv,
   resolveRemoteWorkspaceManifest,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
@@ -164,6 +165,7 @@ export function createWorkerWorkspaceActions(
     );
     signal.throwIfAborted();
     command.assertCurrent?.();
+    const argv = resolveWorkerWorkspaceCommandArgv(command, options.environmentId);
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
@@ -178,8 +180,9 @@ export function createWorkerWorkspaceActions(
     // Exit 255 does not prove whether the remote command was accepted, so stateful
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
+      command.assertCurrent?.();
       const operation = runTask(
-        workerWorkspaceSshArgv(prepared, command.argv),
+        workerWorkspaceSshArgv(prepared, argv),
         commandOptions(remainingCommandTimeoutMs()),
       );
       command.onDispatchReady?.();
@@ -191,7 +194,7 @@ export function createWorkerWorkspaceActions(
       async (port, remainingTimeoutMs) => {
         command.assertCurrent?.();
         return await runTask(
-          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerWorkspaceSshArgv(prepared, argv, port),
           commandOptions(remainingTimeoutMs),
         );
       },
@@ -610,10 +613,6 @@ export function createWorkerWorkspaceActions(
           entries: current.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
       }
-      // Catch additions, deletions, and writes that raced the inbound transfer.
-      // Stop performs this check once more after local acceptance, directly
-      // before destroying the remote owner.
-      await verifyStable(currentRef);
       const preparedStagedResult = request.stagedResult
         ? await runLocalReconciliation(
             async () =>
@@ -642,6 +641,8 @@ export function createWorkerWorkspaceActions(
         : undefined;
       let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
       if (!stagedResult) {
+        // Staged results are fenced by the finalizer immediately before apply.
+        await verifyStable(currentRef);
         appliedWorkspaceResult = await runLocalReconciliation(
           async () =>
             await applyStagedWorkerWorkspace({
@@ -652,7 +653,7 @@ export function createWorkerWorkspaceActions(
               base,
               current,
               journal: request.journal,
-              publishAcceptedManifest,
+              acceptance: { kind: "reconcile", publish: publishAcceptedManifest },
             }),
         );
       }

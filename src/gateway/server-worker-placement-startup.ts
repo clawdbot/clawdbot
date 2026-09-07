@@ -17,7 +17,6 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
@@ -37,6 +36,7 @@ import {
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { isNodeWorkerPlacementCurrent } from "./worker-environments/device-placement-eligibility.js";
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
@@ -218,25 +218,13 @@ export function createGatewayWorkerPlacementRuntime(
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
       runnerAvailability,
       resolveDevicePlacementRequirement,
-      isCurrentNodePlacement: (node, requirement) => {
-        if (
-          nodeWorkerSupervisorTransport?.isCurrent(
-            node,
-            requirement.consumesWorkerSlot,
-            requirement.requiredNodeCommands,
-          ) !== true
-        ) {
-          return false;
-        }
-        const declaredCommands = [...node.commands];
-        const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig(), {
-          commands: declaredCommands,
-          approvedCommands: declaredCommands,
-        });
-        return requirement.requiredNodeCommands.every(
-          (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
-        );
-      },
+      isCurrentNodePlacement: (node, requirement) =>
+        isNodeWorkerPlacementCurrent({
+          node,
+          requirement,
+          transport: nodeWorkerSupervisorTransport,
+          config: getRuntimeConfig(),
+        }),
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({

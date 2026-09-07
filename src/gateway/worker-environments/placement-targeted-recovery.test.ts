@@ -132,7 +132,7 @@ describe("targeted worker placement recovery", () => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const cleanupStarted = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const harness = createHarness(placements, {
+    const harness = createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -142,7 +142,6 @@ describe("targeted worker placement recovery", () => {
       },
     });
     const active = await harness.service.dispatch(REQUEST);
-    seedAttached(active.environmentId);
     placements.beginPlacementMove({
       sessionId: active.sessionId,
       source: {

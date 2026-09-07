@@ -52,12 +52,28 @@ it("rejects repository sources on SSH before invoking any remote command", async
 });
 
 it.each([
-  { publication: "available", filters: false, closeOwner: false },
-  { publication: "blocked by filters", filters: true, closeOwner: false },
-  { publication: "blocked when the owner closes", filters: true, closeOwner: true },
+  { publication: "available", filters: false, closeOwner: false, losePublicationResult: false },
+  {
+    publication: "blocked by filters",
+    filters: true,
+    closeOwner: false,
+    losePublicationResult: false,
+  },
+  {
+    publication: "blocked when the owner closes",
+    filters: true,
+    closeOwner: true,
+    losePublicationResult: false,
+  },
+  {
+    publication: "lost RPC acknowledgement",
+    filters: false,
+    closeOwner: false,
+    losePublicationResult: true,
+  },
 ])(
   "preserves repository checkpoints with publication $publication",
-  async ({ filters, closeOwner }) => {
+  async ({ filters, closeOwner, losePublicationResult }) => {
     const root = await fs.realpath(tempDirs.make("node-repository-roundtrip-"));
     const origin = path.join(root, "origin");
     const home = path.join(root, "node-home");
@@ -104,6 +120,7 @@ it.each([
     );
     const baseCommit = await git("rev-parse", "HEAD");
     let epoch = 1;
+    let lostPublicationResults = 0;
     const service = createNodeWorkspaceTransferService({
       temporaryRoot: path.join(root, "transfers"),
       getOwner: () => ({
@@ -124,6 +141,54 @@ it.each([
     const createActions = () => {
       const ownerEpoch = epoch;
       const ownerSignal = new AbortController().signal;
+      const runWorkspaceCommand: Parameters<
+        typeof createNodeWorkerWorkspaceActions
+      >[0]["runWorkspaceCommand"] = async (command) => {
+        if (epoch !== ownerEpoch) {
+          throw new Error("node workspace authority closed");
+        }
+        try {
+          const result = await runtime.exec(
+            {
+              gatewayNamespace: "gateway-1",
+              environmentId: "environment-1",
+              sessionId: "session-1",
+              generation: ownerEpoch,
+              argv: [...command.argv],
+              sessionKey: command.sessionKey,
+              input: command.input,
+              timeoutMs: command.timeoutMs,
+              resetWorkspace: command.resetWorkspace,
+              transfer: command.transfer,
+              seed: command.seed,
+              capture: command.capture,
+              skillResources: command.skillResources?.operation,
+            },
+            ownerSignal,
+            { url: server.gatewayUrl },
+          );
+          if (
+            losePublicationResult &&
+            lostPublicationResults === 0 &&
+            command.transfer?.direction === "upload" &&
+            command.transfer.publicationBaseCommit
+          ) {
+            expect(result).toMatchObject({ code: 0, termination: "exit" });
+            lostPublicationResults += 1;
+            throw new Error("publication RPC acknowledgement lost after completed HTTP upload");
+          }
+          return result;
+        } catch (error) {
+          if (
+            closeOwner &&
+            command.transfer?.direction === "upload" &&
+            command.transfer.publicationBaseCommit
+          ) {
+            epoch += 1;
+          }
+          throw error;
+        }
+      };
       return createNodeWorkerWorkspaceActions({
         environmentId: "environment-1",
         ownerEpoch,
@@ -131,34 +196,8 @@ it.each([
         ownerSignal,
         isOwnerCurrent: () => epoch === ownerEpoch,
         workspaceTransfer: service,
-        runWorkspaceCommand: async (command) => {
-          if (epoch !== ownerEpoch) {
-            throw new Error("node workspace authority closed");
-          }
-          try {
-            return await runtime.exec(
-              {
-                gatewayNamespace: "gateway-1",
-                environmentId: "environment-1",
-                sessionId: "session-1",
-                generation: ownerEpoch,
-                ...command,
-                argv: [...command.argv],
-              },
-              ownerSignal,
-              { url: server.gatewayUrl },
-            );
-          } catch (error) {
-            if (
-              closeOwner &&
-              command.transfer?.direction === "upload" &&
-              command.transfer.publicationBaseCommit
-            ) {
-              epoch += 1;
-            }
-            throw error;
-          }
-        },
+        runWorkspaceCommand,
+        runResumeWorkspaceCommand: runWorkspaceCommand,
       });
     };
     const source = {
@@ -204,7 +243,7 @@ it.each([
             prepareCheckpoint: async (payload) => {
               const stagingRoot = path.join(root, `checkpoint-${++revision}`);
               await fs.cp(payload.stagingRoot, stagingRoot, { recursive: true });
-              if (filters) {
+              if (filters || (losePublicationResult && revision === 1)) {
                 expect(payload.publicationDigest).toBeUndefined();
                 expect(payload.publicationStagingRoot).toBeUndefined();
               } else {
@@ -255,6 +294,11 @@ it.each([
       await capture();
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
+      if (losePublicationResult) {
+        expect(lostPublicationResults).toBe(1);
+        await capture();
+        expect(revision).toBe(2);
+      }
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
       await fs.writeFile(
         path.join(first.remoteWorkspaceDir, "published[1].ignored"),

@@ -146,6 +146,7 @@ class NodeWorkerSupervisor {
     connectionEndpoint: WorkerConnectionEndpoint,
     signal?: AbortSignal,
   ): Promise<NodeWorkerLaunchReceipt> {
+    const receivedAtMs = performance.now();
     const input = validateNodeWorkerLaunchInput(structuredClone(rawInput));
     const descriptor = completeWorkerLaunchDescriptor(input.descriptor, connectionEndpoint);
     const planHash = nodeWorkerPlanHash(input);
@@ -165,12 +166,18 @@ class NodeWorkerSupervisor {
       return await admission.done;
     }
     const abort = new AbortController();
+    const workspace = this.workspace.acquirePreparedWorkspace({
+      ...binding,
+      sessionKey: input.sessionKey,
+    });
     const done = this.launchAdmitted(
       input,
       descriptor,
       planHash,
       signal ? AbortSignal.any([signal, abort.signal]) : abort.signal,
-    );
+      receivedAtMs,
+      workspace?.homeDir,
+    ).finally(() => workspace?.release());
     const pending = { binding, launchId: input.launchId, planHash, abort, done };
     this.admissions.set(key, pending);
     try {
@@ -187,6 +194,8 @@ class NodeWorkerSupervisor {
     descriptor: WorkerLaunchDescriptor,
     planHash: string,
     signal: AbortSignal,
+    receivedAtMs: number,
+    homeDir?: string,
   ): Promise<NodeWorkerLaunchReceipt> {
     await this.initialize();
     const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
@@ -251,6 +260,7 @@ class NodeWorkerSupervisor {
         continue;
       }
       return await startNodeWorkerTurn({
+        receivedAtMs,
         active: owner,
         descriptor,
         claim: claimInput,
@@ -287,10 +297,14 @@ class NodeWorkerSupervisor {
       void cancellation.catch(() => undefined);
     };
     signal?.addEventListener("abort", cancelClaimed, { once: true });
+    const workerEnv = homeDir ? { ...this.workerEnv, HOME: homeDir } : this.workerEnv;
+    if (homeDir && process.platform === "win32") {
+      workerEnv.USERPROFILE = homeDir;
+    }
     const startup = startNodeWorkerChild(
       {
         bundleRoot: this.bundleRoot,
-        workerEnv: this.workerEnv,
+        workerEnv,
         engineEnv: this.engineEnv,
         store: this.store,
         turns: this.turns,
@@ -304,14 +318,7 @@ class NodeWorkerSupervisor {
         observeChild: (active) => this.observeChild(active),
         stopChild: (active, state) => this.stopChild(active, state),
       },
-      {
-        input,
-        descriptor,
-        planHash,
-        supervisor,
-        signal,
-        claim: claimInput,
-      },
+      { input, descriptor, planHash, supervisor, signal, claim: claimInput, receivedAtMs },
     );
     this.starting.set(input.launchId, startup);
     if (signal?.aborted) {
@@ -603,8 +610,7 @@ class NodeWorkerSupervisor {
         this.closePromise = undefined;
       }
     });
-    this.closePromise = closePromise;
-    return closePromise;
+    return (this.closePromise = closePromise);
   }
 
   private reconcileActiveTerminal(active: NodeWorkerObservedTerminal): NodeWorkerLaunchReceipt {
@@ -640,9 +646,7 @@ class NodeWorkerSupervisor {
   private async observeChild(active: NodeWorkerRunningChild): Promise<void> {
     const outcome = await observeNodeWorkerChildOutput(
       active,
-      (frame) => {
-        settleNodeWorkerTurn(active, frame, this.turns);
-      },
+      (frame) => settleNodeWorkerTurn(active, frame, this.turns),
       () => active.turn?.claim.launchId,
     );
     if (active.container) {
@@ -690,17 +694,14 @@ class NodeWorkerSupervisor {
     if (!active.container) {
       return;
     }
-    if (!active.containerCleanup) {
-      const cleanup = this.requireContainerLifecycle()
-        .remove(active.container, active)
-        .finally(() => {
-          if (active.containerCleanup === cleanup) {
-            active.containerCleanup = undefined;
-          }
-        });
-      active.containerCleanup = cleanup;
-    }
-    await active.containerCleanup;
+    const cleanup = (active.containerCleanup ??= this.requireContainerLifecycle()
+      .remove(active.container, active)
+      .finally(() => {
+        if (active.containerCleanup === cleanup) {
+          active.containerCleanup = undefined;
+        }
+      }));
+    await cleanup;
   }
 
   private async stopChild(

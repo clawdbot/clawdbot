@@ -180,7 +180,7 @@ describe("Crabbox capture recovery", () => {
     const now = Date.now();
     const retained = {
       ...image.value,
-      image: { ...image.value.image!, lastUsedAtMs: now - DAY_MS },
+      image: { ...image.value.image!, lastDemandAtMs: now - DAY_MS },
       operation: {
         type: "capture" as const,
         id: "capacity-capture",
@@ -194,7 +194,7 @@ describe("Crabbox capture recovery", () => {
     for (let index = 0; index < 127; index++) {
       store.register(`idle-${index}`, {
         ...image.value,
-        image: { ...image.value.image!, checkpointId: `chk_idle_${index}`, lastUsedAtMs: now },
+        image: { ...image.value.image!, checkpointId: `chk_idle_${index}`, lastDemandAtMs: now },
       });
     }
     calls.length = 0;

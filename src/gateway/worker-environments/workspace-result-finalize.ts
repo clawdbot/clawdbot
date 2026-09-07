@@ -401,9 +401,10 @@ export async function executeRemoteExecTurn(params: {
   try {
     skillResources = await transferSkillResources({
       snapshot: params.turn.skillsSnapshot,
+      workspaceDir: params.placement.remoteWorkspaceDir,
+      generation: params.placement.activeOwnerEpoch,
       explicitSelections: params.turn.explicitSkillSelections,
       tunnel,
-      remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
       signal: params.turn.abortSignal,
       assertCurrent: () => {
         const current = params.environments.get(environment.environmentId);

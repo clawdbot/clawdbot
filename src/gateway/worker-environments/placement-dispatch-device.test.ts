@@ -59,7 +59,7 @@ function deviceProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true as const, capacity: { total: 2, available } },
+    workerHost: { enabled: true as const, capacity: { total: 2, available }, workspaceManifest: 1 },
     commands,
   };
 }
@@ -120,7 +120,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("provisions, syncs, and activates a local-install device environment", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: true,
       node: deviceProof(),
@@ -130,7 +130,6 @@ describe("device worker placement dispatch", () => {
       providerId: "device",
       profileId: "device:device-1",
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
-      leaseId: "lease-1",
       sshEndpoint: null,
       bootstrapReceipt: {
         bundleHash: "a".repeat(64),
@@ -165,6 +164,7 @@ describe("device worker placement dispatch", () => {
       REQUEST.executionMode,
       "/gateway/workspace",
       undefined,
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -180,7 +180,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("syncs paired-device remote-exec without launching an OpenClaw worker child", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: true,
       node: deviceProof(0),
@@ -191,7 +191,6 @@ describe("device worker placement dispatch", () => {
       profileId: "device:device-1",
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
       nodeDeviceId: "device-1",
-      leaseId: "lease-1",
       sshEndpoint: null,
       sharedHost: true,
     } as const;
@@ -236,6 +235,7 @@ describe("device worker placement dispatch", () => {
       "remote-exec",
       "/gateway/workspace",
       undefined,
+      undefined,
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -250,7 +250,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("activates non-device node remote-exec without a worker slot or worker child", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     const resolveAvailability = vi.fn(async () => ({
       available: true,
       node: deviceProof(0),
@@ -272,6 +272,7 @@ describe("device worker placement dispatch", () => {
       "remote-exec",
       "/gateway/workspace",
       undefined,
+      expect.objectContaining({ providerId: "fake" }),
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -280,7 +281,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("does not require node command approval for an SSH-only remote-exec profile", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
 
     await expect(
@@ -295,7 +296,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("rejects a remote-exec-only enrolled node before provider allocation when its command is denied", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     const request = prepareCloudNodeDispatch(harness);
     runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
     Object.assign(harness.environments, {
@@ -323,7 +324,7 @@ describe("device worker placement dispatch", () => {
       expectedProvisionCalls: 0,
     },
   ])("rejects a non-device cloud node with an $name before workspace sync", async (scenario) => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: true,
       node: scenario.node,
@@ -342,7 +343,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("rejects a non-device cloud node whose current proof names a different node", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: true,
       node: { ...deviceProof(), nodeId: "replacement-node" },
@@ -358,7 +359,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("fences a non-device cloud node replaced inside the activation barrier", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: true,
       node: deviceProof(),
@@ -386,7 +387,7 @@ describe("device worker placement dispatch", () => {
 
   it("rejects a cloud node re-paired while its managed workspace is synchronizing", async () => {
     let currentNode = deviceProof(0);
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       isCurrentNodePlacement: (node) =>
         node.nodeId === currentNode.nodeId &&
         node.connId === currentNode.connId &&
@@ -416,7 +417,7 @@ describe("device worker placement dispatch", () => {
 
   it("fences a cloud node re-paired inside the synchronous activation callback", async () => {
     let currentNode = deviceProof(0);
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       isCurrentNodePlacement: (node) =>
         node.nodeId === currentNode.nodeId &&
         node.connId === currentNode.connId &&
@@ -449,7 +450,7 @@ describe("device worker placement dispatch", () => {
     { name: "denies its required command in Gateway policy", revocation: "policy" as const },
   ])("fences a cloud node that $name inside the activation callback", async (scenario) => {
     let currentNode = deviceProof(0);
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       isCurrentNodePlacement: (node, requirement) =>
         node.nodeId === currentNode.nodeId &&
         node.connId === currentNode.connId &&
@@ -487,7 +488,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("records an unavailable device dispatch as a durable failed placement", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({
       available: false,
       issue: NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
@@ -525,7 +526,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("rechecks a paired node immediately before provisioning after its eligibility changes", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     const resolveAvailability = vi
       .fn()
       .mockResolvedValueOnce({ available: true, node: deviceProof() })
@@ -562,6 +563,17 @@ describe("device worker placement dispatch", () => {
       config: { gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } } },
       expected: true,
     },
+    ...[OPENCLAW_DEVICE_REQUIREMENT, CODEX_DEVICE_REQUIREMENT].map((requirement) => ({
+      name: `rejects missing workspace manifests (worker slot=${requirement.consumesWorkerSlot})`,
+      node: {
+        ...deviceProof(),
+        workerHost: { enabled: true as const, capacity: { total: 2, available: 2 } },
+      },
+      requirement,
+      config: { gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } } },
+      expected: false,
+      message: "run openclaw update",
+    })),
     {
       name: "rejects worker-turn when all slots are occupied",
       node: deviceProof(0),
@@ -650,7 +662,7 @@ describe("device worker placement dispatch", () => {
       expectedMessage: "at capacity",
     },
   ])("fences recovery of a $name before workspace sync", async (scenario) => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     const provisioning = harness.placements.seedProvisioning(scenario.executionMode);
     if (provisioning.state !== "provisioning") {
       throw new Error("paired-device recovery fixture did not enter provisioning");
@@ -680,7 +692,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(database, placementStore);
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,

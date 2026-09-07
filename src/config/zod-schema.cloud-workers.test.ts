@@ -26,6 +26,11 @@ describe("OpenClawSchema cloudWorkers config", () => {
                 title?: string;
                 description?: string;
               };
+              preparedPool?: {
+                title?: string;
+                description?: string;
+                properties?: Record<string, { title?: string; description?: string }>;
+              };
               projectProfiles?: {
                 title?: string;
                 description?: string;
@@ -49,12 +54,15 @@ describe("OpenClawSchema cloudWorkers config", () => {
       }
     ).properties?.cloudWorkers;
     const desktop = properties?.properties?.desktop;
+    const preparedPool = properties?.properties?.preparedPool;
     const projectProfiles = properties?.properties?.projectProfiles;
     const profiles = properties?.properties?.profiles;
     const profile = profiles?.additionalProperties;
 
     for (const [path, schema] of [
       ["cloudWorkers.desktop", desktop],
+      ["cloudWorkers.preparedPool", preparedPool],
+      ["cloudWorkers.preparedPool.maxTotal", preparedPool?.properties?.maxTotal],
       ["cloudWorkers.projectProfiles", projectProfiles],
       ["cloudWorkers.projectProfiles.*", projectProfiles?.additionalProperties],
       ["cloudWorkers.profiles", profiles],
@@ -62,6 +70,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
       ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
       ["cloudWorkers.profiles.*.install", profile?.properties?.install],
       ["cloudWorkers.profiles.*.suspendAfter", profile?.properties?.suspendAfter],
+      ["cloudWorkers.profiles.*.readyWorkers", profile?.properties?.readyWorkers],
       ["cloudWorkers.profiles.*.settings", profile?.properties?.settings],
     ] as const) {
       expect(schema?.title, path).toBe(CLOUD_WORKER_FIELD_LABELS[path]);
@@ -80,6 +89,34 @@ describe("OpenClawSchema cloudWorkers config", () => {
     expect(parseCloudWorkers({ desktop: true })).toStrictEqual({ desktop: true });
     expect(OpenClawSchema.safeParse({ cloudWorkers: { desktop: "true" } }).success).toBe(false);
   });
+
+  it.each([
+    { readyWorkers: 0, maxTotal: 4 },
+    { readyWorkers: 2, maxTotal: 0 },
+    { readyWorkers: 3, maxTotal: 8 },
+  ])("preserves explicit prepared reserve sizing: %j", ({ readyWorkers, maxTotal }) => {
+    expect(
+      parseCloudWorkers({
+        preparedPool: { maxTotal },
+        profiles: { development: { provider: "qa-lab", readyWorkers } },
+      }),
+    ).toStrictEqual({
+      preparedPool: { maxTotal },
+      profiles: { development: { provider: "qa-lab", install: "bundle", readyWorkers } },
+    });
+  });
+
+  it.each([-1, 0.5, "1", null, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid prepared reserve sizing: %s",
+    (value) => {
+      for (const cloudWorkers of [
+        { preparedPool: { maxTotal: value } },
+        { profiles: { development: { provider: "qa-lab", readyWorkers: value } } },
+      ]) {
+        expect(OpenClawSchema.safeParse({ cloudWorkers }).success).toBe(false);
+      }
+    },
+  );
 
   it("accepts normalized per-project default profiles", () => {
     expect(
@@ -218,6 +255,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
   );
 
   it.each([
+    { preparedPool: { unsupported: true } },
     { profiles: { development: { provider: "" } } },
     { profiles: { development: { provider: "qa-lab", install: "git" } } },
     { profiles: { " development ": { provider: "qa-lab" } } },

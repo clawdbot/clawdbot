@@ -11,10 +11,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
-import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
-import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
-import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -279,45 +275,63 @@ describe("outbound message progress companion", () => {
     ).toBe(true);
     const repositoryRoot = process.cwd();
     ensurePinnedReaderCommit(repositoryRoot);
-    const projectedDatabase = openOpenClawStateDatabase(database).db;
-    // Only audit rows belong to this proof. Restore the empty binding and Workshop
-    // proposal tables from the immutable reader's schema without inventing a
-    // production downgrade.
-    expect(
-      projectedDatabase
-        .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
-        .get(),
-    ).toEqual({ count: 0 });
-    const pinnedSchemaDatabase = openNodeSqliteDatabase(":memory:");
+    const candidate = openOpenClawStateDatabase(database);
+    const historicalDatabase = databaseOptions();
+    const historicalPath = path.join(
+      historicalDatabase.env.OPENCLAW_STATE_DIR,
+      "state",
+      "openclaw.sqlite",
+    );
+    fs.mkdirSync(path.dirname(historicalPath), { recursive: true });
+    const projectedDatabase = openNodeSqliteDatabase(historicalPath);
     try {
-      pinnedSchemaDatabase.exec(
+      // Exercise additive audit compatibility inside the immutable reader's own
+      // schema. This separate fixture does not downgrade the candidate state DB.
+      projectedDatabase.exec(
         execFileSync(
           "git",
           ["show", `${PINNED_PRE_C04_READER_SHA}:src/state/openclaw-state-schema.sql`],
           { cwd: repositoryRoot, encoding: "utf8" },
         ),
       );
-      const pinnedStatements = pinnedSchemaDatabase.prepare(
-        `SELECT sql FROM sqlite_schema
-         WHERE tbl_name = ?
-           AND type IN ('table', 'index') AND sql IS NOT NULL
-         ORDER BY type = 'table' DESC, name`,
-      );
-      for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
-        projectedDatabase.exec(`DROP TABLE ${table};`);
-        for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
+      projectedDatabase.exec("PRAGMA user_version = 9;");
+      projectedDatabase
+        .prepare(
+          `INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+           VALUES ('primary', 'global', 9, ?, ?)`,
+        )
+        .run(occurredAt, occurredAt);
+      projectedDatabase.prepare("ATTACH DATABASE ? AS candidate").run(candidate.path);
+      for (const table of [
+        "outbound_message_progress",
+        "outbound_message_execution_bindings",
+      ] as const) {
+        const statements = projectedDatabase
+          .prepare(
+            `SELECT sql FROM candidate.sqlite_schema
+             WHERE tbl_name = ? AND type IN ('table', 'index') AND sql IS NOT NULL
+             ORDER BY type = 'table' DESC, name`,
+          )
+          .all(table) as Array<{ sql: string }>;
+        for (const { sql } of statements) {
           projectedDatabase.exec(sql);
         }
       }
+      for (const table of [
+        "audit_events",
+        "audit_identity_keys",
+        "outbound_message_progress",
+        "outbound_message_execution_bindings",
+      ] as const) {
+        projectedDatabase.exec(`INSERT INTO main.${table} SELECT * FROM candidate.${table};`);
+      }
+      projectedDatabase.exec("DETACH DATABASE candidate;");
     } finally {
-      pinnedSchemaDatabase.close();
+      projectedDatabase.close();
     }
-    // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
-    // v11 curator retirement, and v10 dead-table retirement reversed in order.
-    projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+    expect(candidate.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     closeOpenClawStateDatabaseForTest();
 
     const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
@@ -369,7 +383,7 @@ describe("outbound message progress companion", () => {
           cwd: pinnedCheckout,
           env: {
             ...process.env,
-            OPENCLAW_C04_PINNED_READER_STATE_DIR: database.env.OPENCLAW_STATE_DIR,
+            OPENCLAW_C04_PINNED_READER_STATE_DIR: historicalDatabase.env.OPENCLAW_STATE_DIR,
           },
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
@@ -392,7 +406,7 @@ describe("outbound message progress companion", () => {
       });
     }
 
-    const reopened = openOpenClawStateDatabase(database).db;
+    const reopened = openOpenClawStateDatabase(historicalDatabase).db;
     expect(reopened.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
@@ -400,7 +414,7 @@ describe("outbound message progress companion", () => {
     expect(
       pageOutboundMessageAuditEventsForRun({
         runId: "run-progress",
-        database,
+        database: historicalDatabase,
         now: occurredAt,
         limit: 10,
       }).entries.map((entry) => entry.event.outcome),

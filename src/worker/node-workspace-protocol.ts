@@ -1,8 +1,15 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SpawnResult } from "../process/exec.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "./node-workspace-deadlines.js";
 import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer-protocol.js";
 import { hasExactOwnKeys } from "./protocol-record.js";
+import {
+  parseWorkerSkillResourceOperation,
+  validateWorkerSkillResourceInput,
+  WORKER_SKILL_RESOURCE_COMMAND,
+  type WorkerSkillResourceOperation,
+} from "./skill-resource-protocol.js";
 import {
   isWorkspaceInspectionCommand,
   WORKSPACE_INSPECTION_COMMAND,
@@ -19,7 +26,6 @@ const ARGV_MAX_ITEMS = 128;
 // Workspace scripts are shipped through this private command and remain bounded by
 // REQUEST_MAX_BYTES; the canonical manifest script is larger than an ordinary argv item.
 const ARG_MAX_BYTES = 128 * 1024;
-const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 
 export type NodeWorkerWorkspaceSeedInput =
@@ -30,6 +36,8 @@ export type NodeWorkerWorkspaceExecInput = {
   gatewayNamespace: string;
   environmentId: string;
   sessionId: string;
+  sessionKey?: string;
+  preparationKey?: string;
   generation: number;
   argv: string[];
   input?: string;
@@ -37,6 +45,8 @@ export type NodeWorkerWorkspaceExecInput = {
   resetWorkspace?: boolean;
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
+  capture?: { baseManifestRef: string; referenceManifestRef: string };
+  skillResources?: WorkerSkillResourceOperation;
 };
 
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
@@ -74,12 +84,38 @@ export function parseNodeWorkerWorkspaceExecInput(
     !hasExactOwnKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
+      [
+        "input",
+        "timeoutMs",
+        "resetWorkspace",
+        "transfer",
+        "seed",
+        "capture",
+        "skillResources",
+        "sessionKey",
+        "preparationKey",
+      ],
     )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
   }
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
+  if (
+    value.preparationKey !== undefined &&
+    (typeof value.preparationKey !== "string" || !/^[a-f0-9]{64}$/u.test(value.preparationKey))
+  ) {
+    throw new Error("INVALID_REQUEST: preparationKey must be a SHA-256 hex digest");
+  }
+  if (
+    value.sessionKey !== undefined &&
+    (typeof value.sessionKey !== "string" ||
+      value.sessionKey.length === 0 ||
+      value.sessionKey.length > 1_024 ||
+      value.sessionKey.trim() !== value.sessionKey ||
+      value.sessionKey.includes("\0"))
+  ) {
+    throw new Error("INVALID_REQUEST: sessionKey must be a bounded non-empty identifier");
+  }
   if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
   }
@@ -111,6 +147,8 @@ export function parseNodeWorkerWorkspaceExecInput(
       value.input !== undefined ||
       value.transfer !== undefined ||
       value.seed !== undefined ||
+      value.capture !== undefined ||
+      value.skillResources !== undefined ||
       value.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace drain owns its operation");
@@ -120,6 +158,8 @@ export function parseNodeWorkerWorkspaceExecInput(
     (!inspection ||
       value.transfer !== undefined ||
       value.seed !== undefined ||
+      value.capture !== undefined ||
+      value.skillResources !== undefined ||
       value.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace inspection owns its operation");
@@ -140,12 +180,50 @@ export function parseNodeWorkerWorkspaceExecInput(
     (typeof value.timeoutMs !== "number" ||
       !Number.isSafeInteger(value.timeoutMs) ||
       value.timeoutMs < 1 ||
-      value.timeoutMs > TIMEOUT_MAX_MS)
+      value.timeoutMs > NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS)
   ) {
     throw new Error("INVALID_REQUEST: workspace command timeout is invalid");
   }
   if (value.resetWorkspace !== undefined && typeof value.resetWorkspace !== "boolean") {
     throw new Error("INVALID_REQUEST: resetWorkspace must be a boolean");
+  }
+  let skillResources: WorkerSkillResourceOperation | undefined;
+  if (value.skillResources !== undefined) {
+    if (
+      value.capture !== undefined ||
+      value.transfer !== undefined ||
+      value.seed !== undefined ||
+      value.resetWorkspace !== undefined ||
+      value.argv.length !== 1 ||
+      value.argv[0] !== WORKER_SKILL_RESOURCE_COMMAND
+    ) {
+      throw new Error("INVALID_REQUEST: skill resources require an exclusive workspace operation");
+    }
+    skillResources = parseWorkerSkillResourceOperation(value.skillResources);
+    validateWorkerSkillResourceInput(skillResources, value.input);
+  }
+  const validRef = (candidate: unknown): candidate is string =>
+    typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
+  let capture: NodeWorkerWorkspaceExecInput["capture"];
+  if (value.capture !== undefined) {
+    if (
+      !isRecord(value.capture) ||
+      !hasExactOwnKeys(value.capture, ["baseManifestRef", "referenceManifestRef"]) ||
+      !validRef(value.capture.baseManifestRef) ||
+      !validRef(value.capture.referenceManifestRef) ||
+      value.transfer !== undefined ||
+      value.seed !== undefined ||
+      value.resetWorkspace !== undefined ||
+      value.input !== undefined ||
+      value.argv.length !== 1 ||
+      value.argv[0] !== "openclaw-internal-workspace-manifest"
+    ) {
+      throw new Error("INVALID_REQUEST: workspace manifest capture is invalid");
+    }
+    capture = {
+      baseManifestRef: value.capture.baseManifestRef,
+      referenceManifestRef: value.capture.referenceManifestRef,
+    };
   }
   let seed: NodeWorkerWorkspaceSeedInput | undefined;
   if (value.seed !== undefined) {
@@ -186,8 +264,6 @@ export function parseNodeWorkerWorkspaceExecInput(
     const manifestRef = value.transfer.manifestRef;
     const baseManifestRef = value.transfer.baseManifestRef;
     const referenceManifestRef = value.transfer.referenceManifestRef;
-    const validRef = (candidate: unknown): candidate is string =>
-      typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
     if (
       typeof token !== "string" ||
       token.length === 0 ||
@@ -254,6 +330,8 @@ export function parseNodeWorkerWorkspaceExecInput(
     gatewayNamespace,
     environmentId: requireIdentifier(value.environmentId, "environmentId"),
     sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
+    ...(value.preparationKey === undefined ? {} : { preparationKey: value.preparationKey }),
     generation: value.generation,
     argv: [...value.argv],
     ...(value.input === undefined ? {} : { input: value.input }),
@@ -261,6 +339,8 @@ export function parseNodeWorkerWorkspaceExecInput(
     ...(value.resetWorkspace === undefined ? {} : { resetWorkspace: value.resetWorkspace }),
     ...(transfer ? { transfer } : {}),
     ...(seed ? { seed } : {}),
+    ...(capture ? { capture } : {}),
+    ...(skillResources ? { skillResources } : {}),
   };
 }
 

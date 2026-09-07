@@ -87,6 +87,54 @@ afterEach(() => {
 });
 
 describe("node worker workspace retention", () => {
+  it("reclaims interrupted skill bundles only after their retained or active generation retires", async () => {
+    const root = fs.realpathSync.native(tempDirs.make("node-worker-skill-resource-retention-"));
+    const options = { root, env: { HOME: root, PATH: process.env.PATH } };
+    const creator = new NodeWorkerWorkspaceRuntime(options);
+    const input = testWorkerLaunchInput("/unused", "resource-retention");
+    const identity = {
+      gatewayNamespace: input.gatewayNamespace,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+    };
+    const roots: string[] = [];
+    for (const generation of [1, 2]) {
+      const result = await creator.exec({
+        ...identity,
+        generation,
+        argv: ["openclaw-internal-skill-resources"],
+        skillResources: { operation: "init" },
+      });
+      expect(result.code).toBe(0);
+      const bundle = JSON.parse(result.stdout) as { root: string };
+      expect(path.dirname(bundle.root)).toBe(path.dirname(result.workspaceDir));
+      await fsp.writeFile(path.join(bundle.root, "interrupted"), "partial transfer");
+      roots.push(bundle.root);
+    }
+
+    // No transfer cleanup survives restart. The filesystem artifact retains its owner.
+    const workspace = new NodeWorkerWorkspaceRuntime(options);
+    const claim = workspace.acquireManagedWorkspace({
+      workspaceDir: generationPath(root, input, 2),
+      ...identity,
+      ownerEpoch: 2,
+      sessionKey: "agent:main:resource-retention",
+    });
+    const retained = [{ ...identity, generation: 1, manifestRefs: null }];
+    await workspace.applyRetainSnapshot(retainInput(input, 1, retained), () => []);
+    expect(roots.map((dir) => fs.existsSync(dir))).toEqual([true, true]);
+
+    claim.release();
+    await workspace.applyRetainSnapshot(retainInput(input, 2, retained), () => []);
+    expect(roots.map((dir) => fs.existsSync(dir))).toEqual([true, false]);
+
+    await workspace.applyRetainSnapshot(retainInput(input, 3, []), () => []);
+    expect(fs.existsSync(sessionRoot(root, input))).toBe(false);
+    await expect(
+      workspace.applyRetainSnapshot(retainInput(input, 3, []), () => []),
+    ).resolves.toMatchObject({ applied: true, deleted: 0, hasMore: false });
+  });
+
   it("claims only the exact canonical placement workspace identity", () => {
     const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
     const workspace = new NodeWorkerWorkspaceRuntime({ root });

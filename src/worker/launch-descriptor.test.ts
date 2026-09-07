@@ -106,6 +106,42 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it.each(["/", "C:\\"])("accepts long worker paths rooted at %s", (root) => {
+    const descriptor = launchDescriptor();
+    const separator = root === "/" ? "/" : "\\";
+    const workspaceDir =
+      root + Array.from({ length: 6 }, () => "project".repeat(10)).join(separator);
+    descriptor.assignment.workspaceDir = workspaceDir;
+    descriptor.assignment.workerContainmentRoot = workspaceDir;
+
+    expect(workspaceDir.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH);
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+  });
+
+  it("bounds workspace paths independently from worker identifiers", () => {
+    const descriptor = launchDescriptor();
+    const boundedPath = "/" + "a/".repeat(2_047) + "a";
+    descriptor.assignment.workspaceDir = boundedPath;
+    descriptor.assignment.workerContainmentRoot = boundedPath;
+    expect(boundedPath).toHaveLength(4_096);
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+
+    for (const invalidPath of [
+      boundedPath + "a",
+      "/workspace\0other",
+      " /workspace",
+      "/workspace ",
+    ]) {
+      for (const field of ["workspaceDir", "workerContainmentRoot"] as const) {
+        const candidate = structuredClone(descriptor);
+        candidate.assignment[field] = invalidPath;
+        expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+          "invalid worker launch descriptor",
+        );
+      }
+    }
+  });
+
   it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
     const descriptor = launchDescriptor();
     const identity = {

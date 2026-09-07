@@ -1,6 +1,6 @@
 /** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { once } from "node:events";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -20,7 +20,7 @@ import {
 type JsonRpcRecord = Record<string, unknown>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
-function createManagedWorkspaceInvocation(cwd: string) {
+function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const placement = {
     cwd,
     environmentId: "paired-environment",
@@ -46,7 +46,7 @@ function createManagedWorkspaceInvocation(cwd: string) {
       ) {
         throw new Error("node placement does not own the requested workspace");
       }
-      return { workspaceDir: cwd, release };
+      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
     },
   );
   const context = {
@@ -452,417 +452,433 @@ describe("Codex node exec-server", () => {
     expect(workspace.release).toHaveBeenCalledOnce();
   });
 
-  it("relays the actual pinned Codex binary, isolates credentials, and removes its private home", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "node-provider-canary");
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "node-cloud-canary");
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/node-cloud-canary.json");
-    vi.stubEnv("GITHUB_TOKEN", "node-forge-canary");
-    vi.stubEnv("SSH_AUTH_SOCK", "/node-ssh-canary.sock");
-    vi.stubEnv("NODE_OPTIONS", "--no-warnings");
+  it.each(["ordinary", "prepared"] as const)(
+    "relays the pinned Codex binary with %s HOME, isolated credentials, and private runtime cleanup",
+    async (kind) => {
+      vi.stubEnv("OPENAI_API_KEY", "node-provider-canary");
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "node-cloud-canary");
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/node-cloud-canary.json");
+      vi.stubEnv("GITHUB_TOKEN", "node-forge-canary");
+      vi.stubEnv("SSH_AUTH_SOCK", "/node-ssh-canary.sock");
+      vi.stubEnv("NODE_OPTIONS", "--no-warnings");
 
-    await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-node-exec-contract-" },
-      async ({ dir }) => {
-        const cwd = await realpath(dir);
-        const workspaceUri = pathToFileURL(cwd).href;
-        const probePath = path.join(cwd, "probe.txt");
-        const probeUri = pathToFileURL(probePath).href;
-        const frames = createNodeFrames();
-        const command = createCodexNodeExecServerCommand();
-        const workspace = createManagedWorkspaceInvocation(cwd);
-        const invocation = command.handle(
-          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-          frames.io,
-          workspace.context,
-        );
-        void invocation.catch(() => {});
-        let isolatedHome: string | undefined;
-
-        try {
-          await Promise.race([frames.ready, invocation]);
-          // Codex deliberately omits jsonrpc:"2.0" from every wire envelope.
-          await frames.send({
-            id: 1,
-            method: "initialize",
-            params: { clientName: "openclaw-node" },
-          });
-          expect(await readNodeResponse(frames, 1)).toMatchObject({
-            sessionId: expect.any(String),
-          });
-          await frames.send({ method: "initialized", params: {} });
-
-          await frames.send({ id: 2, method: "environment/info", params: {} });
-          expect(await readNodeResponse(frames, 2)).toMatchObject({
-            cwd: workspaceUri,
-            capabilities: { networkProxyLaunch: true, sandboxedFileStreaming: true },
-          });
-
-          const dataBase64 = Buffer.from("node filesystem proof\n").toString("base64");
-          await frames.send({
-            id: 3,
-            method: "fs/writeFile",
-            params: { path: probeUri, dataBase64, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 3)).toEqual({});
-          expect(await readFile(probePath, "utf8")).toBe("node filesystem proof\n");
-
-          await frames.send({
-            id: 4,
-            method: "fs/canonicalize",
-            params: { path: probeUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 4)).toEqual({ path: probeUri });
-          await frames.send({
-            id: 5,
-            method: "fs/open",
-            params: { handleId: "node-proof", path: probeUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 5)).toEqual({ handleId: "node-proof" });
-          await frames.send({
-            id: 6,
-            method: "fs/readBlock",
-            params: { handleId: "node-proof", offset: 0, len: 256 },
-          });
-          expect(await readNodeResponse(frames, 6)).toEqual({ chunk: dataBase64, eof: true });
-          await frames.send({ id: 7, method: "fs/close", params: { handleId: "node-proof" } });
-          expect(await readNodeResponse(frames, 7)).toEqual({});
-
-          const script = [
-            "process.stdin.once('data', input => {",
-            "process.stdout.write(JSON.stringify({",
-            "input: input.toString().trim(),",
-            "ordinary: process.env.NODE_EXEC_ORDINARY ?? null,",
-            "home: process.env.HOME ?? null,",
-            "codexHome: process.env.CODEX_HOME ?? null,",
-            "userProfile: process.env.USERPROFILE ?? null,",
-            "provider: process.env.OPENAI_API_KEY ?? null,",
-            "cloud: process.env.AWS_ACCESS_KEY_ID ?? null,",
-            "cloudFile: process.env.GOOGLE_APPLICATION_CREDENTIALS ?? null,",
-            "forge: process.env.GITHUB_TOKEN ?? null,",
-            "ssh: process.env.SSH_AUTH_SOCK ?? null,",
-            "injection: process.env.NODE_OPTIONS ?? null",
-            "}) + '\\n', () => process.exit(0))",
-            "})",
-          ].join("\n");
-          await frames.send({
-            id: 8,
-            method: "process/start",
-            params: {
-              processId: "node-proof",
-              argv: [process.execPath, "-e", script],
-              cwd: workspaceUri,
-              env: { NODE_EXEC_ORDINARY: "visible" },
-              envPolicy: {
-                inherit: "all",
-                ignoreDefaultExcludes: true,
-                exclude: [],
-                set: {},
-                includeOnly: [],
-              },
-              tty: false,
-              pipeStdin: true,
-              arg0: null,
-            },
-          });
-          expect(await readNodeResponse(frames, 8)).toMatchObject({ processId: "node-proof" });
-          await frames.send({
-            id: 9,
-            method: "process/write",
-            params: {
-              processId: "node-proof",
-              chunk: Buffer.from("node carrier\n").toString("base64"),
-              writeId: "node-proof-write",
-            },
-          });
-          await readNodeResponse(frames, 9);
-          const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
-          expect(notifications.map((message) => message.method)).toEqual([
-            "process/output",
-            "process/exited",
-            "process/closed",
-          ]);
-          const output = notifications[0]?.params as { chunk: string; seq: number };
-          const observed = JSON.parse(Buffer.from(output.chunk, "base64").toString("utf8")) as {
-            input: string;
-            ordinary: string;
-            home: string;
-            codexHome: string;
-            userProfile: string | null;
-            provider: string | null;
-            cloud: string | null;
-            cloudFile: string | null;
-            forge: string | null;
-            ssh: string | null;
-            injection: string | null;
-          };
-          expect(observed).toMatchObject({
-            input: "node carrier",
-            ordinary: "visible",
-            provider: null,
-            cloud: null,
-            cloudFile: null,
-            forge: null,
-            ssh: null,
-            injection: null,
-          });
-          expect(observed.codexHome).toBe(path.join(observed.home, ".codex"));
-          expect(observed.home).not.toBe(process.env.HOME);
-          if (process.platform === "win32") {
-            expect(observed.userProfile).toBe(observed.home);
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-node-exec-contract-" },
+        async ({ dir }) => {
+          const cwd = await realpath(dir);
+          const workspaceUri = pathToFileURL(cwd).href;
+          const homeDir = kind === "prepared" ? path.join(cwd, "prepared-home") : undefined;
+          if (homeDir) {
+            await mkdir(homeDir);
           }
-          isolatedHome = observed.home;
+          const probePath = path.join(cwd, "probe.txt");
+          const probeUri = pathToFileURL(probePath).href;
+          const frames = createNodeFrames();
+          const command = createCodexNodeExecServerCommand();
+          const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+          const invocation = command.handle(
+            JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+            frames.io,
+            workspace.context,
+          );
+          void invocation.catch(() => {});
+          let isolatedHome: string | undefined;
 
-          // A response spanning many pipe chunks must arrive as one intact frame.
-          const chunkedUri = pathToFileURL(path.join(cwd, "chunked.txt")).href;
-          const chunkedDataBase64 = Buffer.alloc(256 * 1024, 0x61).toString("base64");
-          await frames.send({
-            id: 10,
-            method: "fs/writeFile",
-            params: { path: chunkedUri, dataBase64: chunkedDataBase64, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 10)).toEqual({});
-          await frames.send({
-            id: 11,
-            method: "fs/readFile",
-            params: { path: chunkedUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 11)).toEqual({ dataBase64: chunkedDataBase64 });
-
-          await frames.send({ id: 12, method: "environment/status", params: {} });
-          expect(await readNodeResponse(frames, 12)).toEqual({ status: "ready" });
-          await frames.send({
-            id: 13,
-            method: "fs/walk",
-            params: {
-              path: workspaceUri,
-              options: {
-                maxDepth: 2,
-                maxDirectories: 10,
-                maxEntries: 30,
-                followDirectorySymlinks: false,
-                pruneHiddenDirectories: false,
-              },
-              sandbox: null,
-            },
-          });
-          expect(await readNodeResponse(frames, 13)).toMatchObject({
-            entries: expect.arrayContaining([
-              expect.objectContaining({ path: probeUri, kind: "file" }),
-              expect.objectContaining({ path: chunkedUri, kind: "file" }),
-            ]),
-            errors: [],
-            truncated: false,
-          });
-          await frames.send({
-            id: 14,
-            method: "capabilityRoots/discoverV1",
-            params: { roots: [{ id: "workspace", path: workspaceUri, sandbox: null }] },
-          });
-          expect(await readNodeResponse(frames, 14)).toMatchObject({
-            roots: [expect.objectContaining({ id: "workspace", path: workspaceUri })],
-          });
-
-          for (const control of [
-            { id: 15, processId: "node-signal", method: "process/signal", result: {} },
-            {
-              id: 17,
-              processId: "node-terminate",
-              method: "process/terminate",
-              result: { running: true },
-            },
-          ]) {
+          try {
+            await Promise.race([frames.ready, invocation]);
+            // Codex deliberately omits jsonrpc:"2.0" from every wire envelope.
             await frames.send({
-              id: control.id,
+              id: 1,
+              method: "initialize",
+              params: { clientName: "openclaw-node" },
+            });
+            expect(await readNodeResponse(frames, 1)).toMatchObject({
+              sessionId: expect.any(String),
+            });
+            await frames.send({ method: "initialized", params: {} });
+
+            await frames.send({ id: 2, method: "environment/info", params: {} });
+            expect(await readNodeResponse(frames, 2)).toMatchObject({
+              cwd: workspaceUri,
+              capabilities: { networkProxyLaunch: true, sandboxedFileStreaming: true },
+            });
+
+            const dataBase64 = Buffer.from("node filesystem proof\n").toString("base64");
+            await frames.send({
+              id: 3,
+              method: "fs/writeFile",
+              params: { path: probeUri, dataBase64, sandbox: null },
+            });
+            expect(await readNodeResponse(frames, 3)).toEqual({});
+            expect(await readFile(probePath, "utf8")).toBe("node filesystem proof\n");
+
+            await frames.send({
+              id: 4,
+              method: "fs/canonicalize",
+              params: { path: probeUri, sandbox: null },
+            });
+            expect(await readNodeResponse(frames, 4)).toEqual({ path: probeUri });
+            await frames.send({
+              id: 5,
+              method: "fs/open",
+              params: { handleId: "node-proof", path: probeUri, sandbox: null },
+            });
+            expect(await readNodeResponse(frames, 5)).toEqual({ handleId: "node-proof" });
+            await frames.send({
+              id: 6,
+              method: "fs/readBlock",
+              params: { handleId: "node-proof", offset: 0, len: 256 },
+            });
+            expect(await readNodeResponse(frames, 6)).toEqual({ chunk: dataBase64, eof: true });
+            await frames.send({ id: 7, method: "fs/close", params: { handleId: "node-proof" } });
+            expect(await readNodeResponse(frames, 7)).toEqual({});
+
+            const script = [
+              "process.stdin.once('data', input => {",
+              "process.stdout.write(JSON.stringify({",
+              "input: input.toString().trim(),",
+              "ordinary: process.env.NODE_EXEC_ORDINARY ?? null,",
+              "home: process.env.HOME ?? null,",
+              "codexHome: process.env.CODEX_HOME ?? null,",
+              "userProfile: process.env.USERPROFILE ?? null,",
+              "provider: process.env.OPENAI_API_KEY ?? null,",
+              "cloud: process.env.AWS_ACCESS_KEY_ID ?? null,",
+              "cloudFile: process.env.GOOGLE_APPLICATION_CREDENTIALS ?? null,",
+              "forge: process.env.GITHUB_TOKEN ?? null,",
+              "ssh: process.env.SSH_AUTH_SOCK ?? null,",
+              "injection: process.env.NODE_OPTIONS ?? null",
+              "}) + '\\n', () => process.exit(0))",
+              "})",
+            ].join("\n");
+            await frames.send({
+              id: 8,
               method: "process/start",
               params: {
+                processId: "node-proof",
+                argv: [process.execPath, "-e", script],
+                cwd: workspaceUri,
+                env: { NODE_EXEC_ORDINARY: "visible" },
+                envPolicy: {
+                  inherit: "all",
+                  ignoreDefaultExcludes: true,
+                  exclude: [],
+                  set: {},
+                  includeOnly: [],
+                },
+                tty: false,
+                pipeStdin: true,
+                arg0: null,
+              },
+            });
+            expect(await readNodeResponse(frames, 8)).toMatchObject({ processId: "node-proof" });
+            await frames.send({
+              id: 9,
+              method: "process/write",
+              params: {
+                processId: "node-proof",
+                chunk: Buffer.from("node carrier\n").toString("base64"),
+                writeId: "node-proof-write",
+              },
+            });
+            await readNodeResponse(frames, 9);
+            const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
+            expect(notifications.map((message) => message.method)).toEqual([
+              "process/output",
+              "process/exited",
+              "process/closed",
+            ]);
+            const output = notifications[0]?.params as { chunk: string; seq: number };
+            const observed = JSON.parse(Buffer.from(output.chunk, "base64").toString("utf8")) as {
+              input: string;
+              ordinary: string;
+              home: string;
+              codexHome: string;
+              userProfile: string | null;
+              provider: string | null;
+              cloud: string | null;
+              cloudFile: string | null;
+              forge: string | null;
+              ssh: string | null;
+              injection: string | null;
+            };
+            expect(observed).toMatchObject({
+              input: "node carrier",
+              ordinary: "visible",
+              provider: null,
+              cloud: null,
+              cloudFile: null,
+              forge: null,
+              ssh: null,
+              injection: null,
+            });
+            if (homeDir) {
+              expect(observed.home).toBe(homeDir);
+              expect(observed.codexHome).not.toBe(path.join(homeDir, ".codex"));
+            } else {
+              expect(observed.codexHome).toBe(path.join(observed.home, ".codex"));
+            }
+            expect(observed.home).not.toBe(process.env.HOME);
+            if (process.platform === "win32") {
+              expect(observed.userProfile).toBe(observed.home);
+            }
+            isolatedHome = path.dirname(observed.codexHome);
+
+            // A response spanning many pipe chunks must arrive as one intact frame.
+            const chunkedUri = pathToFileURL(path.join(cwd, "chunked.txt")).href;
+            const chunkedDataBase64 = Buffer.alloc(256 * 1024, 0x61).toString("base64");
+            await frames.send({
+              id: 10,
+              method: "fs/writeFile",
+              params: { path: chunkedUri, dataBase64: chunkedDataBase64, sandbox: null },
+            });
+            expect(await readNodeResponse(frames, 10)).toEqual({});
+            await frames.send({
+              id: 11,
+              method: "fs/readFile",
+              params: { path: chunkedUri, sandbox: null },
+            });
+            expect(await readNodeResponse(frames, 11)).toEqual({ dataBase64: chunkedDataBase64 });
+
+            await frames.send({ id: 12, method: "environment/status", params: {} });
+            expect(await readNodeResponse(frames, 12)).toEqual({ status: "ready" });
+            await frames.send({
+              id: 13,
+              method: "fs/walk",
+              params: {
+                path: workspaceUri,
+                options: {
+                  maxDepth: 2,
+                  maxDirectories: 10,
+                  maxEntries: 30,
+                  followDirectorySymlinks: false,
+                  pruneHiddenDirectories: false,
+                },
+                sandbox: null,
+              },
+            });
+            expect(await readNodeResponse(frames, 13)).toMatchObject({
+              entries: expect.arrayContaining([
+                expect.objectContaining({ path: probeUri, kind: "file" }),
+                expect.objectContaining({ path: chunkedUri, kind: "file" }),
+              ]),
+              errors: [],
+              truncated: false,
+            });
+            await frames.send({
+              id: 14,
+              method: "capabilityRoots/discoverV1",
+              params: { roots: [{ id: "workspace", path: workspaceUri, sandbox: null }] },
+            });
+            expect(await readNodeResponse(frames, 14)).toMatchObject({
+              roots: [expect.objectContaining({ id: "workspace", path: workspaceUri })],
+            });
+
+            for (const control of [
+              { id: 15, processId: "node-signal", method: "process/signal", result: {} },
+              {
+                id: 17,
+                processId: "node-terminate",
+                method: "process/terminate",
+                result: { running: true },
+              },
+            ]) {
+              await frames.send({
+                id: control.id,
+                method: "process/start",
+                params: {
+                  processId: control.processId,
+                  argv: [process.execPath, "-e", "setInterval(() => {}, 60_000)"],
+                  cwd: workspaceUri,
+                  env: {},
+                  tty: false,
+                  pipeStdin: false,
+                  arg0: null,
+                },
+              });
+              expect(await readNodeResponse(frames, control.id)).toMatchObject({
                 processId: control.processId,
-                argv: [process.execPath, "-e", "setInterval(() => {}, 60_000)"],
+              });
+              await frames.send({
+                id: control.id + 1,
+                method: control.method,
+                params: {
+                  processId: control.processId,
+                  ...(control.method === "process/signal" ? { signal: "interrupt" } : {}),
+                },
+              });
+              expect(await readNodeResponse(frames, control.id + 1)).toEqual(control.result);
+              const controlNotifications = await readNodeProcessNotifications(
+                frames,
+                control.processId,
+                2,
+              );
+              expect(controlNotifications.map((message) => message.method)).toEqual([
+                "process/exited",
+                "process/closed",
+              ]);
+            }
+
+            const httpServer = createServer((_request, response) => {
+              response.writeHead(200, { "content-type": "text/plain" });
+              response.write("alpha");
+              setImmediate(() => response.end("beta"));
+            });
+            httpServer.listen(0, "127.0.0.1");
+            try {
+              await once(httpServer, "listening");
+              const address = httpServer.address();
+              if (!address || typeof address === "string") {
+                throw new Error("Codex exec-server HTTP fixture did not bind a TCP port.");
+              }
+              await frames.send({
+                id: 19,
+                method: "http/request",
+                params: {
+                  method: "GET",
+                  url: `http://127.0.0.1:${address.port}/`,
+                  headers: [],
+                  bodyBase64: null,
+                  timeoutMs: 3_000,
+                  redirectPolicy: "follow",
+                  requestId: "node-http-proof",
+                  streamResponse: true,
+                },
+              });
+              expect(await readNodeResponse(frames, 19)).toMatchObject({
+                status: 200,
+                bodyBase64: "",
+              });
+              await vi.waitFor(() =>
+                expect(
+                  frames.outbound.some(
+                    (message) =>
+                      message.method === "http/request/bodyDelta" &&
+                      (message.params as { requestId?: string; done?: boolean }).requestId ===
+                        "node-http-proof" &&
+                      (message.params as { done?: boolean }).done === true,
+                  ),
+                ).toBe(true),
+              );
+              const chunks = frames.outbound
+                .filter(
+                  (message) =>
+                    message.method === "http/request/bodyDelta" &&
+                    (message.params as { requestId?: string }).requestId === "node-http-proof",
+                )
+                .map(
+                  (message) =>
+                    message.params as { seq: number; deltaBase64: string; done: boolean },
+                );
+              expect(chunks.map((chunk) => chunk.seq)).toEqual(
+                chunks.map((_chunk, index) => index + 1),
+              );
+              expect(
+                Buffer.concat(
+                  chunks.map((chunk) => Buffer.from(chunk.deltaBase64, "base64")),
+                ).toString("utf8"),
+              ).toBe("alphabeta");
+              expect(chunks.at(-1)?.done).toBe(true);
+            } finally {
+              await new Promise<void>((resolve, reject) => {
+                httpServer.close((error) => (error ? reject(error) : resolve()));
+              });
+            }
+
+            const policyScript = [
+              "const net = require('node:net')",
+              "const proxy = new URL(process.env.HTTP_PROXY)",
+              "const socket = net.connect(Number(proxy.port), proxy.hostname, () => {",
+              "socket.write('CONNECT 8.8.8.8:443 HTTP/1.1\\r\\nHost: 8.8.8.8:443\\r\\n\\r\\n')",
+              "})",
+              "socket.once('data', chunk => {",
+              "const line = chunk.toString().split('\\r\\n')[0]",
+              "process.stdout.write(line + '\\n', () => { socket.end(); process.exit(0) })",
+              "})",
+            ].join("\n");
+            await frames.send({
+              id: 20,
+              method: "process/start",
+              params: {
+                processId: "node-policy",
+                argv: [process.execPath, "-e", policyScript],
                 cwd: workspaceUri,
                 env: {},
                 tty: false,
                 pipeStdin: false,
                 arg0: null,
+                networkProxy: {
+                  proxy: {
+                    enabled: true,
+                    enableSocks5: false,
+                    enableSocks5Udp: false,
+                    allowUpstreamProxy: false,
+                    dangerouslyAllowAllUnixSockets: false,
+                    mode: "full",
+                    domains: null,
+                    unixSockets: null,
+                    allowLocalBinding: false,
+                  },
+                  environmentId: "node-policy-environment",
+                  executionId: "node-policy-execution",
+                  policyDecisionTimeoutMs: 3_000,
+                },
               },
             });
-            expect(await readNodeResponse(frames, control.id)).toMatchObject({
-              processId: control.processId,
-            });
-            await frames.send({
-              id: control.id + 1,
-              method: control.method,
-              params: {
-                processId: control.processId,
-                ...(control.method === "process/signal" ? { signal: "interrupt" } : {}),
-              },
-            });
-            expect(await readNodeResponse(frames, control.id + 1)).toEqual(control.result);
-            const controlNotifications = await readNodeProcessNotifications(
-              frames,
-              control.processId,
-              2,
+            expect(await readNodeResponse(frames, 20)).toMatchObject({ processId: "node-policy" });
+            await vi.waitFor(() =>
+              expect(
+                frames.outbound.some((message) => message.method === "network/policyRequest"),
+              ).toBe(true),
             );
-            expect(controlNotifications.map((message) => message.method)).toEqual([
-              "process/exited",
-              "process/closed",
-            ]);
-          }
-
-          const httpServer = createServer((_request, response) => {
-            response.writeHead(200, { "content-type": "text/plain" });
-            response.write("alpha");
-            setImmediate(() => response.end("beta"));
-          });
-          httpServer.listen(0, "127.0.0.1");
-          try {
-            await once(httpServer, "listening");
-            const address = httpServer.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Codex exec-server HTTP fixture did not bind a TCP port.");
-            }
-            await frames.send({
-              id: 19,
-              method: "http/request",
+            const policyRequest = frames.outbound.find(
+              (message) => message.method === "network/policyRequest",
+            );
+            expect(policyRequest).toMatchObject({
+              id: expect.any(Number),
               params: {
-                method: "GET",
-                url: `http://127.0.0.1:${address.port}/`,
-                headers: [],
-                bodyBase64: null,
-                timeoutMs: 3_000,
-                redirectPolicy: "follow",
-                requestId: "node-http-proof",
-                streamResponse: true,
+                processId: "node-policy",
+                request: { protocol: "https_connect", host: "8.8.8.8", port: 443 },
               },
             });
-            expect(await readNodeResponse(frames, 19)).toMatchObject({
-              status: 200,
-              bodyBase64: "",
+            await frames.send({
+              id: policyRequest?.id,
+              result: { decision: { type: "deny", reason: "node-policy-proof" } },
             });
             await vi.waitFor(() =>
               expect(
                 frames.outbound.some(
                   (message) =>
-                    message.method === "http/request/bodyDelta" &&
-                    (message.params as { requestId?: string; done?: boolean }).requestId ===
-                      "node-http-proof" &&
-                    (message.params as { done?: boolean }).done === true,
+                    message.method === "process/closed" &&
+                    (message.params as { processId?: string }).processId === "node-policy",
                 ),
               ).toBe(true),
             );
-            const chunks = frames.outbound
-              .filter(
-                (message) =>
-                  message.method === "http/request/bodyDelta" &&
-                  (message.params as { requestId?: string }).requestId === "node-http-proof",
-              )
-              .map(
-                (message) => message.params as { seq: number; deltaBase64: string; done: boolean },
-              );
-            expect(chunks.map((chunk) => chunk.seq)).toEqual(
-              chunks.map((_chunk, index) => index + 1),
+            expect(frames.outbound).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ method: "network/policyDecision" }),
+                expect.objectContaining({
+                  method: "process/output",
+                  params: expect.objectContaining({
+                    processId: "node-policy",
+                    chunk: Buffer.from("HTTP/1.1 403 Forbidden\n").toString("base64"),
+                  }),
+                }),
+              ]),
             );
-            expect(
-              Buffer.concat(
-                chunks.map((chunk) => Buffer.from(chunk.deltaBase64, "base64")),
-              ).toString("utf8"),
-            ).toBe("alphabeta");
-            expect(chunks.at(-1)?.done).toBe(true);
           } finally {
-            await new Promise<void>((resolve, reject) => {
-              httpServer.close((error) => (error ? reject(error) : resolve()));
-            });
+            frames.controller.abort(new Error("paired-device attempt completed"));
+            await expect(invocation).rejects.toThrow("paired-device attempt completed");
+            await command.onDisconnect?.();
+            expect(workspace.release).toHaveBeenCalledOnce();
           }
 
-          const policyScript = [
-            "const net = require('node:net')",
-            "const proxy = new URL(process.env.HTTP_PROXY)",
-            "const socket = net.connect(Number(proxy.port), proxy.hostname, () => {",
-            "socket.write('CONNECT 8.8.8.8:443 HTTP/1.1\\r\\nHost: 8.8.8.8:443\\r\\n\\r\\n')",
-            "})",
-            "socket.once('data', chunk => {",
-            "const line = chunk.toString().split('\\r\\n')[0]",
-            "process.stdout.write(line + '\\n', () => { socket.end(); process.exit(0) })",
-            "})",
-          ].join("\n");
-          await frames.send({
-            id: 20,
-            method: "process/start",
-            params: {
-              processId: "node-policy",
-              argv: [process.execPath, "-e", policyScript],
-              cwd: workspaceUri,
-              env: {},
-              tty: false,
-              pipeStdin: false,
-              arg0: null,
-              networkProxy: {
-                proxy: {
-                  enabled: true,
-                  enableSocks5: false,
-                  enableSocks5Udp: false,
-                  allowUpstreamProxy: false,
-                  dangerouslyAllowAllUnixSockets: false,
-                  mode: "full",
-                  domains: null,
-                  unixSockets: null,
-                  allowLocalBinding: false,
-                },
-                environmentId: "node-policy-environment",
-                executionId: "node-policy-execution",
-                policyDecisionTimeoutMs: 3_000,
-              },
-            },
-          });
-          expect(await readNodeResponse(frames, 20)).toMatchObject({ processId: "node-policy" });
-          await vi.waitFor(() =>
-            expect(
-              frames.outbound.some((message) => message.method === "network/policyRequest"),
-            ).toBe(true),
-          );
-          const policyRequest = frames.outbound.find(
-            (message) => message.method === "network/policyRequest",
-          );
-          expect(policyRequest).toMatchObject({
-            id: expect.any(Number),
-            params: {
-              processId: "node-policy",
-              request: { protocol: "https_connect", host: "8.8.8.8", port: 443 },
-            },
-          });
-          await frames.send({
-            id: policyRequest?.id,
-            result: { decision: { type: "deny", reason: "node-policy-proof" } },
-          });
-          await vi.waitFor(() =>
-            expect(
-              frames.outbound.some(
-                (message) =>
-                  message.method === "process/closed" &&
-                  (message.params as { processId?: string }).processId === "node-policy",
-              ),
-            ).toBe(true),
-          );
-          expect(frames.outbound).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ method: "network/policyDecision" }),
-              expect.objectContaining({
-                method: "process/output",
-                params: expect.objectContaining({
-                  processId: "node-policy",
-                  chunk: Buffer.from("HTTP/1.1 403 Forbidden\n").toString("base64"),
-                }),
-              }),
-            ]),
-          );
-        } finally {
-          frames.controller.abort(new Error("paired-device attempt completed"));
-          await expect(invocation).rejects.toThrow("paired-device attempt completed");
-          await command.onDisconnect?.();
-          expect(workspace.release).toHaveBeenCalledOnce();
-        }
-
-        expect(isolatedHome).toEqual(expect.any(String));
-        await expect(access(isolatedHome!)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
-  });
+          expect(isolatedHome).toEqual(expect.any(String));
+          await expect(access(isolatedHome!)).rejects.toMatchObject({ code: "ENOENT" });
+          if (homeDir) {
+            await expect(access(homeDir)).resolves.toBeUndefined();
+          }
+        },
+      );
+    },
+  );
 });

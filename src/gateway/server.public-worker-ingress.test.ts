@@ -35,10 +35,8 @@ import {
   hashWorkerCredential,
   type WorkerCredentialRecord,
 } from "./worker-environments/credential.js";
-import type {
-  WorkerEnvironmentRecord,
-  WorkerEnvironmentStore,
-} from "./worker-environments/store.js";
+import type { WorkerEnvironmentRecord } from "./worker-environments/environment-record.js";
+import type { WorkerEnvironmentStore } from "./worker-environments/store.js";
 
 const BUILD = {
   bundleHash: "a".repeat(64),

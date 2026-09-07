@@ -38,15 +38,22 @@ async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean 
     nodeTunnels,
     listNodes,
     workspaceTransfer,
-    start: () =>
-      nodeTunnels.start({
-        environmentId,
-        ownerEpoch: attached.ownerEpoch,
-        deviceId,
-        sessionId: "session-destroyed",
-        executionMode: "worker-turn",
-        expectedBuild: support.BOOTSTRAP_RECEIPT,
-      }),
+    start: async () => {
+      // Teardown begins with an admitted owner whose node subsequently disconnects.
+      listNodes.mockResolvedValue(connectedNodes);
+      try {
+        return await nodeTunnels.start({
+          environmentId,
+          ownerEpoch: attached.ownerEpoch,
+          deviceId,
+          sessionId: "session-destroyed",
+          executionMode: "worker-turn",
+          expectedBuild: support.BOOTSTRAP_RECEIPT,
+        });
+      } finally {
+        listNodes.mockResolvedValue([]);
+      }
+    },
     reconnect: () => listNodes.mockResolvedValue(connectedNodes),
   };
 }
@@ -122,6 +129,7 @@ describe("worker provider node teardown", () => {
         expect(support.testState.store.getCredential(environmentId)).toEqual(credential);
         expect(destroy).not.toHaveBeenCalled();
         await start();
+        listNodes.mockClear();
         await expect(service.requestDestroy(environmentId)).rejects.toMatchObject({
           code: "provider_failure",
         });

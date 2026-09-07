@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { createWorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -42,6 +44,80 @@ function createService(provision: WorkerProvider["provision"], providerCallTimeo
 
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("prepares the inherited machine class while preserving explicit overrides and defaults", async () => {
+    const git = await repository("inherited-machine-class");
+    const settings = { region: "test", class: "standard" };
+    support.getDevelopmentProfile().settings = settings;
+    const provider = support.createProvider({
+      requiresNodeEnrollment: true,
+      supportsProjectPreparation: (profile, machineClass) =>
+        (machineClass ?? profile.class) !== "unprepared",
+      resolvePreparationTarget: (profile, machineClass) => {
+        if (typeof profile.class !== "string") {
+          throw new Error("Missing fixture machine class");
+        }
+        return { machineClass: machineClass ?? profile.class, platform: "linux", arch: "x64" };
+      },
+    });
+    const service = createWorkerEnvironmentService({
+      store: support.testState.store,
+      getConfig: () => support.testState.config,
+      resolveProvider: () => provider,
+      projectNamespace: "gateway",
+      prepareInstallation: support.testState.prepareInstallation,
+      bootstrapWorker: support.testState.bootstrapWorker,
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [],
+        },
+        assertCurrent: () => {},
+      }),
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+    });
+    support.testState.service = service;
+    const inherited = {
+      providerId: provider.id,
+      profileSnapshot: { install: "bundle", settings, machineClass: "large" },
+    };
+    const prepare = (options: Parameters<typeof service.prepareProjectIntent>[1] = {}) =>
+      service.prepareProjectIntent("development", { projectPath: git.root, ...options });
+    const configured = await prepare();
+    const large = await prepare({ inherited });
+    const explicitLarge = await prepare({ machineClass: "large" });
+    const override = await prepare({ inherited, machineClass: "standard" });
+
+    expect(
+      readWorkerProjectPreparation(configured.profileSnapshot.project)?.target.machineClass,
+    ).toBe("standard");
+    expect(large.profileSnapshot.machineClass).toBe("large");
+    expect(readWorkerProjectPreparation(large.profileSnapshot.project)?.target.machineClass).toBe(
+      "large",
+    );
+    expect(large.preparationKey).toBe(explicitLarge.preparationKey);
+    expect(large.preparationKey).not.toBe(configured.preparationKey);
+    expect(override.profileSnapshot.machineClass).toBe("standard");
+    expect(override.preparationKey).toBe(configured.preparationKey);
+
+    const ineligible = await prepare({
+      inherited: {
+        ...inherited,
+        profileSnapshot: { ...inherited.profileSnapshot, machineClass: "unprepared" },
+      },
+    });
+    expect(ineligible.profileSnapshot.project).toBeUndefined();
+    expect(ineligible.preparationKey).toBeUndefined();
+    const ordinary = await prepare({ inherited, projectPath: undefined });
+    expect(ordinary.profileSnapshot.machineClass).toBe("large");
+    expect(ordinary.profileSnapshot.project).toBeUndefined();
+    expect(ordinary.preparationKey).toBeUndefined();
+    expect(support.testState.store.list()).toEqual([]);
+  });
 
   it("cancels project snapshot preparation before creating an allocation intent", async () => {
     const git = await repository("cancelled-project-snapshot");
@@ -213,6 +289,106 @@ describe("worker provider project preparation ownership", () => {
     });
     expect(provision).toHaveBeenCalledTimes(1);
     expect(support.testState.store.list()[0]?.profileSnapshot).toEqual(snapshot);
+  });
+
+  it("refills the admitted commit and recipe after the source checkout advances", async () => {
+    const git = await repository("refill-source");
+    const recipePath = path.join(git.root, ".openclaw", "worktree-setup.sh");
+    await fs.mkdir(path.dirname(recipePath));
+    await fs.writeFile(recipePath, "#!/bin/sh\nprintf 'approved B'\n", { mode: 0o755 });
+    await requireGit(git.root, ["add", "."]);
+    await requireGit(git.root, ["update-index", "--chmod=+x", ".openclaw/worktree-setup.sh"]);
+    await requireGit(git.root, ["commit", "--quiet", "-m", "approved recipe B"]);
+    const admittedCommit = await requireGit(git.root, ["rev-parse", "HEAD"]);
+    const admittedRecipe = await requireGit(git.root, [
+      "rev-parse",
+      "HEAD:.openclaw/worktree-setup.sh",
+    ]);
+    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+      throw new Error("fixture reached reserve allocation");
+    });
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      requiresNodeEnrollment: true,
+      supportsProjectPreparation: () => true,
+      resolvePreparationTarget: () => ({ machineClass: "small", platform: "linux", arch: "x64" }),
+      resolvePreparedIdleTimeoutMs: () => 60_000,
+      provision,
+    });
+    const service = createWorkerEnvironmentService({
+      store: support.testState.store,
+      getConfig: () => support.testState.config,
+      resolveProvider: () => provider,
+      projectNamespace: "gateway",
+      prepareInstallation: support.testState.prepareInstallation,
+      bootstrapWorker: support.testState.bootstrapWorker,
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [],
+        },
+        assertCurrent: () => {},
+      }),
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+      now: () => support.testState.nowMs,
+      prepareNodeEnrollment: async () => {
+        throw new Error("fixture never enrolls a reserve");
+      },
+    });
+    support.testState.service = service;
+    const intent = await service.prepareProjectIntent("development", {
+      projectPath: git.root,
+      executionMode: "worker-turn",
+      setupAuthorized: true,
+    });
+    const preparation = expectDefined(
+      readWorkerProjectPreparation(intent.profileSnapshot.project),
+      "approved project preparation",
+    );
+    expect(preparation.setupRecipe).toBe(admittedRecipe);
+    const reserve = support.testState.store.createIntent({
+      environmentId: "admitted-refill",
+      providerId: provider.id,
+      profileId: "development",
+      provisionOperationId: "admitted-refill-operation",
+      profileSnapshot: intent.profileSnapshot,
+      preparation: {
+        key: preparation.key,
+        demandAtMs: support.testState.nowMs,
+        expiresAtMs: support.testState.nowMs + 60_000,
+      },
+    });
+    await fs.writeFile(recipePath, "#!/bin/sh\nprintf 'unapproved C'\n");
+    await requireGit(git.root, ["commit", "--quiet", "-am", "later recipe C"]);
+    expect(await requireGit(git.root, ["rev-parse", "HEAD"])).not.toBe(admittedCommit);
+    expect(await requireGit(git.root, ["rev-parse", "HEAD:.openclaw/worktree-setup.sh"])).not.toBe(
+      admittedRecipe,
+    );
+
+    service.schedulePreparedRefill();
+    await support.waitForFast(() => expect(provision).toHaveBeenCalledOnce());
+    expect(provision.mock.calls[0]?.[2]?.project).toMatchObject({
+      baseCommit: admittedCommit,
+      preparation: { key: preparation.key, cacheKey: preparation.cacheKey, purpose: "reserve" },
+    });
+    expect(support.testState.store.get(reserve.environmentId)).toMatchObject({
+      destroyRequestedAtMs: null,
+      profileSnapshot: {
+        project: {
+          baseCommit: admittedCommit,
+          preparation: {
+            key: preparation.key,
+            cacheKey: preparation.cacheKey,
+            setupRecipe: admittedRecipe,
+          },
+        },
+      },
+    });
+    await service.stop();
   });
 
   it.each([true, false])(

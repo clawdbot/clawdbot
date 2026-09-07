@@ -18,10 +18,10 @@ import {
 } from "../../infra/error-diagnostics.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
+import { createResourceCarrier } from "./skill-resource-transfer.test-support.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -302,8 +302,10 @@ describe("worker launch capabilities", () => {
         attachErrorDiagnostic(primaryError, "original provider diagnostic");
         Object.freeze(primaryError);
       }
-      const remote = path.join(await realpath(root), "remote");
-      await mkdir(remote);
+      const remoteHome = path.join(await realpath(root), "remote");
+      await mkdir(remoteHome);
+      const carrier = await createResourceCarrier(remoteHome, "ssh", OWNER_EPOCH);
+      const remote = carrier.workspace;
       const bytes = Buffer.from("remote attachment");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
       const inputTurn = {
@@ -345,12 +347,7 @@ describe("worker launch capabilities", () => {
         measureLaunchTurn,
         launchTurn,
         runWorkspaceCommand: async (command) =>
-          await runCommandWithTimeout([...command.argv], {
-            cwd: remote,
-            input: command.input,
-            timeoutMs: 5_000,
-            signal: command.signal,
-          }),
+          await carrier.runWorkspaceCommand({ ...command, timeoutMs: 5_000 }),
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,

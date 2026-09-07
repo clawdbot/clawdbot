@@ -11,6 +11,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import {
@@ -19,6 +20,10 @@ import {
   parseNodeWorkerBundleInstallInput,
   type NodeWorkerBundleInstallResult,
 } from "../worker/node-bundle-install-protocol.js";
+import {
+  parseNodeWorkerPreparedWorkspaceInput,
+  type NodeWorkerPreparedWorkspaceResult,
+} from "../worker/node-workspace-prepared-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -60,6 +65,7 @@ type NodeWorkerSupervisorCommandResult =
         | NodeWorkerBundleInstallResult
         | NodeWorkerSupervisorReceipt
         | NodeWorkerWorkspaceExecResult
+        | NodeWorkerPreparedWorkspaceResult
         | NodeWorkerWorkspaceRetainResult
         | { status: "ready" }
         | null;
@@ -129,6 +135,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
     params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND ||
     params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
+    params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND ||
     params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND ||
     params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
     params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND ||
@@ -139,9 +146,11 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   if (
     (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && !params.bundleInstaller) ||
     (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.workspace) ||
+    (params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND && !params.workspace) ||
     (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND && !params.supervisor) ||
     (params.command !== NODE_WORKER_BUNDLE_INSTALL_COMMAND &&
       params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+      params.command !== NODE_WORKER_WORKSPACE_PREPARE_COMMAND &&
       params.command !== NODE_WORKER_WORKSPACE_RETAIN_COMMAND &&
       !params.supervisor)
   ) {
@@ -153,6 +162,16 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   }
   try {
+    if (params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND) {
+      return {
+        handled: true,
+        ok: true,
+        payload: await params.workspace!.prepare(
+          parseNodeWorkerPreparedWorkspaceInput(params.paramsJSON),
+          params.signal,
+        ),
+      };
+    }
     if (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND) {
       if (!params.gatewayUrl) {
         throw new Error("node worker gateway connection unavailable");

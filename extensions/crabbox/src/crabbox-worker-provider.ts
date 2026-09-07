@@ -64,12 +64,10 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxWarmImageCaptureTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import {
-  createCrabboxWarmImageManager,
-  resolveCrabboxWarmImageCaptureTimeoutMs,
-} from "./crabbox-worker-warm-image.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
@@ -326,6 +324,23 @@ export function createCrabboxWorkerProvider(
       const parsed = parseCrabboxProfile(profile);
       return resolveCrabboxWarmImageProfile(parsed, machineClass ?? parsed.class).warmImage;
     },
+    resolvePreparedIdleTimeoutMs(profile) {
+      const parsed = parseCrabboxProfile(profile);
+      // Mutable forwarded inputs cannot certify an immutable prepared generation.
+      return parsed.warmImage === false || parsed.setupEnv?.length
+        ? undefined
+        : parsed.idleTimeoutMs;
+    },
+    resolvePreparationTarget(profile, machineClass) {
+      const parsed = parseCrabboxProfile(profile);
+      const resolved = resolveCrabboxWarmImageProfile(parsed, machineClass ?? parsed.class);
+      return resolved.warmImage && resolved.class && !resolved.setupEnv?.length
+        ? { machineClass: resolved.class, platform: "linux", arch: "x64" }
+        : undefined;
+    },
+    async notePreparedDemand(lease, preparation) {
+      warmImages.notePreparedDemand(lease.leaseId, preparation);
+    },
     resolveAllocation,
     resolveProvisionTimeoutMs(profile) {
       const parsed = parseCrabboxProfile(profile);
@@ -371,6 +386,11 @@ export function createCrabboxWorkerProvider(
         : CRABBOX_WARMUP_TIMEOUT_MS;
       const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
       const project = parsed.warmImage ? options?.project : undefined;
+      if (options?.project?.preparation && (!project || parsed.setupEnv?.length)) {
+        throw new WorkerProviderError(
+          "Crabbox prepared workers require warm images and immutable setup inputs without setupEnv",
+        );
+      }
       const preparationSignal =
         signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
       const setupDeadline =
@@ -411,6 +431,7 @@ export function createCrabboxWorkerProvider(
         id: leaseId,
         profile: parsed,
         ...(project ? { projectKey: project.key } : {}),
+        ...(project?.preparation ? { preparation: project.preparation } : {}),
         ...(project ? { assertCurrent: project.assertCurrent } : {}),
         signal: preparationSignal,
         slug: operationSlug(operationId),
@@ -459,7 +480,7 @@ export function createCrabboxWorkerProvider(
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      if (parsed.setup) {
+      if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
           phase: "profile setup",
@@ -491,6 +512,8 @@ export function createCrabboxWorkerProvider(
           });
           project.assertCurrent();
           warmImages.markPrepared(leaseId, project.baseCommit);
+          // The owner skips foreground restore capture but still checks unresolved
+          // capture custody here; bypassing this call could admit enrollment too early.
           captured = await warmImages.capture(
             {
               ...context,

@@ -208,7 +208,7 @@ it.each(["host", "writable sandbox", "cloud"])(
       const edited = createSolidPngBuffer(3, 3, { r: 0, g: 0, b: 255 });
       await fs.writeFile(path.join(remote, inputs[0]!), edited);
       await fs.writeFile(path.join(remote, inputs[1]!), "edited private source text");
-      const manifestRef = await captureManifest({
+      const { manifestRef } = await captureManifest({
         workspaceDir: remote,
         manifestHome: home,
         baseCommit: base.manifest.baseCommit,
@@ -227,6 +227,7 @@ it.each(["host", "writable sandbox", "cloud"])(
         base: base.manifest,
         current,
         journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+        acceptance: { kind: "reconcile" },
       });
       expect(applied.conflictPaths).toEqual([]);
       const replacement = await snapshot(cwd, "replacement-transfer");

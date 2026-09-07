@@ -297,7 +297,9 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       bundlePrewarm: 1,
     });
     expect(proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof)).toBe(true);
-    expect(proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    expect(
+      proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof, { launchEligibility: true }),
+    ).toBe(false);
     runtime.nodeRegistry.unregister("conn-1");
   });
 
@@ -574,6 +576,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     expect(inventoryChanged).toHaveBeenCalledTimes(2);
 
     const currentClient = createWorkerSupervisorNodeClient("conn-v6");
+    const upgradedHost = {
+      ...availableHost,
+      workerHost: { ...availableHost.workerHost, workspaceManifest: 1 },
+    };
     runtime.nodeRegistry.register(currentClient, {
       pairingIdentity: "identity-1",
       pairingGeneration: "generation-1",
@@ -582,7 +588,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       runnerInventoryOptions({
         nodeRegistry: runtime.nodeRegistry,
         client: currentClient,
-        declaration: availableHost,
+        declaration: upgradedHost,
       }),
     );
     expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
@@ -590,7 +596,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       expect.objectContaining({
         nodeId: "node-1",
         connId: "conn-v6",
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
+        workerHost: upgradedHost.workerHost,
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-v6");

@@ -80,8 +80,11 @@ describe("worker workspace reconciliation publication", () => {
         base,
         current,
         journal,
-        publishAcceptedManifest: async () => {
-          throw publicationFailure;
+        acceptance: {
+          kind: "reconcile",
+          publish: async () => {
+            throw publicationFailure;
+          },
         },
       }),
     ).rejects.toBe(publicationFailure);
@@ -131,8 +134,11 @@ describe("worker workspace reconciliation publication", () => {
           },
           abort,
         },
-        publishAcceptedManifest: async () => {
-          throw new Error("publication rejected");
+        acceptance: {
+          kind: "reconcile",
+          publish: async () => {
+            throw new Error("publication rejected");
+          },
         },
       }),
     ).rejects.toThrow("publication rejected");

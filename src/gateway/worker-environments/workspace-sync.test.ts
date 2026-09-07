@@ -2,14 +2,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  runCommandWithTimeout,
+  type CommandOptions,
+  type SpawnResult,
+} from "../../process/exec.js";
+import {
+  parseWorkerSkillResourceLocator,
+  WORKER_SKILL_RESOURCE_COMMAND,
+} from "../../worker/skill-resource-protocol.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
-import { runBoundedInboundRsync } from "./workspace-sync-helpers.js";
+import { runBoundedInboundRsync, stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function result(code = 0): SpawnResult {
   return {
@@ -56,6 +66,69 @@ function createWorkspaceActions(
 }
 
 describe("worker workspace command transport retry", () => {
+  it.skipIf(process.platform === "win32")(
+    "maps resource operations into the exact SSH generation without touching its project",
+    async () => {
+      const root = await fs.realpath(tempDirs.make("ssh-skill-resources-"));
+      const workspaceDir = path.join(
+        root,
+        ".openclaw-worker",
+        "workspaces",
+        stableWorkerPathComponent("worker:test", 16),
+        stableWorkerPathComponent("session", 32),
+        "2",
+      );
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "project.txt"), "unchanged");
+      const run = vi.fn(async (argv: string[], options: CommandOptions) =>
+        runCommandWithTimeout(["sh", "-c", argv.at(-1)!], options),
+      );
+      const actions = createWorkspaceActions(run);
+      const command = {
+        argv: [WORKER_SKILL_RESOURCE_COMMAND],
+        transportRetry: "never" as const,
+        assertCurrent: () => {},
+        timeoutMs: 5_000,
+        skillResources: {
+          workspaceDir,
+          generation: 2,
+          operation: { operation: "init" as const },
+        },
+      };
+      for (const changed of [{ workspaceDir: root }, { generation: 3 }]) {
+        await expect(
+          actions.runWorkspaceCommand({
+            ...command,
+            skillResources: { ...command.skillResources, ...changed },
+          }),
+        ).rejects.toThrow("SSH workspace owner");
+      }
+      await expect(
+        actions.runWorkspaceCommand({ ...command, transportRetry: "idempotent" }),
+      ).rejects.toThrow("SSH workspace owner");
+      expect(run).not.toHaveBeenCalled();
+      const initialized = await actions.runWorkspaceCommand(command);
+      expect(initialized.code, initialized.stderr).toBe(0);
+      const locator = parseWorkerSkillResourceLocator(JSON.parse(initialized.stdout));
+      expect(path.dirname(locator.root)).toBe(path.dirname(workspaceDir));
+      const cleaned = await actions.runWorkspaceCommand({
+        ...command,
+        skillResources: {
+          ...command.skillResources,
+          operation: {
+            operation: "cleanup",
+            resourceId: locator.resourceId,
+            identity: locator.identity,
+          },
+        },
+      });
+      expect(cleaned.code, cleaned.stderr).toBe(0);
+      await expect(fs.stat(locator.root)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(workspaceDir, "project.txt"), "utf8")).toBe("unchanged");
+      expect(run).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(["never", "idempotent"] as const)(
     "does not dispatch a %s command after its turn closes during tunnel preparation",
     async (transportRetry) => {

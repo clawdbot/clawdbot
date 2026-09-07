@@ -145,9 +145,9 @@ describe("Crabbox plugin generation lifecycle", () => {
         // Classless profiles reserve placement-enabled preparation/capture and the
         // complete diagnostics, Stop and child-settlement cleanup envelope.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          170 * 60_000 + 15_000,
+          216 * 60_000 + 25_000,
         );
-        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(28 * 60_000 + 5_000);
+        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
@@ -306,14 +306,17 @@ describe("Crabbox plugin generation lifecycle", () => {
     });
     const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
     store.register("expired", {
-      version: 2,
+      version: 3,
       allocations: {},
       image: {
         checkpointId: "chk_expired",
         kind: "aws-ebs-snapshot",
         state: "available",
         createdAtMs: old,
-        lastUsedAtMs: old,
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        lastDemandAtMs: old,
       },
     });
     const started = createDeferred<AbortSignal>();

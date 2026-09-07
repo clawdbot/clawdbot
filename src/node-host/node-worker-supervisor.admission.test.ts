@@ -44,6 +44,7 @@ describe("node worker admission re-arm journal", () => {
           workerHost: {
             enabled: true,
             environmentSession: 1,
+            workspaceManifest: 1,
             capacity: { total: 1, available: 1 },
           },
           commands: [],

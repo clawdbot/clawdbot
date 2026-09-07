@@ -12,6 +12,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -37,6 +38,11 @@ describe("worker placement workspace journal", () => {
     });
 
   const seedJournal = () => {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "worker-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 7,
+    });
     const active = seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
     if (active.state !== "active") {
       throw new Error("expected active placement");

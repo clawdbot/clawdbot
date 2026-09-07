@@ -2,12 +2,14 @@ import {
   selectWorkspaceSeedsToPrune,
   WORKSPACE_SEED_RETENTION,
 } from "../../worker/workspace-seed-retention.js";
+import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
 
 type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
-  pack?: { directory: string; sha256: string; bytes: number };
+  preparation?: { preparationKey: string; cacheKey: string; setupRecipe?: string };
+  pack?: { directory: string; sha256: string; bytes: number; retainedCommit?: string };
 };
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
@@ -23,6 +25,7 @@ const { spawnSync } = require("node:child_process");
 const input = ${JSON.stringify(input)};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 const selectSeedsToPrune = ${selectWorkspaceSeedsToPrune.toString()};
+const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 const git = (root, args, stdin) => {
@@ -57,13 +60,15 @@ const ownedDirectory = (parent, target) => {
   };
   const seed = path.join(namespace, input.seedKey);
   const stagingPrefix = ".tmp-" + input.seedKey + "-";
+  const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
   if (!input.pack) {
     if (fs.existsSync(seed)) {
       ownedDirectory(namespace, seed);
       ownedDirectory(seed, path.join(seed, ".git"));
+      const preparedWorkspace = retained?.baseCommit === input.baseCommit ? retained : undefined;
       if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
       prune();
-      process.stdout.write(JSON.stringify({ ready: true }));
+      process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
       return;
     }
     // Provisioning serializes this lease. Discard only this project's abandoned staging.
@@ -74,7 +79,7 @@ const ownedDirectory = (parent, target) => {
       fs.rmSync(stale, { recursive: true });
     }
     const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
-    process.stdout.write(JSON.stringify({ ready: false, directory }));
+    process.stdout.write(JSON.stringify({ ready: false, directory, retainedCommit: retained?.baseCommit }));
     return;
   }
   const directory = input.pack.directory;
@@ -90,12 +95,18 @@ const ownedDirectory = (parent, target) => {
     const repository = path.join(directory, "repository");
     fs.mkdirSync(repository, { mode: 0o700 });
     git(repository, ["init", "--quiet", "--object-format=" + (input.baseCommit.length === 40 ? "sha1" : "sha256"), "."]);
+    if (input.pack.retainedCommit) {
+      if (retained?.baseCommit !== input.pack.retainedCommit) throw new Error("Prepared project retained Git base changed before transfer");
+      // Fetch one local snapshot into independent objects, without alternates or
+      // ancestors that the retained checkout may never have received.
+      git(repository, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", retained.workspaceDir, input.pack.retainedCommit]);
+    }
+    fs.writeFileSync(path.join(repository, ".git", "shallow"), [...new Set([input.baseCommit, input.pack.retainedCommit].filter(Boolean))].join("\\n") + "\\n", { mode: 0o600 });
     const fd = fs.openSync(pack, "r");
-    try { git(repository, ["index-pack", "--stdin"], fd); } finally { fs.closeSync(fd); }
-    fs.writeFileSync(path.join(repository, ".git", "shallow"), input.baseCommit + "\\n", { mode: 0o600 });
+    try { git(repository, ["index-pack", "--stdin", "--fix-thin"], fd); } finally { fs.closeSync(fd); }
     if (git(repository, ["rev-parse", "--verify", input.baseCommit + "^{commit}"]) !== input.baseCommit) throw new Error("Project pack commit does not match");
+    git(repository, ["fsck", "--full", "--strict", "--no-reflogs", input.baseCommit]);
     git(repository, ["checkout", "--detach", "--force", input.baseCommit]);
-    git(repository, ["fsck", "--connectivity-only", "--no-reflogs"]);
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();

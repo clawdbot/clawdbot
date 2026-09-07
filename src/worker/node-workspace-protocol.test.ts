@@ -4,6 +4,7 @@ import {
   parseNodeWorkerWorkspaceExecInput,
   parseNodeWorkerWorkspaceExecResult,
 } from "./node-workspace-protocol.js";
+import { WORKER_SKILL_RESOURCE_INPUT_MAX_BYTES } from "./skill-resource-protocol.js";
 import {
   WORKSPACE_INSPECTION_COMMAND,
   WORKSPACE_INSPECTION_MAX_BYTES,
@@ -26,6 +27,8 @@ it("admits workspace drain only without a mutation payload", () => {
     { input: "payload" },
     { resetWorkspace: true },
     { seed: { action: "apply", key } },
+    { capture: { baseManifestRef: `sha256:${key}`, referenceManifestRef: `sha256:${key}` } },
+    { skillResources: { operation: "init" } },
     { transfer: { direction: "download", token: "token", manifestRef: `sha256:${key}` } },
   ]) {
     expect(() =>
@@ -35,6 +38,20 @@ it("admits workspace drain only without a mutation payload", () => {
 });
 
 describe("node workspace seed protocol", () => {
+  it("carries the exact prepared identity and session key", () => {
+    const prepared = { ...request, preparationKey: key, sessionKey: "agent:test:prepared" };
+    expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify(prepared))).toEqual(prepared);
+  });
+
+  it.each(["../outside", "A".repeat(64), "", null])(
+    "rejects malformed preparation identity %j",
+    (preparationKey) => {
+      expect(() =>
+        parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, preparationKey })),
+      ).toThrow("preparationKey");
+    },
+  );
+
   const download = {
     direction: "download",
     token: "token",
@@ -103,6 +120,104 @@ describe("node workspace seed protocol", () => {
   });
 });
 
+describe("node workspace manifest capture protocol", () => {
+  const capture = {
+    baseManifestRef: `sha256:${key}`,
+    referenceManifestRef: `sha256:${"b".repeat(64)}`,
+  };
+  const captureRequest = { ...request, argv: ["openclaw-internal-workspace-manifest"], capture };
+  it("carries only bound manifest references", () => {
+    expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify(captureRequest))).toEqual(
+      captureRequest,
+    );
+  });
+  it.each([
+    { capture: { ...capture, baseManifestRef: "../outside" } },
+    { capture: { ...capture, referenceManifestRef: "sha256:" } },
+    { capture: { ...capture, memo: [] } },
+    { argv: ["node"] },
+    { input: "[]" },
+    { seed: { action: "apply", key } },
+    { transfer: { direction: "upload", token: "token", baseManifestRef: capture.baseManifestRef } },
+    { resetWorkspace: false },
+  ])("rejects malformed or mixed capture %#", (invalid) => {
+    expect(() =>
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...captureRequest, ...invalid })),
+    ).toThrow("workspace manifest capture is invalid");
+  });
+});
+
+describe("node workspace skill resource protocol", () => {
+  const resourceRequest = { ...request, argv: ["openclaw-internal-skill-resources"] };
+  const identity = { resourceId: "b".repeat(32), identity: "1:18446744073709551615" };
+  const write = {
+    operation: "write",
+    ...identity,
+    path: "0/SKILL.md",
+    offset: 0,
+    sizeBytes: 3,
+    sha256: key,
+    executable: false,
+  };
+
+  it.each([
+    { skillResources: { operation: "init" } },
+    { skillResources: { operation: "cleanup", ...identity } },
+    { skillResources: write, input: "YWJj" },
+    { skillResources: { ...write, sizeBytes: 0 }, input: "" },
+  ])("preserves a closed generation-bound operation %#", (operation) => {
+    const input = { ...resourceRequest, ...operation };
+    expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify(input))).toEqual(input);
+  });
+
+  it.each([
+    ["caller-selected root", { skillResources: { operation: "init", root: "/tmp/other" } }],
+    ["cleanup root", { skillResources: { operation: "cleanup", ...identity, root: "/tmp/other" } }],
+    ["traversing resource id", { skillResources: { ...write, resourceId: "../outside" } }],
+    ["numeric inode", { skillResources: { ...write, identity: 1 } }],
+    ["path traversal", { skillResources: { ...write, path: "0/../outside" } }],
+    ["absolute path", { skillResources: { ...write, path: "/outside" } }],
+    ["Windows path", { skillResources: { ...write, path: "C:/outside" } }],
+    ["deep path", { skillResources: { ...write, path: "a/".repeat(17) + "file" } }],
+    ["negative offset", { skillResources: { ...write, offset: -1 } }],
+    ["oversize file", { skillResources: { ...write, sizeBytes: 1_048_577 } }],
+    ["invalid digest", { skillResources: { ...write, sha256: "A".repeat(64) } }],
+    ["extra write field", { skillResources: { ...write, command: ["node"] } }],
+    ["ordinary argv", { argv: ["node", "-e", "process.exit()"] }],
+    ["extra argv", { argv: [...resourceRequest.argv, "/outside"] }],
+    ["missing chunk", { input: undefined }],
+    ["noncanonical base64", { input: "YWJj\n" }],
+    ["chunk over file bound", { input: "YWJjZA==" }],
+    [
+      "stdin over transport bound",
+      { input: "a".repeat(WORKER_SKILL_RESOURCE_INPUT_MAX_BYTES + 1) },
+    ],
+    ["init with input", { skillResources: { operation: "init" }, input: "" }],
+    ["cleanup with input", { skillResources: { operation: "cleanup", ...identity }, input: "" }],
+    ["workspace reset", { resetWorkspace: false }],
+    ["workspace seed", { seed: { action: "apply", key } }],
+    [
+      "workspace capture",
+      { capture: { baseManifestRef: `sha256:${key}`, referenceManifestRef: `sha256:${key}` } },
+    ],
+    [
+      "workspace transfer",
+      { transfer: { direction: "upload", token: "token", baseManifestRef: `sha256:${key}` } },
+    ],
+  ])("rejects %s before filesystem dispatch", (_label, invalid) => {
+    expect(() =>
+      parseNodeWorkerWorkspaceExecInput(
+        JSON.stringify({
+          ...resourceRequest,
+          skillResources: write,
+          input: "YWJj",
+          ...invalid,
+        }),
+      ),
+    ).toThrow("INVALID_REQUEST:");
+  });
+});
+
 describe("node workspace upload references", () => {
   const transfer = {
     direction: "upload",
@@ -159,6 +274,11 @@ it("allows larger bounded inspection payloads without widening ordinary command 
 
 it.each([
   { argv: [WORKSPACE_INSPECTION_COMMAND, "extra"] },
+  {
+    argv: [WORKSPACE_INSPECTION_COMMAND],
+    capture: { baseManifestRef: `sha256:${key}`, referenceManifestRef: `sha256:${key}` },
+  },
+  { argv: [WORKSPACE_INSPECTION_COMMAND], skillResources: { operation: "init" } },
   { argv: [WORKSPACE_INSPECTION_COMMAND], resetWorkspace: false },
   { argv: [WORKSPACE_INSPECTION_COMMAND], seed: { action: "apply", key } },
   {

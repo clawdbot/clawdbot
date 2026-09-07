@@ -114,7 +114,7 @@ async function applyWorkspace(params: {
     ...params,
     baseManifestRef: `sha256:${"a".repeat(64)}`,
     currentManifestRef: `sha256:${"b".repeat(64)}`,
-    publishAcceptedManifest: params.publishAcceptedManifest,
+    acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     journal: {
       load: () => pending,
       begin: (journal) => {

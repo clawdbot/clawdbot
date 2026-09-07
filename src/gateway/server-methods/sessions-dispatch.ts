@@ -487,6 +487,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             executionMode,
             runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
             ...dispatchTarget,
+            setupAuthorized: client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
             ...(devicePlacement ? { devicePlacement } : {}),
           },
           () =>
@@ -541,7 +542,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respond,
     );
   },
-  "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.move": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
       return;
     }
@@ -602,6 +603,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           agentId: target.target.agentId,
           source: params.expected,
           target: params.target,
+          setupAuthorized: client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
           ...("abandonSource" in params ? { abandonSource: true } : {}),
         },
         () =>

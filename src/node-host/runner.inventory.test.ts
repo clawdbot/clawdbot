@@ -239,6 +239,8 @@ describe("runNodeHost", () => {
       bundleStatus: 1,
       portalStream: 1,
       environmentSession: 1,
+      workspaceManifest: 1,
+      workspaceSkillResources: 1,
     };
     options?.onHelloOk?.({
       protocol: 4,
@@ -250,6 +252,8 @@ describe("runNodeHost", () => {
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
           GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
           GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_MANIFEST,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_SKILL_RESOURCES,
         ],
       },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);

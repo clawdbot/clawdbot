@@ -47,16 +47,14 @@ import {
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  seedPublicationWorkerPlacement,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import {
-  REQUEST,
-  seedActivePlacement,
-} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -484,7 +482,10 @@ describe("personal publication authority and recovery", () => {
         });
       }
       if (state === "remote" || state === "reconciliation") {
-        const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
+        const active = seedPublicationWorkerPlacement(openOpenClawStateDatabase(), placements, {
+          environmentId: "remote",
+          ownerEpoch: 1,
+        });
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
           const claim = placements.claimTurn({

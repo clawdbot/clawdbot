@@ -4,6 +4,7 @@ import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
   type NodeWorkerConnectionFailureMessage,
+  type NodeWorkerStartupMessage,
 } from "./node-supervisor-protocol.js";
 import { hasExactOwnKeys } from "./protocol-record.js";
 import { runWorkerCommand, type WorkerCommandLifetime } from "./worker-command.runtime.js";
@@ -69,23 +70,28 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   };
   process.on("message", onMessage);
   process.once("disconnect", onDisconnect);
+  const sendDiagnostic = (
+    message: NodeWorkerConnectionFailureMessage | NodeWorkerStartupMessage,
+  ) => {
+    if (disposed || !process.connected || typeof process.send !== "function") {
+      return;
+    }
+    try {
+      process.send(message, () => {});
+    } catch {
+      // The disconnect handler owns worker shutdown when the supervisor is gone.
+    }
+  };
   return {
     started: startedPromise,
     signal: abortController.signal,
     reportConnectionFailure: (cause) => {
-      if (disposed || !process.connected || typeof process.send !== "function") {
-        return;
-      }
-      const message: NodeWorkerConnectionFailureMessage = {
+      sendDiagnostic({
         type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
         cause: cause ?? null,
-      };
-      try {
-        process.send(message, () => {});
-      } catch {
-        // The disconnect handler owns worker shutdown when the supervisor is gone.
-      }
+      });
     },
+    reportStartup: sendDiagnostic,
     terminateOwnedTree: () => {
       signalProcessTree(process.pid, "SIGKILL", {
         detached: process.platform !== "win32",

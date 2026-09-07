@@ -46,10 +46,12 @@ vi.mock("../session-utils.js", async () => {
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
-export function getSessionDispatchHandler() {
+export function getSessionDispatchHandler(
+  method: "sessions.dispatch" | "sessions.move" = "sessions.dispatch",
+) {
   return expectDefined(
-    sessionDispatchHandlers["sessions.dispatch"],
-    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
+    sessionDispatchHandlers[method],
+    `sessionDispatchHandlers["${method}"] test invariant`,
   );
 }
 
@@ -142,7 +144,7 @@ export function makeDispatchTestContext(
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 }, workspaceManifest: 1 },
         commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
       };
       return { available: true, node };

@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -66,9 +67,14 @@ describe("automatic Skill Workshop migration", () => {
       });
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
       closeOpenClawStateDatabaseForTest();
-      if (schemaVersion === 15) {
-        const legacy = openNodeSqliteDatabase(databasePath);
-        try {
+      const legacy = openNodeSqliteDatabase(databasePath);
+      try {
+        removePreparedWorkerOwnershipColumns(legacy);
+        legacy.exec(`
+          PRAGMA user_version = ${schemaVersion};
+          UPDATE schema_meta SET schema_version = ${schemaVersion} WHERE meta_key = 'primary';
+        `);
+        if (schemaVersion === 15) {
           legacy.exec(`
             ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
             ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
@@ -82,15 +88,13 @@ describe("automatic Skill Workshop migration", () => {
               written_names_json TEXT NOT NULL,
               dropped_json TEXT NOT NULL
             ) STRICT;
-            PRAGMA user_version = 15;
-            UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
           `);
           legacy
             .prepare("UPDATE skill_workshop_proposals SET workspace_dir = ?")
             .run(state.workspaceDir);
-        } finally {
-          legacy.close();
         }
+      } finally {
+        legacy.close();
       }
 
       const migration = await autoMigrateLegacyState({

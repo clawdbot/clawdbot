@@ -175,6 +175,7 @@ export function createWorkerPlacementMoveService(options: {
           sessionKey: request.sessionKey,
           agentId: request.agentId,
           ...destination,
+          setupAuthorized: request.setupAuthorized,
           idempotencyKey: `session-move:${intent.operationId}:dispatch`,
         },
         onTransition,

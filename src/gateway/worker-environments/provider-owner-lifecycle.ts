@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type {
   WorkerEnvironmentAbandonment,
@@ -10,7 +11,6 @@ import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
 } from "./service-validation.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelStopReason,

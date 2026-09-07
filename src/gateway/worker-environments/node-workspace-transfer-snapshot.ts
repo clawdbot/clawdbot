@@ -68,7 +68,12 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     }
     includePaths = manifestPaths;
   }
-  const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
+  const actual = await readActualWorkspaceManifest({
+    root,
+    baseCommit,
+    includePaths,
+    signal: params.signal,
+  });
   return {
     ...actual,
     rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),

@@ -1,13 +1,36 @@
 import { createHash } from "node:crypto";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+
+export function resolveCrabboxWarmImageProfileKey(
+  profile: ReturnType<typeof parseCrabboxProfile>,
+  projectKey?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        backendProvider: profile.provider,
+        setup: profile.setup ?? "",
+        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        desktop: profile.desktop ?? false,
+        // Exact class is intentionally conservative; cross-class reuse comes later.
+        machineClass: profile.class,
+        ...(projectKey ? { projectKey } : {}),
+      }),
+    )
+    .digest("hex");
+}
 
 export type WarmImageRecord = {
   checkpointId: string;
   kind: string;
   state: "pending" | "available";
   createdAtMs: number;
-  lastUsedAtMs: number;
+  preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
+  lastDemandAtMs: number | null;
   baseCommit?: string;
 };
 
@@ -15,11 +38,16 @@ export type WarmAllocationRecord = {
   choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
   machineClass: string;
   phase: "pending" | "prepared" | "enrolled";
+  preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
+  demandAtMs: number | null;
+  imageGeneration: { checkpointId: string; createdAtMs: number } | null;
   baseCommit?: string;
 };
 
 export type WarmProfileRecord = {
-  version: 2;
+  version: 3;
   projectKey?: string;
   image?: WarmImageRecord;
   allocations: Record<string, WarmAllocationRecord>;
@@ -75,13 +103,55 @@ export function assertCrabboxWarmImageMigrationReady(): void {
 }
 
 function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
-  if (record && record.version !== 2) {
+  if (record && record.version !== 3) {
     throw new Error(
       "Crabbox warm-image state requires migration; run openclaw doctor --fix before provisioning workers.",
     );
   }
+  const preparationKey = (value: unknown) =>
+    value === null || (typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
+  const demandAtMs = (value: unknown) =>
+    value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+  const cacheIdentity = (value: { preparationKey: unknown; cacheKey: unknown; purpose: unknown }) =>
+    preparationKey(value.cacheKey) &&
+    (value.cacheKey === null
+      ? value.purpose === null
+      : value.preparationKey !== null &&
+        (value.purpose === "session" || value.purpose === "reserve"));
+  if (
+    record &&
+    (!isRecord(record.allocations) ||
+      (record.image &&
+        (!isRecord(record.image) ||
+          !preparationKey(record.image.preparationKey) ||
+          !cacheIdentity(record.image) ||
+          !demandAtMs(record.image.lastDemandAtMs) ||
+          (record.image.preparationKey !== null && record.image.lastDemandAtMs === null))) ||
+      Object.values(record.allocations).some(
+        (allocation) =>
+          !isRecord(allocation) ||
+          !preparationKey(allocation.preparationKey) ||
+          !cacheIdentity(allocation) ||
+          !demandAtMs(allocation.demandAtMs) ||
+          (allocation.preparationKey !== null && allocation.demandAtMs === null) ||
+          (allocation.imageGeneration !== null &&
+            (!isRecord(allocation.imageGeneration) ||
+              Object.keys(allocation.imageGeneration).length !== 2 ||
+              typeof allocation.imageGeneration.checkpointId !== "string" ||
+              !allocation.imageGeneration.checkpointId.trim() ||
+              !Number.isSafeInteger(allocation.imageGeneration.createdAtMs) ||
+              allocation.imageGeneration.createdAtMs < 0)),
+      ))
+  ) {
+    throw new Error("Crabbox warm-image preparation state is invalid; run openclaw doctor --fix.");
+  }
   return record;
 }
+
+export const sameCrabboxWarmImageGeneration = (
+  left: WarmAllocationRecord["imageGeneration"] | undefined,
+  right: WarmAllocationRecord["imageGeneration"] | undefined,
+) => left?.checkpointId === right?.checkpointId && left?.createdAtMs === right?.createdAtMs;
 
 export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
   const store = createPluginStateSyncKeyedStore<WarmProfileRecord>("crabbox", {
@@ -90,7 +160,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
     overflowPolicy: "reject-new",
     ...(env ? { env } : {}),
   });
-  return {
+  const canonical = {
     ...store,
     lookup(key: string) {
       return requireCanonicalProfile(store.lookup(key));
@@ -107,6 +177,105 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
       return store.update(key, (current) => update(requireCanonicalProfile(current)));
+    },
+  };
+  const lookupLease = (id: string) => {
+    const entries = canonical.entries().filter(({ value }) => Object.hasOwn(value.allocations, id));
+    if (entries.length > 1) {
+      throw new Error(
+        `Crabbox lease ${id} has conflicting warm-image owners; run openclaw doctor --fix.`,
+      );
+    }
+    const entry = entries[0];
+    return entry
+      ? { key: entry.key, projectKey: entry.value.projectKey, ...entry.value.allocations[id]! }
+      : undefined;
+  };
+
+  const markPhase = (id: string, phase: "prepared" | "enrolled", baseCommit?: string) => {
+    const owner = lookupLease(id);
+    if (!owner) {
+      return;
+    }
+    if (
+      phase === "prepared" &&
+      (!baseCommit || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit))
+    ) {
+      throw new Error("Crabbox project preparation requires a verified Git commit.");
+    }
+    let rejection: string | undefined;
+    canonical.update(owner.key, (record) => {
+      const allocation = record?.allocations[id];
+      if (!record || !allocation) {
+        rejection = "Crabbox allocation closed before preparation completed.";
+        return undefined;
+      }
+      if (record.operation?.type === "capture" && record.operation.leaseId === id) {
+        rejection = "Crabbox allocation cannot enroll while its image capture is unresolved.";
+        return undefined;
+      }
+      if (baseCommit && allocation.baseCommit && baseCommit !== allocation.baseCommit) {
+        rejection = "Crabbox provision retry changed its prepared Git commit.";
+        return undefined;
+      }
+      if (phase === "enrolled" && record.projectKey && allocation.phase === "pending") {
+        rejection = "Crabbox project allocation must be prepared before enrollment.";
+        return undefined;
+      }
+      return {
+        ...record,
+        allocations: {
+          ...record.allocations,
+          [id]: {
+            ...allocation,
+            phase: allocation.phase === "enrolled" ? "enrolled" : phase,
+            ...(baseCommit ? { baseCommit } : {}),
+          },
+        },
+      };
+    });
+    if (rejection) {
+      throw new Error(rejection);
+    }
+  };
+
+  return {
+    ...canonical,
+    lookupLease,
+    markPrepared: (id: string, baseCommit: string) => markPhase(id, "prepared", baseCommit),
+    markEnrolled: (id: string) => markPhase(id, "enrolled"),
+    notePreparedDemand(id: string, preparation: { preparationKey: string; demandAtMs: number }) {
+      const owner = lookupLease(id);
+      const generation = owner?.imageGeneration;
+      if (
+        !owner ||
+        owner.preparationKey !== preparation.preparationKey ||
+        owner.cacheKey === null ||
+        !generation ||
+        !Number.isSafeInteger(preparation.demandAtMs) ||
+        preparation.demandAtMs < 0
+      ) {
+        return;
+      }
+      // Assignment has no provider fork. Refresh only the exact image this lease
+      // selected or produced, never a replacement published while it waited ready.
+      canonical.update(owner.key, (record) =>
+        record?.image &&
+        record.image.cacheKey === owner.cacheKey &&
+        sameCrabboxWarmImageGeneration(record.image, generation) &&
+        record.allocations[id]?.preparationKey === owner.preparationKey &&
+        record.allocations[id]?.cacheKey === owner.cacheKey &&
+        record.allocations[id]?.purpose === owner.purpose &&
+        sameCrabboxWarmImageGeneration(record.allocations[id]?.imageGeneration, generation)
+          ? {
+              ...record,
+              image: {
+                ...record.image,
+                lastDemandAtMs: Math.max(record.image.lastDemandAtMs ?? 0, preparation.demandAtMs),
+              },
+            }
+          : undefined,
+      );
     },
   };
 }
@@ -151,7 +320,10 @@ export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
       checkpointId: value.image?.checkpointId,
       state: value.image?.state ?? "no-image",
       createdAtMs: value.image?.createdAtMs,
-      lastUsedAtMs: value.image?.lastUsedAtMs,
+      preparationKey: value.image?.preparationKey,
+      cacheKey: value.image?.cacheKey,
+      purpose: value.image?.purpose,
+      lastDemandAtMs: value.image?.lastDemandAtMs,
       baseCommit: value.image?.baseCommit,
       allocations: value.allocations,
       capture: crabboxWarmImageCaptureStatus(key, value),

@@ -21,6 +21,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
@@ -48,23 +49,14 @@ describe("offline device placement abandonment", () => {
     active: Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>,
     providerId = "device",
   ): void {
-    database.db
-      .prepare(
-        `INSERT INTO worker_environments (
-          environment_id, provider_id, profile_id, profile_snapshot_json,
-          provision_operation_id, lease_id, state, owner_epoch, node_device_id,
-          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-        ) VALUES (?, ?, ?, '{}', ?, 'lease-device', 'attached', ?, ?, ?, 1000, 1000, 1000)`,
-      )
-      .run(
-        active.environmentId,
-        providerId,
-        providerId === "device" ? "device:device-1" : "development",
-        `provision:${active.environmentId}`,
-        active.activeOwnerEpoch,
-        providerId === "device" ? "device-1" : null,
-        JSON.stringify([active.sessionId]),
-      );
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: active.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+      providerId,
+      profileId: providerId === "device" ? "device:device-1" : "development",
+      nodeDeviceId: providerId === "device" ? "device-1" : null,
+    });
   }
 
   function requestFor(
@@ -86,13 +78,15 @@ describe("offline device placement abandonment", () => {
   }
 
   async function deviceTeardown(liveTunnel: boolean, providerId = "device", sharedHost = true) {
-    const harness = createHarness(placements);
+    const harness = createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active, providerId);
     database.db
       .prepare(
-        "UPDATE worker_environments SET profile_snapshot_json = ?, shared_host = ?, node_device_id = 'device-1' WHERE environment_id = ?",
+        `UPDATE worker_environments SET profile_snapshot_json = ?, shared_host = ?,
+         node_device_id = 'device-1', ssh_host = NULL, ssh_port = NULL, ssh_user = NULL,
+         ssh_host_key = NULL, ssh_key_ref_json = NULL WHERE environment_id = ?`,
       )
       .run(
         JSON.stringify({ settings: {}, executionMode: "worker-turn" }),
@@ -100,7 +94,7 @@ describe("offline device placement abandonment", () => {
         active.environmentId,
       );
     const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    let connected = false;
+    let connected = liveTunnel;
     const nodeTransport = transport();
     const nodes = await nodeTransport.listCurrentNodes();
     for (const node of nodes) {
@@ -128,6 +122,7 @@ describe("offline device placement abandonment", () => {
         expectedBuild: BUILD,
       });
     }
+    connected = false;
     const provider = createProvider({ id: providerId, destroy: vi.fn(async () => {}) });
     const environments = createWorkerEnvironmentService({
       store,
@@ -162,7 +157,7 @@ describe("offline device placement abandonment", () => {
   function expectRetainedDeviceCleanup(fixture: Awaited<ReturnType<typeof deviceTeardown>>) {
     expect(fixture.environments.get(fixture.active.environmentId)).toMatchObject({
       state: "attached",
-      leaseId: "lease-device",
+      leaseId: `lease:${fixture.active.environmentId}`,
       nodeDeviceId: "device-1",
       ownerEpoch: fixture.active.activeOwnerEpoch,
       attachedSessionIds: [fixture.active.sessionId],
@@ -353,7 +348,7 @@ describe("offline device placement abandonment", () => {
       expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
       expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
     });
-    const harness = createHarness(placements, {
+    const harness = createHarness(database, placements, {
       beforeMoveBegin,
       afterMoveBegin: () => afterMoveBegin(),
     });
@@ -425,7 +420,7 @@ describe("offline device placement abandonment", () => {
   });
 
   it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
-    const harness = createHarness(placements);
+    const harness = createHarness(database, placements);
     const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -484,7 +479,7 @@ describe("offline device placement abandonment", () => {
       throw new Error("move barrier interrupted after durable begin");
     });
     const options = { beforeMoveBegin, afterMoveBegin, deviceRunnerAvailable: false };
-    const harness = createHarness(placements, options);
+    const harness = createHarness(database, placements, options);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -584,7 +579,7 @@ describe("offline device placement abandonment", () => {
         });
       }
     });
-    const harness = createHarness(placements, { beforeMoveBegin });
+    const harness = createHarness(database, placements, { beforeMoveBegin });
     const source = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(source);
@@ -622,7 +617,7 @@ describe("offline device placement abandonment", () => {
   });
 
   it("keeps an ordinary offline move reconcile-first", async () => {
-    const harness = createHarness(placements);
+    const harness = createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -644,7 +639,9 @@ describe("offline device placement abandonment", () => {
     { name: "available", available: true, providerId: "device", error: "use Move session" },
     { name: "unknown", available: false, providerId: "test", error: "known runner binding" },
   ])("rejects a $name abandonment source before draining", async (scenario) => {
-    const harness = createHarness(placements, { deviceRunnerAvailable: scenario.available });
+    const harness = createHarness(database, placements, {
+      deviceRunnerAvailable: scenario.available,
+    });
     const active = await harness.service.dispatch(REQUEST);
     if (scenario.providerId === "device") {
       harness.markEnvironmentNodeDeviceId("device-1");
@@ -658,7 +655,7 @@ describe("offline device placement abandonment", () => {
   });
 
   it("retains the durable decision when authorization closes after teardown", async () => {
-    const harness = createHarness(placements);
+    const harness = createHarness(database, placements);
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -686,7 +683,7 @@ describe("offline device placement abandonment", () => {
   });
 
   it("recovers a crash after the durable drain without remote reconciliation", async () => {
-    const harness = createHarness(placements, { failMoveAfterBegin: true });
+    const harness = createHarness(database, placements, { failMoveAfterBegin: true });
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
@@ -695,7 +692,7 @@ describe("offline device placement abandonment", () => {
       "move barrier interrupted",
     );
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restarted = createHarness(restartedStore);
+    const restarted = createHarness(database, restartedStore);
     restarted.markEnvironmentNodeDeviceId("device-1");
     await restarted.service.reconcile();
 

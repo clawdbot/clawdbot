@@ -1,6 +1,7 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import type { WorkerEnvironmentStore } from "./store.js";
 
 export function createWorkerProvisionCancellation(
   store: WorkerEnvironmentStore,

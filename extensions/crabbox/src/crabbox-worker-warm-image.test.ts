@@ -204,10 +204,8 @@ describe("Crabbox profile warm images", () => {
 
     expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
     expect(scrub?.options.input).toContain('rm -rf "$HOME/.openclaw-worker/workspaces"');
-    // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
-    // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
-    expect(calls[1]?.options.timeoutMs).toBe(180_000);
+    expect(calls[1]?.options.timeoutMs).toBe(48 * 60_000);
     expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
@@ -333,6 +331,8 @@ describe("Crabbox profile warm images", () => {
       "--mode",
       "native",
       "--wait",
+      "--wait-timeout",
+      "45m",
       "--json",
     ]);
     calls.length = 0;
@@ -380,11 +380,13 @@ describe("Crabbox profile warm images", () => {
       "--mode",
       "native",
       "--wait",
+      "--wait-timeout",
+      "45m",
       "--json",
       "--strategy",
       "image",
     ]);
-    expect(create?.options.timeoutMs).toBe(600_000);
+    expect(create?.options.timeoutMs).toBe(78 * 60_000);
     const scrub = calls.find(({ options }) =>
       options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
     );

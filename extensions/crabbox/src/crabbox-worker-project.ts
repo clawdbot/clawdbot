@@ -17,16 +17,21 @@ export async function prepareCrabboxProjectFiles(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
 }): Promise<void> {
-  const run = async (args: string[], signal: AbortSignal, input?: string) => {
+  const run = async (
+    args: string[],
+    signal: AbortSignal,
+    createScript?: (timeoutMs: number) => string,
+  ) => {
     params.project.assertCurrent();
+    const timeoutMs = params.timeoutMs();
     const result = await runCrabboxCommand({
       action: "project preparation",
       args,
       binary: params.binary,
       runCommand: params.runCommand,
       signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
-      input,
-      timeoutMs: params.timeoutMs(),
+      input: createScript?.(timeoutMs),
+      timeoutMs,
     });
     params.project.assertCurrent();
     if (result.termination !== "exit" || result.code !== 0) {
@@ -35,7 +40,8 @@ export async function prepareCrabboxProjectFiles(params: {
     return result.stdout;
   };
   await params.project.prepare({
-    runScript: (input, signal) => run(params.runArgs, signal, input),
+    runScript: (input, signal) => run(params.runArgs, signal, () => input),
+    runScriptWithBudget: (createScript, signal) => run(params.runArgs, signal, createScript),
     upload: async (localPath, remotePath, signal) => {
       await run(
         [

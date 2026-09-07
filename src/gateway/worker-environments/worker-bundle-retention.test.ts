@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 
 const hash = (value: string) => value.repeat(64);
@@ -8,12 +8,13 @@ const hash = (value: string) => value.repeat(64);
 function environment(state: WorkerEnvironmentRecord["state"], bundleHash: string) {
   return {
     state,
+    profileSnapshot: { settings: {} },
     bootstrapReceipt: {
       bundleHash,
       openclawVersion: "1.2.3",
       protocolFeatures: [],
     },
-  } as Pick<WorkerEnvironmentRecord, "bootstrapReceipt" | "state">;
+  } satisfies Pick<WorkerEnvironmentRecord, "bootstrapReceipt" | "profileSnapshot" | "state">;
 }
 
 function placement(state: WorkerSessionPlacementRecord["state"], bundleHash: string | null) {

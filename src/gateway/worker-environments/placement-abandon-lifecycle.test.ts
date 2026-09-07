@@ -36,7 +36,9 @@ describe("offline device abandonment with retained physical cleanup", () => {
     "fences the old claim and retains exact cleanup ownership with $cleanup sibling cleanup and sharedHost=$sharedHost",
     async ({ cleanup, sharedHost }) => {
       let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(placements, { workspacePath: support.testState.root });
+      const harness = createHarness(support.testState.stateDb, placements, {
+        workspacePath: support.testState.root,
+      });
       const environmentId = harness.ready.environmentId;
       const deviceId = "paired-device";
       const build = {

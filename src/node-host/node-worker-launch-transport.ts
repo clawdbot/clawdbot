@@ -34,6 +34,7 @@ type NodeWorkerLaunchTransportOptions = {
   input: NodeWorkerLaunchInput;
   descriptor: WorkerLaunchDescriptor;
   connectionFailure: { errorText?: string };
+  onStartupMessage: (message: unknown) => void;
   scrubber: NodeWorkerCredentialScrubber;
   store: NodeWorkerLaunchStore;
   containerEngine?: NodeWorkerContainerEngine;
@@ -69,6 +70,7 @@ export async function prepareNodeWorkerLaunchTransport(
         onWorkerMessage: (message) => {
           const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
           if (!diagnostic) {
+            options.onStartupMessage(message);
             return;
           }
           options.connectionFailure.errorText = diagnostic.cause
@@ -143,6 +145,7 @@ export async function startNodeWorkerLaunchTransport(params: {
   descriptor: WorkerLaunchDescriptor;
   container?: NodeWorkerContainerIdentity;
   isCurrent: () => boolean;
+  onStartGateOpened?: () => void;
 }): Promise<void> {
   if (!params.isCurrent()) {
     throw new Error("node worker admission closed before startup");
@@ -152,6 +155,9 @@ export async function startNodeWorkerLaunchTransport(params: {
   }
   if (!params.isCurrent()) {
     throw new Error("node worker admission closed before descriptor dispatch");
+  }
+  if (!params.container && params.adapter.openStartGate) {
+    params.onStartGateOpened?.();
   }
   await sendNodeWorkerInput(params.adapter, buildWorkerProcessTurn(params.descriptor));
 }

@@ -5,6 +5,7 @@ import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-regi
 import { toErrorObject } from "../infra/errors.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import type { NodeWorkerStartupMessage } from "./node-supervisor-protocol.js";
 import { parseWorkerProcessRequest, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -19,6 +20,7 @@ type RunWorkerCommandOptions = {
 export type WorkerCommandLifetime = {
   dispose: () => void;
   reportConnectionFailure: (cause: string | undefined) => void;
+  reportStartup?: (message: NodeWorkerStartupMessage) => void;
   signal: AbortSignal;
   started: Promise<boolean>;
   terminateOwnedTree: () => void;
@@ -120,6 +122,7 @@ async function runManagedWorkerCommand(
             {
               environmentStateDir: environment.stateDir,
               signal: current.controller.signal,
+              onStartup: options.lifetime?.reportStartup,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
                 : {}),
@@ -297,6 +300,7 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
     }
     const result = await runWorkerDescriptor(descriptor, {
       signal: abortController.signal,
+      onStartup: options.lifetime?.reportStartup,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
         : {}),

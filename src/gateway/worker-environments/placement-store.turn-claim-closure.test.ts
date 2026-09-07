@@ -28,6 +28,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
@@ -58,6 +59,11 @@ afterEach(async () => {
 });
 
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "environment-placement-claim-close",
+    sessionId: SESSION.sessionId,
+    ownerEpoch: 7,
+  });
   let placement = store.startDispatch({ ...SESSION, executionMode });
   placement = store.transition({
     sessionId: SESSION.sessionId,

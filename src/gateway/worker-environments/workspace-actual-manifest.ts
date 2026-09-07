@@ -129,7 +129,9 @@ export async function readActualWorkspaceManifestImpl(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
+  params.signal?.throwIfAborted();
   const root = await fs.realpath(params.root);
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(root));
   const rawEntries: Array<
@@ -157,8 +159,11 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
   };
   const scanController = new AbortController();
+  const scanSignal = params.signal
+    ? AbortSignal.any([params.signal, scanController.signal])
+    : scanController.signal;
   const checkTraversal = (relative: string): void => {
-    scanController.signal.throwIfAborted();
+    scanSignal.throwIfAborted();
     traversedEntries += 1;
     traversedPathBytes += Buffer.byteLength(relative);
     if (traversedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
@@ -179,7 +184,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       // Keep the queued graph bounded too: each worker claims an index before
       // awaiting I/O, rather than retaining one task per inventory entry.
       tasks: Array.from({ length: Math.min(4, end - start) }, () => async () => {
-        while (next < end && !scanController.signal.aborted) {
+        while (next < end && !scanSignal.aborted) {
           await scan(next++);
         }
       }),
@@ -187,9 +192,11 @@ export async function readActualWorkspaceManifestImpl(params: {
       errorMode: "stop",
       onTaskError: (error) => scanController.abort(error),
     });
+    // Cancellation while workers drain must not replace the first failure.
     if (result.hasError) {
       throw result.firstError;
     }
+    scanSignal.throwIfAborted();
   };
   const addFile = async (relative: string): Promise<void> => {
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
@@ -199,7 +206,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         return size;
       },
       root,
-      scanController.signal,
+      scanSignal,
     );
     if (snapshot.type === "file") {
       addEntry({
@@ -367,6 +374,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   // No file readers overlap metadata selection; failures stop new admission
   // and join all opened handles before any manifest can be returned.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
+  params.signal?.throwIfAborted();
   const directories = rawEntries
     .filter((entry) => entry.type === "directory")
     .toSorted((left, right) => left.path.localeCompare(right.path));

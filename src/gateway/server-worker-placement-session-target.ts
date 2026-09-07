@@ -254,6 +254,7 @@ export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
             },
       manifestRef: placement.workspaceBaseManifestRef,
       remoteWorkspaceDir: placement.remoteWorkspaceDir,
+      sessionKey: placement.sessionKey,
     };
   };
 }

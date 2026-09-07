@@ -74,7 +74,12 @@ describe("private worker launch wire", () => {
       connId,
       declaration: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          environmentSession: 1,
+          workspaceManifest: 1,
+        },
       },
     });
   });

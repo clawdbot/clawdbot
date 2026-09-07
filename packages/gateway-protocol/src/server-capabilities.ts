@@ -5,6 +5,8 @@ export const GATEWAY_SERVER_CAPS = {
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
+  NODE_WORKER_WORKSPACE_MANIFEST: "node-worker-workspace-manifest-v1",
+  NODE_WORKER_WORKSPACE_SKILL_RESOURCES: "node-worker-workspace-skill-resources-v1",
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
   PROGRESS_CARD_AGENT_SCOPE: "progress-card-agent-scope-v1",

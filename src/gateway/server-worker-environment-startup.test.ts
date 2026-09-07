@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { setActiveNodeContext } from "../infra/active-node-context.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
+import * as workspaceCommands from "../node-host/node-worker-workspace-commands.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
@@ -15,6 +17,7 @@ import type { WorkerProvider } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { parseNodeWorkerPreparedWorkspaceResult } from "../worker/node-workspace-prepared-protocol.js";
 import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type {
@@ -25,6 +28,7 @@ import {
   createGatewayWorkerEnvironmentRuntime,
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
+import { withPreparedNodeAcknowledgement } from "./server-worker-environment-startup.test-support.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import {
   DEVICE_WORKER_PROVIDER_ID,
@@ -35,11 +39,240 @@ const DEVICE_ID = "revoked-device";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  setActiveNodeContext(null);
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
 });
 
 describe("gateway worker environment startup", () => {
+  it.each(["register", "bind"] as const)(
+    "rejects prepared workspace %s without its manifest dialect before node I/O",
+    async (action) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-prepared-dialect-"));
+      await withPreparedNodeAcknowledgement(root, async (f) => {
+        if (action === "bind") {
+          await f.register();
+          f.makeReady();
+        }
+        f.setWorkspaceManifest(false);
+        const invokedBefore = f.invoked.length;
+        await expect(f[action]()).rejects.toThrow("node worker supervisor dialect is unavailable");
+        expect(f.invoked).toHaveLength(invokedBefore);
+        const registration = f.preparedStore.find(f.record.environmentId);
+        if (action === "register") {
+          expect(registration).toBeUndefined();
+        } else {
+          expect(registration).toMatchObject({ session_id: null, bound_at_ms: null });
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "round-trips actual prepared node acknowledgements and rejection reasons (source changed: %s)",
+    async (changedSource) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-prepared-ack-"));
+      await withPreparedNodeAcknowledgement(root, async (f) => {
+        if (changedSource) {
+          await fs.writeFile(path.join(f.prepared.workspaceDir, "source.txt"), "changed source\n");
+        }
+        if (changedSource) {
+          const error = await f.register().then(
+            () => undefined,
+            (reason: unknown) => reason,
+          );
+          expect(f.received).toEqual([
+            expect.objectContaining({
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "INVALID_REQUEST: prepared workspace source does not match its manifest",
+              },
+            }),
+          ]);
+          expect(error).toMatchObject({
+            message: expect.stringContaining(
+              "prepared workspace source does not match its manifest",
+            ),
+          });
+        } else {
+          await f.register();
+          f.makeReady();
+          await f.bind();
+          expect(f.received).toHaveLength(2);
+          for (const response of f.received) {
+            expect(response.ok).toBe(true);
+            expect(
+              parseNodeWorkerPreparedWorkspaceResult(JSON.parse(response.payloadJSON!)),
+            ).toEqual(f.prepared);
+          }
+          const acquired = f.workspace.acquireManagedWorkspace({
+            ...f.binding,
+            workspaceDir: f.prepared.workspaceDir,
+          });
+          expect(acquired.homeDir).toBe(f.prepared.homeDir);
+          acquired.release();
+        }
+      });
+    },
+  );
+
+  it.each(["workspace-budget", "reserve-expiry", "caller-abort"] as const)(
+    "keeps prepared registration within its %s while cancelling before node commit",
+    async (boundary) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-prepared-deadline-"));
+      await withPreparedNodeAcknowledgement(
+        root,
+        async (f) => {
+          const entered = createDeferredCore<AbortSignal | undefined>();
+          const release = createDeferredCore();
+          const capture = workspaceCommands.captureManifest;
+          const heldCapture = vi
+            .spyOn(workspaceCommands, "captureManifest")
+            .mockImplementation(async (params) => {
+              const manifestRef = await capture(params);
+              entered.resolve(params.signal);
+              await release.promise;
+              return manifestRef;
+            });
+          const caller = new AbortController();
+          vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          let settled = false;
+          const registering = f
+            .register(caller.signal)
+            .then(
+              () => ({ ok: true as const }),
+              (error: unknown) => ({ error }),
+            )
+            .finally(() => {
+              settled = true;
+            });
+          try {
+            const signal = await entered.promise;
+            if (boundary === "caller-abort") {
+              caller.abort();
+              await registering;
+            } else {
+              await vi.advanceTimersByTimeAsync(
+                boundary === "reserve-expiry"
+                  ? f.record.preparation!.expiresAtMs - Date.now() + 1
+                  : 30_001,
+              );
+            }
+            expect(settled).toBe(boundary !== "workspace-budget");
+            if (boundary === "workspace-budget") {
+              expect(signal?.aborted).toBe(false);
+              release.resolve();
+              await expect(registering).resolves.toEqual({ ok: true });
+              expect(f.preparedStore.find(f.record.environmentId)).toMatchObject({
+                source_manifest_ref: f.prepared.sourceManifestRef,
+                session_id: null,
+              });
+            } else {
+              expect(await registering).toMatchObject({
+                error: {
+                  message: expect.stringContaining(
+                    boundary === "reserve-expiry" ? "timed out" : "cancelled",
+                  ),
+                },
+              });
+              await f.cancelled.promise;
+              expect(signal?.aborted).toBe(true);
+              release.resolve();
+              await f.settleInvokes();
+              expect(f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+              expect(f.received).toEqual([]);
+            }
+          } finally {
+            caller.abort();
+            release.resolve();
+            vi.useRealTimers();
+            await registering;
+            await f.settleInvokes();
+            heldCapture.mockRestore();
+          }
+        },
+        boundary === "reserve-expiry" ? 10_000 : undefined,
+      );
+    },
+  );
+
+  it("keeps bind control bounded to 30 seconds and cancels before consuming its registration", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-prepared-bind-deadline-"));
+    await withPreparedNodeAcknowledgement(root, async (f) => {
+      await f.register();
+      f.makeReady();
+      const entered = createDeferredCore<AbortSignal | undefined>();
+      const release = createDeferredCore();
+      const prepare = f.workspace.prepare.bind(f.workspace);
+      const heldBind = vi
+        .spyOn(f.workspace, "prepare")
+        .mockImplementation(async (input, signal) => {
+          entered.resolve(signal);
+          await release.promise;
+          return await prepare(input, signal);
+        });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const binding = f.bind().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        const signal = await entered.promise;
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect(await binding).toMatchObject({ message: expect.stringContaining("timed out") });
+        await f.cancelled.promise;
+        expect(signal?.aborted).toBe(true);
+        release.resolve();
+        await f.settleInvokes();
+        expect(f.preparedStore.find(f.record.environmentId)).toMatchObject({
+          session_id: null,
+          bound_at_ms: null,
+        });
+      } finally {
+        release.resolve();
+        vi.useRealTimers();
+        await binding;
+        await f.settleInvokes();
+        heldBind.mockRestore();
+      }
+    });
+  });
+
+  it("rejects an actual successful node acknowledgement delivered after its caller aborts", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-prepared-late-ack-"));
+    await withPreparedNodeAcknowledgement(root, async (f) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      f.holdReply(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const caller = new AbortController();
+      const registering = f.register(caller.signal).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await entered.promise;
+        expect(f.preparedStore.find(f.record.environmentId)).toBeDefined();
+        caller.abort();
+        expect(await registering).toMatchObject({ message: expect.stringContaining("cancelled") });
+        await f.cancelled.promise;
+        release.resolve();
+        await f.settleInvokes();
+        expect(f.received).toEqual([expect.objectContaining({ ok: true })]);
+        expect(f.accepted).toEqual([false]);
+      } finally {
+        caller.abort();
+        release.resolve();
+        await registering;
+        await f.settleInvokes();
+      }
+    });
+  });
+
   it("cleans transfer scratch before serving and removes it on shutdown", async () => {
     const stateDir = tempDirs.make("openclaw-worker-transfer-startup-");
     const transferRoot = path.join(stateDir, "tmp", "node-workspace-transfer");

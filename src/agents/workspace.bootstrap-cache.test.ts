@@ -24,7 +24,7 @@ describe("workspace bootstrap file caching", () => {
   });
 
   const loadAgentsFile = async (dir: string) => {
-    const result = await loadWorkspaceBootstrapFiles(dir);
+    const result = await loadWorkspaceBootstrapFiles(dir, [DEFAULT_AGENTS_FILENAME]);
     return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
   };
 

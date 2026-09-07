@@ -6,7 +6,8 @@ import {
   verifyWorkerAdmissionHandshake,
 } from "./admission.js";
 import { hashWorkerCredential, type WorkerCredentialRecord } from "./credential.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import type { WorkerEnvironmentStore } from "./store.js";
 
 const BUNDLE_HASH = "a".repeat(64);
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");

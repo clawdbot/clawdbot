@@ -33,9 +33,13 @@ describe("worker placement dispatch conflict lookup", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
   const createTestHarness = (
-    options: Parameters<typeof createPlacementHarness>[1] = {},
+    options: Parameters<typeof createPlacementHarness>[2] = {},
     store: PlacementStore = placementStore,
-  ) => createPlacementHarness(store, { workspacePath: path.join(root, "workspace"), ...options });
+  ) =>
+    createPlacementHarness(database, store, {
+      workspacePath: path.join(root, "workspace"),
+      ...options,
+    });
 
   beforeEach(async () => {
     workerPlacementWarn.mockClear();

@@ -13,8 +13,9 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerDesktopObserveResult } from "./service-contract.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentStore } from "./store.js";
 
 const APP_LAUNCH_TIMEOUT_MS = 30_000;
 
@@ -173,7 +174,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     // the authority for whether that connection may still act for this desktop owner.
     runtime === capturedRuntime &&
     isBindingCurrent(options.store, binding) &&
-    capturedRuntime.transport.isCurrent(node, false);
+    capturedRuntime.transport.isCurrent(node);
 
   const findCurrentNode = async (
     binding: NodeDesktopBinding,

@@ -3,11 +3,8 @@ import path from "node:path";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
 import { runExec } from "../process/exec.js";
-import {
-  runWorkspaceCommand,
-  TRANSFER_TIMEOUT_MS,
-  workspaceCommandEnv,
-} from "./node-worker-workspace-commands.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../worker/node-workspace-deadlines.js";
+import { runWorkspaceCommand, workspaceCommandEnv } from "./node-worker-workspace-commands.js";
 
 export async function initializeNodeWorkerGitWorkspace(params: {
   workspaceDir: string;
@@ -39,7 +36,7 @@ export async function initializeNodeWorkerGitWorkspace(params: {
         baseEnv: workspaceCommandEnv(params.manifestHome),
         stdinFileDescriptor: pack.fd,
         signal: params.signal,
-        timeoutMs: TRANSFER_TIMEOUT_MS,
+        timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         logOutput: false,
       });

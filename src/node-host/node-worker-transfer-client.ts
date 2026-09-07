@@ -4,6 +4,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
@@ -30,6 +32,10 @@ import {
   stagedInputDirectoriesFromEntries,
 } from "../media/staged-inputs.js";
 import {
+  boundedWorkspaceTransferChunks,
+  readWorkspaceTransferBody as readResponseBody,
+} from "../worker/node-workspace-transfer-body.js";
+import {
   isNodeWorkspaceTransferInvalidReason,
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
@@ -38,6 +44,10 @@ import {
   nodeWorkspaceTransferReconcilePath,
   type NodeWorkerWorkspaceTransferInput,
 } from "../worker/node-workspace-transfer-protocol.js";
+import {
+  prepareNodeWorkerWorkspaceOverlay,
+  type NodeWorkerPreparedWorkspaceTransfer,
+} from "./node-worker-prepared-workspace-transfer.js";
 import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
@@ -65,21 +75,6 @@ export type NodeWorkerTransferGateway = {
   tlsFingerprint?: string;
   cloudflareAccess?: CloudflareAccessCredentials;
 };
-
-async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const value of response) {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      response.destroy(new Error("workspace transfer response exceeded its byte limit"));
-      throw new Error("workspace transfer response exceeded its byte limit");
-    }
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
 
 async function requireOk(response: IncomingMessage): Promise<void> {
   if (response.statusCode === 200) {
@@ -117,9 +112,28 @@ async function requireOk(response: IncomingMessage): Promise<void> {
 }
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
-  const response = await openNodeWorkerTransferHttpRequest(params);
+  const response = await openNodeWorkerTransferHttpRequest({
+    ...params,
+    headers: { ...params.headers, "accept-encoding": "gzip" },
+  });
   await requireOk(response);
-  return await readResponseBody(response, maxBytes);
+  const encoding = response.headers["content-encoding"]?.trim().toLowerCase();
+  if (!encoding || encoding === "identity") {
+    return await readResponseBody(response, maxBytes);
+  }
+  if (encoding !== "gzip") {
+    response.destroy();
+    throw new Error("workspace transfer response has an unsupported content encoding");
+  }
+  // Bound both wire bytes and expansion. Join response and decoder shutdown
+  // on cancellation, corrupt gzip, or either limit before returning.
+  return await pipeline(
+    response,
+    (source) => boundedWorkspaceTransferChunks(source, maxBytes),
+    createGunzip(),
+    async (source) => await readResponseBody(source, maxBytes),
+    { signal: params.signal },
+  );
 }
 
 async function downloadFile(params: {
@@ -211,6 +225,7 @@ async function downloadWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "download" }>;
+  prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -248,6 +263,16 @@ async function downloadWorkspace(params: {
   if (params.transfer.seedKey && (!manifest.baseCommit || params.transfer.attachments)) {
     throw new Error("Prepared project seeds require a Git workspace transfer");
   }
+  const overlay =
+    params.prepared && !params.transfer.attachments
+      ? await prepareNodeWorkerWorkspaceOverlay({
+          prepared: params.prepared,
+          manifest,
+          manifestRef: params.transfer.manifestRef,
+          hashMemo: params.hashMemo,
+          signal: params.signal,
+        })
+      : undefined;
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   if (
     params.transfer.attachments &&
@@ -283,7 +308,7 @@ async function downloadWorkspace(params: {
     if (published.trim() !== params.transfer.manifestRef) {
       throw new Error("workspace transfer manifest publication acknowledgement is invalid");
     }
-    if (manifest.baseCommit && !checkpointBase) {
+    if (manifest.baseCommit && !checkpointBase && !overlay) {
       try {
         let seeded = false;
         if (params.transfer.seedKey) {
@@ -350,7 +375,11 @@ async function downloadWorkspace(params: {
     }
     await withWorkerWorkspaceHashMemo(stagingHashMemo, async () => {
       for (const entry of manifest.entries) {
-        if (checkpointPaths && !checkpointPaths.has(entry.path)) {
+        if (
+          overlay
+            ? !overlay.changed.has(entry.path)
+            : checkpointPaths && !checkpointPaths.has(entry.path)
+        ) {
           continue;
         }
         const destination = workspacePath(staging, entry.path);
@@ -390,7 +419,7 @@ async function downloadWorkspace(params: {
     const blobApplyMs = performance.now() - blobApplyStartedAt;
     // Reuse only hashes validated on this staging filesystem. Capture still checks
     // the complete tree and current handle identities before the atomic replacement.
-    if (checkpointBase && checkpointBaseRef) {
+    if (checkpointBase && checkpointBaseRef && !overlay) {
       await applyNodeRepositoryCheckpoint({
         workspaceDir: params.workspaceDir,
         stagingRoot: staging,
@@ -402,14 +431,18 @@ async function downloadWorkspace(params: {
       });
       params.hashMemo?.clear();
     } else {
-      const observed = await captureManifest({
-        workspaceDir: staging,
-        manifestHome: params.manifestHome,
-        baseCommit: manifest.baseCommit,
-        referenceManifestRef: params.transfer.manifestRef,
-        hashMemo: stagingHashMemo,
-        signal: params.signal,
-      });
+      const observed = overlay
+        ? await overlay.apply(staging)
+        : (
+            await captureManifest({
+              workspaceDir: staging,
+              manifestHome: params.manifestHome,
+              baseCommit: manifest.baseCommit,
+              referenceManifestRef: params.transfer.manifestRef,
+              hashMemo: stagingHashMemo,
+              signal: params.signal,
+            })
+          ).manifestRef;
       if (observed !== params.transfer.manifestRef) {
         throw new Error(
           `workspace transfer materialized a different manifest (${observed}/${params.transfer.manifestRef})`,
@@ -441,10 +474,10 @@ async function downloadWorkspace(params: {
         }
         params.signal?.throwIfAborted();
       }
-    } else if (!checkpointBase) {
+    } else if (!overlay && !checkpointBase) {
       await replaceWorkspace(params.workspaceDir, staging);
     }
-    if (params.hashMemo && !checkpointBase) {
+    if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
     }
     transferLog.debug("node worker workspace transfer completed", {
@@ -509,11 +542,12 @@ async function uploadWorkspace(params: {
     "utf8",
   );
   const base = parseWorkerWorkspaceManifest(baseRaw, params.transfer.baseManifestRef);
-  const currentRef = await captureManifest({
+  const { manifestRef: currentRef } = await captureManifest({
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
     referenceManifestRef: params.transfer.referenceManifestRef,
+    baseManifestRef: params.transfer.baseManifestRef,
     ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
   });
@@ -604,11 +638,14 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: NodeWorkerWorkspaceTransferInput;
+  prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    await recoverWorkspaceReplacement(params.workspaceDir);
+    if (!params.prepared) {
+      await recoverWorkspaceReplacement(params.workspaceDir);
+    }
     return params.transfer.direction === "download"
       ? await downloadWorkspace({
           ...params,

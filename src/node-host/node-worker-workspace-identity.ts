@@ -4,8 +4,78 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
+import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.js";
 
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+export function assertNodePreparedWorkspacePaths(
+  root: string,
+  request: {
+    gatewayNamespace: string;
+    cacheKey: string;
+    workspaceDir: string;
+    homeDir: string;
+  },
+): void {
+  const ownerRoot = path.join(root, request.gatewayNamespace, request.cacheKey);
+  if (
+    !GATEWAY_NAMESPACE_PATTERN.test(request.gatewayNamespace) ||
+    !/^[a-f0-9]{64}$/u.test(request.cacheKey)
+  ) {
+    throw new Error("INVALID_REQUEST: invalid prepared workspace identity");
+  }
+  for (const [name, target] of [
+    ["workspace", request.workspaceDir],
+    ["home", request.homeDir],
+  ] as const) {
+    const expected = path.join(ownerRoot, name);
+    const stats = fs.lstatSync(target);
+    if (
+      target !== expected ||
+      !stats.isDirectory() ||
+      stats.isSymbolicLink() ||
+      fs.realpathSync.native(target) !== expected
+    ) {
+      throw new Error("INVALID_REQUEST: prepared workspace path escaped its owner root");
+    }
+  }
+}
+
+export function resolveNodePreparedWorkspaceIdentity(
+  root: string,
+  row: NodeWorkerPreparedWorkspaceRow,
+  request: NodeWorkerManagedWorkspaceRequest,
+) {
+  if (
+    row.state !== "bound" ||
+    row.workspace_dir !== request.workspaceDir ||
+    row.environment_id !== request.environmentId ||
+    row.session_id !== request.sessionId ||
+    row.session_key !== request.sessionKey ||
+    row.owner_epoch !== request.ownerEpoch ||
+    row.bound_at_ms === null ||
+    row.retired_at_ms !== null
+  ) {
+    throw new Error("INVALID_REQUEST: node placement does not own the prepared workspace");
+  }
+  assertNodePreparedWorkspacePaths(root, {
+    gatewayNamespace: row.gateway_namespace,
+    cacheKey: row.cache_key,
+    workspaceDir: row.workspace_dir,
+    homeDir: row.home_dir,
+  });
+  return {
+    workspaceDir: row.workspace_dir,
+    homeDir: row.home_dir,
+    gatewayNamespace: row.gateway_namespace,
+    generationKey: nodeWorkerWorkspaceLaunchGenerationKey({
+      gatewayNamespace: row.gateway_namespace,
+      environmentId: row.environment_id,
+      sessionId: request.sessionId,
+      ownerEpoch: request.ownerEpoch,
+    }),
+  };
+}
 
 export type NodeWorkerManagedWorkspaceRequest = {
   workspaceDir: string;

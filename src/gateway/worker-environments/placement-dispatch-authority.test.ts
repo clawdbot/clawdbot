@@ -40,8 +40,11 @@ describe("worker placement cancellation and reclaim authority", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
-  const createTestHarness = (options: Parameters<typeof createHarness>[1] = {}) =>
-    createHarness(placementStore, { workspacePath: path.join(root, "workspace"), ...options });
+  const createTestHarness = (options: Parameters<typeof createHarness>[2] = {}) =>
+    createHarness(database, placementStore, {
+      workspacePath: path.join(root, "workspace"),
+      ...options,
+    });
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-reclaim-auth-");
@@ -192,17 +195,6 @@ describe("worker placement cancellation and reclaim authority", () => {
   it("passes the Move admission signal through destination provisioning", async () => {
     const harness = createTestHarness();
     const active = await harness.service.dispatch(REQUEST);
-    database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json, provision_operation_id,
-      lease_id, state, owner_epoch, attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, 'fake', ?, '{}', 'move-source', 'lease-1', 'attached', ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        REQUEST.profileId,
-        active.activeOwnerEpoch,
-        JSON.stringify([active.sessionId]),
-      );
     const entered = createDeferredCore();
     const settled = createDeferredCore();
     const controller = new AbortController();
@@ -365,7 +357,7 @@ describe("worker placement dispatch authority", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const database = openOpenClawStateDatabase({ env: state.env });
         const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(store, { workspacePath: state.workspaceDir });
+        const harness = createHarness(database, store, { workspacePath: state.workspaceDir });
         const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
         const owner = ensureProfileForEmail("dispatch-owner@example.test");
         const member = ensureProfileForEmail("dispatch-member@example.test");
@@ -405,7 +397,11 @@ describe("worker placement dispatch authority", () => {
           clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
           clientMode: GATEWAY_CLIENT_MODES.NODE,
           protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          workerHost: { enabled: true as const, capacity: { total: 2, available: 2 } },
+          workerHost: {
+            enabled: true as const,
+            capacity: { total: 2, available: 2 },
+            workspaceManifest: 1,
+          },
           commands: ["system.run"],
         };
         let readinessObserved = false;

@@ -15,6 +15,7 @@ import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   BUILD,
   environment,
+  preparedEnvironment,
   startRequest,
   transport,
   withWorkspaceDrain,
@@ -70,6 +71,71 @@ function turnClaim() {
 }
 
 describe("node worker tunnel lifetime", () => {
+  it.each([false, true])(
+    "scopes restored launch wire identity to prepared=%s",
+    async (preparedWorkspace) => {
+      const record = preparedWorkspace ? preparedEnvironment() : environment();
+      const sessionKey = "agent:test:restored";
+      const manifestRef = `sha256:${"f".repeat(64)}`;
+      const transfer = workspaceTransfer();
+      transfer.prepareSync = vi.fn(async () => ({
+        token: "restore-token",
+        snapshot: {
+          manifest: { version: 1 as const, baseCommit: null, entries: [] },
+          manifestRef,
+          rawManifest: "{}",
+          root: "/gateway/workspace",
+        },
+      }));
+      const launchNodeWorker = vi.fn<NodeWorkerLaunch>(async ({ input }) => {
+        expect(Object.keys(input).toSorted()).toEqual([
+          "descriptor",
+          "environmentSession",
+          "expectedBundleHash",
+          "gatewayNamespace",
+          "launchId",
+          "placementGeneration",
+          ...(preparedWorkspace ? ["sessionKey"] : []),
+        ]);
+        if (preparedWorkspace) {
+          expect(input.sessionKey).toBe(sessionKey);
+        }
+        return {
+          launchId: input.launchId,
+          planHash: "b".repeat(64),
+          environmentId: record.environmentId,
+          sessionId: "session-1",
+          ownerEpoch: record.ownerEpoch,
+          placementGeneration: input.placementGeneration,
+          runId: input.descriptor.assignment.runId,
+          state: "completed",
+          resultJson: '{"status":"completed"}',
+        };
+      });
+      const manager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: () => record,
+        listEnvironments: () => [record],
+        getTransport: transport,
+        launchNodeWorker,
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      });
+      manager.bindWorkspaceBindingResolver(async () => ({
+        source: { kind: "local", path: "/gateway/workspace" },
+        remoteWorkspaceDir: "/node/workspace",
+        manifestRef,
+        sessionKey,
+      }));
+      const handle = await manager.start(startRequest());
+      await expect(
+        handle.launchTurn({ plan: plan(), turnClaim: turnClaim() }),
+      ).resolves.toMatchObject({ code: 0 });
+      expect(launchNodeWorker).toHaveBeenCalledOnce();
+      await handle.stop();
+    },
+  );
+
   it("revalidates the exact claim when a same-run replacement launches", async () => {
     const record = environment();
     let currentClaim = turnClaim();

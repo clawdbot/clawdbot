@@ -1,11 +1,18 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
+import {
+  SKILL_LIBRARY_MAX_FILES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+} from "./skill-library-constants.js";
 
-export const SKILL_LIBRARY_MAX_FILES = 256;
-export const SKILL_LIBRARY_MAX_FILE_BYTES = 1024 * 1024;
-export const SKILL_LIBRARY_MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
-export const SKILL_LIBRARY_MAX_SELECTIONS = 64;
+export {
+  SKILL_LIBRARY_MAX_FILES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  SKILL_LIBRARY_MAX_SELECTIONS,
+} from "./skill-library-constants.js";
 const id = Type.String({ pattern: "^[a-f0-9-]{36}$" });
 const revision = Type.String({ pattern: "^[a-f0-9]{64}$" });
 const slug = Type.String({ pattern: "^[a-z0-9][a-z0-9-]{0,62}$" });

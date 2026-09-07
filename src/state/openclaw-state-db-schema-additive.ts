@@ -214,6 +214,19 @@ export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSy
   ensureColumn(database, "worker_environments", "node_device_id TEXT");
 }
 
+/** Create the node-owned binding table only for fresh prepared workspace registration. */
+export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (",
+  );
+  const endMarker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
+  if (start < 0 || end < start) {
+    throw new Error("OpenClaw prepared workspace schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length));
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;

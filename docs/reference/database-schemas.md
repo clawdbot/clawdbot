@@ -534,6 +534,61 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+| 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
+
+### State schema 17
+
+Schema 17 records prepared cloud capacity in four nullable `worker_environments`
+columns: `preparation_key`, `preparation_demand_at_ms`,
+`preparation_expires_at_ms`, and `preparation_consumed_at_ms`. Existing workers
+keep all four values `NULL`; migration never classifies them as unused reserves.
+The consumed timestamp survives placement retirement and attachment rollback,
+so an assigned machine cannot return to the ready pool.
+
+The separate nullable `last_activated_at_ms` column records successful placement
+activation in the same transaction as the placement transition. It keeps the
+latest successful activation time after placement retirement; failed claims,
+refills, and cleanup do not advance it. Existing rows remain `NULL`, without an
+inferred activation backfill. A prepared worker without a successful activation
+keeps only its original demand window, including after a failed consumed claim.
+
+Terminal environment metadata normally expires after seven days. It remains
+available while its demand window is open, including when the provider's idle
+policy exceeds seven days. If that policy cannot be resolved, cleanup retains
+the metadata. This retention does not delay physical machine teardown.
+
+Dedicated nodes register their fixed build paths in the first-use
+`node_worker_prepared_workspaces` table before advertising readiness. Registration
+records the exact environment and completed `preparation_key`, with a separate
+required `cache_key` for compatible project/runtime contents and fixed workspace
+and HOME paths. The cache key excludes the commit; preparation remains an exact
+commit match. Binding adds the session and owner epoch once, and retirement uses
+the stored cache identity to remove the same physical directory.
+Retirement preserves that binding until machine teardown. Ordinary database open
+and migration leave this node-only table absent. Per-agent schemas do not change.
+
+Startup and `openclaw doctor --fix` apply the schema-16 Skill Workshop migration
+before the prepared-worker migration when opening a schema-15 database. A
+schema-16 database receives only the prepared-worker migration. Both paths
+publish schema 17 in both version markers in the same exclusive transaction;
+failure rolls back all database changes from that open. Workshop directory
+relocation runs afterward, outside that database transaction.
+
+The tuple constraint is attached to the last added column, so no
+environment-table rebuild is needed. Existing
+leases, credentials, placements, inference turns, and uncertain cleanup remain
+intact. Failed validation rolls back the additions and version markers. Adding
+the constraint scans existing environments once; no provider operation runs in
+the migration transaction.
+
+Before upgrading, stop older writers and create a verified, WAL-aware backup.
+Builds supporting state schema 16 or earlier refuse the migrated database. To
+roll back, use the compatible build to complete cloud cleanup, stop all writers,
+then restore the pre-upgrade backup into a separate state directory. Restoring
+does not retain changes made after that backup. Do not lower either version
+marker or erase a consumed binding. If cleanup is unresolved or the owner is
+offline, resources can continue incurring charges until deletion is confirmed.
+See [cloud workers](/gateway/cloud-workers) for reserve capacity settings.
 
 ### State schema 16
 

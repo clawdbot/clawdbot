@@ -51,11 +51,16 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-  publishAcceptedManifest?: (accepted: {
-    manifestRef: string;
-    manifest: WorkerWorkspaceManifest;
-    conflictPaths: string[];
-  }) => Promise<void>;
+  acceptance:
+    | {
+        kind: "reconcile";
+        publish?: (accepted: {
+          manifestRef: string;
+          manifest: WorkerWorkspaceManifest;
+          conflictPaths: string[];
+        }) => Promise<void>;
+      }
+    | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(
     async () => await applyStagedWorkerWorkspaceWithMemo(params),
@@ -71,6 +76,19 @@ async function applyStagedWorkerWorkspaceWithMemo(
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
   const changed = changedPaths(params.base, params.current);
+  const acceptance = params.acceptance;
+  const acceptExactTarget = async (
+    verify: () => Promise<void>,
+  ): Promise<WorkerWorkspaceApplyResult> => {
+    await verify();
+    params.journal.commit(params.currentManifestRef);
+    return {
+      manifest: params.current,
+      manifestRef: params.currentManifestRef,
+      conflictPaths: [],
+      verifyLocalStable: verify,
+    };
+  };
   const assertInputOwnership = async () => {
     if (stagedInputDirectories.size === 0) {
       return;
@@ -129,12 +147,13 @@ async function applyStagedWorkerWorkspaceWithMemo(
         metrics,
       ),
   });
-  const preflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
+  const inspectPaths = () =>
+    preflightWorkspaceApply({ root, base: params.base, current: params.current });
+  const preflight = await inspectPaths();
   if (changed.size === 0) {
+    if (acceptance.kind === "exact-target") {
+      return await acceptExactTarget(acceptance.verify);
+    }
     const actual = await readActualWorkspaceManifest({
       root,
       baseCommit: params.current.baseCommit,
@@ -149,7 +168,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
       includePaths,
     });
     const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
+    await acceptance.publish?.({ ...actual, conflictPaths });
     params.journal.commit(actual.manifestRef);
     return createApplyResult(actual, conflictPaths);
   }
@@ -199,11 +218,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     baseEntries,
     appliedEntries,
   });
-  const confirmedPreflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
+  const confirmedPreflight = await inspectPaths();
   if (
     JSON.stringify([...confirmedPreflight.applyPaths].toSorted()) !==
       JSON.stringify([...preflight.applyPaths].toSorted()) ||
@@ -240,28 +255,28 @@ async function applyStagedWorkerWorkspaceWithMemo(
       current: params.current,
       applyPaths: preflight.applyPaths,
     });
-    const actual = await readActualWorkspaceManifest({
-      root,
-      baseCommit: params.current.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const finalPreflight = await preflightWorkspaceApply({
-      root,
-      base: params.base,
-      current: params.current,
-    });
-    await assertActualWorkspaceManifest({
-      root,
-      expectedRef: actual.manifestRef,
-      baseCommit: actual.manifest.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
-    params.journal.commit(actual.manifestRef);
-    return createApplyResult(actual, conflictPaths);
+    if (acceptance.kind === "exact-target") {
+      await inspectPaths();
+    } else {
+      const actual = await readActualWorkspaceManifest({
+        root,
+        baseCommit: params.current.baseCommit,
+        preserveDirectories,
+        includePaths,
+      });
+      const finalPreflight = await inspectPaths();
+      await assertActualWorkspaceManifest({
+        root,
+        expectedRef: actual.manifestRef,
+        baseCommit: actual.manifest.baseCommit,
+        preserveDirectories,
+        includePaths,
+      });
+      const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      await acceptance.publish?.({ ...actual, conflictPaths });
+      params.journal.commit(actual.manifestRef);
+      return createApplyResult(actual, conflictPaths);
+    }
   } catch (error) {
     // Transport or settlement timeouts are observation evidence, never authority
     // for an inverse operation; recovery owns restoring both sides.
@@ -280,4 +295,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     }
     throw error;
   }
+  // A late exact-target fence failure leaves the prepared owner's mutation pending.
+  // It is not evidence permitting rollback or reopening that binding.
+  return await acceptExactTarget(acceptance.verify);
 }

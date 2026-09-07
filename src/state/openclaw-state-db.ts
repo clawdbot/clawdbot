@@ -135,13 +135,6 @@ function assertOpenClawStateDatabaseFreshOpenAllowed(
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
-function executeCanonicalStateSchema(
-  database: DatabaseSync,
-  options: { includeVersionLazyAdditiveTables: boolean },
-): void {
-  database.exec(getOpenClawStateRuntimeSchema(options));
-}
-
 function repairStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
@@ -216,9 +209,11 @@ function repairStateSchema(
               applied.push(migration.applied);
             }
           }
-          executeCanonicalStateSchema(db, {
-            includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
-          });
+          db.exec(
+            getOpenClawStateRuntimeSchema({
+              includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            }),
+          );
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);
             ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
@@ -412,9 +407,11 @@ function ensureSchema(
           }
           sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
           assertCanonicalStateSchemaShape(db, pathname);
-          executeCanonicalStateSchema(db, {
-            includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
-          });
+          db.exec(
+            getOpenClawStateRuntimeSchema({
+              includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            }),
+          );
           migrateLegacyCronRunLogsToTaskRuns(db);
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);

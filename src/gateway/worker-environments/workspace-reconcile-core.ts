@@ -185,6 +185,7 @@ export async function readActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
   return await readActualWorkspaceManifestImpl(params);
 }

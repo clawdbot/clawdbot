@@ -101,6 +101,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
         const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
         return await runCodexNodeExecServer({
           workspaceDir: workspace.workspaceDir,
+          homeDir: workspace.homeDir,
           io,
           activeProcesses,
           assertExecAuthorized,

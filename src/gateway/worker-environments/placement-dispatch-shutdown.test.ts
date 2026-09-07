@@ -163,7 +163,7 @@ describe("worker placement shutdown replay", () => {
     new WorkerDispatchTargetChangedError("session runtime changed"),
   ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(placements, {
+    const harness = createHarness(support.testState.stateDb, placements, {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });

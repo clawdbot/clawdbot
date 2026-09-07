@@ -34,7 +34,9 @@ import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlit
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import { hashWorkerCredential } from "../src/gateway/worker-environments/credential.js";
 import { createWorkerSessionPlacementStore } from "../src/gateway/worker-environments/placement-store.js";
+import { createWorkerEnvironmentStore } from "../src/gateway/worker-environments/store.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
@@ -194,13 +196,53 @@ async function withFixture(
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
         let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
         if (placements) {
+          const environments = createWorkerEnvironmentStore();
+          const environmentId = `policy-worker-${runId}`;
+          const credential = (boundSessionId: string | null) => ({
+            credentialHash: hashWorkerCredential(`${environmentId}:${boundSessionId}`),
+            sessionId: boundSessionId,
+            rpcSetVersion: 1,
+            expiresAtMs: Date.now() + 60_000,
+          });
+          environments.createIntent({
+            environmentId,
+            providerId: "policy-provider",
+            profileId: "policy-profile",
+            profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+            provisionOperationId: `provision:${environmentId}`,
+          });
+          environments.transition({ environmentId, from: "requested", to: "provisioning" });
+          environments.transition({
+            environmentId,
+            from: "provisioning",
+            to: "ready",
+            patch: {
+              leaseId: `lease:${environmentId}`,
+              nodeDeviceId: `node:${environmentId}`,
+              bootstrapReceipt: {
+                bundleHash: "a".repeat(64),
+                openclawVersion: "2026.9.1",
+                protocolFeatures: ["worker-execution-context-v2"],
+              },
+              credential: credential(null),
+            },
+          });
+          const attached = environments.transition({
+            environmentId,
+            from: "ready",
+            to: "attached",
+            patch: {
+              attachedSessionIds: [sessionId],
+              credential: credential(sessionId),
+            },
+          });
           let placement = placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
             from: "requested",
             to: "provisioning",
             expectedGeneration: placement.generation,
-            patch: { environmentId: "policy-worker" },
+            patch: { environmentId },
           });
           placement = placements.transition({
             sessionId,
@@ -224,13 +266,13 @@ async function withFixture(
             from: "starting",
             to: "active",
             expectedGeneration: placement.generation,
-            patch: { activeOwnerEpoch: 7 },
+            patch: { activeOwnerEpoch: attached.ownerEpoch },
           });
           workerClaim = placements.claimTurn({
             ...target,
             runId,
             claimId: "policy-claim",
-            owner: { kind: "worker", environmentId: "policy-worker", ownerEpoch: 7 },
+            owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
           });
         }
         const capturedWorkerClaim = workerClaim;

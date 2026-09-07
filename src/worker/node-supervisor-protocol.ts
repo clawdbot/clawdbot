@@ -11,6 +11,21 @@ const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
 export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-connection-failure-v1";
+export const NODE_WORKER_STARTUP_MESSAGE_TYPE = "openclaw-worker-startup-v1";
+export const NODE_WORKER_STARTUP_PHASES = [
+  "connection-start",
+  "transport-open",
+  "hello-ready",
+  "first-inference",
+] as const;
+
+export type NodeWorkerStartupMessage = {
+  type: typeof NODE_WORKER_STARTUP_MESSAGE_TYPE;
+  runId: string;
+  turnId: string;
+  phase: (typeof NODE_WORKER_STARTUP_PHASES)[number];
+  workerTimeMs: number;
+};
 
 export type NodeWorkerLaunchInput = {
   environmentSession: 1;
@@ -18,6 +33,7 @@ export type NodeWorkerLaunchInput = {
   gatewayNamespace: string;
   expectedBundleHash: string;
   placementGeneration: number;
+  sessionKey?: string;
   descriptor: WorkerLaunchPlan;
 };
 
@@ -124,19 +140,33 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
 export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
-    !hasExactOwnKeys(value, [
-      "environmentSession",
-      "launchId",
-      "gatewayNamespace",
-      "expectedBundleHash",
-      "placementGeneration",
-      "descriptor",
-    ])
+    !hasExactOwnKeys(
+      value,
+      [
+        "environmentSession",
+        "launchId",
+        "gatewayNamespace",
+        "expectedBundleHash",
+        "placementGeneration",
+        "descriptor",
+      ],
+      ["sessionKey"],
+    )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker launch request");
   }
   if (value.environmentSession !== 1) {
     throw new Error("INVALID_REQUEST: node worker environment lifetime support required");
+  }
+  if (
+    value.sessionKey !== undefined &&
+    (typeof value.sessionKey !== "string" ||
+      value.sessionKey.length === 0 ||
+      value.sessionKey.length > 1_024 ||
+      value.sessionKey.trim() !== value.sessionKey ||
+      value.sessionKey.includes("\0"))
+  ) {
+    throw new Error("INVALID_REQUEST: sessionKey must be a bounded non-empty identifier");
   }
   const launchId = requireIdentifier(value.launchId, "launchId");
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
@@ -162,6 +192,7 @@ export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchI
     environmentSession: 1,
     launchId,
     gatewayNamespace,
+    ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
     expectedBundleHash: value.expectedBundleHash,
     placementGeneration: requireNonNegativeInteger(
       value.placementGeneration,
@@ -243,7 +274,7 @@ export function parseNodeWorkerEnvironmentStopInput(
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration"
+    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration" | "sessionKey"
   >,
 ): string {
   return createHash("sha256")
@@ -253,6 +284,7 @@ export function nodeWorkerPlanHash(
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
+        ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
       }),
     )
     .digest("hex");
@@ -332,6 +364,33 @@ export function parseNodeWorkerConnectionFailureMessage(
   return {
     type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
     cause: value.cause,
+  };
+}
+
+export function parseNodeWorkerStartupMessage(value: unknown): NodeWorkerStartupMessage | null {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["type", "runId", "turnId", "phase", "workerTimeMs"]) ||
+    value.type !== NODE_WORKER_STARTUP_MESSAGE_TYPE ||
+    !isIdentifier(value.runId) ||
+    !isIdentifier(value.turnId) ||
+    typeof value.workerTimeMs !== "number" ||
+    !Number.isFinite(value.workerTimeMs) ||
+    value.workerTimeMs < 0 ||
+    value.workerTimeMs > Number.MAX_SAFE_INTEGER
+  ) {
+    return null;
+  }
+  const phase = NODE_WORKER_STARTUP_PHASES.find((knownPhase) => knownPhase === value.phase);
+  if (!phase) {
+    return null;
+  }
+  return {
+    type: NODE_WORKER_STARTUP_MESSAGE_TYPE,
+    runId: value.runId,
+    turnId: value.turnId,
+    phase,
+    workerTimeMs: value.workerTimeMs,
   };
 }
 

@@ -19,6 +19,7 @@ export function createWorkerWorkspaceQuiescence(params: {
   ownerSignal: AbortSignal;
   sharedHost: boolean;
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
+  runResumeWorkspaceCommand?: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
 }): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
   return async (remoteWorkspaceDir) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
@@ -30,8 +31,8 @@ export function createWorkerWorkspaceQuiescence(params: {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
-    const run = async (argv: string[]) => {
-      const result = await params.runWorkspaceCommand({ transportRetry: "never", argv });
+    const run = async (argv: string[], execute = params.runWorkspaceCommand) => {
+      const result = await execute({ transportRetry: "never", argv });
       if (!workerWorkspaceCommandSucceeded(result)) {
         throw workspaceSyncError(result);
       }
@@ -111,7 +112,10 @@ export function createWorkerWorkspaceQuiescence(params: {
           // Teardown can retain an attached row after fencing the tunnel. Recheck after
           // draining renewals: a closed owner releases only local state, never remote work.
           if (!params.ownerSignal.aborted) {
-            await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
+            await run(
+              ["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce],
+              params.runResumeWorkspaceCommand,
+            );
           }
         })().catch((error: unknown) => {
           if (params.ownerSignal.aborted) {

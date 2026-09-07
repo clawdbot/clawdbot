@@ -32,7 +32,10 @@ describe("forced worker environment destruction", () => {
 
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const harness = createHarness(placementStore, { workspaceOperations, workspacePath: root });
+    const harness = createHarness(database, placementStore, {
+      workspaceOperations,
+      workspacePath: root,
+    });
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
@@ -102,7 +105,7 @@ describe("forced worker environment destruction", () => {
     { failure: "tunnel stop", state: "draining" as const },
     { failure: "provider stop", state: "destroying" as const },
   ])("stays successful after $failure failure", async ({ state }) => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: state,
       workspacePath: root,
@@ -124,7 +127,7 @@ describe("forced worker environment destruction", () => {
   });
 
   it("retries remote teardown when a failed rollback journal remains", async () => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: "destroying",
       failAt: "workspace",

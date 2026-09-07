@@ -1,0 +1,16 @@
+{
+  "id": "qa-prepared-pool",
+  "name": "Prepared pool wire fixture",
+  "description": "Dedicated local leases for the prepared-worker wire proof.",
+  "activation": { "onStartup": true },
+  "contracts": { "workerProviders": ["qa-prepared-pool"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["endpoint", "token"],
+    "properties": {
+      "endpoint": { "type": "string" },
+      "token": { "type": "string" }
+    }
+  }
+}

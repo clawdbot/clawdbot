@@ -15,6 +15,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 describe("forced worker environment abandonment", () => {
   let root: string;
@@ -33,6 +34,11 @@ describe("forced worker environment abandonment", () => {
   it("drains nested operations before recording result loss and releasing the claim", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -90,6 +96,11 @@ describe("forced worker environment abandonment", () => {
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -128,6 +139,11 @@ describe("forced worker environment abandonment", () => {
   it("deletes a stale journal without replaying it into the current workspace", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -180,6 +196,11 @@ describe("forced worker environment abandonment", () => {
   it("retains a current journal when its best-effort rollback fails", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -227,6 +248,11 @@ describe("forced worker environment abandonment", () => {
   it("retains a current journal when loading it fails", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");

@@ -78,6 +78,10 @@ const CloudWorkerProfileShape = {
       label: "Cloud Worker Idle Suspend Duration",
       help: "Automatically reclaims an idle cloud worker after this duration, such as 45m or 2h; the next message provisions a replacement. Minimum: 1m. Leave unset to keep workers running.",
     }),
+  readyWorkers: z.number().int().nonnegative().optional().register(configUiMetadata, {
+    label: "Cloud Worker Ready Reserve Target",
+    help: "Target unassigned prepared workers per eligible project using this profile (default: 1), subject to the Gateway-wide prepared pool cap. Set 0 to disable this profile's reserves while preserving snapshot reuse. Preparing workers and unconfirmed reserve cleanup count toward the target.",
+  }),
   settings: CloudWorkerSettingsSchema.optional().register(configUiMetadata, {
     label: "Cloud Worker Provider Settings",
     help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
@@ -110,11 +114,26 @@ const CloudWorkerProjectProfileSchema = CloudWorkerProfileIdSchema.register(conf
   help: "Cloud worker profile name used by default when a session worktree's origin matches this repository identity.",
 });
 
+const CloudWorkerPreparedPoolShape = {
+  maxTotal: z.number().int().nonnegative().optional().register(configUiMetadata, {
+    label: "Cloud Worker Ready Reserve Cap",
+    help: "Gateway-wide cap on unassigned prepared cloud workers across projects and profiles (default: 4). Preparing workers and unconfirmed reserve cleanup count toward the cap. Set 0 to drain unassigned reserves and disable replenishment while preserving snapshot reuse and active sessions.",
+  }),
+} satisfies ConfigSchemaShape<NonNullable<CloudWorkersConfig["preparedPool"]>>;
+
 const CloudWorkersConfigShape = {
   desktop: z.boolean().optional().register(configUiMetadata, {
     label: "Cloud Worker Desktop (Labs)",
     help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
   }),
+  preparedPool: z
+    .object(CloudWorkerPreparedPoolShape)
+    .strict()
+    .optional()
+    .register(configUiMetadata, {
+      label: "Cloud Worker Prepared Pool",
+      help: "Limits for prepared cloud workers kept ready for later sessions. Reserves incur running-machine charges until provider cleanup completes; their fixed expiry follows actual project demand and the provider's existing idle policy.",
+    }),
   projectProfiles: z
     .record(CloudWorkerProjectKeySchema, CloudWorkerProjectProfileSchema)
     .optional()

@@ -28,6 +28,7 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
@@ -126,25 +127,14 @@ describe("dispatch Stop before provider allocation", () => {
         signal?.throwIfAborted();
       });
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(placements, { workspacePath: support.testState.root });
+      const harness = createHarness(support.testState.stateDb, placements, {
+        workspacePath: support.testState.root,
+      });
       const active = harness.placements.seedActive(2, "remote-exec");
       if (active.state !== "active") {
         throw new Error("Move fixture requires an active source");
       }
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
-      support.testState.stateDb.db
-        .prepare(`INSERT INTO worker_environments (
-        environment_id, provider_id, profile_id, profile_snapshot_json,
-        provision_operation_id, lease_id, state, owner_epoch,
-        attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-      ) VALUES (?, 'test', ?, '{}', ?, 'lease-move', 'attached', ?, ?, 1000, 1000, 1000)`)
-        .run(
-          active.environmentId,
-          REQUEST.profileId,
-          `provision:${active.environmentId}`,
-          active.activeOwnerEpoch,
-          JSON.stringify([active.sessionId]),
-        );
       if (outcome === "published") {
         vi.mocked(harness.environments.create).mockImplementation(
           async (_profile, _key, _machine, _mode, _path, signal) => {
@@ -326,6 +316,11 @@ describe("dispatch Stop before provider allocation", () => {
       const environments = support.createService(support.createProvider());
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       if (state === "reclaimed") {
+        seedAttachedPlacementEnvironment(support.testState.stateDb, {
+          environmentId: "old-environment",
+          sessionId: REQUEST.sessionId,
+          ownerEpoch: 1,
+        });
         const active = seedActivePlacement(placements, {
           environmentId: "old-environment",
           ownerEpoch: 1,
@@ -350,6 +345,10 @@ describe("dispatch Stop before provider allocation", () => {
           to: "reclaimed",
           expectedGeneration: current.generation,
         });
+        // The prior worker has already been cleaned up before this redispatch is queued.
+        support.testState.stateDb.db
+          .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+          .run("old-environment");
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -494,7 +493,7 @@ describe("dispatch Stop before provider allocation", () => {
       );
       workspace.preflight.mockResolvedValue(undefined);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(placements);
+      const harness = createHarness(support.testState.stateDb, placements);
       const environments = {
         ...support.createService(support.createProvider()),
         ...harness.environments,

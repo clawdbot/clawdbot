@@ -19,6 +19,7 @@ import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
 type GatewayAuxParams = Parameters<typeof createGatewayAuxHandlers>[0];
@@ -301,6 +302,11 @@ describe("gateway auxiliary authority lifecycle", () => {
       agentId: "main",
       sessionKey: "agent:main:worker-close",
     };
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "worker-env",
+      sessionId: identity.sessionId,
+      ownerEpoch: 7,
+    });
     let placement = placements.startDispatch(identity);
     placement = placements.transition({
       sessionId: identity.sessionId,

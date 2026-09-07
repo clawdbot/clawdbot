@@ -71,8 +71,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   ...QA_SCENARIO_EXECUTION_ENTRIES,
   // Invoked directly by the sandbox bind-conflict E2E verification script.
   "scripts/e2e-sandbox-bind-conflict.mts!",
-  // The Voice Call QA scenario loads this fixture through a generated plugin directory.
-  "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
+  // QA scenarios load these plugin directories through config, without static entry imports.
+  "test/e2e/qa-lab/runtime/fixtures/*/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.

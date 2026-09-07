@@ -14,6 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-move",
@@ -39,14 +40,20 @@ describe("worker session placement moves", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function advanceToActive() {
+  function advanceToActive(environmentId = "environment-move", profileId = "profile-source") {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId,
+      sessionId: SESSION.sessionId,
+      ownerEpoch: 7,
+      profileId,
+    });
     let placement = store.startDispatch(SESSION);
     placement = store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
-      patch: { environmentId: "environment-move" },
+      patch: { environmentId },
     });
     placement = store.transition({
       sessionId: SESSION.sessionId,
@@ -78,32 +85,6 @@ describe("worker session placement moves", () => {
     return active;
   }
 
-  function seedAttachedEnvironment(input: {
-    environmentId: string;
-    sessionId: string;
-    ownerEpoch: number;
-    profileId?: string;
-  }): void {
-    database.db
-      .prepare(
-        `INSERT INTO worker_environments (
-          environment_id, provider_id, profile_id, profile_snapshot_json,
-          provision_operation_id, lease_id, state, owner_epoch,
-          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-        ) VALUES (?, 'test', ?, '{}', ?, 'lease-test', 'attached', ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.environmentId,
-        input.profileId ?? "profile-source",
-        `provision:${input.environmentId}`,
-        input.ownerEpoch,
-        JSON.stringify([input.sessionId]),
-        nowMs,
-        nowMs,
-        nowMs,
-      );
-  }
-
   it("lazily begins one exact-source move in the drain transaction", () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
     expect(
@@ -114,11 +95,6 @@ describe("worker session placement moves", () => {
     expect(store.listPlacementMoves()).toEqual([]);
 
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const workerClaim = store.claimTurn({
       ...SESSION,
       owner: {
@@ -191,11 +167,6 @@ describe("worker session placement moves", () => {
 
   it("persists explicit abandonment and atomically completes its exact failed source", () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
@@ -241,11 +212,6 @@ describe("worker session placement moves", () => {
 
   it("persists a profile machine class and joins only the exact target", () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const source = {
       generation: active.generation,
       environmentId: active.environmentId,
@@ -277,11 +243,6 @@ describe("worker session placement moves", () => {
 
   it("rejects a machine class stored for a non-profile target", () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     store.beginPlacementMove({
       sessionId: SESSION.sessionId,
       source: {
@@ -305,6 +266,9 @@ describe("worker session placement moves", () => {
   it("keeps invalid move attempts from creating optional storage", () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
     const active = advanceToActive();
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run(active.environmentId);
 
     expect(() =>
       store.beginPlacementMove({
@@ -330,11 +294,6 @@ describe("worker session placement moves", () => {
 
   it("fences move errors and Gateway completion by operation id", () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: SESSION.sessionId,
       source: {
@@ -389,11 +348,6 @@ describe("worker session placement moves", () => {
 
   it("completes a worker move only against the exact attached destination", () => {
     const source = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: source.environmentId,
-      sessionId: source.sessionId,
-      ownerEpoch: source.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: SESSION.sessionId,
       source: {
@@ -420,19 +374,7 @@ describe("worker session placement moves", () => {
         "UPDATE worker_environments SET state = 'destroyed', attached_session_ids_json = '[]'",
       )
       .run();
-    const destination = advanceToActive();
-    database.db
-      .prepare(
-        `UPDATE worker_environments
-         SET state = 'attached', profile_id = ?, owner_epoch = ?, attached_session_ids_json = ?
-         WHERE environment_id = ?`,
-      )
-      .run(
-        "profile-destination",
-        destination.activeOwnerEpoch,
-        JSON.stringify([destination.sessionId]),
-        destination.environmentId,
-      );
+    const destination = advanceToActive("environment-move-destination", "profile-destination");
     expect(destination.generation).toBeGreaterThan(local.generation);
 
     expect(
@@ -449,11 +391,6 @@ describe("worker session placement moves", () => {
 
   it("completes a persisted abandonment only after a later sweep makes its placement local", async () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
@@ -517,11 +454,6 @@ describe("worker session placement moves", () => {
 
   it("completes an ordinary reconciled move with one durable Gateway placement", async () => {
     const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
@@ -559,11 +491,6 @@ describe("worker session placement moves", () => {
 
   it("fails a pending profile move after restart loses request authority", async () => {
     const source = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: source.environmentId,
-      sessionId: source.sessionId,
-      ownerEpoch: source.activeOwnerEpoch,
-    });
     const begun = store.beginPlacementMove({
       sessionId: source.sessionId,
       source: {

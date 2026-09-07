@@ -76,6 +76,10 @@ suite.define(() => {
       await setTheme(page, theme);
       await page.getByRole("button", { name: "Expand sidebar" }).click();
       await page.locator(".nav-drawer").waitFor();
+      // Hold the real entrance animation before host/CDP scheduling can advance it.
+      await page.addStyleTag({
+        content: ".shell--mobile-nav .sidebar-issues-panel { animation-play-state: paused; }",
+      });
       await page.locator(".sidebar-issues-button:visible").click();
       const panel = page.locator("#sidebar-issues-panel");
       await panel.waitFor({ state: "attached" });
@@ -100,9 +104,6 @@ suite.define(() => {
           throw new Error("Expected the mobile Inbox sheet entrance animation");
         }
         const timing = animation.effect.getComputedTiming();
-        // Playwright can reach this sample after the entrance animation has advanced.
-        // Rewind the real effect so start geometry does not depend on runner load.
-        animation.pause();
         animation.currentTime = 0;
         const startTop = element.getBoundingClientRect().top;
         animation.play();

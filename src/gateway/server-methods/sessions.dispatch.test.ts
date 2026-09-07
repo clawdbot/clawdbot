@@ -592,6 +592,7 @@ describe("sessions.dispatch", () => {
           agentId: "main",
           source,
           target: { kind: "gateway" },
+          setupAuthorized: false,
           ...(sourceState === "abandoned" ? { abandonSource: true } : {}),
         },
         expect.any(Function),

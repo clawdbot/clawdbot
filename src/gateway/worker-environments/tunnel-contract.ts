@@ -4,6 +4,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerSkillResourceOperation } from "../../worker/skill-resource-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
@@ -78,11 +79,18 @@ export type WorkerWorkspaceCommand = {
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
+  capture?: { baseManifestRef: string; referenceManifestRef: string };
+  skillResources?: {
+    workspaceDir: string;
+    generation: number;
+    operation: WorkerSkillResourceOperation;
+  };
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
+  sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
@@ -125,6 +133,7 @@ type WorkerRepositoryWorkspaceSource = {
 
 export type WorkerWorkspaceSyncRequest = {
   sessionId: string;
+  sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;

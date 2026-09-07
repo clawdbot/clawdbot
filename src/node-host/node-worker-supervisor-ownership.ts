@@ -11,6 +11,7 @@ import type {
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import { createNodeWorkerStartupDiagnostics } from "./node-worker-startup-diagnostics.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
@@ -59,9 +60,15 @@ export function nodeWorkerEnvironmentMatches(
   );
 }
 
-export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim) {
+export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim, receivedAtMs: number) {
   const { promise, resolve } = createDeferredCore();
-  return { claim, done: promise, settle: resolve, cancelled: false };
+  return {
+    claim,
+    done: promise,
+    settle: resolve,
+    cancelled: false,
+    startup: createNodeWorkerStartupDiagnostics(claim, receivedAtMs),
+  };
 }
 
 type NodeWorkerActiveTurn = ReturnType<typeof createNodeWorkerActiveTurn>;

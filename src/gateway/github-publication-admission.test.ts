@@ -16,11 +16,9 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  seedPublicationWorkerPlacement,
 } from "./github-publication.test-support.js";
-import {
-  REQUEST,
-  seedActivePlacement,
-} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -32,13 +30,17 @@ const rejection = (idempotencyKey: string) => ({
 });
 
 function sharedAdmission(surface: "local" | "deferred" | "claim") {
-  const db = openOpenClawStateDatabase().db;
-  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  const database = openOpenClawStateDatabase();
+  const db = database.db;
+  const placements = createWorkerSessionPlacementStore({ database });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   const sessionId = surface === "local" ? SESSION_ID : REQUEST.sessionId;
   const sessionKey = surface === "local" ? SESSION_KEY : REQUEST.sessionKey;
   if (surface !== "local") {
-    seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
+    seedPublicationWorkerPlacement(database, placements, {
+      environmentId: "publication-worker",
+      ownerEpoch: 2,
+    });
   }
   const claim =
     surface === "claim"

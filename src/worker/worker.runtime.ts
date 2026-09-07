@@ -15,6 +15,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
+  NODE_WORKER_STARTUP_MESSAGE_TYPE,
+  type NodeWorkerStartupMessage,
+} from "./node-supervisor-protocol.js";
+import {
   WorkerAdmissionDeadlineExceededError,
   type WorkerAdmissionDeadlineResult,
 } from "./worker-connection-contract.js";
@@ -115,6 +119,7 @@ export async function runWorkerDescriptor(
   options: {
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
+    onStartup?: (message: NodeWorkerStartupMessage) => void;
     browserRuntime?: WorkerBrowserRuntime;
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
@@ -146,6 +151,22 @@ export async function runWorkerDescriptor(
   const stateDir = options.environmentStateDir ?? environment!.stateDir;
 
   const abortController = new AbortController();
+  const reportStartup = (phase: NodeWorkerStartupMessage["phase"]) => {
+    if (abortController.signal.aborted) {
+      return;
+    }
+    try {
+      options.onStartup?.({
+        type: NODE_WORKER_STARTUP_MESSAGE_TYPE,
+        runId: descriptor.assignment.runId,
+        turnId: descriptor.assignment.turnId,
+        phase,
+        workerTimeMs: performance.now(),
+      });
+    } catch {
+      // Startup observers cannot alter admission, inference, or terminal outcomes.
+    }
+  };
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
@@ -181,8 +202,14 @@ export async function runWorkerDescriptor(
     initialAckedSeq: descriptor.assignment.liveEvents.ackedSeq,
   });
   const inference = new WorkerInferenceProxyClient(connection);
+  let transportOpened = false;
   const unsubscribeState = connection.onStateChange((state) => {
-    if (state.kind === "fenced") {
+    if (state.kind === "admitting" && !transportOpened) {
+      // Record the first open only: time until hello includes admission retries,
+      // and later reconnects must not reset this turn's startup boundary.
+      transportOpened = true;
+      reportStartup("transport-open");
+    } else if (state.kind === "fenced") {
       abortController.abort(new Error(`worker fenced: ${state.reason}`));
     } else if (state.kind === "failed") {
       abortController.abort(state.error);
@@ -192,6 +219,7 @@ export async function runWorkerDescriptor(
   try {
     let hello: WorkerHelloOk;
     try {
+      reportStartup("connection-start");
       hello = await connection.start();
     } catch (error) {
       const fenced = fencedResult(connection.state);
@@ -209,6 +237,7 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
+    reportStartup("hello-ready");
     const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] = await Promise.all([
       import("./embedded-agent.runtime.js"),
       import("./inference-stream.runtime.js"),
@@ -222,6 +251,7 @@ export async function runWorkerDescriptor(
       turnId: descriptor.assignment.turnId,
       modelRef: descriptor.assignment.modelRef,
       computerContextEpoch,
+      onFirstInference: () => reportStartup("first-inference"),
     });
     const github = descriptor.assignment.github
       ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>

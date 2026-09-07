@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
+import {
+  testWorkerDescriptor,
+  testWorkerLaunchInput,
+} from "../node-host/node-worker-supervisor.test-support.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  nodeWorkerPlanHash,
   parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
@@ -23,6 +27,28 @@ const identity: NodeWorkerSupervisorIdentity = {
 };
 
 describe("node worker supervisor launch request", () => {
+  it("preserves the host session key in parsing and binds it to the launch hash", () => {
+    const input = {
+      ...testWorkerLaunchInput("/tmp/worker", "turn-1"),
+      sessionKey: "agent:test:prepared",
+    };
+    expect(parseNodeWorkerLaunchInput(JSON.stringify(input))).toEqual(input);
+    expect(nodeWorkerPlanHash(input)).not.toBe(
+      nodeWorkerPlanHash({ ...input, sessionKey: "agent:test:other" }),
+    );
+  });
+
+  it.each(["", " other", "x".repeat(1_025), "a\0b", null])(
+    "rejects an invalid host session key %j",
+    (sessionKey) => {
+      expect(() =>
+        parseNodeWorkerLaunchInput(
+          JSON.stringify({ ...testWorkerLaunchInput("/tmp/worker", "turn-1"), sessionKey }),
+        ),
+      ).toThrow("sessionKey");
+    },
+  );
+
   it.each([undefined, 2])(
     "rejects a Gateway without the negotiated environment lifetime marker %s",
     (environmentSession) => {

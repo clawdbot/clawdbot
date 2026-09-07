@@ -8,7 +8,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKER_WORKSPACE_MANIFEST_VERSION,
+} from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -258,7 +261,11 @@ describe("worker environment service provision replay", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          workspaceManifest: NODE_WORKER_WORKSPACE_MANIFEST_VERSION,
+        },
         commands: [],
       },
     }));
@@ -475,7 +482,7 @@ describe("worker environment service provision replay", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()[0]).toMatchObject({
-      state: "provisioning",
+      state: "requested",
       leaseId: null,
     });
   });

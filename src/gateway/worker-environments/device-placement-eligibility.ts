@@ -1,10 +1,19 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_WORKSPACE_MANIFEST_VERSION,
+} from "../../infra/node-runner-inventory.js";
+import {
+  isNodeCommandAllowed,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { readNodeSessionWithheldCommands } from "../node-registry.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
@@ -56,6 +65,13 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
+  // Every new node tunnel syncs a manifest-bound workspace, including remote-exec.
+  if (node.workerHost.workspaceManifest !== NODE_WORKER_WORKSPACE_MANIFEST_VERSION) {
+    return {
+      ok: false,
+      error: formatNodeRunnerUpdateRequired(deviceId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+    };
+  }
   const declaredCommands = [...node.commands];
   const allowlist = resolveNodeCommandAllowlist(params.config, {
     ...(params.currentNode?.platform ? { platform: params.currentNode.platform } : {}),
@@ -86,4 +102,31 @@ export async function resolveDevicePlacementEligibility(params: {
     };
   }
   return { ok: true, availableSlots: node.workerHost.capacity.available, node };
+}
+
+export function isNodeWorkerPlacementCurrent(params: {
+  node: NodeWorkerSupervisorNodeProof;
+  requirement: DevicePlacementRequirement;
+  transport: NodeWorkerSupervisorTransport | undefined;
+  config: OpenClawConfig;
+}): boolean {
+  const { node, requirement, transport, config } = params;
+  if (
+    transport?.isCurrent(node, {
+      launchEligibility: requirement.consumesWorkerSlot,
+      commands: requirement.requiredNodeCommands,
+      // Inventory may change after admission; cleanup callers keep their weaker requirements.
+      workspaceManifest: true,
+    }) !== true
+  ) {
+    return false;
+  }
+  const declaredCommands = [...node.commands];
+  const allowlist = resolveNodeCommandAllowlist(config, {
+    commands: declaredCommands,
+    approvedCommands: declaredCommands,
+  });
+  return requirement.requiredNodeCommands.every(
+    (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
+  );
 }

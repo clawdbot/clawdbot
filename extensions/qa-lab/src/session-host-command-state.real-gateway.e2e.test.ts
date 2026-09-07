@@ -14,6 +14,7 @@ const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "openai/gpt-5.6-luna";
 const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
+const NODE_WORKER_WORKSPACE_MANIFEST_VERSION = 1;
 const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const REQUEST_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 180_000;
@@ -473,6 +474,7 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
     workerHost: {
       enabled: true,
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+      workspaceManifest: NODE_WORKER_WORKSPACE_MANIFEST_VERSION,
       capacity: { total: 1, available: 1 },
     },
   });

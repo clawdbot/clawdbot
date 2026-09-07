@@ -1,7 +1,8 @@
 import type { WorkerProvider } from "../../plugins/types.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { resolveWorkerLeaseTransportError } from "./service-validation.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import type { WorkerEnvironmentStore } from "./store.js";
 
 export function requestStaleWorkerDestroy(
   record: WorkerEnvironmentRecord,

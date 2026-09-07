@@ -15,8 +15,25 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
 import { createGitHubPublicationCoordinator as createCoordinator } from "./github-publication.js";
-import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import {
+  REQUEST,
+  seedActivePlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+
+export function seedPublicationWorkerPlacement(
+  database: OpenClawStateDatabase,
+  placements: Parameters<typeof seedActivePlacement>[0],
+  params: Parameters<typeof seedActivePlacement>[1],
+) {
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: params.environmentId,
+    sessionId: REQUEST.sessionId,
+    ownerEpoch: params.ownerEpoch,
+  });
+  return seedActivePlacement(placements, params);
+}
 
 const mocks = vi.hoisted(() => ({
   matchesIdentity: vi.fn(),

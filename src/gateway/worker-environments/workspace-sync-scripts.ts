@@ -1,7 +1,9 @@
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
+  MAX_WORKSPACE_HASH_MEMO_ENTRIES,
   selectWorkerWorkspaceHashMemoEntries,
+  serializeRemoteWorkspaceManifestEnvelope,
   workspaceStatIdentity,
 } from "./workspace-hash-memo.js";
 import {
@@ -15,7 +17,6 @@ import {
   REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
   REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
 } from "./workspace-manifest-remote-script.js";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   WORKSPACE_PATH_EXCLUSIONS_JS,
   WORKSPACE_STAGED_INPUT_OWNERSHIP_JS,
@@ -79,7 +80,8 @@ const path = require("node:path");
 ${WORKSPACE_PATH_EXCLUSIONS_JS}
 const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
 const selectWorkerWorkspaceHashMemoEntries = ${selectWorkerWorkspaceHashMemoEntries.toString()};
-const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};
+const serializeRemoteWorkspaceManifestEnvelope = ${serializeRemoteWorkspaceManifestEnvelope.toString()};
+const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};
 const MAX_WORKSPACE_HASH_MEMO_BYTES = ${MAX_WORKSPACE_HASH_MEMO_BYTES};
 const root = fs.realpathSync(process.argv[1]);
 ${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
@@ -124,7 +126,7 @@ function readHashMemo() {
   }
   if (
     !Array.isArray(entries) ||
-    entries.length > MAX_RECONCILIATION_ENTRIES
+    entries.length > MAX_WORKSPACE_HASH_MEMO_ENTRIES
   ) {
     fail("invalid workspace hash memo");
   }
@@ -352,45 +354,84 @@ function assertSerializedManifestBudget(baseCommit, entries) {
   }
 }
 async function hashFiles(entries) {
-  for (const entry of entries) {
-    if (entry.type !== "file") {
-      continue;
+  // Inventory sizes are only preflight estimates; retain symlink bytes and
+  // reserve actual file sizes from opened descriptors before accepting hashes.
+  let openedBytes = eligibleBytes - entries.reduce(
+    (bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0,
+  );
+  let next = 0;
+  let failure;
+  const controller = new AbortController();
+  const stop = (error) => {
+    if (!failure) {
+      failure = { error };
+      controller.abort(error);
     }
-    const absolute = path.join(root, entry.path);
-    const handle = await fs.promises.open(
-      absolute,
-      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
-    );
-    try {
-      const before = await handle.stat({ bigint: true });
-      if (!before.isFile()) fail("worker workspace file changed while it was being read");
-      const identity = workspaceStatIdentity("worker", before);
-      let sha256 = hashMemo.get(identity);
-      if (sha256) {
-        metrics.memoHitCount += 1;
-      } else {
-        const hashStartedAt = performance.now();
-        const hash = crypto.createHash("sha256");
-        const stream = handle.createReadStream({ autoClose: false });
-        for await (const chunk of stream) {
-          hash.update(chunk);
+  };
+  async function worker() {
+    while (!failure && next < entries.length) {
+      const entry = entries[next++];
+      if (entry.type !== "file") {
+        continue;
+      }
+      const absolute = path.join(root, entry.path);
+      let handle;
+      try {
+        handle = await fs.promises.open(
+          absolute,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+        );
+        controller.signal.throwIfAborted();
+        const before = await handle.stat({ bigint: true });
+        controller.signal.throwIfAborted();
+        if (!before.isFile()) fail("worker workspace file changed while it was being read");
+        const openedSize = Number(before.size);
+        openedBytes += openedSize;
+        if (openedBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+          fail("worker workspace manifest exceeds its eligible byte limit");
         }
-        sha256 = hash.digest("hex");
-        metrics.contentHashCount += 1;
-        metrics.contentHashDurationMs += performance.now() - hashStartedAt;
+        const identity = workspaceStatIdentity("worker", before);
+        let sha256 = hashMemo.get(identity);
+        if (sha256) {
+          metrics.memoHitCount += 1;
+        } else {
+          const hashStartedAt = performance.now();
+          const hash = crypto.createHash("sha256");
+          const stream = handle.createReadStream({ autoClose: false, signal: controller.signal });
+          let bytes = 0;
+          for await (const chunk of stream) {
+            bytes += chunk.length;
+            if (bytes > openedSize) fail("worker workspace file changed while it was being read");
+            hash.update(chunk);
+          }
+          sha256 = hash.digest("hex");
+          metrics.contentHashCount += 1;
+          // Concurrent samples overlap; their sum is hashing effort, not wall time.
+          metrics.contentHashDurationMs += performance.now() - hashStartedAt;
+        }
+        const after = await handle.stat({ bigint: true });
+        if (workspaceStatIdentity("worker", after) !== identity) {
+          fail("worker workspace file changed while it was being read");
+        }
+        entry.mode = Number(after.mode & 0o777n);
+        entry.size = Number(after.size);
+        entry.sha256 = sha256;
+        usedHashMemo.set(identity, sha256);
+      } catch (error) {
+        stop(error);
+      } finally {
+        try {
+          await handle?.close();
+        } catch (error) {
+          stop(error);
+        }
       }
-      const after = await handle.stat({ bigint: true });
-      if (workspaceStatIdentity("worker", after) !== identity) {
-        fail("worker workspace file changed while it was being read");
-      }
-      entry.mode = Number(after.mode & 0o777n);
-      entry.size = Number(after.size);
-      entry.sha256 = sha256;
-      usedHashMemo.set(identity, sha256);
-    } finally {
-      await handle.close();
     }
   }
+  // The standalone child cannot import the shared pool. Stop admission on the
+  // first failure and join every reader before publishing or returning it.
+  await Promise.all(Array.from({ length: Math.min(4, entries.length) }, worker));
+  if (failure) throw failure.error;
 }
 function ensurePrivateDirectory(directory) {
   try {
@@ -487,17 +528,8 @@ async function main() {
   const digest = publishManifest(manifestRoot, manifest);
   const manifestRef = "sha256:" + digest;
   if (memoMode) {
-    const memo = selectWorkerWorkspaceHashMemoEntries(
-      usedHashMemo, MAX_RECONCILIATION_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
-    );
-    metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
     const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
-    process.stdout.write(JSON.stringify({
-      version: 1,
-      manifestRef,
-      memo,
-      metrics: measured,
-    }) + "\n");
+    process.stdout.write(serializeRemoteWorkspaceManifestEnvelope(manifestRef, usedHashMemo, measured));
   } else {
     process.stdout.write(manifestRef + "\n");
   }

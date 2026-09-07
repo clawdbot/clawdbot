@@ -14,6 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
@@ -77,6 +78,7 @@ describe("worker portal tool execution", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-portal-"));
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, SOURCE);
     let placement = placements.startDispatch(SOURCE);
     placement = placements.transition({
       sessionId: SOURCE.sessionId,
