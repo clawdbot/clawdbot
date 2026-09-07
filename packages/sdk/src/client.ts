@@ -1,9 +1,13 @@
-// OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
+import {
+  readSdkRunTimestamp,
+  resolveSdkLifecycleEventType,
+  resolveSdkRunWaitStatus,
+} from "./run-terminal.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentsCreateParams,
@@ -24,7 +28,6 @@ import type {
   OpenClawTransport,
   RunCreateParams,
   RunResult,
-  RunTimestamp,
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
@@ -41,7 +44,6 @@ import type {
 // into current Gateway RPC methods and normalize event streams for consumers.
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
-const MAX_NORMALIZED_REPLAY_EVENTS = 2000;
 
 /** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
@@ -61,83 +63,6 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
     return options.gateway;
   }
   return undefined;
-}
-
-function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
-  // Gateway wait payloads come from several runtime paths. Preserve timeout vs
-  // cancellation semantics from metadata instead of trusting one status field.
-  const record =
-    typeof payload === "object" && payload !== null
-      ? (payload as Record<string, unknown> & { aborted?: unknown; status?: unknown })
-      : {};
-  const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
-  const pendingError = record.pendingError === true;
-  const timeoutPhase =
-    typeof record.timeoutPhase === "string" ? record.timeoutPhase.toLowerCase() : undefined;
-  const statusAlreadyTimeoutAttributed = status === "timeout" || status === "timed_out";
-  const hardTimeout =
-    !pendingError &&
-    ((stopReason !== "restart" &&
-      record.providerStarted === true &&
-      statusAlreadyTimeoutAttributed) ||
-      timeoutPhase === "preflight" ||
-      timeoutPhase === "provider" ||
-      timeoutPhase === "post_turn");
-  const hasTerminalTimeoutMetadata =
-    readOptionalTimestamp(record.endedAt) !== undefined ||
-    (!pendingError && readNonEmptyString(record.error) !== undefined) ||
-    stopReason.length > 0 ||
-    typeof record.livenessState === "string" ||
-    record.yielded === true;
-  if (hardTimeout) {
-    return "timed_out";
-  }
-  if (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed" ||
-    stopReason === "aborted" ||
-    stopReason === "cancelled" ||
-    stopReason === "canceled" ||
-    stopReason === "killed" ||
-    stopReason === "auth-revoked" ||
-    stopReason === "restart" ||
-    stopReason === "rpc" ||
-    stopReason === "user" ||
-    (record.aborted === true && stopReason === "stop")
-  ) {
-    return "cancelled";
-  }
-  if (status === "ok" || status === "completed" || status === "succeeded") {
-    return "completed";
-  }
-  if (status === "timeout") {
-    if (
-      stopReason === "timeout" ||
-      stopReason === "timed_out" ||
-      record.aborted === true ||
-      hasTerminalTimeoutMetadata
-    ) {
-      return "timed_out";
-    }
-    return "accepted";
-  }
-  if (status === "timed_out") {
-    return "timed_out";
-  }
-  if (status === "accepted") {
-    return "accepted";
-  }
-  return "failed";
-}
-
-function readOptionalTimestamp(value: unknown): RunTimestamp | undefined {
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
@@ -213,12 +138,14 @@ function unsupportedGatewayApi(api: string): never {
   throw new Error(`${api} is not supported by the current OpenClaw Gateway yet`);
 }
 
-type ChatProjectionState = "delta" | "final";
+type ChatProjectionState = "delta" | "final" | "error" | "aborted";
 
 type ChatProjection = {
   state: ChatProjectionState;
   payload: Record<string, unknown>;
 };
+
+type RunTerminalSource = { kind: "canonical" } | { kind: "chat"; eventType: OpenClawEvent["type"] };
 
 function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
   const record = asRecord(params);
@@ -252,8 +179,9 @@ function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
     return undefined;
   }
   const payload = asRecord(raw.payload);
-  return payload.state === "delta" || payload.state === "final"
-    ? { state: payload.state, payload }
+  const state = payload.state;
+  return state === "delta" || state === "final" || state === "error" || state === "aborted"
+    ? { state, payload }
     : undefined;
 }
 
@@ -275,14 +203,6 @@ function readChatProjectionText(payload: Record<string, unknown>): string | unde
   return text.length > 0 ? text : undefined;
 }
 
-function readChatProjectionDeltaText(payload: Record<string, unknown>): string | undefined {
-  return typeof payload.deltaText === "string" ? payload.deltaText : undefined;
-}
-
-function readChatProjectionReplace(payload: Record<string, unknown>): boolean {
-  return payload.replace === true;
-}
-
 function isAssistantRunEvent(event: OpenClawEvent): boolean {
   return event.type === "assistant.delta" || event.type === "assistant.message";
 }
@@ -301,23 +221,44 @@ function normalizeChatProjectionEvent(
   projection: ChatProjection,
   previousText: string | undefined,
 ): OpenClawEvent {
-  const text = readChatProjectionText(projection.payload);
-  const deltaText = readChatProjectionDeltaText(projection.payload);
-  const hasPreviousText = previousText !== undefined;
-  const isReplacement = readChatProjectionReplace(projection.payload);
+  const { payload, state } = projection;
+  const text = readChatProjectionText(payload);
+  if (state === "delta") {
+    const deltaText = typeof payload.deltaText === "string" ? payload.deltaText : undefined;
+    return {
+      ...event,
+      type: "assistant.delta",
+      data:
+        text === undefined
+          ? event.data
+          : {
+              text,
+              delta: previousText !== undefined ? (deltaText ?? text) : text,
+              ...(payload.replace === true ? { replace: true } : {}),
+            },
+    };
+  }
+  const error = readNonEmptyString(payload.errorMessage);
+  const stopReason = readNonEmptyString(payload.stopReason);
+  // Gateway timeout aborts publish this mechanical chat frame before lifecycle.
+  const type =
+    state === "final"
+      ? "run.completed"
+      : state === "aborted"
+        ? resolveSdkLifecycleEventType({ aborted: true, status: "cancelled", stopReason }, "end")
+        : payload.errorKind === "timeout"
+          ? "run.timed_out"
+          : "run.failed";
   return {
     ...event,
-    type: projection.state === "delta" ? "assistant.delta" : "run.completed",
-    data:
-      projection.state === "delta"
-        ? text !== undefined
-          ? {
-              text,
-              delta: hasPreviousText ? (deltaText ?? text) : text,
-              ...(isReplacement ? { replace: true } : {}),
-            }
-          : event.data
-        : { phase: "end", ...(text !== undefined ? { outputText: text } : {}) },
+    type,
+    data: {
+      phase: state === "error" ? "error" : "end",
+      ...(state === "aborted" ? { aborted: true } : {}),
+      ...(text !== undefined ? { outputText: text } : {}),
+      ...(error ? { error } : {}),
+      ...(stopReason ? { stopReason } : {}),
+    },
   };
 }
 
@@ -334,9 +275,7 @@ export class OpenClaw {
   readonly environments: EnvironmentsNamespace;
 
   private readonly transport: OpenClawTransport;
-  private readonly normalizedEvents = new EventHub<OpenClawEvent>({
-    replayLimit: MAX_NORMALIZED_REPLAY_EVENTS,
-  });
+  private readonly normalizedEvents = new EventHub<OpenClawEvent>();
   private readonly replayByRunId = new Map<string, OpenClawEvent[]>();
   private connected = false;
   private closed = false;
@@ -394,6 +333,7 @@ export class OpenClaw {
         await this.eventPumpPromise?.catch(() => {});
       } finally {
         this.normalizedEvents.close();
+        this.replayByRunId.clear();
         this.eventPumpPromise = null;
         this.eventPumpReady = null;
         this.connected = false;
@@ -456,7 +396,9 @@ export class OpenClaw {
     this.assertOpen();
     const replayEvents = this.replaySnapshot(runId);
     let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
-    let hasTerminalRunEvent = replayEvents.some(isTerminalRunEvent);
+    let terminalSource: RunTerminalSource | undefined = replayEvents.some(isTerminalRunEvent)
+      ? { kind: "canonical" }
+      : undefined;
     let previousChatProjectionText: string | undefined;
     const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
       const chatProjection = readChatProjection(event);
@@ -475,31 +417,39 @@ export class OpenClaw {
         }
         return runEvent;
       }
-      if (chatProjection?.state === "final") {
-        if (hasTerminalRunEvent) {
+      if (chatProjection) {
+        if (terminalSource) {
           return undefined;
         }
-        hasTerminalRunEvent = true;
-        return normalizeChatProjectionEvent(event, chatProjection, previousChatProjectionText);
+        const runEvent = normalizeChatProjectionEvent(
+          event,
+          chatProjection,
+          previousChatProjectionText,
+        );
+        terminalSource = { kind: "chat", eventType: runEvent.type };
+        return runEvent;
       }
       if (isAssistantRunEvent(event)) {
         hasCanonicalAssistantRunEvent = true;
       }
       if (isTerminalRunEvent(event)) {
-        hasTerminalRunEvent = true;
+        // Abort broadcasts can arrive chat-first. Collapse matching carriers,
+        // while preserving a later authoritative outcome that differs.
+        const duplicate =
+          terminalSource?.kind === "chat" && terminalSource.eventType === event.type;
+        terminalSource = { kind: "canonical" };
+        if (duplicate) {
+          return undefined;
+        }
       }
       return event;
     };
     const matches = (event: OpenClawEvent) => event.runId === runId;
-    const liveSource = this.normalizedEvents.stream(matches, { replay: true });
+    const liveSource = this.normalizedEvents.stream(matches);
+    // Iterator creation subscribes before replay yields, so live events queue behind the snapshot.
     const live = liveSource[Symbol.asyncIterator]();
-    const seen = new Set<string>();
     try {
       for (const event of replayEvents) {
-        if (seen.has(event.id)) {
-          continue;
-        }
-        seen.add(event.id);
         const runEvent = toRunStreamEvent(event);
         if (!runEvent || (filter && !filter(runEvent))) {
           continue;
@@ -511,10 +461,6 @@ export class OpenClaw {
         if (next.done) {
           break;
         }
-        if (seen.has(next.value.id)) {
-          continue;
-        }
-        seen.add(next.value.id);
         const runEvent = toRunStreamEvent(next.value);
         if (!runEvent || (filter && !filter(runEvent))) {
           continue;
@@ -640,6 +586,7 @@ export class Run {
     readonly sessionKey?: string,
   ) {}
 
+  /** Replay this run's retained in-memory tail, then stream live events. */
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
     return this.client.runEvents(this.id, filter);
   }
@@ -655,7 +602,7 @@ export class Run {
       { timeoutMs: null },
     );
     const record = asRecord(raw);
-    const status = runStatusFromWaitPayload(raw);
+    const status = resolveSdkRunWaitStatus(raw);
     const error = readNonEmptyString(record.error)
       ? { message: readNonEmptyString(record.error) ?? "run failed" }
       : undefined;
@@ -664,8 +611,8 @@ export class Run {
       status,
       sessionKey: readNonEmptyString(record.sessionKey) ?? this.sessionKey,
       sessionId: readNonEmptyString(record.sessionId),
-      startedAt: readOptionalTimestamp(record.startedAt),
-      endedAt: readOptionalTimestamp(record.endedAt),
+      startedAt: readSdkRunTimestamp(record.startedAt),
+      endedAt: readSdkRunTimestamp(record.endedAt),
       ...(error ? { error } : {}),
       raw,
     };

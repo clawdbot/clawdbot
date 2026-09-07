@@ -18,6 +18,8 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
@@ -25,12 +27,17 @@ import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { icons } from "./icons.ts";
-import { renderSidebarConnectionStatus } from "./session-row-badges.ts";
+import {
+  renderSidebarConnectionStatus,
+  resolveSidebarConnectionStatus,
+} from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
+import "../styles/settings.css";
 import "./sidebar-build-chip.ts";
 
 type SettingsSidebarProps = {
+  presentation?: "sidebar" | "embed-list" | "embed-page";
   basePath: string;
   activeRouteId: RouteId;
   activePathname?: string;
@@ -38,6 +45,7 @@ type SettingsSidebarProps = {
   activeHash?: string;
   offline: boolean;
   restartPending?: boolean;
+  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
   queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
@@ -51,7 +59,7 @@ type SettingsSidebarProps = {
   canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
   searchQuery: string;
@@ -66,6 +74,7 @@ type SettingsSidebarProps = {
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
   canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 };
 
 type SettingsNavigationGroupView = {
@@ -92,10 +101,11 @@ function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ): readonly SettingsNavigationGroupView[] {
-  const navigationGroups = visibleSettingsNavigationGroups(canAdmin);
+  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
   const visibleBlockMatches = blockMatches.filter((block) =>
-    isSettingsNavigationRouteVisible(block.routeId, canAdmin),
+    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
   );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
@@ -109,7 +119,7 @@ function filterSettingsNavigationGroups(
     ...new Set([
       ...sidebarRoutes,
       ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
-        isSettingsNavigationRouteVisible(routeId, canAdmin),
+        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
       ),
       ...visibleBlockMatches.map((block) => block.routeId),
     ]),
@@ -198,8 +208,9 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId)}</span
+        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
+      ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
   `;
 }
@@ -243,7 +254,46 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
     ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
 }
 
+function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
+  const connectionStatus = resolveSidebarConnectionStatus(props);
+  return html`<header class="native-embed-header">
+    ${
+      props.presentation === "embed-page"
+        ? html`<button
+            class="native-embed-header__back btn btn--ghost"
+            type="button"
+            aria-label=${t("common.back")}
+            @click=${props.onExit}
+          >
+            <span aria-hidden="true">${icons.chevronLeft}</span>${t("common.back")}
+          </button>`
+        : nothing
+    }
+    <h1 class="page-title">
+      ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
+    </h1>
+    ${
+      connectionStatus
+        ? renderSidebarConnectionStatus({
+            kind: connectionStatus,
+            queuedOutboxCount: props.queuedOutboxCount ?? 0,
+            title: props.lastError
+              ? redactLoginFailureError(props.lastError)
+              : t("connection.reconnecting"),
+            onRetry: props.onRetryConnect,
+          })
+        : html`<openclaw-settings-save-indicator
+            .props=${props.saveIndicator}
+          ></openclaw-settings-save-indicator>`
+    }
+  </header>`;
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
+  if (props.presentation === "embed-page") {
+    return renderEmbeddedSettingsHeader(props);
+  }
+  const connectionStatus = resolveSidebarConnectionStatus(props);
   const reconnecting = t("connection.reconnecting");
   const searchBlockMatches =
     props.searchBlockMatches ??
@@ -252,7 +302,42 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
     props.searchQuery,
     searchBlockMatches,
     props.canAdmin !== false,
+    props.nativeDeviceSettings ?? null,
   );
+  const navigation = html` <nav
+    class="settings-sidebar__nav"
+    aria-label=${t("common.settingsSections")}
+    @scroll=${(event: Event) => syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+  >
+    ${
+      navigationGroups.length === 0
+        ? html`<p class="settings-sidebar__empty" role="status">
+            ${t("nav.settingsSearchNoResults")}
+          </p>`
+        : navigationGroups.map(
+            (group) => html`
+              <div class="settings-sidebar__group">
+                ${
+                  group.labelKey
+                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
+                    : nothing
+                }
+                ${group.items.map(
+                  (item) => html`
+                    ${renderItem(props, item.routeId)}
+                    ${item.blocks.map((block) => renderBlockItem(props, block))}
+                  `,
+                )}
+              </div>
+            `,
+          )
+    }
+  </nav>`;
+  if (props.presentation === "embed-list") {
+    return html`<section class="settings-embed-list">
+      ${renderEmbeddedSettingsHeader(props)} ${navigation}
+    </section>`;
+  }
   return html`
     <aside class="settings-sidebar">
       <header class="settings-sidebar__header">
@@ -287,62 +372,41 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             props.onExit();
           }}
         />
-        ${props.searchQuery
-          ? html`
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label=${t("nav.settingsSearchClear")}
-                @click=${(event: MouseEvent) => {
-                  const searchInput = (
-                    event.currentTarget as HTMLElement
-                  ).parentElement?.querySelector<HTMLInputElement>("input");
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        ${
+          props.searchQuery
+            ? html`
+                <button
+                  type="button"
+                  class="settings-sidebar__search-clear"
+                  aria-label=${t("nav.settingsSearchClear")}
+                  @click=${(event: MouseEvent) => {
+                    const searchInput = (
+                      event.currentTarget as HTMLElement
+                    ).parentElement?.querySelector<HTMLInputElement>("input");
+                    props.onSearchQueryChange("");
+                    searchInput?.focus();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
-      <nav
-        class="settings-sidebar__nav"
-        aria-label=${t("common.settingsSections")}
-        @scroll=${(event: Event) =>
-          syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
-      >
-        ${navigationGroups.length === 0
-          ? html`<p class="settings-sidebar__empty" role="status">
-              ${t("nav.settingsSearchNoResults")}
-            </p>`
-          : navigationGroups.map(
-              (group) => html`
-                <div class="settings-sidebar__group">
-                  ${group.labelKey
-                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                    : nothing}
-                  ${group.items.map(
-                    (item) => html`
-                      ${renderItem(props, item.routeId)}
-                      ${item.blocks.map((block) => renderBlockItem(props, block))}
-                    `,
-                  )}
-                </div>
-              `,
-            )}
-      </nav>
+      ${navigation}
       <footer class="settings-sidebar__footer">
-        ${props.restartPending || props.offline
-          ? renderSidebarConnectionStatus({
-              kind: props.restartPending ? "restarting" : "offline",
-              queuedOutboxCount: props.queuedOutboxCount ?? 0,
-              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
-              onRetry: props.onRetryConnect,
-            })
-          : html`<openclaw-settings-save-indicator
-              .props=${props.saveIndicator}
-            ></openclaw-settings-save-indicator>`}
+        ${
+          connectionStatus
+            ? renderSidebarConnectionStatus({
+                kind: connectionStatus,
+                queuedOutboxCount: props.queuedOutboxCount ?? 0,
+                title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+                onRetry: props.onRetryConnect,
+              })
+            : html`<openclaw-settings-save-indicator
+                .props=${props.saveIndicator}
+              ></openclaw-settings-save-indicator>`
+        }
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

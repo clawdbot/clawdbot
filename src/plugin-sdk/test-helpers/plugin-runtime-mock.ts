@@ -687,6 +687,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listVoices: vi.fn<PluginRuntime["tts"]["listVoices"]>(),
     },
     mediaUnderstanding: {
+      resolveAudioInputBudget: vi
+        .fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>()
+        .mockResolvedValue({ enabled: true, maxBytes: 20 * 1024 * 1024 }),
       runFile: vi.fn<PluginRuntime["mediaUnderstanding"]["runFile"]>(),
       describeImageFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFile"]>(),
       describeImageFileWithModel:
@@ -1005,12 +1008,34 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       } as PluginRuntime["tasks"]["flows"],
       managedFlows: taskFlow,
     },
+    modelConfig: {
+      resolveDefaultModelForAgent:
+        vi.fn<PluginRuntime["modelConfig"]["resolveDefaultModelForAgent"]>(),
+      resolveAllowedModelRef: vi.fn<PluginRuntime["modelConfig"]["resolveAllowedModelRef"]>(),
+    },
     modelAuth: {
+      resolveProviderIdForAuth: vi.fn<PluginRuntime["modelAuth"]["resolveProviderIdForAuth"]>(
+        (provider) => provider,
+      ),
+      ensureAuthProfileStore: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStore"]>(() => ({
+        version: 1,
+        profiles: {},
+      })),
+      resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
+        () => [],
+      ),
+      listProfilesForProvider: vi.fn<PluginRuntime["modelAuth"]["listProfilesForProvider"]>(
+        () => [],
+      ),
+      isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
+        () => false,
+      ),
       getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
       getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),
     },
     subagent: {
+      complete: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

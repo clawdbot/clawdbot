@@ -112,6 +112,11 @@ export async function createTelegramQaTransportAdapter(
     updateCount: 0,
   };
   const accountId = options.sutAccountId?.trim() || "sut";
+  const directMessageOnly = options.transportPolicy?.directMessageOnly === true;
+  const agentDeliveryTarget = directMessageOnly
+    ? credentialLease.payload.testerUserId
+    : credentialLease.payload.groupId;
+  let nativeChatId = Number(credentialLease.payload.groupId);
   let logicalConversationId = credentialLease.payload.groupId;
   let logicalConversationKind: "channel" | "direct" | "group" = "channel";
   const nativeMessageIds = new Map<string, number>();
@@ -133,7 +138,7 @@ export async function createTelegramQaTransportAdapter(
     }
     const outbound = await context.messages.addOutboundMessage({
       accountId,
-      to: `${logicalConversationKind}:${logicalConversationId}`,
+      to: `${logicalConversationKind === "direct" ? "dm" : logicalConversationKind}:${logicalConversationId}`,
       senderId: String(update.senderId),
       senderName: update.senderUsername,
       text: update.text,
@@ -148,7 +153,7 @@ export async function createTelegramQaTransportAdapter(
     observerState.updateCount += 1;
     observerState.relevantUpdateKinds.add(update.kind);
     if (
-      update.chatId !== Number(credentialLease.payload.groupId) ||
+      update.chatId !== nativeChatId ||
       update.senderId !== Number(credentialLease.payload.sutBotId)
     ) {
       observerState.filteredCount += 1;
@@ -168,12 +173,13 @@ export async function createTelegramQaTransportAdapter(
     apiProxy = await skillRuntime.startApiProxy(leaseHealth);
     await apiProxy.drainUpdates(restored.sutToken);
     userbot = await TelegramUserbotDriver.start({
-      chatId: restored.groupId,
+      chatId: directMessageOnly ? `@${credentialLease.payload.sutUsername}` : restored.groupId,
       driverEnv: restored.driverEnv,
       leaseHealth,
       userDriverPath: skillRuntime.userDriverPath,
       onUpdate: observeUpdate,
     });
+    nativeChatId = userbot.chatId;
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {
@@ -275,6 +281,7 @@ export async function createTelegramQaTransportAdapter(
     createGatewayConfig: () =>
       buildTelegramQaConfig({} as OpenClawConfig, {
         apiRoot: activeApiProxy.apiRoot,
+        directMessageOnly,
         groupId: credentialLease.payload.groupId,
         sutToken: credentialLease.payload.sutToken,
         testerUserId: credentialLease.payload.testerUserId,
@@ -287,9 +294,9 @@ export async function createTelegramQaTransportAdapter(
       }),
     buildAgentDelivery: () => ({
       channel: "telegram",
-      to: credentialLease.payload.groupId,
+      to: agentDeliveryTarget,
       replyChannel: "telegram",
-      replyTo: credentialLease.payload.groupId,
+      replyTo: agentDeliveryTarget,
     }),
     async handleAction() {
       throw new Error("Telegram live QA adapter does not implement transport actions");

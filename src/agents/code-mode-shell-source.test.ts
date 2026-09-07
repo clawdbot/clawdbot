@@ -43,6 +43,9 @@ describe("isShellLikeCodeModeSource", () => {
     'GREETING="hello world" npm test',
     "GREETING='hello world' ./gradlew test",
     "EMPTY= npm test",
+    String.raw`A="\\" ls "file" argument`,
+    String.raw`A="\\" B='a b' ls "file" argument`,
+    "A=\\😀\r\n  ls -1",
     "// inspect the workspace\npwd",
     "/* inspect the workspace */ pwd;",
     "// use a clean environment\nNODE_ENV=test npm test",
@@ -204,6 +207,22 @@ describe("isShellLikeCodeModeSource", () => {
     },
   ])("preserves transpiled command-like TypeScript: $source", ({ source, preparedSource }) => {
     expect(isShellLikeCodeModeSource(source, preparedSource)).toBe(false);
+  });
+
+  it.each([
+    ["repeated quotes", `A=${'""'.repeat(22)}`],
+    ["escaped quotes", `A="${'\\"'.repeat(32_000)}`],
+  ])("classifies an unfinished assignment with %s promptly", (_name, source) => {
+    const started = performance.now();
+    expect(isShellLikeCodeModeSource(source)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("classifies a long chain of assignments without rescanning each suffix", () => {
+    const source = `${"A=x ".repeat(32_000)}ls -1`;
+    const started = performance.now();
+    expect(isShellLikeCodeModeSource(source)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("explains how to execute a real catalog tool without retrying shell source", () => {

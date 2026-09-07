@@ -7,6 +7,7 @@ import {
   installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
+import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
@@ -32,6 +34,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
+import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -51,10 +54,14 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
+import { bindHarnessContextMedia } from "./context-media.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
+  registerAgentHarnessBeforeToolCallRetention,
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
+  resolveAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -65,24 +72,6 @@ type AgentHarnessHostApprovalResult = NonNullable<
 >;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
-
-type RetainedBeforeToolCallRunner = Readonly<{
-  assertActive: () => void;
-  release: () => void;
-  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"];
-}>;
-
-const retainedBeforeToolCallRunners = new WeakMap<
-  AgentHarnessHostCapabilities["runBeforeToolCall"],
-  () => RetainedBeforeToolCallRunner | undefined
->();
-
-/** Internal core-only lease for an already-created host policy callback. */
-export function retainBeforeToolCallForNativeHookRelay(
-  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"],
-): RetainedBeforeToolCallRunner | undefined {
-  return retainedBeforeToolCallRunners.get(runBeforeToolCall)?.();
-}
 
 function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
   if (typeof value !== "string") {
@@ -181,24 +170,6 @@ function gateBoundTool(
   return gated;
 }
 
-function createBoundCallerIdentity(
-  params: AgentHarnessHostAttempt,
-  receiptAuthority: () => void,
-  signal: AbortSignal,
-) {
-  return createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: params.admittedRunContext,
-    receiptAuthority,
-    approvalSignals: [signal, ...(params.abortSignal ? [params.abortSignal] : [])],
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    turnSourceChannel: params.messageChannel ?? params.messageProvider,
-    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
-    turnSourceAccountId: params.agentAccountId,
-    turnSourceThreadId: params.currentThreadTs,
-  });
-}
-
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
@@ -210,6 +181,8 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const workSignal = getAsyncWorkSignal();
+  const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
   const localProcessEnv = installationTargetEnv(installationTarget);
   const { sessionKey, onAgentEvent } = attempt;
@@ -233,11 +206,25 @@ export function createAgentHarnessHostCapabilities(params: {
     inheritedCaller?.operationalRunInstance === operationalRunInstance
       ? inheritedCaller
       : undefined;
-  const callerIdentity = createBoundCallerIdentity(
-    attempt,
-    assertActive,
-    capabilityAbortController.signal,
-  );
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attempt.admittedRunContext,
+    receiptAuthority: assertActive,
+    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
+    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
+    turnSourceAccountId: attempt.agentAccountId,
+    turnSourceThreadId: attempt.currentThreadTs,
+  });
+  const inactiveError = (message: string) => {
+    // Gateway closure can precede the run's abort marker. Keep its captured
+    // reason without replacing an earlier user cancellation or deadline.
+    throwAgentRunRestartAbortReason(
+      attemptSignal?.aborted ? attemptSignal.reason : workSignal?.reason,
+    );
+    return new Error(message);
+  };
   function assertActive() {
     if (
       !active ||
@@ -246,7 +233,7 @@ export function createAgentHarnessHostCapabilities(params: {
       (callerIdentity?.gatewayContextResolver !== undefined &&
         callerIdentity.gatewayContextResolver() === undefined)
     ) {
-      throw new Error("agent harness host capability is no longer active");
+      throw inactiveError("agent harness host capability is no longer active");
     }
     // The captured worker/source claim owns every host capability use, including
     // native configuration writes that do not pass through prompt annotation.
@@ -280,6 +267,7 @@ export function createAgentHarnessHostCapabilities(params: {
       : {}),
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
+  const prepareContextMedia = bindHarnessContextMedia({ attempt, config, assertActive });
   const recorder = attempt.userTurnTranscriptRecorder;
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
   const annotateCurrentUserTurn =
@@ -410,7 +398,7 @@ export function createAgentHarnessHostCapabilities(params: {
       async () => await runBeforeToolCallWithAssertion(assertActive, request),
       request.signal,
     );
-  retainedBeforeToolCallRunners.set(runBeforeToolCall, () => {
+  registerAgentHarnessBeforeToolCallRetention(runBeforeToolCall, () => {
     const recovery = retainAdmittedRunBeforeToolCallRecovery(attempt.admittedRunContext);
     if (!recovery) {
       return undefined;
@@ -422,7 +410,7 @@ export function createAgentHarnessHostCapabilities(params: {
         (callerIdentity?.gatewayContextResolver !== undefined &&
           callerIdentity.gatewayContextResolver() === undefined)
       ) {
-        throw new Error("agent harness retained host policy is no longer active");
+        throw inactiveError("agent harness retained host policy is no longer active");
       }
       recovery.assertActive();
     };
@@ -487,6 +475,7 @@ export function createAgentHarnessHostCapabilities(params: {
       }
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
+    ...(prepareContextMedia ? { prepareContextMedia } : {}),
     ...(trajectoryRecorder
       ? {
           trajectory: Object.freeze({
@@ -517,8 +506,10 @@ export function createAgentHarnessHostCapabilities(params: {
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
       // must not replay a retained core result into this attempt's authority set.
       const tools = bindTools(
-        withInstallationTarget(installationTarget, () =>
-          createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
+          withInstallationTarget(installationTarget, () =>
+            createOpenClawCodingTools({ ...options, operationalRunInstance }),
+          ),
         ),
         bindingOptions,
         observeCoreTtsToolResult,
@@ -555,36 +546,54 @@ export function createAgentHarnessHostCapabilities(params: {
     requestApproval: async (request) => {
       assertActive();
       request.signal?.throwIfAborted();
-      const result = await withCaller(
-        async () =>
-          await withGatewayToolApprovalOwner(
-            params.pluginId,
-            async () =>
-              await callGatewayTool(
-                "plugin.approval.request",
-                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-                {
-                  title: request.title,
-                  description: request.description,
-                  severity: request.severity,
-                  toolName: request.toolName,
-                  toolCallId: request.toolCallId,
-                  timeoutMs: request.timeoutMs,
-                  twoPhase: true,
-                  ...(request.allowedDecisions
-                    ? { allowedDecisions: request.allowedDecisions }
-                    : {}),
-                },
-                { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
-              ),
-          ),
-        request.signal,
-      );
-      // Gateway approval calls may outlive their owning attempt. A late
-      // request result must not escape after exact authority has closed.
-      assertActive();
-      request.signal?.throwIfAborted();
-      return result;
+      const releaseMcpBinding =
+        request.mcpTool && request.toolCallId && request.isMcpToolApprovalActive && attempt.agentId
+          ? registerMcpToolApprovalBinding({
+              authority: delegatedAuthority,
+              agentId: attempt.agentId,
+              toolCallId: request.toolCallId,
+              ...request.mcpTool,
+              isActive: () => {
+                assertActive();
+                return !request.signal?.aborted && request.isMcpToolApprovalActive!();
+              },
+            })
+          : undefined;
+      try {
+        const result = await withCaller(
+          async () =>
+            await withGatewayToolApprovalOwner(
+              params.pluginId,
+              async () =>
+                await callGatewayTool(
+                  "plugin.approval.request",
+                  { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                  {
+                    title: request.title,
+                    description: request.description,
+                    severity: request.severity,
+                    toolName: request.toolName,
+                    toolCallId: request.toolCallId,
+                    ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
+                    timeoutMs: request.timeoutMs,
+                    twoPhase: true,
+                    ...(request.allowedDecisions
+                      ? { allowedDecisions: request.allowedDecisions }
+                      : {}),
+                  },
+                  { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
+                ),
+            ),
+          request.signal,
+        );
+        // Gateway approval calls may outlive their owning attempt. A late
+        // request result must not escape after exact authority has closed.
+        assertActive();
+        request.signal?.throwIfAborted();
+        return result;
+      } finally {
+        releaseMcpBinding?.();
+      }
     },
     waitForApproval: async (request) => {
       assertActive();

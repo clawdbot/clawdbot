@@ -293,7 +293,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps Tool Search controls off for lean message-tool-only delivery", async () => {
+  it.each([false, true])("keeps lean replies direct (private: %s)", async (privateReply) => {
     hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
         name: "message",
@@ -320,6 +320,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         disableTools: false,
         sourceReplyDeliveryMode: "message_tool_only",
+        toolsAllow: privateReply ? ["message"] : undefined,
         config: {
           agents: {
             defaults: {
@@ -338,7 +339,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       0,
       "createOpenClawCodingTools options",
     );
-    expect(options.includeToolSearchControls).toBe(false);
+    expect(options.includeToolSearchControls).toBe(!privateReply);
     const sessionOptions = mockParams(
       hoisted.createAgentSessionMock,
       0,
@@ -692,6 +693,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -700,13 +702,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       trajectory: true,
       attemptOverrides: {
-        prompt: [
-          "visible ask",
-          "",
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "secret runtime context",
-          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        ].join("\n"),
+        prompt: "visible ask",
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "secret runtime context" }],
         transcriptPrompt: "visible ask",
       },
       sessionPrompt: async (session, prompt) => {
@@ -1097,71 +1094,74 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
-    const runBeforePromptBuild = vi.fn(async () => ({
-      prependContext: "dynamic hook context",
-      appendContext: "dynamic hook tail",
-    }));
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
-      runBeforePromptBuild,
-    });
-    const seen: {
-      modelMessages?: unknown[];
-      preprocessedModelMessages?: unknown[];
-      prompt?: string;
-      messages?: unknown[];
-      systemPrompt?: string;
-    } = {};
+  it.each([undefined, "visible ask"])(
+    "keeps hook context out of transcripts with override %s",
+    async (transcriptPrompt) => {
+      const runBeforePromptBuild = vi.fn(async () => ({
+        prependContext: "dynamic hook context",
+        appendContext: "dynamic hook tail",
+      }));
+      hoisted.getGlobalHookRunnerMock.mockReturnValue({
+        hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+        runBeforePromptBuild,
+      });
+      const seen: {
+        modelMessages?: unknown[];
+        preprocessedModelMessages?: unknown[];
+        prompt?: string;
+        messages?: unknown[];
+        systemPrompt?: string;
+      } = {};
 
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        prompt: "visible ask",
-        transcriptPrompt: "visible ask",
-      },
-      sessionPrompt: async (session, prompt) => {
-        seen.prompt = prompt;
-        seen.messages = [...session.messages];
-        seen.systemPrompt = session.agent.state.systemPrompt;
-        const transformContext = (
-          session.agent as {
-            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
-          }
-        ).transformContext;
-        seen.modelMessages = await transformContext?.([
-          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
-        ]);
-        seen.preprocessedModelMessages = await transformContext?.([
-          {
-            role: "user",
-            content: [{ type: "text", text: `session preprocessed\n\n${prompt}` }],
-            timestamp: 1,
-          },
-        ]);
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
-    });
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          prompt: "visible ask",
+          transcriptPrompt,
+        },
+        sessionPrompt: async (session, prompt) => {
+          seen.prompt = prompt;
+          seen.messages = [...session.messages];
+          seen.systemPrompt = session.agent.state.systemPrompt;
+          const transformContext = (
+            session.agent as {
+              transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+            }
+          ).transformContext;
+          seen.modelMessages = await transformContext?.([
+            { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+          ]);
+          seen.preprocessedModelMessages = await transformContext?.([
+            {
+              role: "user",
+              content: [{ type: "text", text: `session preprocessed\n\n${prompt}` }],
+              timestamp: 1,
+            },
+          ]);
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        },
+      });
 
-    expect(seen.prompt).toBe("visible ask");
-    expect(result.finalPromptText).toBe("visible ask");
-    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
-    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
-    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook context");
-    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("session preprocessed");
-    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook tail");
-    expect(seen.systemPrompt).not.toContain("dynamic hook context");
-    expect(seen.systemPrompt).not.toContain("dynamic hook tail");
-    expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
-    expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook tail");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
-  });
+      expect(seen.prompt).toBe("visible ask");
+      expect(result.finalPromptText).toBe("visible ask");
+      expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+      expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
+      expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook context");
+      expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("session preprocessed");
+      expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook tail");
+      expect(seen.systemPrompt).not.toContain("dynamic hook context");
+      expect(seen.systemPrompt).not.toContain("dynamic hook tail");
+      expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
+      expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook tail");
+      expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
+      expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+    },
+  );
 
   it("keeps hook context model-only when orphan repair merges the prompt", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({
@@ -1186,6 +1186,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+        },
         prompt: "visible ask",
         suppressNextUserMessagePersistence: true,
         onUserMessagePersistenceInvalidated,
@@ -1218,11 +1222,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(
       hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
-    ).toHaveBeenCalledOnce();
-    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {
@@ -1526,6 +1530,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
       parentId: "parent-leaf",
@@ -1539,13 +1544,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        prompt: [
-          "visible ask",
-          "",
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "secret runtime context",
-          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        ].join("\n"),
+        prompt: "visible ask",
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "secret runtime context" }],
         transcriptPrompt: "visible ask",
       },
       sessionPrompt: async (session, prompt) => {
@@ -1752,6 +1752,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
     let seenMessages: unknown[] | undefined;
 
@@ -1761,13 +1762,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       trajectory: true,
       attemptOverrides: {
-        prompt: [
-          "what does this mean?",
-          "",
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "secret runtime context",
-          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        ].join("\n"),
+        prompt: "what does this mean?",
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "secret runtime context" }],
         transcriptPrompt: "what does this mean?",
         currentInboundContext: {
           text: [
@@ -1825,6 +1821,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps hook prompt context visible while hiding inter-session provenance", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     const recalledMemoryContext = [
       "<relevant-memories>",
       "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
@@ -1850,13 +1847,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        prompt: [
-          "visible ask",
-          "",
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-          "secret runtime context",
-          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        ].join("\n"),
+        prompt: "visible ask",
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "secret runtime context" }],
         transcriptPrompt: "visible ask",
         inputProvenance: {
           kind: "inter_session",
@@ -1914,6 +1906,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
     let seenModelMessages: unknown[] | undefined;
     const runBeforePromptBuild = vi.fn(async () => ({
@@ -1932,6 +1925,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       trajectory: true,
       attemptOverrides: {
         prompt: "internal heartbeat event",
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "internal heartbeat event" },
+        ],
         transcriptPrompt: "",
       },
       sessionPrompt: async (session, prompt) => {
@@ -1973,6 +1969,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps runtime-only context hidden when orphan repair merges an empty transcript", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
     let seenMessages: unknown[] | undefined;
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
@@ -1989,6 +1986,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       trajectory: true,
       attemptOverrides: {
         prompt: "internal heartbeat event",
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "internal heartbeat event" },
+        ],
         transcriptPrompt: "",
       },
       sessionPrompt: async (session, prompt) => {
@@ -2018,6 +2018,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps current inbound context visible on runtime-only turns", async () => {
+    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
 
     const result = await createContextEngineAttemptRunner({
@@ -2027,6 +2028,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       trajectory: true,
       attemptOverrides: {
         prompt: "runtime bare mention event",
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "runtime bare mention event" },
+        ],
         transcriptPrompt: "",
         currentInboundContext: {
           text: [
@@ -2058,6 +2062,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("Hello from the replied message");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain(
+      "Reply target of current user message:",
+    );
   });
 
   it("submits suppressed room event context as the model prompt", async () => {
@@ -2814,7 +2822,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
-  it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
+  it("recovers when the runtime emits the mid-turn precheck as an assistant error", async () => {
     hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
       const params = args[0] as ToolResultGuardInstallParams;
       params.midTurnPrecheck?.onMidTurnPrecheck?.({

@@ -81,10 +81,13 @@ describe("Control UI retained integrity", () => {
     "refuses source %s before publication",
     async (fault) => {
       await withRetentionFixture(async ({ root, cache }) => {
-        const build = await writeRetentionBuild(path.join(root, "build"), "source");
+        const build = await writeRetentionBuild(path.join(root, "build"), "source", {
+          size: fault === "inode-swap" ? 128 * 1024 : undefined,
+        });
         const source = path.join(build.root, build.assetPath);
         const outside = path.join(root, "outside");
         await fs.cp(build.root, outside, { recursive: true });
+        const outsideContents = await fs.readFile(path.join(outside, build.assetPath));
         if (fault === "leaf-symlink") {
           await fs.rm(source);
           await fs.symlink(path.join(outside, build.assetPath), source);
@@ -95,8 +98,25 @@ describe("Control UI retained integrity", () => {
           const open = fs.open;
           vi.spyOn(fs, "open").mockImplementation(async (...args) => {
             const handle = await open(...args);
-            await fs.rename(source, `${source}.old`);
-            await fs.copyFile(path.join(outside, build.assetPath), source);
+            if (args[0] !== source) {
+              return handle;
+            }
+            const read = handle.read.bind(handle);
+            let replaced = false;
+            vi.spyOn(handle, "read").mockImplementation((async (
+              buffer: Buffer,
+              offset: number,
+              length: number,
+              position: number | null,
+            ) => {
+              const result = await read(buffer, offset, length, position);
+              if (!replaced && result.bytesRead > 0) {
+                replaced = true;
+                await fs.rename(source, `${source}.old`);
+                await fs.copyFile(path.join(outside, build.assetPath), source);
+              }
+              return result;
+            }) as typeof handle.read);
             return handle;
           });
         }
@@ -106,8 +126,47 @@ describe("Control UI retained integrity", () => {
         );
         expect(owner.resolveAsset(build.assetPath)).toBeNull();
         expect(await fs.readdir(cache)).toEqual([]);
-        expect(await fs.readFile(path.join(outside, build.assetPath), "utf8")).toContain("source");
+        expect(await fs.readFile(path.join(outside, build.assetPath))).toEqual(outsideContents);
       });
     },
   );
+
+  it("rejects a cached asset replaced after its handle opens", async () => {
+    await withRetentionFixture(async ({ root, cache, seed }) => {
+      const cached = await seed("cached", { size: 128 * 1024 });
+      const asset = path.join(cached.target, cached.assetPath);
+      const current = await writeRetentionBuild(path.join(root, "current"), "current");
+      const open = fs.open;
+      let replaced = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] !== asset) {
+          return handle;
+        }
+        const read = handle.read.bind(handle);
+        vi.spyOn(handle, "read").mockImplementation((async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          const result = await read(buffer, offset, length, position);
+          if (!replaced && result.bytesRead > 0) {
+            replaced = true;
+            await fs.rename(asset, `${asset}.old`);
+            await fs.writeFile(asset, Buffer.alloc(cached.manifest.assets[0]!.size, 120));
+          }
+          return result;
+        }) as typeof handle.read);
+        return handle;
+      });
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+      expect(replaced).toBe(true);
+      expect(owner.resolveAsset(cached.assetPath)).toBeNull();
+      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      await expect(fs.access(cached.target)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.readdir(cache)).some((entry) => entry.startsWith(".staging-"))).toBe(false);
+    });
+  });
 });

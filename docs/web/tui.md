@@ -51,6 +51,7 @@ openclaw tui --local
 
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
+- On terminals with hyperlink support, Markdown links open their authored destination, including wrapped links and URL-shaped labels.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
 - Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
@@ -83,6 +84,8 @@ openclaw tui --local
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
+Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter; press again to close it.
+
 ## Keyboard shortcuts
 
 - Enter: send message
@@ -98,17 +101,21 @@ openclaw tui --local
 
 ## Slash commands
 
+Multiline input follows the normal chat path instead of the TUI's local command
+dispatcher. Pasting `/exit` with a trailing newline keeps the TUI open. Shared
+chat commands such as `/stop` and `/btw` retain their normal meaning.
+
 Core:
 
 - `/help`
 - `/status` (Gateway-forwarded; shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
+- `/gateway-status` (alias `/gwstatus`; shows Gateway version, channel configuration summaries, and sessions directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`; `default` clears the session override)
 
 Gateway-connected model updates honor the optional
-[`agents.defaults.modelSelectionScope`](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+[`agents.defaults.modelSelectionScope`](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)
 setting. When it is unset, they retain their existing configured-default behavior
 for admins. The embedded local TUI stays session-only regardless of this setting.
 

@@ -41,10 +41,10 @@ const supportsNoLazyFetch =
   spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
 
 function createFixtureGit(repo: string) {
-  const git = (args: string[], input?: string, cwd = repo) =>
+  const git = (args: string[], input?: string, cwd = repo, env?: NodeJS.ProcessEnv) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
-      env: gitEnv,
+      env: { ...gitEnv, ...env },
       input,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -54,8 +54,25 @@ function createFixtureGit(repo: string) {
     const b = git(["hash-object", "-w", "--stdin"], sibling);
     return git(["mktree"], `100644 blob ${a}\towner.txt\n100644 blob ${b}\tsibling.txt\n`);
   };
-  const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
-    git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
+  const commit = (
+    contents: string,
+    parents: string[],
+    message = "Fixture commit\n",
+    author?: { name: string; email: string },
+  ) =>
+    git(
+      ["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])],
+      message,
+      repo,
+      author
+        ? {
+            GIT_AUTHOR_NAME: author.name,
+            GIT_AUTHOR_EMAIL: author.email,
+            GIT_COMMITTER_NAME: author.name,
+            GIT_COMMITTER_EMAIL: author.email,
+          }
+        : undefined,
+    );
   return { git, tree, commit };
 }
 
@@ -78,6 +95,7 @@ function fixture(
   sourceMessage?: string,
   sourceVersions: Array<[string, string?]> = [["after\n"]],
   promisor = false,
+  sourceAuthor?: { name: string; email: string },
 ) {
   const root = realpathSync(temps.make("pr-merge-outcome-"));
   const remote = join(root, "remote.git");
@@ -96,7 +114,7 @@ function fixture(
   const sourceCommits: string[] = [];
   let head = base;
   for (const [owner, sibling] of sourceVersions) {
-    head = commit(tree(owner, sibling), [head], sourceMessage);
+    head = commit(tree(owner, sibling), [head], sourceMessage, sourceAuthor);
     sourceCommits.push(head);
   }
   git(["update-ref", "refs/heads/topic", head]);
@@ -183,6 +201,8 @@ function fixture(
     calls: [] as string[][],
     mutations: 0,
     mergeBody: null as string | null,
+    previewBody: "Fixture body",
+    tamperMergeBody: false,
     issueComments: [
       {
         id: 1,
@@ -211,7 +231,7 @@ function fixture(
     audit: false,
     gates: "pass",
     ciExit: 0,
-    duringChecks: null as null | { head?: string; artifact?: string },
+    duringChecks: null as null | { head?: string; artifact?: string; bodyPath?: string },
     review: true,
     ready: true,
     cleanup: "",
@@ -264,6 +284,7 @@ if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("user")) out("relay-reader");
 else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(args.includes("--include") ? "HTTP/2.0 200 OK\\n\\n" + JSON.stringify({data:{viewer:{login:s.operator}}}) : s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {
+  if(s.duringChecks?.bodyPath) fs.writeFileSync(s.duringChecks.bodyPath,"Changed later");
   if(s.duringChecks?.head) s.pr.headRefOid=s.duringChecks.head;
   if(s.duringChecks?.artifact) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact,"\\n# changed during checks\\n");
   out([{name:"CI",bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
@@ -316,7 +337,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   s.reads++;save();
   if(s.unavailable) fail("metadata unavailable");
   if(s.invalid) {out({data:{repository:{}}});process.exit(0);}
-  if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:"Fixture body"}}}});}
+  if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:s.previewBody}}}});}
   else {
     s.observationReads++;
     const step=s.observations.shift();
@@ -348,6 +369,10 @@ else if(args[0]==="pr"&&args[1]==="view") {
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
+    if(s.tamperMergeBody) {
+      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
+      for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
+    }
     if(s.issueCommentReads===s.issueCommentsErrorAt) fail("comment API unavailable");
     if(s.issueCommentReads>1&&s.issueCommentsAfterFirst) s.issueComments=s.issueCommentsAfterFirst;
     save();
@@ -408,7 +433,7 @@ git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
-merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}"
+merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}"
 `,
   );
   chmodSync(shell, 0o755);
@@ -431,6 +456,7 @@ merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}"
     method = "squash",
     recoveryOid = "",
     replacementHead = "",
+    bodyPath = "",
   ) => {
     const result = spawnSync(
       process.execPath,
@@ -441,6 +467,7 @@ merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}"
         String(auto),
         recoveryOid,
         replacementHead,
+        bodyPath,
       ],
       { cwd, env: { ...env, OPENCLAW_PR_MERGE_METHOD: method }, encoding: "utf8", timeout: 20_000 },
     );
@@ -574,6 +601,81 @@ function expectNoProbeFetch(trace: ReturnType<ReturnType<typeof fixture>["trace"
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("snapshots corrected squash prose once and retains source and server coauthors", () => {
+    const source = "Co-authored-by: Source <source@example.com>";
+    const server = "Co-authored-by: Server <server@example.com>";
+    const f = fixture(`Repair\n\n${source}`, undefined, false, {
+      name: "Server",
+      email: "server@example.com",
+    });
+    const body = join(f.repo, "operator body.md");
+    writeFileSync(body, "Partial repair. Related: #42.\n");
+    f.save({
+      ...f.state(),
+      previewBody: `Fixes #42\n\n${server}`,
+      duringChecks: { bodyPath: body },
+    });
+    const result = f.run(false, f.repo, "squash", "", "", body);
+    expect(result.status, result.output).toBe(0);
+    expect(readFileSync(body, "utf8")).toBe("Changed later");
+    expect(f.state().mergeBody).toBe(`Partial repair. Related: #42.\n\n${server}\n${source}\n`);
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().calls.find((call) => call[1] === "pr" && call[2] === "merge")).toContain(
+      f.head,
+    );
+  });
+
+  it.each(["tamper", "head", "queue", "merge", "review"])(
+    "keeps explicit body admission closed for %s",
+    (fault) => {
+      const f = fixture();
+      const body = join(f.repo, "body.md");
+      writeFileSync(body, "Corrected prose");
+      const state = f.state();
+      if (fault === "tamper") {
+        state.tamperMergeBody = true;
+      }
+      if (fault === "head") {
+        state.duringChecks = { head: "a".repeat(40) };
+      }
+      if (fault === "queue") {
+        state.observations = [{ pr: { isMergeQueueEnabled: true } }];
+      }
+      if (fault === "review") {
+        state.ready = false;
+      }
+      f.save(state);
+      const result = f.run(false, f.repo, fault === "merge" ? "merge" : "squash", "", "", body);
+      expect(result.status, result.output).not.toBe(0);
+      expect(f.state().mutations).toBe(0);
+      expect(() => f.git(["rev-parse", "--verify", outcomeRef])).toThrow();
+    },
+  );
+
+  it("reconciles uncertain dispatch without the body and accepts a body only for explicit recovery", () => {
+    const f = fixture();
+    const body = join(f.repo, "body.md");
+    writeFileSync(body, "First message");
+    f.save({ ...f.state(), mode: "unapplied" });
+    const first = f.run(false, f.repo, "squash", "", "", body);
+    expect(first.status, first.output).not.toBe(0);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    rmSync(body);
+    f.recover();
+    const resumed = f.run(false, f.repo, "squash", "", "", body);
+    expect(resumed.status, resumed.output).not.toBe(0);
+    expect(resumed.output).not.toContain("Cannot prepare merge body");
+    expect(f.state().mutations).toBe(1);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    f.recover();
+    writeFileSync(body, "Corrected retry message");
+    f.save({ ...f.state(), mode: "success" });
+    const recovered = f.run(false, f.repo, "squash", previous, "", body);
+    expect(recovered.status, recovered.output).toBe(0);
+    expect(f.state().mergeBody).toBe("Corrected retry message");
+    expect(f.state().mutations).toBe(2);
+  });
+
   it.each([
     { method: "squash", queue: false },
     { method: "merge", queue: false },
@@ -1345,7 +1447,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = f.run();
     expect(run.status, run.output).toBe(0);
     expect(f.record().phase).toBe("complete");
-    expect(f.state().reads).toBe(5);
+    expect(f.state().observationReads).toBe(5);
     expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);

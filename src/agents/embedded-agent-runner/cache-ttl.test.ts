@@ -91,7 +91,7 @@ describe("isCacheTtlEligibleProvider", () => {
 });
 
 describe("readLastCacheTtlTimestamp", () => {
-  it("returns the latest matching timestamp for the active provider/model", () => {
+  it("returns the latest matching timestamp while ignoring projection metadata", () => {
     // Replay only reuses cache TTL entries scoped to the current model target;
     // stale entries for other providers must not reset pruning clocks.
     const sessionManager = {
@@ -103,6 +103,8 @@ describe("readLastCacheTtlTimestamp", () => {
             timestamp: 1_700_000_000_000,
             provider: "anthropic",
             modelId: "claude-sonnet-4-5",
+            prunedToolResults: [{ key: "tool:old:42", mode: "hard" }],
+            ambiguousToolResultBaseKeys: [],
           },
         },
         {

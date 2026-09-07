@@ -7,6 +7,28 @@ import { discoverLlamaServerProvider, prepareLlamaServerDynamicModel } from "./p
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
+const catalogSdk = vi.hoisted((): { available: boolean; calls: number; failure?: Error } => ({
+  available: true,
+  calls: 0,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>();
+  const run = (params: Parameters<typeof actual.runLiveProviderCatalog>[0]) => {
+    catalogSdk.calls += 1;
+    if (catalogSdk.failure) {
+      throw catalogSdk.failure;
+    }
+    return actual.runLiveProviderCatalog(params);
+  };
+  return {
+    ...actual,
+    get runLiveProviderCatalog() {
+      return catalogSdk.available ? run : undefined;
+    },
+  };
+});
 
 vi.mock("./discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discovery.js")>()),
@@ -40,8 +62,8 @@ function success() {
   return {
     kind: "success" as const,
     endpoint: {
-      origin: "http://localhost:8080",
-      inferenceBaseUrl: "http://localhost:8080/v1",
+      origin: "http://127.0.0.1:8080",
+      inferenceBaseUrl: "http://127.0.0.1:8080/v1",
     },
     models: [model()],
   };
@@ -81,66 +103,126 @@ describe("llama-server provider discovery", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
+    catalogSdk.available = true;
+    catalogSdk.calls = 0;
+    catalogSdk.failure = undefined;
   });
 
-  it("builds the legacy runtime provider from live discovery", async () => {
-    discoverMock.mockResolvedValue(success());
-
-    await expect(discoverLlamaServerProvider(catalogContext())).resolves.toMatchObject({
-      provider: {
-        baseUrl: "http://localhost:8080/v1",
-        api: "openai-completions",
-        models: [expect.objectContaining({ id: "org/model:Q4" })],
-      },
+  describe.each([true, false])("catalog SDK helper available=%s", (available) => {
+    beforeEach(() => {
+      catalogSdk.available = available;
     });
-  });
 
-  it("prefers configured Authorization over ambient API-key discovery auth", async () => {
-    discoverMock.mockResolvedValue(success());
-    const ctx = catalogContext();
-    ctx.config.models = {
-      providers: {
-        "llama-cpp": {
-          baseUrl: "http://localhost:8080/v1",
-          headers: { Authorization: "Bearer proxy-key" },
-          models: [],
+    it("publishes live discovery with the profile that supplied its credential", async () => {
+      discoverMock.mockResolvedValue(success());
+      const ctx = catalogContext();
+      ctx.resolveProviderApiKey = () => ({
+        apiKey: "LLAMA_SERVER_API_KEY",
+        discoveryApiKey: "profile-key",
+        profileId: "llama-cpp:default",
+      });
+
+      await expect(discoverLlamaServerProvider(ctx)).resolves.toMatchObject({
+        provider: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          api: "openai-completions",
+          models: [expect.objectContaining({ id: "org/model:Q4" })],
         },
+        outcomes: [{ provider: "llama-cpp", profileId: "llama-cpp:default", status: "ready" }],
+      });
+      expect(discoverMock).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: "profile-key", cacheTtlMs: 0 }),
+      );
+      expect(catalogSdk.calls).toBe(available ? 1 : 0);
+    });
+
+    it("prefers configured Authorization over ambient API-key discovery auth", async () => {
+      discoverMock.mockResolvedValue(success());
+      const ctx = catalogContext();
+      ctx.config.models = {
+        providers: {
+          "llama-cpp": {
+            baseUrl: "http://localhost:8080/v1",
+            headers: { Authorization: "Bearer proxy-key" },
+            models: [],
+          },
+        },
+      };
+      ctx.resolveProviderApiKey = vi.fn(() => ({
+        apiKey: "LLAMA_SERVER_API_KEY",
+        discoveryApiKey: "ambient-key",
+        profileId: "llama-cpp:ambient",
+      }));
+
+      const result = await discoverLlamaServerProvider(ctx);
+      expect(result?.outcomes).toEqual([{ provider: "llama-cpp", status: "ready" }]);
+
+      expect(discoverMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: undefined,
+          headers: { Authorization: "Bearer proxy-key" },
+        }),
+      );
+    });
+
+    it.each([
+      { failure: { kind: "http-error", status: 401 }, status: "auth-rejected" },
+      { failure: { kind: "http-error", status: 403 }, status: "auth-rejected" },
+      { failure: { kind: "http-error", status: 503 }, status: "unavailable" },
+      { failure: { kind: "unreachable", error: new Error("offline") }, status: "unavailable" },
+      {
+        failure: { kind: "invalid-response", error: new Error("malformed") },
+        status: "unavailable",
       },
-    };
-    ctx.resolveProviderApiKey = vi.fn(() => ({
-      apiKey: "LLAMA_SERVER_API_KEY",
-      discoveryApiKey: "ambient-key",
-    }));
+    ])(
+      "reports $failure as $status instead of publishing empty discovery",
+      async ({ failure, status }) => {
+        discoverMock.mockResolvedValue({
+          ...failure,
+          endpoint: {
+            origin: "http://localhost:8080",
+            inferenceBaseUrl: "http://localhost:8080/v1",
+          },
+        });
+        const ctx = catalogContext();
+        ctx.config.models = {
+          providers: {
+            "llama-cpp": {
+              baseUrl: "http://localhost:8080/v1",
+              models: [model().config],
+            },
+          },
+        };
 
-    await discoverLlamaServerProvider(ctx);
+        await expect(discoverLlamaServerProvider(ctx)).resolves.toEqual({
+          providers: {},
+          outcomes: [
+            {
+              provider: "llama-cpp",
+              status,
+              ...(status === "auth-rejected" ? { rejectionScope: "catalog" } : {}),
+            },
+          ],
+        });
+      },
+    );
 
-    expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: undefined,
-        headers: { Authorization: "Bearer proxy-key" },
-      }),
+    it.each([undefined, "custom-local"])(
+      "keeps unconfigured probes quiet with marker %s",
+      async (apiKey) => {
+        discoverMock.mockResolvedValue({ kind: "unreachable", error: new Error("offline") });
+        const ctx = catalogContext();
+        ctx.resolveProviderApiKey = () => ({ apiKey });
+        await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
+      },
     );
   });
 
-  it("preserves explicit models when the server is unavailable", async () => {
-    discoverMock.mockResolvedValue({
-      kind: "unreachable",
-      endpoint: { origin: "http://localhost:8080", inferenceBaseUrl: "http://localhost:8080/v1" },
-      error: new Error("offline"),
-    });
-    const ctx = catalogContext();
-    ctx.config.models = {
-      providers: {
-        "llama-cpp": {
-          baseUrl: "http://localhost:8080/v1",
-          models: [model().config],
-        },
-      },
-    };
-
-    await expect(discoverLlamaServerProvider(ctx)).resolves.toMatchObject({
-      provider: { models: [expect.objectContaining({ id: "org/model:Q4" })] },
-    });
+  it("preserves errors thrown by an available catalog helper", async () => {
+    const failure = new Error("current SDK helper failed");
+    catalogSdk.failure = failure;
+    await expect(discoverLlamaServerProvider(catalogContext())).rejects.toBe(failure);
+    expect(discoverMock).not.toHaveBeenCalled();
   });
 
   it("returns only the requested discovered model directly to its preparation owner", async () => {

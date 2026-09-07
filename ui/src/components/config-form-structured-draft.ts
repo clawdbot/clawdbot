@@ -135,15 +135,17 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
         onPatch: (path, value) => this.patchDraft(path, value),
         onRemove: (path) => this.patchDraft(path, undefined),
       })}
-      ${this.error
-        ? html`
-            <div class="settings-row settings-row--stacked cfg-structured-draft__error">
-              <div class="settings-row__control">
-                <span id=${errorId} class="cfg-field__error" role="alert">${this.error}</span>
+      ${
+        this.error
+          ? html`
+              <div class="settings-row settings-row--stacked cfg-structured-draft__error">
+                <div class="settings-row__control">
+                  <span id=${errorId} class="cfg-field__error" role="alert">${this.error}</span>
+                </div>
               </div>
-            </div>
-          `
-        : nothing}
+            `
+          : nothing
+      }
     `;
   }
 }

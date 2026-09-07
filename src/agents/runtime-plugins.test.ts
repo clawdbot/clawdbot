@@ -1,5 +1,5 @@
 // Verifies agent runtime plugin loads stay scoped to prepared-runtime handles.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -113,6 +113,14 @@ describe("agent runtime plugin registries", () => {
       .mockImplementation((_config, selections) => selections);
   });
 
+  afterEach(() => {
+    for (const [options] of hoisted.loadPluginRegistryHandle.mock.calls) {
+      expect(options).not.toHaveProperty("capabilityCatalogContext");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelAuth");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelConfig");
+    }
+  });
+
   it("adopts full-only runtime capabilities from the active composition-root registry", () => {
     const activeRegistry = createEmptyPluginRegistry();
     const contextEnginesAdopted = { handle: "context-engines" };
@@ -134,6 +142,22 @@ describe("agent runtime plugin registries", () => {
     );
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.not.objectContaining({ onlyPluginIds: expect.anything() }),
+    );
+  });
+
+  it("uses harness runtimes prepared by the lifecycle batch", () => {
+    const configuredHarnessRuntimes = ["codex"];
+
+    loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      configuredHarnessRuntimes,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(hoisted.resolveAgentRuntimePluginSelections).toHaveBeenCalledWith(
+      {},
+      [],
+      configuredHarnessRuntimes,
     );
   });
 
@@ -554,10 +578,37 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
       config,
       workspaceDir: "/tmp/workspace",
-      basePluginIds: [],
+      basePluginIds: undefined,
       selections: [],
       metadataSnapshot: expect.any(Object),
     });
+  });
+
+  it("inherits active runtime ids for direct hosts without a request registry", async () => {
+    const config = {} as never;
+    hoisted.getActivePluginRegistry.mockReturnValue({
+      plugins: [
+        createPluginRecord({ id: "startup-channel", status: "loaded" }),
+        createPluginRecord({ id: "startup-provider", status: "loaded" }),
+      ],
+    });
+    const pluginRegistry = createEmptyPluginRegistry();
+    hoisted.loadPluginRegistryHandle.mockReturnValue(pluginRegistry);
+
+    await withAgentPluginRegistry({
+      config,
+      workspaceDir: "/tmp/workspace",
+      run: async () => {},
+    });
+
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        basePluginIds: ["startup-channel", "startup-provider"],
+      }),
+    );
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["codex", "memory-core"] }),
+    );
   });
 
   it.each([

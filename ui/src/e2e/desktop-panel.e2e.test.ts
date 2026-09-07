@@ -1,9 +1,15 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installDesktopClientFake, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import {
+  createRfbClipboardProvide,
+  createRfbRawFrame,
+  installDesktopClientFake,
+  installScriptedRfbServer,
+} from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop source panel",
@@ -73,6 +79,41 @@ async function openDirectDesktop(page: import("playwright").Page, environmentId:
       }),
     );
   }, environmentId);
+}
+
+async function openScriptedDesktop(
+  page: import("playwright").Page,
+  options: { disconnectAfterLastPeer?: boolean } = {},
+) {
+  const gateway = await installMockGateway(page, {
+    featureMethods: ["desktop.observe", "environments.list"],
+    methodResponses: {
+      "sessions.list": sessionsList("active"),
+      "environments.list": { environments: [workerDesktopEnvironment] },
+      "desktop.observe": {
+        cases: [false, true].map((control) => ({
+          match: {
+            source: { kind: "environment", environmentId: "worker-desktop-1" },
+            control,
+          },
+          response: {
+            transport: "rfb",
+            wsPath: `/desktop/observe?token=${control ? "control" : "view"}`,
+            expiresAtMs: 60_000,
+            control,
+          },
+        })),
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}activity`);
+  // DesktopClient owns the real noVNC parser; only its RFB wire peer is scripted.
+  const rfb = await installScriptedRfbServer(page, options);
+  await openDirectDesktop(page, "worker-desktop-1");
+  const panel = page.locator("openclaw-desktop-panel");
+  await panel.locator(".desktop-surface canvas").waitFor();
+  await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+  return { gateway, rfb, panel };
 }
 
 suite.define(() => {
@@ -593,10 +634,9 @@ suite.define(() => {
     });
   });
 
-  it("launches advertised desktop apps and keeps observe controls working", async () => {
+  it("settles desktop app launches across takeover and source changes", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["desktop.launch"],
         featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
         methodResponses: {
           "sessions.list": sessionsList("active"),
@@ -688,42 +728,6 @@ suite.define(() => {
       });
       expect(stageUsesAppBackground).toBe(true);
 
-      await browserButton.click();
-      const launchRequest = await gateway.waitForRequest("desktop.launch");
-      expect(launchRequest.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        app: "browser",
-      });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("true");
-      expect(await terminalButton.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
-
-      // Pin past the first launch so a slow runner can't return it stale.
-      const launchesBeforeRetry = (await gateway.getRequests("desktop.launch")).length;
-      await gateway.deferNext("desktop.launch");
-      await browserButton.click();
-      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeRetry });
-      await gateway.rejectDeferred("desktop.launch", {
-        message: "worker desktop app launch unavailable; try again",
-      });
-      await panel
-        .getByRole("alert")
-        .filter({ hasText: "worker desktop app launch unavailable; try again" })
-        .waitFor();
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
-      expect(await browserButton.isEnabled()).toBe(true);
-
-      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
-      expect(
-        await panel
-          .getByText("worker desktop app launch unavailable; try again", { exact: true })
-          .count(),
-      ).toBe(0);
-      await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
-
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       const overlayCoversStage = await panel.evaluate((element) => {
         const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
@@ -741,16 +745,90 @@ suite.define(() => {
         );
       });
       expect(overlayCoversStage).toBe(true);
-      await takeControl.click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
-      const observeRequests = await gateway.getRequests("desktop.observe");
-      expect(observeRequests[2]?.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        control: true,
+      for (const outcome of ["success", "failure"] as const) {
+        const launchesBefore = (await gateway.getRequests("desktop.launch")).length;
+        await gateway.deferNext("desktop.launch");
+        await browserButton.click();
+        const launchRequest = await gateway.waitForRequest("desktop.launch", {
+          after: launchesBefore,
+        });
+        expect(launchRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          app: "browser",
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("true");
+        expect(await terminalButton.isEnabled()).toBe(true);
+
+        const observationsBefore = (await gateway.getRequests("desktop.observe")).length;
+        const connectionsBefore = Number(await panel.getAttribute("data-connect-count"));
+        await gateway.deferNext("desktop.observe");
+        await takeControl.click();
+        const controlRequest = await gateway.waitForRequest("desktop.observe", {
+          after: observationsBefore,
+        });
+        expect(controlRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          control: true,
+        });
+        // Launch completion belongs to the machine while its replacement viewer is pending.
+        if (outcome === "success") {
+          await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
+        } else {
+          await gateway.rejectDeferred("desktop.launch", {
+            message: "worker desktop app launch unavailable; try again",
+          });
+        }
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `desktop-launch-takeover-${outcome}.png`),
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("false");
+        expect(await browserButton.isEnabled()).toBe(true);
+        if (outcome === "failure") {
+          await panel
+            .getByRole("alert")
+            .filter({ hasText: "worker desktop app launch unavailable; try again" })
+            .waitFor();
+        } else {
+          expect(await panel.getByRole("alert").count()).toBe(0);
+        }
+        await gateway.resolveDeferred("desktop.observe");
+        await expect
+          .poll(async () => Number(await panel.getAttribute("data-connect-count")))
+          .toBe(connectionsBefore + 1);
+        expect(await takeControl.count()).toBe(0);
+
+        await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+        await panel.getByText("Desktop sources", { exact: true }).waitFor();
+        expect(await panel.getByRole("alert").count()).toBe(0);
+        await panel.getByRole("button", { name: "Connect", exact: true }).click();
+        await browserButton.waitFor();
+      }
+
+      const launchesBeforeSwitch = (await gateway.getRequests("desktop.launch")).length;
+      await gateway.deferNext("desktop.launch");
+      await browserButton.click();
+      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeSwitch });
+      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await gateway.setMethodResponse("environments.list", {
+        environments: [{ ...workerDesktopEnvironment, id: "worker-desktop-2" }],
       });
-      expect(await panel.getByRole("button", { name: "Take control", exact: true }).count()).toBe(
-        0,
-      );
+      await gateway.setMethodResponse("desktop.observe", {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=replacement",
+        control: false,
+      });
+      await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+      await panel.getByText("worker-desktop-2", { exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await browserButton.waitFor();
+      await gateway.rejectDeferred("desktop.launch", { message: "stale desktop launch failure" });
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "desktop-launch-source-switch.png"),
+      });
+      expect(await panel.getByRole("alert").count()).toBe(0);
+      expect(await browserButton.getAttribute("aria-busy")).toBe("false");
+      expect(await browserButton.isEnabled()).toBe(true);
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
@@ -760,52 +838,10 @@ suite.define(() => {
 
   it("takes control by clicking a real noVNC-mounted desktop", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["desktop.observe", "environments.list"],
-        methodResponses: {
-          "sessions.list": sessionsList("active"),
-          "environments.list": { environments: [workerDesktopEnvironment] },
-          "desktop.observe": {
-            cases: [
-              {
-                match: {
-                  source: { kind: "environment", environmentId: "worker-desktop-1" },
-                  control: false,
-                },
-                response: {
-                  transport: "rfb",
-                  wsPath: "/desktop/observe?token=view",
-                  expiresAtMs: 60_000,
-                  control: false,
-                },
-              },
-              {
-                match: {
-                  source: { kind: "environment", environmentId: "worker-desktop-1" },
-                  control: true,
-                },
-                response: {
-                  transport: "rfb",
-                  wsPath: "/desktop/observe?token=control",
-                  expiresAtMs: 60_000,
-                  control: true,
-                },
-              },
-            ],
-          },
-        },
+      const { gateway, rfb, panel } = await openScriptedDesktop(page, {
+        disconnectAfterLastPeer: true,
       });
-      await page.goto(`${suite.server.baseUrl}activity`);
-      // The production DesktopClient still owns noVNC; only the RFB endpoint
-      // is scripted here so this CI test remains deterministic.
-      const rfb = await installScriptedRfbServer(page, { disconnectAfterLastPeer: true });
-
-      await openDirectDesktop(page, "worker-desktop-1");
-      const panel = page.locator("openclaw-desktop-panel");
-      await panel.locator("section[aria-label='Desktop']").waitFor();
       const canvas = panel.locator(".desktop-surface canvas");
-      await canvas.waitFor();
-      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       const canvasHandle = await canvas.elementHandle();
       await panel.getByRole("button", { name: "Enter fullscreen", exact: true }).click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
@@ -832,6 +868,85 @@ suite.define(() => {
       expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
       await panel.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+    });
+  });
+
+  it.each(
+    [
+      { name: "view-only text", control: false, format: 1 as const },
+      { name: "controlling unsupported format", control: true, format: 2 as const },
+      { name: "controlling text", control: true, format: 1 as const },
+    ].flatMap(({ name, control, format }) =>
+      (["coalesced", "fragmented"] as const).map((delivery) => ({
+        name,
+        control,
+        format,
+        delivery,
+      })),
+    ),
+  )(
+    "renders the next RFB frame after $name Provide ($delivery)",
+    async ({ control, format, delivery }) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const { gateway, rfb, panel } = await openScriptedDesktop(page);
+        if (control) {
+          await panel.getByRole("button", { name: "Take control", exact: true }).click();
+          await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+        }
+        const provide = createRfbClipboardProvide(format);
+        const frame = createRfbRawFrame();
+        await rfb.send(
+          delivery === "coalesced"
+            ? [[...provide, ...frame]]
+            : [...provide.map((byte) => [byte]), frame],
+        );
+        // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
+        const outcome = () =>
+          panel.evaluate((element) => {
+            if (element.shadowRoot?.textContent?.includes("Desktop disconnected:")) {
+              return "disconnected";
+            }
+            const canvas =
+              element.shadowRoot?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+            const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
+            return pixel && [...pixel].join(",") === "24,180,160,255" ? "frame" : null;
+          });
+        await expect.poll(outcome).not.toBeNull();
+        await page.screenshot({ path: path.join(suite.artifactDir, "clipboard-stream.png") });
+        expect(await outcome()).toBe("frame");
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(control ? 2 : 1);
+        expect(await panel.getByRole("button", { name: "Reconnect", exact: true }).count()).toBe(0);
+      });
+    },
+  );
+
+  it.each([
+    {
+      kind: "invalid server message",
+      expected: "Reconnect. If it fails again,",
+    },
+    { kind: "server close", expected: "synthetic desktop service stopped" },
+  ])("explains real RFB $kind failures", async ({ kind, expected }) => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          consoleErrors.push(message.text());
+        }
+      });
+      const { rfb, panel } = await openScriptedDesktop(page);
+      if (kind === "server close") {
+        await rfb.disconnect(expected);
+      } else {
+        await rfb.send([[120]]);
+      }
+      await panel.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
+      await page.screenshot({ path: path.join(suite.artifactDir, "desktop-disconnect.png") });
+      const message = await panel.locator(".desktop-status").textContent();
+      expect(message).toContain(expected);
+      expect(message).not.toContain("unknown reason");
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
+      expect(consoleErrors).not.toContain("Tried changing state of a disconnected RFB object");
     });
   });
 

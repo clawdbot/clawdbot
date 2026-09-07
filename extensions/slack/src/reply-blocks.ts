@@ -6,6 +6,7 @@ import {
 // Slack plugin module implements reply blocks behavior.
 import {
   resolveAskUserQuestionOptionIndices,
+  resolveSendableOutboundReplyParts,
   type AskUserQuestionOptionIndices,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -150,14 +151,58 @@ export function resolveSlackReplyRenderPlan(
   payload: ReplyPayload,
   text = payload.text,
 ): SlackReplyRenderPlan {
-  const hasStructuredContent = hasSlackReplyStructuredContent(payload);
-  // Live preview/streaming still consumes this compact plan shape. Derive it
-  // from canonical ordered segments so preview/streaming stays conservative
-  // without a second renderer.
-  const resolution = resolveSlackReplyBlockResolution(
-    { ...payload, text },
-    { materializeAuthoredText: hasStructuredContent },
-  );
+  return prepareSlackReply(payload).resolvePreview(text);
+}
+
+export type PreparedSlackReply = {
+  readonly payload: ReplyPayload;
+  resolveDelivery: () => SlackReplyBlockResolution;
+  resolvePreview: (text?: string) => SlackReplyRenderPlan;
+};
+
+/** One attempt owns its authored compilation; media captions retain a separate delivery policy. */
+export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
+  const text = payload.text;
+  const source = { ...payload, text };
+  let authoredChunks: readonly string[] | undefined;
+  let structuredContent: boolean | undefined;
+  let materialized: SlackReplyBlockResolution | undefined;
+  let unmaterialized: SlackReplyBlockResolution | undefined;
+  let preview: SlackReplyRenderPlan | undefined;
+  const resolveAuthoredTextChunks = () =>
+    (authoredChunks ??= markdownToSlackMrkdwnChunks(text?.trim() ?? "", SLACK_SECTION_TEXT_MAX));
+  const hasStructuredContent = () => (structuredContent ??= hasSlackReplyStructuredContent(source));
+  const resolve = (materializeAuthoredText: boolean) =>
+    materializeAuthoredText
+      ? (materialized ??= resolveSlackReplyBlockResolution(source, {
+          materializeAuthoredText: true,
+          resolveAuthoredTextChunks,
+        }))
+      : (unmaterialized ??= resolveSlackReplyBlockResolution(source));
+  return {
+    payload,
+    resolveDelivery: () =>
+      resolve(!resolveSendableOutboundReplyParts(source).hasMedia && hasStructuredContent()),
+    resolvePreview: (override = text) => {
+      if (override !== text) {
+        return prepareSlackReply({ ...source, text: override }).resolvePreview();
+      }
+      return (preview ??= projectSlackReplyRenderPlan(
+        source,
+        text,
+        resolve(hasStructuredContent()),
+        resolveAuthoredTextChunks,
+      ));
+    },
+  };
+}
+
+function projectSlackReplyRenderPlan(
+  payload: ReplyPayload,
+  text: string | undefined,
+  resolution: SlackReplyBlockResolution,
+  resolveAuthoredTextChunks: () => readonly string[],
+): SlackReplyRenderPlan {
   const messages = resolveSlackReplyDeliveryMessages({
     authoredTextPlacement: resolution.authoredTextPlacement,
     segments: resolution.segments,
@@ -168,7 +213,10 @@ export function resolveSlackReplyRenderPlan(
     const sourceText = text?.trim() ?? "";
     const blocks =
       message?.authoredTextPlacement === "blocks"
-        ? addPreviewVerbatimToAuthoredTextBlocks(message.blocks, sourceText)
+        ? addPreviewVerbatimToAuthoredTextBlocks(
+            message.blocks,
+            sourceText ? resolveAuthoredTextChunks() : [],
+          )
         : message?.blocks;
     let renderedText = message?.text ?? resolveSlackReplyText(payload, text);
     let textIsSlackMrkdwn = Boolean(
@@ -229,8 +277,8 @@ function renderSlackAuthoredTextFragments(blocks: readonly SlackBlock[]): string
   });
 }
 
-function buildSlackAuthoredTextBlocks(text: string): SlackBlock[] {
-  return markdownToSlackMrkdwnChunks(text, SLACK_SECTION_TEXT_MAX).map((chunk) => ({
+function buildSlackAuthoredTextBlocks(chunks: readonly string[]): SlackBlock[] {
+  return chunks.map((chunk) => ({
     type: "section",
     text: { type: "mrkdwn", text: chunk, verbatim: true },
   }));
@@ -238,12 +286,12 @@ function buildSlackAuthoredTextBlocks(text: string): SlackBlock[] {
 
 function addPreviewVerbatimToAuthoredTextBlocks(
   blocks: SlackBlock[] | undefined,
-  sourceText: string,
+  authoredTextChunks: readonly string[],
 ): SlackBlock[] | undefined {
-  if (!blocks?.length || !sourceText) {
+  if (!blocks?.length || authoredTextChunks.length === 0) {
     return blocks;
   }
-  const authoredChunks = new Set(markdownToSlackMrkdwnChunks(sourceText, SLACK_SECTION_TEXT_MAX));
+  const authoredChunks = new Set(authoredTextChunks);
   return blocks.map((block) => {
     const text = (block as { text?: { text?: unknown; type?: unknown; verbatim?: unknown } }).text;
     if (
@@ -433,7 +481,10 @@ function subtractMirroredSlackControlRows(params: {
  */
 export function resolveSlackReplyBlockResolution(
   payload: ReplyPayload,
-  options: { materializeAuthoredText?: boolean } = {},
+  options: {
+    materializeAuthoredText?: boolean;
+    resolveAuthoredTextChunks?: () => readonly string[];
+  } = {},
 ): SlackReplyBlockResolution {
   const segments: SlackReplyBlockSegment[] = [];
   const channelBlocks = readSlackChannelBlocks(payload);
@@ -449,7 +500,10 @@ export function resolveSlackReplyBlockResolution(
     authoredTextKnownInBlocks = initialPlacement === "blocks";
     const text = normalizeOptionalString(payload.text);
     if (text && initialPlacement === "outside-blocks") {
-      const textBlocks = buildSlackAuthoredTextBlocks(text);
+      const textBlocks = buildSlackAuthoredTextBlocks(
+        options.resolveAuthoredTextChunks?.() ??
+          markdownToSlackMrkdwnChunks(text, SLACK_SECTION_TEXT_MAX),
+      );
       const compiledText = renderSlackAuthoredTextFragments(textBlocks).join(" ");
       const compiledPlacement = resolveSlackAuthoredTextPlacement({
         text: compiledText,

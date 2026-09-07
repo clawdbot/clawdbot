@@ -16,6 +16,7 @@ import {
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
+  isReleaseCheckJobAdvisory,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
@@ -36,6 +37,7 @@ import {
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -787,6 +789,27 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
+export function releaseAdvisoryJobEvidence(childEvidence, releaseProfile, workflowRef) {
+  return Object.entries(childEvidence ?? {})
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .flatMap(([child, evidence]) =>
+      /^releaseChecks(?:Independent|Candidate)?$/u.test(child)
+        ? evidence.jobs
+            .filter((job) =>
+              isReleaseCheckJobAdvisory({ jobName: job.name, releaseProfile, workflowRef }),
+            )
+            .toSorted(compareReleaseJobsByName)
+            .map((job) => ({
+              child,
+              job: job.name,
+              status: job.status,
+              conclusion: job.conclusion,
+              policy: "advisory",
+            }))
+        : [],
+    );
+}
+
 function manifestEvidenceIdentity(manifest) {
   return sortReleaseJsonValueKeys({
     childRunIds: manifest.childRunIds,
@@ -905,7 +928,28 @@ export function validateParentManifest(value, expected) {
     rerunGroup,
     runReleaseSoak,
   });
+  if (
+    coveragePolicy === "npm-stable-v1" &&
+    (!resolveReleaseContextIdentity(
+      validationInputs.targetContextRef || String(value.targetRef ?? ""),
+      validationInputs.targetVersion,
+    ) ||
+      controls.performanceBlocking !== true ||
+      controls.stableSoakRequired !== true)
+  ) {
+    throw new Error(
+      "npm stable coverage policy requires release context, blocking performance, and stable soak",
+    );
+  }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
+  const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, releaseProfile, value.workflowRef);
+  if (
+    value.advisoryJobs !== undefined &&
+    JSON.stringify(sortReleaseJsonValueKeys(value.advisoryJobs)) !==
+      JSON.stringify(sortReleaseJsonValueKeys(advisoryJobs))
+  ) {
+    throw new Error("release validation advisory jobs differ from canonical policy evidence");
+  }
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -950,7 +994,7 @@ export function validateParentManifest(value, expected) {
           releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
         };
   if (
-    coveragePolicy &&
+    coveragePolicy === "npm-beta-v1" &&
     (childRunIds.productPerformance ||
       childRunIds.npmTelegram ||
       controls.performanceBlocking !== false ||
@@ -988,6 +1032,7 @@ export function validateParentManifest(value, expected) {
     };
   }
   return {
+    advisoryJobs,
     candidateBinding,
     childEvidence,
     childRunIds,
@@ -2092,6 +2137,11 @@ async function validateStrictChildRun({
   }
 
   return {
+    advisoryJobs: releaseAdvisoryJobEvidence(
+      { [child.manifestKey]: { jobs } },
+      releaseProfile,
+      parentEvidence.manifest.workflowRef,
+    ),
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,
@@ -2934,11 +2984,15 @@ async function main() {
     }
 
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
+    for (const job of sourceManifest.advisoryJobs) {
+      console.log(`advisory: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`);
+    }
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,
       sourceManifest.workflowRef,
       selectedKeys,
+      sourceManifest.version === 4 ? 3 : 2,
     );
     const sourceParentJobs = await findParentJobsAll(sourceManifest.runId, repository);
     children = [];
@@ -2991,6 +3045,7 @@ async function main() {
       parent.attempt,
       parent.headBranch,
       selectedKeys,
+      selectedKeys.has("releaseChecksCandidate") ? 3 : 2,
     )
       .map((child) => {
         const run = findExactChildRun(child, repository);

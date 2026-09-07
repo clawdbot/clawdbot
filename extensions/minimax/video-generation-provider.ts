@@ -4,7 +4,6 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -23,7 +22,6 @@ import {
   type ProviderOperationTimeoutMs,
   type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -270,6 +268,8 @@ async function downloadVideoFromUrl(params: {
     label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
     maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    chunkTimeoutMs: 0,
     fetchResponse: async ({ timeoutMs }) =>
       await fetchMinimaxResponse({
         stage: "download",
@@ -335,44 +335,17 @@ async function downloadVideoFromFileId(params: {
   if (!downloadUrl) {
     throw new Error("MiniMax generated video metadata missing download_url");
   }
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "MiniMax generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const { response, release } = await fetchMinimaxResponse({
-    stage: "download",
+  const video = await downloadVideoFromUrl({
     url: downloadUrl,
-    init: { method: "GET" },
-    timeoutMs,
+    timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
-    requestFailedMessage: "MiniMax generated video download failed",
+    maxBytes: params.maxBytes,
     policy: params.policy,
   });
-  try {
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
-    });
-    return {
-      buffer,
-      mimeType,
-      fileName:
-        normalizeOptionalString(metadata.file?.filename) ||
-        `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
-  } finally {
-    await release();
-  }
+  return {
+    ...video,
+    fileName: normalizeOptionalString(metadata.file?.filename) || video.fileName,
+  };
 }
 
 function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider {

@@ -6,11 +6,12 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
+  getLoadedChannelPluginForRead,
   listLoadedChannelPlugins,
 } from "../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import {
@@ -127,7 +128,7 @@ function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig) {
   const candidates: ProviderResolution[] = [];
   for (const plugin of listLoadedChannelPlugins()) {
     const resolved = resolveProviderAllowFrom({
-      plugin: plugin as ChannelPlugin,
+      plugin,
       cfg,
       accountId: ctx.AccountId,
     });
@@ -231,28 +232,26 @@ function resolveOwnerAllowFromList(
     return [];
   }
   const filtered: string[] = [];
-  for (const entry of raw) {
-    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
-    if (!trimmed) {
+  for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
+    const separatorIndex = trimmed.indexOf(":");
+    const prefix = trimmed.slice(0, separatorIndex);
+    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    if (!channel) {
+      filtered.push(trimmed);
       continue;
     }
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex);
-      const channel = normalizeAnyChannelId(prefix);
-      if (channel) {
-        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
-        if (!params.providerId || channel !== params.providerId) {
-          continue;
-        }
-        const remainder = trimmed.slice(separatorIndex + 1).trim();
-        if (remainder) {
-          filtered.push(remainder);
-        }
-        continue;
-      }
+    // Doctor owns bundled channel:user:id migration; third-party native identities stay intact.
+    if (
+      !params.providerId ||
+      channel !== params.providerId ||
+      (normalizeChatChannelId(prefix) && /^[^:]+:user:[^:\s*]+$/i.test(trimmed))
+    ) {
+      continue;
     }
-    filtered.push(trimmed);
+    const remainder = trimmed.slice(separatorIndex + 1).trim();
+    if (remainder) {
+      filtered.push(remainder);
+    }
   }
   return formatAllowFromList({ ...params, allowFrom: filtered });
 }
@@ -476,9 +475,7 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     ctx,
     cfg,
   );
-  const plugin = providerId
-    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
-    : undefined;
+  const plugin = providerId ? getLoadedChannelPluginById(providerId) : undefined;
   const from = normalizeOptionalString(ctx.From) ?? "";
   const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
@@ -543,15 +540,20 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     : ownerAllowlistConfigured
       ? senderIsOwner
       : senderIsOwnerByScope || Boolean(matchedCommandOwner);
-  const access = resolveCommandSenderAuthorization({
-    commandAuthorized,
-    enforceOwnerForCommands: enforceOwner,
-    isOwnerForCommands,
-    senderCandidates,
-    commandsAllowFromList,
-    providerResolutionError,
-    commandsAllowFromConfigured,
-  });
+  // Literal turns cannot regain command access through an allowlist; inline
+  // command consumers must preserve their text while owner facts remain intact.
+  const access =
+    ctx.CommandInterpretationSuppressed === true
+      ? "denied"
+      : resolveCommandSenderAuthorization({
+          commandAuthorized,
+          enforceOwnerForCommands: enforceOwner,
+          isOwnerForCommands,
+          senderCandidates,
+          commandsAllowFromList,
+          providerResolutionError,
+          commandsAllowFromConfigured,
+        });
 
   return {
     authorization: {
@@ -571,6 +573,20 @@ export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {
   return resolveCommandAuthorizationState(params).authorization;
+}
+
+/** Recheck admitted sender identity against the current global owner list. */
+export function isConfiguredCommandOwner(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+): boolean {
+  const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  const params = { cfg, plugin, providerId, accountId: requester.accountId };
+  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
+  return resolveSenderCandidates({ ...params, senderId: requester.senderId }).some((sender) =>
+    owners.includes(sender),
+  );
 }
 
 /** Resolves reset admission without granting other command or owner authority. */

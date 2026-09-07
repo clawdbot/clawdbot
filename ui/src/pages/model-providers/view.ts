@@ -15,6 +15,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
@@ -24,11 +25,14 @@ import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
-  ModelProviderLogoutTarget,
+  ModelProviderPendingLogout,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
+import { renderProviderProfiles } from "./profiles-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+
+registerSettingsEnglish();
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -56,6 +60,7 @@ type ModelProvidersViewProps = {
   configBusy: boolean;
   quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
+  canViewProfiles: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
@@ -66,7 +71,7 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogoutProvider: string | null;
+  profileOrders: Record<string, string[]>;
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
@@ -77,9 +82,8 @@ type ModelProvidersViewProps = {
   onSaveKey: (provider: string, configKey: string) => void;
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (provider: string) => void;
-  onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onRequestLogout: (pending: ModelProviderPendingLogout) => void;
+  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProviderKeyChange: (value: string) => void;
@@ -106,9 +110,11 @@ function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
     <div class="callout ${message.kind}" role=${message.kind === "error" ? "alert" : "status"}>
       ${message.text}
     </div>
-    ${message.warning
-      ? html`<div class="callout warning" role="status">${message.warning}</div>`
-      : nothing}
+    ${
+      message.warning
+        ? html`<div class="callout warning" role="status">${message.warning}</div>`
+        : nothing
+    }
   `;
 }
 
@@ -190,15 +196,19 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
     <div class="model-providers__probe model-providers__probe--${presentation}" role="status">
       <div class="model-providers__probe-summary">
         <strong
-          >${hasWarnings
-            ? t("modelProviders.probe.status.partial")
-            : t(`modelProviders.probe.status.${result.status}`)}</strong
+          >${
+            hasWarnings
+              ? t("modelProviders.probe.status.partial")
+              : t(`modelProviders.probe.status.${result.status}`)
+          }</strong
         >
-        ${result.latencyMs !== undefined
-          ? html`<span
-              >${t("modelProviders.probe.latency", { ms: String(result.latencyMs) })}</span
-            >`
-          : nothing}
+        ${
+          result.latencyMs !== undefined
+            ? html`<span
+                >${t("modelProviders.probe.latency", { ms: String(result.latencyMs) })}</span
+              >`
+            : nothing
+        }
       </div>
       ${result.error ? html`<div>${formatUiExternalText(result.error)}</div>` : nothing}
       ${result.results.map(
@@ -206,9 +216,11 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
           <div class="model-providers__probe-target">
             <span>${target.label}</span>
             <span>
-              ${t(`modelProviders.probe.status.${target.status}`)}${target.latencyMs !== undefined
-                ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
-                : ""}
+              ${t(`modelProviders.probe.status.${target.status}`)}${
+                target.latencyMs !== undefined
+                  ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
+                  : ""
+              }
             </span>
             ${target.error ? html`<small>${formatUiExternalText(target.error)}</small>` : nothing}
           </div>
@@ -234,9 +246,11 @@ function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps
         <input
           type="password"
           autocomplete="off"
-          placeholder=${card.apiKey?.source === "config"
-            ? t("modelProviders.apiKey.replacePlaceholder")
-            : t("modelProviders.apiKey.placeholder")}
+          placeholder=${
+            card.apiKey?.source === "config"
+              ? t("modelProviders.apiKey.replacePlaceholder")
+              : t("modelProviders.apiKey.placeholder")
+          }
           .value=${props.keyDraft}
           ?disabled=${busy || mutationDisabled || authModeBlocked}
           @input=${(event: Event) =>
@@ -264,10 +278,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
-  const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -277,78 +289,53 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     : blocked;
   return html`
     <div class="model-providers__card-actions">
-      ${isConfigured
-        ? html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${probeBusy || !props.canMutate || !props.probeAvailable}
-              title=${!props.probeAvailable ? t("modelProviders.probe.unavailable") : blocked}
-              @click=${() => props.onProbe(card.id, credentialProviders)}
-            >
-              ${probeBusy ? t("modelProviders.probe.testing") : t("modelProviders.probe.test")}
-            </button>
-          `
-        : nothing}
-      ${apiKeyUnsupported
-        ? nothing
-        : html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
-              title=${keyBlocked}
-              @click=${() => props.onOpenKeyEditor(card.id)}
-            >
-              ${card.hasConfigApiKey
-                ? t("modelProviders.apiKey.replace")
-                : t("modelProviders.apiKey.set")}
-            </button>
-          `}
-      ${card.hasConfigApiKey
-        ? html`
-            <button
-              class="btn btn--sm danger"
-              ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
-              title=${keyBlocked}
-              @click=${() => props.onRemoveKey(card.id, card.configKey ?? card.id)}
-            >
-              ${t("modelProviders.apiKey.remove")}
-            </button>
-          `
-        : nothing}
-      ${canLogout
-        ? html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${logoutBusy || mutationDisabled}
-              title=${blocked}
-              @click=${() => props.onRequestLogout(card.id)}
-            >
-              ${t("modelProviders.logout.action")}
-            </button>
-          `
-        : nothing}
-    </div>
-    ${props.pendingLogoutProvider === card.id
-      ? html`
-          <div class="model-providers__confirm" role="alert">
-            <span>${t("modelProviders.logout.confirm", { provider: card.displayName })}</span>
-            <div class="model-providers__form-actions">
+      ${
+        isConfigured
+          ? html`
               <button
-                class="btn danger btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                @click=${() => props.onLogout(card.id, card.logoutTargets)}
+                class="btn btn--sm"
+                ?disabled=${probeBusy || !props.canMutate || !props.probeAvailable}
+                title=${!props.probeAvailable ? t("modelProviders.probe.unavailable") : blocked}
+                @click=${() => props.onProbe(card.id, credentialProviders)}
               >
-                ${logoutBusy
-                  ? t("modelProviders.logout.loggingOut")
-                  : t("modelProviders.logout.action")}
+                ${probeBusy ? t("modelProviders.probe.testing") : t("modelProviders.probe.test")}
               </button>
-              <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                ${t("common.cancel")}
+            `
+          : nothing
+      }
+      ${
+        apiKeyUnsupported
+          ? nothing
+          : html`
+              <button
+                class="btn btn--sm"
+                ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
+                title=${keyBlocked}
+                @click=${() => props.onOpenKeyEditor(card.id)}
+              >
+                ${
+                  card.hasConfigApiKey
+                    ? t("modelProviders.apiKey.replace")
+                    : t("modelProviders.apiKey.set")
+                }
               </button>
-            </div>
-          </div>
-        `
-      : nothing}
+            `
+      }
+      ${
+        card.hasConfigApiKey
+          ? html`
+              <button
+                class="btn btn--sm danger"
+                ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
+                title=${keyBlocked}
+                @click=${() => props.onRemoveKey(card.id, card.configKey ?? card.id)}
+              >
+                ${t("modelProviders.apiKey.remove")}
+              </button>
+            `
+          : nothing
+      }
+    </div>
   `;
 }
 
@@ -375,17 +362,31 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      ${
+        card.profiles.length > 0 && props.canViewProfiles
+          ? renderProviderProfiles(card, {
+              busy: props.busy,
+              canMutate: props.canMutate && !props.configBusy,
+              mutationBlockedReason: props.mutationBlockedReason,
+              profileOrders: props.profileOrders,
+              onOpenModelSetup: props.onOpenModelSetup,
+              onProfileOrderChange: props.onProfileOrderChange,
+              onRequestLogout: props.onRequestLogout,
+            })
+          : renderCredentialSummary(card, props.credentialAgentLabel)
+      }
       <div
         class="model-providers__global-metrics"
         aria-busy=${props.supplementalLoading ? "true" : "false"}
       >
         <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
-        ${card.usage
-          ? renderProviderUsageDetails(card.usage)
-          : html`<div class="model-providers__no-stats">
-              ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
-            </div>`}
+        ${
+          card.usage
+            ? renderProviderUsageDetails(card.usage)
+            : html`<div class="model-providers__no-stats">
+                ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
+              </div>`
+        }
         ${renderLocalCost(card, props.costDays)}
       </div>
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
@@ -398,53 +399,57 @@ function renderAddProvider(props: ModelProvidersViewProps) {
   const busy = Boolean(props.busy.add);
   const disabled = configMutationDisabled(props) || busy;
   const rows = html`
-    ${props.unconfiguredProviders.length === 0
-      ? renderSettingsEmpty(t("modelProviders.add.none"))
-      : nothing}
-    ${props.addProviderOpen
-      ? html`
-          <div class="settings-row settings-row--stacked">
-            <div class="model-providers__add-form">
-              <label class="field">
-                <span>${t("modelProviders.add.provider")}</span>
-                <select
-                  class="settings-select"
-                  .value=${props.addProviderId}
-                  ?disabled=${disabled}
-                  @change=${(event: Event) =>
-                    props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
+    ${
+      props.unconfiguredProviders.length === 0
+        ? renderSettingsEmpty(t("modelProviders.add.none"))
+        : nothing
+    }
+    ${
+      props.addProviderOpen
+        ? html`
+            <div class="settings-row settings-row--stacked">
+              <div class="model-providers__add-form">
+                <label class="field">
+                  <span>${t("modelProviders.add.provider")}</span>
+                  <select
+                    class="settings-select"
+                    .value=${props.addProviderId}
+                    ?disabled=${disabled}
+                    @change=${(event: Event) =>
+                      props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
+                  >
+                    <option value="">${t("modelProviders.add.selectProvider")}</option>
+                    ${props.unconfiguredProviders.map(
+                      (provider) =>
+                        html`<option value=${provider.id}>${provider.displayName}</option>`,
+                    )}
+                  </select>
+                </label>
+                <label class="field">
+                  <span>${t("modelProviders.apiKey.label")}</span>
+                  <input
+                    type="password"
+                    autocomplete="off"
+                    placeholder=${t("modelProviders.apiKey.placeholder")}
+                    .value=${props.addProviderKey}
+                    ?disabled=${disabled}
+                    @input=${(event: Event) =>
+                      props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
+                  />
+                </label>
+                <button
+                  class="btn primary"
+                  ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
+                  @click=${props.onAddProvider}
                 >
-                  <option value="">${t("modelProviders.add.selectProvider")}</option>
-                  ${props.unconfiguredProviders.map(
-                    (provider) =>
-                      html`<option value=${provider.id}>${provider.displayName}</option>`,
-                  )}
-                </select>
-              </label>
-              <label class="field">
-                <span>${t("modelProviders.apiKey.label")}</span>
-                <input
-                  type="password"
-                  autocomplete="off"
-                  placeholder=${t("modelProviders.apiKey.placeholder")}
-                  .value=${props.addProviderKey}
-                  ?disabled=${disabled}
-                  @input=${(event: Event) =>
-                    props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-                />
-              </label>
-              <button
-                class="btn primary"
-                ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
-                @click=${props.onAddProvider}
-              >
-                ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
-              </button>
+                  ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
+                </button>
+              </div>
+              ${renderMutationMessage(props.messages.add)}
             </div>
-            ${renderMutationMessage(props.messages.add)}
-          </div>
-        `
-      : nothing}
+          `
+        : nothing
+    }
   `;
   return renderSettingsSection(
     {
@@ -453,9 +458,11 @@ function renderAddProvider(props: ModelProvidersViewProps) {
       actions: html`
         <button
           class="btn btn--sm"
-          ?disabled=${busy ||
-          (!props.addProviderOpen &&
-            (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))}
+          ?disabled=${
+            busy ||
+            (!props.addProviderOpen &&
+              (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))
+          }
           title=${props.mutationBlockedReason ?? ""}
           @click=${props.onAddProviderToggle}
         >
@@ -541,18 +548,22 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   const providerRows = html`
     <div class="model-providers__provider-list">
       ${props.error ? renderSettingsGroup(renderProviderNoticeRow(props.error)) : nothing}
-      ${props.providerUsageFailed
-        ? renderSettingsGroup(renderProviderNoticeRow(t("usage.providerUsage.unavailable")))
-        : nothing}
-      ${props.cards.length === 0
-        ? renderSettingsGroup(
-            renderSettingsEmpty(
-              html`<strong>${t("modelProviders.emptyTitle")}</strong><br />${t(
-                  "modelProviders.emptySubtitle",
-                )}`,
-            ),
-          )
-        : props.cards.map((card) => renderSettingsGroup(renderProviderRow(card, props)))}
+      ${
+        props.providerUsageFailed
+          ? renderSettingsGroup(renderProviderNoticeRow(t("usage.providerUsage.unavailable")))
+          : nothing
+      }
+      ${
+        props.cards.length === 0
+          ? renderSettingsGroup(
+              renderSettingsEmpty(
+                html`<strong>${t("modelProviders.emptyTitle")}</strong><br />${t(
+                    "modelProviders.emptySubtitle",
+                  )}`,
+              ),
+            )
+          : props.cards.map((card) => renderSettingsGroup(renderProviderRow(card, props)))
+      }
     </div>
   `;
   const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
@@ -584,22 +595,24 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         title: t("modelProviders.title"),
         count: props.cards.length,
         actions: html`
-          ${props.updatedAt
-            ? html`<span class="model-providers__updated"
-                >${t("modelProviders.updated", {
-                  time: formatTimeMs(props.updatedAt, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }),
-                })}</span
-              >`
-            : nothing}
+          ${
+            props.updatedAt
+              ? html`<span class="model-providers__updated"
+                  >${t("modelProviders.updated", {
+                    time: formatTimeMs(props.updatedAt, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    }),
+                  })}</span
+                >`
+              : nothing
+          }
           <openclaw-tooltip
             .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
           >
             <button
               type="button"
-              class="btn btn--icon btn--sm model-providers__refresh-button"
+              class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
               aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
               ?disabled=${props.refreshing}
               @click=${() => props.onRefresh()}
@@ -612,8 +625,10 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       providerRows,
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
-    ${props.providerUsageStalled
-      ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
-      : nothing}
+    ${
+      props.providerUsageStalled
+        ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
+        : nothing
+    }
   `);
 }

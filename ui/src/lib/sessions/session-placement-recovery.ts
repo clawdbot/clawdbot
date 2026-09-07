@@ -5,7 +5,10 @@ import {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
+import type { HumanMention } from "../chat/chat-types.ts";
+import { readHumanMentions } from "../chat/human-mentions.ts";
 import { formatUiError } from "../format-error.ts";
 import type { SessionCreateParams } from "./create.ts";
 import {
@@ -25,13 +28,16 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   message: "";
   projectId?: string;
   visibility?: "draft";
-  worktree: true;
-};
+} & (
+    | { worktree: true; repository?: undefined }
+    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+  );
 
 type SessionPlacementSubmission = {
   sessionKey: string;
   messageId: string;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments?: unknown[];
   target: SessionPlacementTarget;
   agentId: string;
@@ -58,6 +64,7 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 // while scoping it to this tab, Gateway, and authenticated credential.
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
+  "displayName",
   "model",
   "contextWindow",
   "thinkingLevel",
@@ -72,6 +79,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "repository",
   "incognito",
   "visibility",
   "permissionMode",
@@ -94,7 +102,15 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
-    record.worktree !== true ||
+    (record.repository === undefined
+      ? record.worktree !== true
+      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+        record.worktree !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.worktreeName !== undefined ||
+        record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&
@@ -196,8 +212,16 @@ function validateSessionPlacementRecovery(
   ) {
     return null;
   }
+  const { mentions: storedMentions, ...recovery } = value;
+  const mentions = readHumanMentions(value.message, storedMentions);
+  if (
+    storedMentions !== undefined &&
+    (!Array.isArray(storedMentions) || (mentions?.length ?? 0) !== storedMentions.length)
+  ) {
+    return null;
+  }
   // SAFETY: every required recovery field and nested closed target was validated above.
-  return value as SessionPlacementRecovery;
+  return { ...recovery, ...(mentions ? { mentions } : {}) } as SessionPlacementRecovery;
 }
 
 function removeSessionPlacementRecoveryRow(storage: Storage, key: string): boolean {
@@ -352,11 +376,13 @@ export function readSessionPlacementRecovery(
 
 export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery): boolean {
   const { gatewayUrl, recoveryScope, sessionKey } = recovery;
-  if (
-    !gatewayUrl ||
-    !recoveryScope ||
-    !validateSessionPlacementRecovery(recovery, gatewayUrl, recoveryScope, sessionKey)
-  ) {
+  const normalized = validateSessionPlacementRecovery(
+    recovery,
+    gatewayUrl,
+    recoveryScope,
+    sessionKey,
+  );
+  if (!gatewayUrl || !recoveryScope || !normalized) {
     return false;
   }
   try {
@@ -365,7 +391,7 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
       return false;
     }
     const key = sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
-    storage.setItem(key, JSON.stringify(recovery));
+    storage.setItem(key, JSON.stringify(normalized));
     return Boolean(
       readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
     );
@@ -501,14 +527,15 @@ export function pauseSessionPlacementRecovery(
     : recovery.phase === "sending"
       ? "unconfirmed"
       : "not-sent",
-): SessionPlacementPausedRecovery {
+): { recovery: SessionPlacementPausedRecovery; persisted: boolean } {
   const paused: SessionPlacementPausedRecovery = {
     ...recovery,
     phase: "paused",
     reason,
-    error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+    error: truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
   };
-  if (persistent && !writeSessionPlacementRecoveryIfAvailable(paused)) {
+  const persisted = persistent && writeSessionPlacementRecoveryIfAvailable(paused);
+  if (persistent && !persisted) {
     // Preserve input in memory without leaving an executable pending row when
     // storage refuses the paused replacement. Never retire a newer submission.
     const stored = readSessionPlacementRecovery(
@@ -524,11 +551,10 @@ export function pauseSessionPlacementRecovery(
         recovery.messageId,
       );
     }
-    paused.error =
-      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`.slice(
-        0,
-        SESSION_PLACEMENT_ERROR_MAX_LENGTH,
-      );
+    paused.error = truncateUtf16Safe(
+      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`,
+      SESSION_PLACEMENT_ERROR_MAX_LENGTH,
+    );
   }
-  return paused;
+  return { recovery: paused, persisted };
 }

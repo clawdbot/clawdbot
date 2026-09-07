@@ -3,27 +3,18 @@
  * Encodes symbolic keys, hex bytes, and literal input before writing to a
  * live process stdin.
  */
+import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { textResult } from "./tools/tool-results.js";
 
-/** Writable stdin surface shared by child-process and PTY session records. */
-export type WritableStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
-};
-
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
-export async function writeProcessStdin(stdin: WritableStdin, data: string) {
+export async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {
   await new Promise<void>((resolve, reject) => {
     stdin.write(data, (err) => {
       if (err) {
@@ -39,7 +30,7 @@ export async function writeProcessStdin(stdin: WritableStdin, data: string) {
 export async function handleProcessSendKeys(params: {
   sessionId: string;
   session: ProcessSession;
-  stdin: WritableStdin;
+  stdin: ManagedRunStdin;
   keys?: string[];
   hex?: string[];
   literal?: string;
@@ -59,12 +50,12 @@ export async function handleProcessSendKeys(params: {
   const cursorKeyMode =
     params.session.cursorKeyMode === "unknown" ? undefined : params.session.cursorKeyMode;
   const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
-  if (!data) {
+  if (data.length === 0) {
     return failText("No key data provided.");
   }
   await writeProcessStdin(params.stdin, data);
   const text =
-    `Sent ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}.` +
+    `Sent ${data.length} bytes to session ${params.sessionId}.` +
     (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : "");
   return textResult(text, {
     status: "running",

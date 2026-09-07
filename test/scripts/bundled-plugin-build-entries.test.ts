@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelConfigDoctorBuildEntries,
+  collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
@@ -28,6 +29,28 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("selects typed barrels and manifest exports rather than every runtime sidecar", () => {
+    const sources = [
+      "./index.ts",
+      "./api.ts",
+      "./runtime-api.ts",
+      "./contract-api.ts",
+      "./client.ts",
+      "./types.ts",
+      "./runtime-helper.ts",
+      "./setup-entry.ts",
+    ];
+    expect(
+      collectPluginDeclarationSourceEntries(
+        {
+          exports: { "./client": { types: "./dist/client.d.ts", import: "./dist/client.js" } },
+          types: "./dist/types.d.ts",
+        },
+        sources,
+      ),
+    ).toEqual(["./api.ts", "./runtime-api.ts", "./contract-api.ts", "./client.ts", "./types.ts"]);
+  });
+
   it("retains manifest-owned config repairs independently of runtime package exclusions", () => {
     const cwd = tempDirs.make("openclaw-config-doctor-entries-");
     const pluginDir = path.join(cwd, "extensions", "external-owner");

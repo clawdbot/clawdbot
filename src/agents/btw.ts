@@ -6,11 +6,16 @@ import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildReplyUsageState,
+  recordReplyUsageState,
+} from "../auto-reply/reply/reply-usage-state.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
   AssistantMessageEvent,
@@ -31,9 +36,9 @@ import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./bt
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
-import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -71,10 +76,8 @@ import {
   type PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
@@ -92,18 +95,12 @@ import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
+import { hasBillableUsage } from "./usage.js";
 
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
-    .join("");
-}
-
-function collectThinkingContent(content: Array<{ type?: string; thinking?: string }>): string {
-  return content
-    .filter((part): part is { type: "thinking"; thinking: string } => part.type === "thinking")
-    .map((part) => part.thinking)
     .join("");
 }
 
@@ -129,7 +126,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return resolveSessionAuthProfileOverrideSource(sessionEntry);
+  return resolveCollapsedSessionAuthPinSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -150,6 +147,7 @@ function resolveBtwAuthProfileStore(params: {
   if (isOpenAIProvider(params.provider)) {
     return {
       store: ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       }),
@@ -170,11 +168,13 @@ function resolveBtwAuthProfileStore(params: {
   let store: AuthProfileStore;
   if (externalCliAuthScope.providerIds) {
     store = ensureAuthProfileStore(params.agentDir, {
+      profileId: params.authProfileId,
       externalCliProviderIds: externalCliAuthScope.providerIds,
       allowKeychainPrompt: false,
     });
   } else {
     store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      profileId: params.authProfileId,
       allowKeychainPrompt: false,
     });
     externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
@@ -188,6 +188,7 @@ function resolveBtwAuthProfileStore(params: {
     });
     if (externalCliAuthScope.providerIds) {
       store = ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: externalCliAuthScope.providerIds,
         allowKeychainPrompt: false,
       });
@@ -420,6 +421,8 @@ async function materializeBtwRuntimeModel(
       provider: params.provider,
       modelId: params.modelId,
       config: cfg,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: params.model,
       ...(params.forceResolve !== undefined ? { forceResolve: params.forceResolve } : {}),
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
@@ -499,15 +502,18 @@ async function resolveRuntimeModel(params: {
   const agentDir = preparedModelRuntime.agentDir;
   const workspaceDir = preparedModelRuntime.workspaceDir;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
-  let model = resolveModelWithRegistry({
-    provider: params.provider,
-    modelId: params.model,
+  const resolution = await resolveModelAsync(params.provider, params.model, agentDir, cfg, {
+    authStorage,
     modelRegistry,
-    cfg,
+    preparedModelRuntime,
     workspaceDir,
+    skipAgentDiscovery: true,
+    allowBundledStaticCatalogFallback: true,
+    preferBundledStaticCatalogTransport: true,
   });
+  let model = resolution.model;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
+    throw new Error(resolution.error ?? `Unknown model: ${params.provider}/${params.model}`);
   }
   const runtimeProvider = model.provider;
   const runtimeModelId = model.id;
@@ -1067,6 +1073,42 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
+        if (hasBillableUsage(result.usage)) {
+          const usageState = buildReplyUsageState({
+            config: params.cfg,
+            agentDir: params.agentDir,
+            agentId: sessionAgentId,
+            sessionId,
+            provider: runtimeModel.provider,
+            model: runtimeModel.id,
+            chatType: params.chatType,
+            usage: result.usage,
+          });
+          // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+          recordReplyUsageState(params.opts?.runId, usageState);
+          if (isDiagnosticsEnabled(params.cfg)) {
+            const { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 } = result.usage;
+            const promptTokens = input + cacheRead + cacheWrite;
+            emitTrustedDiagnosticEvent({
+              type: "model.usage",
+              sessionKey: params.sessionKey,
+              sessionId,
+              channel: params.messageChannel,
+              agentId: sessionAgentId,
+              provider: runtimeModel.provider,
+              model: runtimeModel.id,
+              usage: {
+                input,
+                output,
+                cacheRead,
+                cacheWrite,
+                promptTokens,
+                total: result.usage.total ?? promptTokens + output,
+              },
+              costUsd: usageState.turnUsd,
+            });
+          }
+        }
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -1272,9 +1314,10 @@ export async function runBtwSideQuestion(
       agentDir: params.agentDir,
       workspaceDir,
       env: process.env,
+      wrapProviderStream: true,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       llmRuntime: modelRegistryRuntime.llmRuntime,
       currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
       providerStreamFn,
@@ -1376,8 +1419,8 @@ export async function runBtwSideQuestion(
       }
 
       if (event.type === "thinking_delta") {
-        reasoningText += event.delta;
         if (params.resolvedReasoningLevel !== "off") {
+          reasoningText += event.delta;
           await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
         }
         continue;
@@ -1399,13 +1442,8 @@ export async function runBtwSideQuestion(
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
-    if (finalMessage) {
-      if (!sawTextEvent) {
-        answerText = collectTextContent(finalMessage.content);
-      }
-      if (!reasoningText) {
-        collectThinkingContent(finalMessage.content);
-      }
+    if (finalMessage && !sawTextEvent) {
+      answerText = collectTextContent(finalMessage.content);
     }
 
     const answer = answerText.trim();

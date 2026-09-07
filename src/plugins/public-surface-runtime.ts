@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 
 export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".ts",
@@ -82,13 +83,12 @@ export function resolvePluginRootPublicSurfacePath(params: {
 }): string | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const pluginRoot = path.resolve(params.pluginRoot);
-  for (const candidate of [
-    path.join(pluginRoot, artifactBasename),
-    path.join(pluginRoot, "dist", artifactBasename),
-  ]) {
-    if (pluginCacheExistsSync(candidate)) {
-      return candidate;
-    }
+  const builtCandidate = resolvePluginRootArtifactPath(pluginRoot, [
+    artifactBasename,
+    path.join("dist", artifactBasename),
+  ]);
+  if (builtCandidate) {
+    return builtCandidate;
   }
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
@@ -177,19 +177,9 @@ function resolvePublicSurfaceFromBundledDir(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const pluginDir = path.resolve(params.bundledPluginsDir, params.dirName);
-  const builtCandidate = path.join(pluginDir, params.artifactBasename);
-  if (pluginCacheExistsSync(builtCandidate)) {
-    return builtCandidate;
-  }
-  const packageLocalBuiltCandidate = path.join(pluginDir, "dist", params.artifactBasename);
-  if (pluginCacheExistsSync(packageLocalBuiltCandidate)) {
-    return packageLocalBuiltCandidate;
-  }
   return (
-    resolveBundledPluginSourcePublicSurfacePath({
-      sourceRoot: params.bundledPluginsDir,
-      dirName: params.dirName,
+    resolvePluginRootPublicSurfacePath({
+      pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
       artifactBasename: params.artifactBasename,
     }) ??
     resolvePackageFallbackForBundledDir({

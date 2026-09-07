@@ -15,6 +15,7 @@ import platform
 import re
 import secrets
 import select
+import signal
 import shutil
 import stat
 import subprocess
@@ -250,7 +251,30 @@ def default_chat(config, bot_config):
 
 
 class TdClient:
-    def __init__(self, config):
+    def __init__(self, config, deadline_unix_ms=None):
+        self.deadline_unix_ms = deadline_unix_ms
+        self.proof_authority_file = os.environ.get("TELEGRAM_PROOF_AUTHORITY_FILE")
+        self.proof_authority_invalid = False
+        self.proof_clock_wall = time.time() * 1000
+        self.proof_clock_monotonic = time.monotonic()
+        self.deadline_monotonic = (
+            time.monotonic() + (deadline_unix_ms / 1000 - time.time())
+            if deadline_unix_ms is not None else None
+        )
+        if self.proof_authority_file:
+            # Applies to every credentialed proof client, including status/auth
+            # before the recorder exists. Arm before creating native threads.
+            try:
+                parent_pid = int(os.environ.get("TELEGRAM_PROOF_PARENT_PID", ""))
+            except ValueError:
+                raise DriverError("Missing trusted proof owner.") from None
+            if sys.platform != "linux" or parent_pid <= 1:
+                raise DriverError("Trusted proof ownership requires a Linux controller.")
+            if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+                raise DriverError("Unable to arm proof parent-death cleanup.")
+            if os.getppid() != parent_pid:
+                raise DriverError("Trusted proof owner is no longer active.")
+            self.assert_proof_authority()
         lib_path = find_tdjson(config)
         if not lib_path:
             raise DriverError(
@@ -282,7 +306,30 @@ class TdClient:
         raw = self.lib.td_json_client_execute(self.client, json.dumps(payload).encode())
         return json.loads(raw.decode()) if raw else None
 
+    def assert_proof_authority(self):
+        authority_file = getattr(self, "proof_authority_file", None)
+        if authority_file:
+            # Only the trusted controller can refresh this private atomic file.
+            # Check at the native-send boundary, before any queued action escapes.
+            try:
+                deadline = int(Path(authority_file).read_text())
+                now = max(time.time() * 1000, self.proof_clock_wall +
+                          (time.monotonic() - self.proof_clock_monotonic) * 1000)
+                if getattr(self, "proof_authority_invalid", False) or now >= deadline:
+                    raise ValueError("expired")
+            except (OSError, ValueError):
+                self.proof_authority_invalid = True
+                raise DriverError("Trusted review authority expired.") from None
+
     def send(self, payload):
+        self.assert_proof_authority()
+        # Check at the native send boundary, before a resumed process can emit
+        # a queued action. Background TDLib transport traffic is not an action.
+        if self.deadline_unix_ms is not None and (
+            time.time() * 1000 >= self.deadline_unix_ms
+            or time.monotonic() >= self.deadline_monotonic
+        ):
+            raise DriverError("Trusted proof action deadline expired.")
         self.extra += 1
         extra = str(self.extra)
         payload = dict(payload)
@@ -335,10 +382,10 @@ class TdClient:
 
 
 class UserDriver:
-    def __init__(self, config, bot_config):
+    def __init__(self, config, bot_config, deadline_unix_ms=None):
         self.config = config
         self.bot_config = bot_config
-        self.client = TdClient(config)
+        self.client = TdClient(config) if deadline_unix_ms is None else TdClient(config, deadline_unix_ms)
         self.auth_state = None
         self.printed_qr_link = ""
 
@@ -700,7 +747,6 @@ def normalize_message(message, users=None):
         "replyToMessageId": reply_to_message_id,
         "threadId": message.get("message_thread_id"),
         **message_content(content),
-        "contentType": content.get("@type"),
         "raw": message,
     }
 
@@ -994,6 +1040,7 @@ def serve_message(message, users):
         "senderUsername": normalized.get("senderUsername"),
         "replyToMessageId": normalized.get("replyToMessageId"),
         "timestamp": int(message.get("date") or 0) * 1000,
+        "contentType": normalized["contentType"],
         "text": normalized["text"],
         "entities": normalized["entities"],
     }
@@ -1023,8 +1070,8 @@ def message_content(content):
     key = "text" if content.get("@type") == "messageText" else "caption"
     formatted = content.get(key)
     if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
-        return {"text": formatted["text"], "entities": formatted["entities"]}
-    return {"text": "", "entities": []}
+        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"]}
+    return {"contentType": content.get("@type"), "text": "", "entities": []}
 
 
 def write_ndjson(payload):

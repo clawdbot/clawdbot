@@ -11,6 +11,7 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
 import {
   checkClientVoiceToolConfirmationPolicy,
   noteClientVoiceConfirmationUtterance,
@@ -19,6 +20,7 @@ import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voic
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -134,6 +136,10 @@ vi.mock("../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synth
 
 vi.mock("../../talk/provider-registry.js", () => ({
   canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
+  getRealtimeVoiceProvider: (providerId: string | undefined) =>
+    mocks
+      .listRealtimeVoiceProviders()
+      .find((provider: { id: string }) => provider.id === providerId),
   listRealtimeVoiceProviders: mocks.listRealtimeVoiceProviders,
 }));
 
@@ -393,6 +399,33 @@ describe("talk.catalog handler", () => {
     mocks.resolveTtsConfig.mockReturnValue({ timeoutMs: 30_000 });
   });
 
+  it("rejects an ambiguous owner before discovering catalog providers", async () => {
+    const respond = vi.fn();
+    await mocks.listRealtimeTranscriptionProviders.withImplementation(
+      () => {
+        throw new Error("provider discovery failed");
+      },
+      () =>
+        callTalkHandler("talk.catalog", {
+          params: {},
+          respond,
+          context: {
+            getRuntimeConfig: () => ({
+              agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
+            }),
+          },
+        }),
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("Talk session ownership has no explicit owner"),
+    });
+    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
+    expect(mocks.listRealtimeTranscriptionProviders).not.toHaveBeenCalled();
+    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["talk.catalog", {}],
     ["talk.client.create", { provider: "openai" }],
@@ -620,9 +653,8 @@ describe("talk.catalog handler", () => {
       id: "openai",
       label: "OpenAI Realtime",
       defaultModel: "gpt-realtime-2.1",
-      models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
+      models: ["gpt-realtime-2.1"],
       voices: ["alloy", "marin"],
-      capabilities: { voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] } },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -633,6 +665,13 @@ describe("talk.catalog handler", () => {
       provider: { id: "openai" },
       providerConfig: {},
     } as never);
+    mocks.resolveRealtimeVoiceProviderCapabilities.mockReturnValueOnce({
+      transports: ["gateway-relay"],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      voices: ["marin", "cedar"],
+      voiceSelectionPolicy: "allowlist-default",
+    });
     const respond = vi.fn();
 
     await callTalkHandler("talk.catalog", {
@@ -646,7 +685,7 @@ describe("talk.catalog handler", () => {
               realtime: {
                 provider: "openai",
                 providers: { openai: { model: "gpt-realtime-2.1" } },
-                model: "gpt-live-1-codex",
+                model: "gpt-live-test-canary",
               },
             },
           }) as OpenClawConfig,
@@ -657,23 +696,25 @@ describe("talk.catalog handler", () => {
       realtime: { providers: Array<Record<string, unknown>> };
     };
     expect(catalog.realtime.providers[0]).toMatchObject({
-      models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
+      models: ["gpt-realtime-2.1"],
       voices: ["alloy", "marin"],
-      voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
+      activeVoices: ["marin", "cedar"],
+      activeVoiceSelectionPolicy: "allowlist-default",
     });
+    expect(JSON.stringify(catalog)).not.toContain("gpt-live-test-canary");
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved
     // agent scope is consulted, or GPT-Live over OAuth reads as unconfigured.
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerConfigOverrides: { model: "gpt-live-1-codex" },
+        providerConfigOverrides: { model: "gpt-live-test-canary" },
         agentId: expect.any(String),
       }),
     );
     expect(mocks.isRealtimeVoiceProviderConfigured).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: expect.any(String),
-        providerConfig: expect.objectContaining({ model: "gpt-live-1-codex" }),
+        providerConfig: expect.objectContaining({ model: "gpt-live-test-canary" }),
         surface: "browser-session",
       }),
     );
@@ -684,6 +725,7 @@ describe("talk.catalog handler", () => {
     const provider = {
       id: "relay",
       label: "Relay Voice",
+      voices: ["relay-default"],
       isConfigured,
       capabilities: {
         transports: ["gateway-relay"],
@@ -725,6 +767,7 @@ describe("talk.catalog handler", () => {
     expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
     const catalog = expectRespondOk(respond);
     expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
+    expect(catalog.realtime.providers[0]).toMatchObject({ voices: ["relay-default"] });
   });
 
   it.each(["realtime-fast", "realtime-fast-alias"])(
@@ -1261,6 +1304,158 @@ describe("talk.config handler", () => {
       transport: "provider-websocket",
     });
   });
+
+  it("preserves unavailable non-OpenAI realtime models without a bundled projector", async () => {
+    const runtimeConfig = {
+      talk: {
+        realtime: {
+          provider: "other-realtime",
+          model: "other-live-model",
+          providers: {
+            "other-realtime": { model: "other-live-model", voice: "other-voice" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: runtimeConfig,
+    });
+    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.config", {
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } },
+      respond,
+      context: { getRuntimeConfig: () => runtimeConfig },
+    });
+
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    const realtime = expectRecordFields(response.config?.talk?.realtime, {
+      provider: "other-realtime",
+      model: "other-live-model",
+    });
+    expectRecordFields((realtime.providers as Record<string, unknown>)["other-realtime"], {
+      model: "other-live-model",
+      voice: "other-voice",
+    });
+  });
+
+  it.each([
+    { includeSecrets: false, providerSelection: "explicit" },
+    { includeSecrets: true, providerSelection: "explicit" },
+    { includeSecrets: false, providerSelection: "implicit" },
+  ] as const)(
+    "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=$includeSecrets provider=$providerSelection",
+    async ({ includeSecrets, providerSelection }) => {
+      const runtimeConfig = {
+        talk: {
+          realtime: {
+            ...(providerSelection === "explicit" ? { provider: "openai" } : {}),
+            model: "gpt-live-test-canary",
+            providers: {
+              openai: { model: "gpt-live-test-canary", voice: "marin" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        path: "/tmp/openclaw.json",
+        hash: "test-hash",
+        valid: true,
+        config: runtimeConfig,
+      });
+      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+      const respond = vi.fn();
+
+      await callTalkHandler("talk.config", {
+        params: includeSecrets ? { includeSecrets: true } : {},
+        client: {
+          connect: {
+            scopes: includeSecrets ? ["operator.read", "operator.talk.secrets"] : ["operator.read"],
+          },
+        },
+        respond,
+        context: { getRuntimeConfig: () => runtimeConfig },
+      });
+
+      const response = expectRespondOk(respond) as {
+        config?: {
+          talk?: Record<string, unknown>;
+          clientHints?: Record<string, unknown>;
+        };
+      };
+      const realtime = expectRecordFields(response.config?.talk?.realtime, {
+        provider: "openai",
+      });
+      expect(JSON.stringify(response)).not.toContain("gpt-live-test-canary");
+      expect(realtime).not.toHaveProperty("model");
+      const providerConfig = (realtime.providers as Record<string, unknown>).openai;
+      expectRecordFields(providerConfig, { voice: "marin" });
+      expect(providerConfig).not.toHaveProperty("model");
+      expect(response.config?.clientHints).toEqual({
+        realtime: {
+          modelSource: "gateway",
+          gatewayRelaySupported: false,
+        },
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves the released OpenAI realtime route through the cold bundled policy surface includeSecrets=%s",
+    async (includeSecrets) => {
+      const runtimeConfig = {
+        talk: {
+          realtime: {
+            provider: "openai",
+            model: "gpt-live-1-codex",
+            providers: {
+              openai: { model: "gpt-live-1-codex", voice: "spruce" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        path: "/tmp/openclaw.json",
+        hash: "test-hash",
+        valid: true,
+        config: runtimeConfig,
+      });
+      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+      const respond = vi.fn();
+
+      await callTalkHandler("talk.config", {
+        params: includeSecrets ? { includeSecrets: true } : {},
+        client: {
+          connect: {
+            scopes: includeSecrets ? ["operator.read", "operator.talk.secrets"] : ["operator.read"],
+          },
+        },
+        respond,
+        context: { getRuntimeConfig: () => runtimeConfig },
+      });
+
+      const response = expectRespondOk(respond) as {
+        config?: {
+          talk?: Record<string, unknown>;
+          clientHints?: Record<string, unknown>;
+        };
+      };
+      const realtime = expectRecordFields(response.config?.talk?.realtime, {
+        provider: "openai",
+        model: "gpt-live-1-codex",
+      });
+      expectRecordFields((realtime.providers as Record<string, unknown>).openai, {
+        model: "gpt-live-1-codex",
+        voice: "spruce",
+      });
+      expect(response.config).not.toHaveProperty("clientHints");
+    },
+  );
 
   it("projects effective legacy realtime provider config for native routing", async () => {
     const resolveConfig = vi.fn(
@@ -1970,6 +2165,18 @@ describe("talk.session unified handlers", () => {
       language: "de",
       consultAuthority: {
         senderIsOwner: false,
+        replyCaller: {
+          ApprovalReviewerDeviceId: undefined,
+          ChatType: "direct",
+          GatewayClientCaps: [],
+          GatewayClientScopes: ["operator.talk"],
+          OriginatingChannel: "webchat",
+          Provider: "webchat",
+          Surface: "webchat",
+          SenderId: undefined,
+          SenderName: undefined,
+          SenderUsername: undefined,
+        },
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       },
     });
@@ -2125,6 +2332,22 @@ describe("talk.session unified handlers", () => {
     expect(mocks.steerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
+      authority: {
+        senderIsOwner: false,
+        replyCaller: {
+          ApprovalReviewerDeviceId: undefined,
+          ChatType: "direct",
+          GatewayClientCaps: [],
+          GatewayClientScopes: [],
+          OriginatingChannel: "webchat",
+          Provider: "webchat",
+          Surface: "webchat",
+          SenderId: undefined,
+          SenderName: undefined,
+          SenderUsername: undefined,
+        },
+        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
+      },
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
@@ -2150,16 +2373,24 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("uses talk.agentId for a bare realtime session in an explicit fleet", async () => {
+  it("uses talk.agentId and projects an opaque model from a bare realtime session", async () => {
+    const model = "gpt-live-test-canary";
     const provider = {
       id: "openai",
       label: "OpenAI Realtime",
       isConfigured: () => true,
       createBridge: vi.fn(),
+      [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+        isBrowserSessionConfigured: () => true,
+        projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
+          const { model: _model, ...publicConfig } = config;
+          return { config: publicConfig };
+        },
+      },
     };
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: {},
+      providerConfig: { model },
     });
     mocks.createTalkRealtimeRelaySession.mockReturnValue({
       provider: "openai",
@@ -2171,7 +2402,7 @@ describe("talk.session unified handlers", () => {
         outputEncoding: "pcm16",
         outputSampleRateHz: 24000,
       },
-      model: "gpt-realtime",
+      model,
       voice: "alloy",
       expiresAt: 1_797_986_400,
     });
@@ -2184,7 +2415,8 @@ describe("talk.session unified handlers", () => {
         agentId: "research",
         realtime: {
           provider: "openai",
-          providers: { openai: {} },
+          model,
+          providers: { openai: { model } },
         },
       },
     };
@@ -2213,18 +2445,19 @@ describe("talk.session unified handlers", () => {
         assertCommitAllowed: expect.any(Function),
       }),
     );
-    expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
+    const response = expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
+    expect(JSON.stringify(response)).not.toContain(model);
   });
 
   it.each([
     {
       label: "request override from a configured GA model",
       configuredModel: "gpt-realtime-2.1",
-      requestedModel: "gpt-live-1-codex",
+      requestedModel: "gpt-live-test-canary",
     },
     {
       label: "configured supported model without an override",
-      configuredModel: "gpt-live-1-codex",
+      configuredModel: "gpt-live-test-canary",
       requestedModel: undefined,
     },
   ])("resolves relay readiness from the effective model: $label", async (testCase) => {
@@ -2238,14 +2471,14 @@ describe("talk.session unified handlers", () => {
       expect(input).toEqual(
         expect.objectContaining({
           agentId: "voice-agent",
-          providerConfigOverrides: { model: "gpt-live-1-codex" },
+          providerConfigOverrides: { model: "gpt-live-test-canary" },
           defaultModel: testCase.configuredModel,
           surface: "gateway-relay",
         }),
       );
       return {
         provider,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-test-canary" },
       } as never;
     });
     mocks.createTalkRealtimeRelaySession.mockReturnValueOnce({
@@ -2258,7 +2491,7 @@ describe("talk.session unified handlers", () => {
         outputEncoding: "pcm16",
         outputSampleRateHz: 24000,
       },
-      model: "gpt-live-1-codex",
+      model: "gpt-live-test-canary",
       voice: "marin",
       expiresAt: 1_797_986_400,
     });
@@ -2293,8 +2526,8 @@ describe("talk.session unified handlers", () => {
     expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
       expect.objectContaining({
         provider,
-        providerConfig: { model: "gpt-live-1-codex" },
-        model: "gpt-live-1-codex",
+        providerConfig: { model: "gpt-live-test-canary" },
+        model: "gpt-live-test-canary",
         sessionTarget: expect.objectContaining({
           agentId: "voice-agent",
           sessionKey: "agent:voice-agent:main",
@@ -2323,7 +2556,7 @@ describe("talk.session unified handlers", () => {
     };
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: { model: "gpt-live-1-codex" },
+      providerConfig: { model: "gpt-live-test-canary" },
     });
     mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
       "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
@@ -2336,7 +2569,7 @@ describe("talk.session unified handlers", () => {
         transport: "gateway-relay",
         brain: "agent-consult",
         provider: "openai",
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
       },
       respond,
       context: {
@@ -2345,7 +2578,7 @@ describe("talk.session unified handlers", () => {
             talk: {
               realtime: {
                 provider: "openai",
-                providers: { openai: { model: "gpt-live-1-codex" } },
+                providers: { openai: { model: "gpt-live-test-canary" } },
                 consultRouting: "force-agent-consult",
               },
             },
@@ -2356,8 +2589,8 @@ describe("talk.session unified handlers", () => {
     expect(mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError).toHaveBeenCalledWith({
       provider,
       cfg: expect.any(Object),
-      providerConfig: { model: "gpt-live-1-codex" },
-      model: "gpt-live-1-codex",
+      providerConfig: { model: "gpt-live-test-canary" },
+      model: "gpt-live-test-canary",
       autoRespondToAudio: false,
     });
     expectRespondError(respond, {
@@ -2750,6 +2983,10 @@ describe("talk.client.toolCall handler", () => {
         name: "openclaw_agent_consult",
         args: { question: "Do something" },
       },
+      client: {
+        connId: "conn-1",
+        connect: { scopes: ["operator.admin"], caps: ["tool-events", "task-suggestions"] },
+      },
       respond,
       context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
     });
@@ -2762,6 +2999,10 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
       expect.objectContaining({ voiceSessionId: "voice-test", runId: "run-voice-1" }),
     );
+    expect(mocks.chatSend.mock.calls[0]?.[0].client.connect).toMatchObject({
+      scopes: ["operator.admin"],
+      caps: ["tool-events"],
+    });
     expect(mocks.chatSend).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
   });
@@ -2845,6 +3086,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
@@ -2973,6 +3215,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: undefined,
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
@@ -3123,6 +3366,7 @@ describe("talk.client.steer handler", () => {
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       runTarget: expect.objectContaining({ runId: "run-voice-1" }),
+      getToolAuthorityOverlay: expect.any(Function),
       text: "use the safer plan",
       mode: "steer",
     });
@@ -3345,6 +3589,7 @@ describe("talk.client.create handler", () => {
       },
       16,
       800,
+      "model-context",
     );
     expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai" }),
@@ -3643,6 +3888,7 @@ describe("talk.client.create handler", () => {
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       runTarget: expect.objectContaining({ runId: "talk-realtime-consult:gpt-live" }),
+      getToolAuthorityOverlay: expect.any(Function),
       text: "Use the safer plan",
       mode: "steer",
     });
@@ -4055,6 +4301,114 @@ describe("talk.client.create handler", () => {
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expect(createInput).not.toHaveProperty("model");
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+  });
+
+  it("projects opaque models out of browser session responses", async () => {
+    const model = "gpt-live-test-canary";
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "secret",
+      model,
+    }));
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      defaultModel: "gpt-realtime",
+      models: ["gpt-realtime"],
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
+      value: {
+        isBrowserSessionConfigured: () => true,
+        projectPublicProjection: ({
+          config,
+        }: {
+          config: Record<string, unknown>;
+        }): { config: Record<string, unknown> } => {
+          const { model: _model, ...publicConfig } = config;
+          return { config: publicConfig };
+        },
+      },
+    });
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key", model },
+    });
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.client.create", {
+      params: { model },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key", model } },
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    const response = expectRespondOk(respond) as Record<string, unknown>;
+    expect(response).not.toHaveProperty("model");
+    expect(JSON.stringify(response)).not.toContain(model);
+  });
+
+  it("preserves the released model in browser session responses", async () => {
+    const model = "gpt-live-1-codex";
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "secret",
+      model,
+      voice: "spruce",
+    }));
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      defaultModel: "gpt-realtime",
+      models: ["gpt-realtime", model],
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
+      value: {
+        isBrowserSessionConfigured: () => true,
+        projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => ({ config }),
+      },
+    });
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key", model },
+    });
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.client.create", {
+      params: { model },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key", model } },
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expectRespondOk(respond, { model, voice: "spruce" });
   });
 
   it("uses the first configured realtime voiceModel fallback", async () => {

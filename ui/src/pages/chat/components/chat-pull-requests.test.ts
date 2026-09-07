@@ -6,7 +6,7 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../../src/gateway/control-ui-contract.js";
-import type { GitHubPublicationView } from "../chat-github-publication.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import {
   chatPullRequestId,
   createPullRequestBranch,
@@ -18,6 +18,7 @@ import {
 function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
     busy: false,
+    canWrite: true,
     locked: false,
     options: null,
     selection: {
@@ -418,6 +419,36 @@ describe("renderChatPullRequests", () => {
     expect(container.textContent).toContain("The outcome is unknown");
     expect(container.querySelector("a.chat-pr__create")).toBeNull();
   });
+
+  it.each(["system-configured", "agent-override"] as const)(
+    "shows a sole %s publisher as information behind the publication arrow",
+    (source) => {
+      const shared = { source, accountId: 1, login: "system-bot" };
+      const onSelect = vi.fn();
+      render(
+        renderChatPullRequests({
+          pullRequests: [],
+          branch: sessionBranch(),
+          rateLimited: false,
+          expanded: false,
+          onExpand: () => {},
+          onDismiss: () => {},
+          publication: publication({
+            options: { shared, personal: null, pendingPersonal: null },
+            selection: { source: "shared", expected: shared },
+            onSelect,
+          }),
+        }),
+        container,
+      );
+      expect(container.querySelector("select")).toBeNull();
+      expect(container.querySelector('button[aria-label="Publication account"]')).not.toBeNull();
+      const popover = container.querySelector("wa-popover");
+      expect(popover?.textContent).toContain("Publish as @system-bot");
+      expect(container.querySelector(".chat-pr__publication-outcome")).toBeNull();
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the shared cloud flow available and explains the personal workspace boundary", () => {
     render(

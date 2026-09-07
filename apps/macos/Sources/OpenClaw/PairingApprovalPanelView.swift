@@ -1,92 +1,68 @@
 import AppKit
 import SwiftUI
 
-/// Approval dialog listing every pending pairing request as a card. The host
-/// panel draws native window chrome; this view only lays out the content.
 struct PairingApprovalPanelView: View {
     let center: PairingApprovalCenter
 
     var body: some View {
-        self.content
-            .frame(width: PairingApprovalPanelController.panelWidth)
-    }
-
-    private var content: some View {
         let cards = self.center.cards
-        return VStack(alignment: .leading, spacing: 12) {
-            self.header(cards: cards)
-            // Every request renders and stays actionable; the scroll plus the
-            // controller's screen-height clamp bound hostile queue sizes.
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                if let icon = NSApp.applicationIconImage {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 64, height: 64)
+                        .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("OpenClaw")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(verbatim: PairingCardPresentation.headerTitle(for: cards))
+                        .font(.system(size: 23, weight: .semibold))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            // Keep the entire requested grant surface visible; long queues scroll.
+            ScrollView {
+                VStack(spacing: 16) {
                     ForEach(cards) { card in
                         PairingRequestCardView(
                             card: card,
                             isOnlyRequest: cards.count == 1,
-                            onDecision: { self.center.decide(card, $0) })
+                            onDecision: { self.center.decide(card, $0) },
+                            onSnooze: { self.center.snooze() })
                     }
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
             .scrollBounceBehavior(.basedOnSize)
-            self.footer(cards: cards)
-        }
-        .padding(18)
-    }
 
-    /// Single request keeps the minimal "Not Now" footer; multiple requests
-    /// add one-click bulk actions so a queue never needs card-by-card clicks.
-    @ViewBuilder
-    private func footer(cards: [PairingApprovalCenter.Card]) -> some View {
-        let notNow = Button("Not Now") { self.center.snooze() }
-            .keyboardShortcut(.cancelAction)
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-        if cards.count > 1 {
-            HStack(spacing: 8) {
-                notNow
-                Spacer()
-                // No keyboard shortcuts here: bulk approval is a security
-                // decision and must never be a stray Return press. Both
-                // actions resolve the rendered `cards` snapshot, never the
-                // live queue, so a request that arrives mid-click cannot be
-                // approved before it was ever displayed.
-                Button(role: .destructive) {
-                    self.center.decideAll(cards, .reject)
-                } label: {
-                    Text("Reject All")
-                        .padding(.horizontal, 6)
+            if cards.count > 1 {
+                Divider()
+                HStack(spacing: 10) {
+                    Button("Not Now") { self.center.snooze() }
+                        .keyboardShortcut(.cancelAction)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    // Bulk actions resolve the rendered snapshot, never newly arrived requests.
+                    // They deliberately have no keyboard shortcut.
+                    Button("Reject All") { self.center.decideAll(cards, .reject) }
+                    Button("Approve All") { self.center.decideAll(cards, .approve) }
+                        .buttonStyle(.borderedProminent)
                 }
-                .pairingActionStyle(prominent: false)
-                Button {
-                    self.center.decideAll(cards, .approve)
-                } label: {
-                    Text("Approve All")
-                        .padding(.horizontal, 6)
-                }
-                .pairingActionStyle(prominent: true)
-            }
-        } else {
-            HStack {
-                Spacer()
-                notNow
+                .controlSize(.large)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
             }
         }
-    }
-
-    private func header(cards: [PairingApprovalCenter.Card]) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(cards.count == 1 ? "Pairing Request" : "Pairing Requests")
-                    .font(.title3.weight(.semibold))
-                Text(PairingCardPresentation.headerSummary(for: cards))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
+        .frame(width: PairingApprovalPanelController.panelWidth)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -94,153 +70,167 @@ struct PairingRequestCardView: View {
     let card: PairingApprovalCenter.Card
     let isOnlyRequest: Bool
     let onDecision: (PairingApprovalCenter.Decision) -> Void
+    let onSnooze: () -> Void
 
-    @State private var isHoveringDetail = false
+    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                self.icon
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(PairingCardPresentation.title(for: self.card))
-                        .font(.headline)
-                        .lineLimit(1)
+                Image(systemName: PairingCardPresentation.deviceSymbol(for: self.card))
+                    .font(.system(size: 24))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, height: 40)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    let title = PairingCardPresentation.title(for: self.card)
+                    Text(verbatim: title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(2)
+                        .help(Text(verbatim: title))
                     if let subtitle = PairingCardPresentation.subtitle(for: self.card) {
-                        Text(subtitle)
-                            .font(.subheadline)
+                        Text(verbatim: subtitle)
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .textSelection(.enabled)
                     }
                 }
                 Spacer(minLength: 0)
+                Button("Details") { self.showingDetails.toggle() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .popover(isPresented: self.$showingDetails, arrowEdge: .bottom) { self.details }
             }
 
-            self.trustRow
+            if let warning = PairingCardPresentation.trustWarning(for: self.card) {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             self.accessRows
-            self.detailRow
+            Divider()
 
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
+                if self.isOnlyRequest {
+                    Button("Not Now", action: self.onSnooze)
+                        .keyboardShortcut(.cancelAction)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                self.rejectButton
-                self.approveButton
+                Button("Reject") { self.onDecision(.reject) }
+                Button {
+                    self.onDecision(.approve)
+                } label: {
+                    Text(self.card.kind == .node ? "Approve Node" : "Approve Device")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(self.isOnlyRequest ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                .help(self.isOnlyRequest ? "Approve this request (⌘Return)" : "Approve this request")
             }
+            .controlSize(.large)
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16).fill(.quinary))
+        .padding(16)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.1)))
     }
 
-    private var icon: some View {
-        Image(systemName: PairingCardPresentation.deviceSymbol(for: self.card))
-            .font(.system(size: 20, weight: .medium))
-            .frame(width: 42, height: 42)
-            .background(Circle().fill(.quaternary))
-    }
-
-    private var trustRow: some View {
-        let trust = PairingCardPresentation.trustLine(for: self.card)
-        return Label(trust.text, systemImage: trust.symbol)
-            .font(.caption)
-            .foregroundStyle(self.trustStyle(trust.tone))
-    }
-
-    private func trustStyle(_ tone: PairingCardPresentation.TrustTone) -> AnyShapeStyle {
-        switch tone {
-        case .caution: AnyShapeStyle(.orange)
-        case .neutral: AnyShapeStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
     private var accessRows: some View {
-        // Every requested scope/capability renders: hiding one behind a cap
-        // could conceal what approval grants. The panel scrolls when long.
         let rows = PairingCardPresentation.accessRows(for: self.card)
-        if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(rows) { row in
-                    Label(row.text, systemImage: row.symbol)
-                        .font(.caption)
-                        .foregroundStyle(
-                            row.isElevated ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("REQUESTED ACCESS")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(.secondary)
+            ForEach(rows.filter(\.isElevated)) { row in
+                self.accessLabel(row)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                alignment: .leading,
+                spacing: 6)
+            {
+                ForEach(rows.filter { !$0.isElevated && $0.id != "commands" }) { row in
+                    self.accessLabel(row)
                 }
             }
-        }
-    }
-
-    private var detailRow: some View {
-        HStack(spacing: 4) {
-            Text(PairingCardPresentation.identityLine(for: self.card))
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            // Hover-only copy affordance; stays out of the keyboard focus loop.
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(self.card.subjectId, forType: .string)
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            // Unknown commands are still grants; show the complete list at full width.
+            ForEach(rows.filter { $0.id == "commands" }) { row in
+                self.accessLabel(row)
             }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .help("Copy full ID")
-            .opacity(self.isHoveringDetail ? 1 : 0)
-            Spacer()
-            Text(PairingCardPresentation.metaLine(for: self.card))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .help(PairingCardPresentation.versionTooltip(for: self.card))
+            if rows.isEmpty {
+                Text("No additional capabilities requested.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
         }
-        .onHover { self.isHoveringDetail = $0 }
     }
 
-    private var approveButton: some View {
-        Button {
-            self.onDecision(.approve)
-        } label: {
-            Text(self.card.kind == .node ? "Approve Node" : "Approve Device")
-                .padding(.horizontal, 6)
-        }
-        .pairingActionStyle(prominent: true)
-        .keyboardShortcut(self.isOnlyRequest ? .defaultAction : nil)
+    private func accessLabel(_ row: PairingCardPresentation.AccessRow) -> some View {
+        Label(PairingCardPresentation.display(row.text), systemImage: row.symbol)
+            .font(.system(size: 12))
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 
-    private var rejectButton: some View {
-        Button(role: .destructive) {
-            self.onDecision(.reject)
-        } label: {
-            Text("Reject")
-                .padding(.horizontal, 6)
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Request details").font(.headline)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        PairingCardPresentation.display(self.card.subjectId),
+                        forType: .string)
+                } label: {
+                    Label("Copy ID", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+            }
+            ScrollView {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                    self.detail("ID", value: self.card.subjectId)
+                    self.detail("Model", value: self.card.modelIdentifier)
+                    self.detail("App version", value: self.card.version)
+                    self.detail("Core version", value: self.card.coreVersion)
+                    GridRow(alignment: .top) {
+                        Text("Requested").foregroundStyle(.secondary)
+                        Text(self.card.requestedAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 220)
         }
-        .pairingActionStyle(prominent: false)
+        .font(.system(size: 12))
+        .padding(16)
+        .frame(width: 420)
     }
-}
 
-extension View {
-    /// Shared capsule styling for pairing decision buttons: Liquid Glass on
-    /// macOS 26+, bordered fallback on macOS 15.
     @ViewBuilder
-    func pairingActionStyle(prominent: Bool) -> some View {
-        if #available(macOS 26.0, *) {
-            if prominent {
-                self.buttonStyle(.glassProminent).buttonBorderShape(.capsule)
-            } else {
-                self.buttonStyle(.glass).buttonBorderShape(.capsule)
-            }
-        } else {
-            if prominent {
-                self.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-            } else {
-                self.buttonStyle(.bordered).buttonBorderShape(.capsule)
+    private func detail(_ title: LocalizedStringKey, value: String?) -> some View {
+        if let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            GridRow(alignment: .top) {
+                Text(title).foregroundStyle(.secondary)
+                Text(verbatim: PairingCardPresentation.display(value))
+                    .fontDesign(.monospaced)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 }
 
-/// Pure display mapping for pairing cards; kept UI-framework-free so tests
-/// can assert copy and symbols without instantiating views.
 enum PairingCardPresentation {
     struct AccessRow: Identifiable, Equatable {
         /// Single grants use their raw value; intentional grouped grants use a
@@ -251,34 +241,28 @@ enum PairingCardPresentation {
         let isElevated: Bool
     }
 
-    enum TrustTone: Equatable {
-        case caution
-        case neutral
-    }
-
-    struct TrustLine: Equatable {
-        let symbol: String
-        let text: String
-        let tone: TrustTone
-    }
-
-    static func headerSummary(for cards: [PairingApprovalCenter.Card]) -> String {
+    static func headerTitle(for cards: [PairingApprovalCenter.Card]) -> String {
         guard cards.count == 1, let card = cards.first else {
-            return "\(cards.count) devices want to connect to OpenClaw."
+            return String(localized: "Review pairing requests")
         }
         return card.kind == .node
-            ? "A node wants to connect to OpenClaw."
-            : "A device wants to connect to OpenClaw."
+            ? String(localized: "Allow this node’s capabilities?")
+            : String(localized: "Allow this device?")
+    }
+
+    static func display(_ value: String) -> String {
+        ExecApprovalCommandDisplaySanitizer.sanitize(value)
     }
 
     static func title(for card: PairingApprovalCenter.Card) -> String {
         let name = card.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let name, !name.isEmpty, name != card.subjectId {
-            return name
+            return self.display(name)
         }
         switch card.kind {
-        case .node: return "Unnamed node"
-        case .device: return self.isMac(card.platform) ? "OpenClaw Mac app" : "New device"
+        case .node: return String(localized: "Unnamed node")
+        case .device: return self.isMac(card.platform)
+            ? String(localized: "OpenClaw Mac app") : String(localized: "New device")
         }
     }
 
@@ -287,46 +271,31 @@ enum PairingCardPresentation {
         if let platform = self.prettyPlatform(card.platform) {
             parts.append(platform)
         }
-        if let model = self.prettyModel(card.modelIdentifier, deviceFamily: card.deviceFamily),
-           parts.allSatisfy({ $0 != model })
-        {
-            parts.append(model)
-        }
         if card.kind == .device, let role = card.role?.trimmingCharacters(in: .whitespacesAndNewlines),
            !role.isEmpty
         {
-            parts.append(role == "operator" ? "Operator" : role)
+            parts.append(role == "operator" ? String(localized: "Operator") : role)
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        if let ip = self.prettyIP(card.remoteIp) {
+            parts.append(ip)
+        }
+        return parts.isEmpty ? nil : self.display(parts.joined(separator: " · "))
     }
 
-    static func trustLine(for card: PairingApprovalCenter.Card) -> TrustLine {
+    static func trustWarning(for card: PairingApprovalCenter.Card) -> String? {
+        // Node requests change capabilities on an authenticated paired device;
+        // only device pairing replaces the requested role's access token.
+        if card.kind == .node {
+            return card.previouslyPaired == true
+                ? String(localized: "This node is requesting updated capabilities.") : nil
+        }
         if card.isRepair {
-            return TrustLine(
-                symbol: "arrow.triangle.2.circlepath",
-                text: "Repair request — its access token will rotate",
-                tone: .caution)
+            return String(localized: "Approving this repair replaces the device’s access token.")
         }
-        switch card.previouslyPaired {
-        case true:
-            // The requester merely CLAIMS this id (it is not authenticated),
-            // so an already-paired id is a caution — approval replaces the
-            // existing peer's token — never a positive trust signal.
-            return TrustLine(
-                symbol: "exclamationmark.triangle",
-                text: "This ID is already paired — approving replaces its access token",
-                tone: .caution)
-        case false:
-            return TrustLine(
-                symbol: "sparkles",
-                text: "First connection from this \(card.kind == .node ? "node" : "device")",
-                tone: .neutral)
-        case nil:
-            return TrustLine(
-                symbol: "clock",
-                text: "Checking pairing history…",
-                tone: .neutral)
+        if card.previouslyPaired == true {
+            return String(localized: "This device ID is already paired. Approving replaces its access token.")
         }
+        return nil
     }
 
     static func accessRows(for card: PairingApprovalCenter.Card) -> [AccessRow] {
@@ -349,11 +318,16 @@ enum PairingCardPresentation {
             let isSystemRun = { (command: String) in
                 command == "system.run" || command == "system.which" || command.hasPrefix("system.run.")
             }
-            if card.commands.contains(where: isSystemRun) {
+            let canRunCommands = card.commands.contains(where: isSystemRun)
+            // Approval privilege belongs to Gateway. Its request-level fact
+            // covers command families this client may not recognize yet.
+            if canRunCommands || card.requiredApproveScopes?.contains("operator.admin") == true {
                 rows.append(AccessRow(
-                    id: "system-run",
+                    id: "node-approval",
                     symbol: "exclamationmark.shield",
-                    text: "Can run system commands",
+                    text: canRunCommands
+                        ? String(localized: "Can run system commands")
+                        : String(localized: "Requires administrator approval"),
                     isElevated: true))
             }
             rows.append(contentsOf: self.friendlyCapNames(card.caps).map {
@@ -374,52 +348,6 @@ enum PairingCardPresentation {
             }
             return rows
         }
-    }
-
-    /// Left, monospaced: stable identity facts (short id, source address).
-    static func identityLine(for card: PairingApprovalCenter.Card) -> String {
-        var parts = ["ID \(self.shortIdentifier(card.subjectId))"]
-        if let ip = self.prettyIP(card.remoteIp) {
-            parts.append(ip)
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// Right, trailing: app version and request age.
-    static func metaLine(for card: PairingApprovalCenter.Card, now: Date = Date()) -> String {
-        var parts: [String] = []
-        if let version = card.version?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !version.isEmpty
-        {
-            parts.append("v\(version)")
-        }
-        parts.append(self.relativeRequestTime(for: card, now: now))
-        return parts.joined(separator: " · ")
-    }
-
-    static func versionTooltip(for card: PairingApprovalCenter.Card) -> String {
-        var parts: [String] = []
-        if let version = card.version?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !version.isEmpty
-        {
-            parts.append("App \(version)")
-        }
-        if let core = card.coreVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !core.isEmpty
-        {
-            parts.append("Core \(core)")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    static func relativeRequestTime(for card: PairingApprovalCenter.Card, now: Date = Date()) -> String {
-        let elapsed = now.timeIntervalSince(card.requestedAt)
-        if elapsed < 60 {
-            return "just now"
-        }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: card.requestedAt, relativeTo: now)
     }
 
     static func deviceSymbol(for card: PairingApprovalCenter.Card) -> String {
@@ -459,14 +387,6 @@ enum PairingCardPresentation {
             return "server.rack"
         }
         return "network"
-    }
-
-    static func shortIdentifier(_ id: String) -> String {
-        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 20 else {
-            return trimmed
-        }
-        return "\(trimmed.prefix(8))...\(trimmed.suffix(7))"
     }
 
     static func prettyIP(_ ip: String?) -> String? {
@@ -587,18 +507,6 @@ enum PairingCardPresentation {
         }
         let capitalized = first.prefix(1).uppercased() + first.dropFirst()
         return ([capitalized] + words.dropFirst()).joined(separator: " ")
-    }
-
-    private static func prettyModel(_ modelIdentifier: String?, deviceFamily: String?) -> String? {
-        let model = modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let model, !model.isEmpty {
-            return model
-        }
-        let family = deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let family, !family.isEmpty else {
-            return nil
-        }
-        return family
     }
 
     private static func isMac(_ platform: String?) -> Bool {

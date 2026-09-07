@@ -28,6 +28,16 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      [
+        "meetingCapture",
+        "/settings/communications",
+        "?section=transcripts",
+        "#settings-communications-meeting-capture",
+      ],
+      ["meetings", "/meetings", "", ""],
+      ["device", "/settings/device", "", ""],
+      ["devicePermissions", "/settings/device/permissions", "", ""],
+      ["deviceTalk", "/settings/talk", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
@@ -96,7 +106,11 @@ describe("settings search target manifest", () => {
   it("indexes only translation keys present in the English source catalog", () => {
     const source = flattenTranslations(loadControlUiSourceCatalog());
     for (const target of targets) {
-      for (const key of [target.labelKey, ...target.searchKeys]) {
+      for (const key of [
+        target.labelKey,
+        ...target.searchKeys,
+        ...Object.keys(target.nativeSearchKeys ?? {}),
+      ]) {
         expect(source.has(key), `Missing settings search translation: ${key}`).toBe(true);
       }
     }
@@ -120,7 +134,7 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts"]],
+    ["communications", ["messages", "tts", "transcripts"]],
     ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   clearActiveEmbeddedRun,
@@ -9,7 +8,6 @@ import {
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -46,9 +44,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
-// Register shared mocks before loading the execution graph. A timed-out import
-// must not resume later and consume the next case's one-shot mock.
+const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
@@ -309,39 +305,55 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.6-sol";
-    followupRun.run.thinkLevel = "ultra";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-            "demo/basic": { agentRuntime: { id: "openclaw" } },
+  it.each([undefined, "default", "ultra"] as const)(
+    "revalidates original thinking for main-chat fallback with turn request=%s",
+    async (override) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "openai";
+      followupRun.run.model = "gpt-5.6-sol";
+      followupRun.run.thinkLevel = "ultra";
+      if (override !== undefined) {
+        followupRun.run = {
+          ...followupRun.run,
+          thinkLevel: override === "ultra" ? "off" : "ultra",
+          thinkLevelOverride: override,
+        };
+      }
+      followupRun.run.config = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              "demo/basic": { agentRuntime: { id: "openclaw" } },
+            },
           },
         },
-      },
-    };
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.6-sol", initialFallbackAttemptOptions(params));
-      const result = await params.run("demo", "basic", fallbackAttemptOptions(params, "unknown"));
-      return { result, provider: "demo", model: "basic", attempts: [] };
-    });
-    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+      };
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          await params.run("openai", "gpt-5.6-sol", initialFallbackAttemptOptions(params));
+          const result = await params.run(
+            "demo",
+            "basic",
+            fallbackAttemptOptions(params, "unknown"),
+          );
+          return { result, provider: "demo", model: "basic", attempts: [] };
+        },
+      );
+      state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-    });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+      });
 
-    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-      "ultra",
-      "high",
-    ]);
-    expect(followupRun.run.thinkLevel).toBe("ultra");
-  });
+      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+        "ultra",
+        "high",
+      ]);
+      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+    },
+  );
 
   it("preserves thinking for runtime-discovered Ollama fallback models", async () => {
     const followupRun = createFollowupRun();
@@ -728,65 +740,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("injects pending MCP App context exactly once without changing transcript text", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "selected item 42" }],
-      },
-    );
-    state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "show details",
-      transcriptCommandBody: "show details",
-    });
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "next question",
-      transcriptCommandBody: "next question",
-    });
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("selected item 42");
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("show details");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.prompt).toBe("next question");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.transcriptPrompt).toBe("next question");
-  });
-
-  it("does not consume pending MCP App context when pre-start validation fails", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "still pending" }],
-      },
-    );
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
-      "invalid image",
-    );
-    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("still pending");
-  });
-
   it("forwards CLI harness execution phases into typing signals", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -827,43 +780,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clientCaps: ["tool-events", "inline-widgets"],
       media: followupRun.media,
     });
-  });
-
-  it("consumes pending MCP App context when a CLI process receives the turn", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "CLI selection" }],
-      },
-    );
-    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "process_spawned" });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-      }),
-    );
-
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.prompt).toContain("CLI selection");
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("fix it");
-    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
   it("requires explicit message targets on heartbeat CLI runs", async () => {
@@ -975,24 +891,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     resolveImages?.();
     await runPromise;
-  });
-
-  it("clears run ownership when image preflight fails", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(
-      executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          opts: { runId: "preflight-failure" },
-        }),
-      ),
-    ).rejects.toThrow("invalid image metadata");
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {

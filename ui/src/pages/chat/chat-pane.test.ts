@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
+import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
   submitInputDialog,
@@ -111,11 +113,11 @@ describe("chat pane retained presentation", () => {
     const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
     lifecycle.render = () => null;
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
     const performUpdate = vi.spyOn(lifecycle, "performUpdate");
 
     lifecycle.onPaneSessionChange = () => undefined;
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
 
     expect(performUpdate).not.toHaveBeenCalled();
     ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
@@ -160,7 +162,7 @@ describe("chat pane header state", () => {
       const deleteOne = vi.fn(async () => ({ deleted: true }));
       const sessions = createSessionCapabilityFixture({
         delete: deleteOne,
-        refreshReplacement: vi.fn(async () => undefined),
+        refreshReplacement: vi.fn(async () => null),
       });
       const client = createGatewayBrowserClientFixture();
       const { pane } = createTestChatPane({ client, sessions });
@@ -701,13 +703,30 @@ describe("chat pane initialization", () => {
     );
   });
 
-  it("keeps active turn state when re-entry canonicalizes the main route alias", () => {
+  it("keeps active turn state when re-entry canonicalizes the main route alias", async () => {
+    const consoleError = vi.spyOn(console, "error");
+    onTestFinished(() => consoleError.mockRestore());
     const canonicalSessionKey = "agent:main:main";
-    const client = createGatewayBrowserClientFixture({ request: vi.fn() });
+    const models: ModelCatalogEntry[] = [
+      { id: "fixture-model", name: "Fixture model", provider: "test", available: true },
+    ];
+    const authStatus = { ts: 1, providers: [] };
+    const request = createGatewayRequestMock(async (method) => {
+      switch (method) {
+        case "chat.metadata":
+          return { commands: [], models, swarmEnabled: false };
+        case "models.authStatus":
+          return authStatus;
+        default:
+          throw new Error(`Unexpected gateway request: ${method}`);
+      }
+    });
+    const client = createGatewayBrowserClientFixture({ request });
     const { pane, state } = createTestChatPane({
       client,
       sessions: createSessionCapabilityFixture(),
     });
+    onTestFinished(() => pane.disconnectedCallback());
     const hello = {
       snapshot: {
         sessionDefaults: {
@@ -738,6 +757,12 @@ describe("chat pane initialization", () => {
       }
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
+    expect(state.chatModelsLoading).toBe(true);
+    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(state.chatModelCatalog).toEqual(models);
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(state.modelAuthStatusResult).toEqual(authStatus);
     expect(state.sessionKey).toBe(canonicalSessionKey);
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe("The response survived navigation.");
@@ -824,6 +849,9 @@ describe("chat pane keyboard shortcuts", () => {
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
     expect(press().defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
+    state.terminalAvailable = false;
+    expect(press().defaultPrevented).toBe(false);
     expect(state.sidebarLayout.open).toBe(false);
   });
 });

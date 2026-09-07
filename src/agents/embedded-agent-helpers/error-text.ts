@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -18,7 +19,6 @@ import {
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
-import type { FailoverReason } from "../failover/signal.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   formatBillingErrorMessage,
@@ -41,6 +41,30 @@ export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "The selected model was not found by the provider. Check the model id or choose a different model.";
+const RUNTIME_FAILURE_COPY: Partial<
+  Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
+> = {
+  auth_refresh: "Authentication refresh failed. Re-authenticate this provider and try again.",
+  refresh_contention:
+    "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+  refresh_timeout:
+    "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+  callback_timeout:
+    "Browser OAuth did not complete before manual fallback kicked in. Retry the login flow and paste the redirect URL if prompted.",
+  callback_validation:
+    "Browser OAuth returned an invalid or incomplete callback. Retry the login flow and make sure the full redirect URL is pasted if prompted.",
+  auth_scope:
+    "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
+  auth_html:
+    "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+  auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
+  upstream_html:
+    "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+  proxy: "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+  tls_certificate:
+    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
+  model_not_found: MODEL_NOT_FOUND_USER_TEXT,
+};
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
@@ -55,17 +79,8 @@ type AssistantErrorTextOptions = {
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
 };
-type ClassifiedAssistantErrorFacts = {
-  provider?: string;
-  model?: string;
-  providerRuntimeFailureKind: ReturnType<typeof classifyProviderRuntimeFailureKind>;
-  reason: FailoverReason | null;
-  status?: number;
-};
-function classifyAssistantErrorFacts(
-  msg: AssistantMessage,
-  opts?: AssistantErrorTextOptions,
-): ClassifiedAssistantErrorFacts {
+type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
+function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
   const signal = buildAssistantFailoverSignal(msg, {
     provider: opts?.providerOwner?.id ?? opts?.provider,
   });
@@ -80,10 +95,11 @@ function classifyAssistantErrorFacts(
       classification?.kind === "reason"
         ? classification.reason
         : classification
-          ? "context_overflow"
+          ? ("context_overflow" as const)
           : null,
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
+    storageFailure: classifyGatewayStorageFailure(msg),
   };
 }
 function isMissingToolCallInputError(raw: string): boolean {
@@ -107,6 +123,9 @@ export function formatAssistantErrorText(
   }
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
+  if (classifiedFacts.storageFailure) {
+    return renderAssistantRequestFailureCopy(classifiedFacts);
+  }
   const {
     reason: failoverReason,
     status: formatStatus,
@@ -135,66 +154,9 @@ export function formatAssistantErrorText(
   if (diskSpaceCopy) {
     return diskSpaceCopy;
   }
-  if (providerRuntimeFailureKind === "auth_refresh") {
-    return "Authentication refresh failed. Re-authenticate this provider and try again.";
-  }
-  if (providerRuntimeFailureKind === "refresh_contention") {
-    return (
-      "Authentication refresh is already in progress elsewhere and this attempt " +
-      "timed out waiting for it. Retry in a moment."
-    );
-  }
-  if (providerRuntimeFailureKind === "refresh_timeout") {
-    return (
-      "Authentication refresh timed out before the provider completed. " +
-      "Retry in a moment; re-authenticate only if it keeps failing."
-    );
-  }
-  if (providerRuntimeFailureKind === "callback_timeout") {
-    return (
-      "Browser OAuth did not complete before manual fallback kicked in. " +
-      "Retry the login flow and paste the redirect URL if prompted."
-    );
-  }
-  if (providerRuntimeFailureKind === "callback_validation") {
-    return (
-      "Browser OAuth returned an invalid or incomplete callback. " +
-      "Retry the login flow and make sure the full redirect URL is pasted if prompted."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_scope") {
-    return (
-      "Authentication is missing the required OpenAI ChatGPT scopes. " +
-      "Re-run OpenAI login and try again."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_html") {
-    return (
-      "Authentication failed at the provider. " +
-      "Re-authenticate and verify your provider credentials and account access."
-    );
-  }
-  if (providerRuntimeFailureKind === "auth_invalid_token") {
-    return AUTH_INVALID_TOKEN_USER_TEXT;
-  }
-  if (providerRuntimeFailureKind === "upstream_html") {
-    return (
-      "The provider returned an HTML error page instead of an API response. " +
-      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
-      "Retry in a moment or check provider status."
-    );
-  }
-  if (providerRuntimeFailureKind === "proxy") {
-    return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
-  }
-  if (providerRuntimeFailureKind === "tls_certificate") {
-    return (
-      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
-      "Check the endpoint hostname, proxy, and local certificate trust."
-    );
-  }
-  if (providerRuntimeFailureKind === "model_not_found") {
-    return MODEL_NOT_FOUND_USER_TEXT;
+  const runtimeCopy = RUNTIME_FAILURE_COPY[providerRuntimeFailureKind];
+  if (runtimeCopy) {
+    return runtimeCopy;
   }
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);

@@ -2,6 +2,7 @@ import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.t
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
   handleInlineSlashArgKeydown,
@@ -15,6 +16,7 @@ type ComposerKeyDownDeps = {
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
+  mentionMenuHost: HumanMentionMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
@@ -30,6 +32,7 @@ export function createComposerKeyDownHandler({
   props,
   skillMenuHost,
   slashMenuHost,
+  mentionMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
@@ -47,6 +50,10 @@ export function createComposerKeyDownHandler({
       return;
     }
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
       return;
     }
 
@@ -114,6 +121,7 @@ export function createComposerKeyDownHandler({
       event.key === "Escape" &&
       !state.skillMenuOpen &&
       !state.slashMenuOpen &&
+      !state.mentionMenu.open &&
       !props.replyTarget &&
       !state.dictation?.active &&
       showAbortableUi &&
@@ -158,7 +166,7 @@ export function createComposerKeyDownHandler({
       commitDraft(target.value);
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      props.onSend(followUpModeOverride, event);
+      void props.onSend(followUpModeOverride, event);
       syncDraftAfterSend(target);
     }
   };

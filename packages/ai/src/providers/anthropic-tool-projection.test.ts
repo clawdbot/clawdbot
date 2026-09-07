@@ -24,6 +24,99 @@ describe("projectAnthropicTools", () => {
     expect(reversed.tools).toEqual(first.tools);
   });
 
+  it("retains same-original duplicates while sorting their descriptions", () => {
+    const projection = projectAnthropicTools(
+      ["Zulu", "Alpha"].map((description) => ({
+        name: "Read",
+        description,
+        parameters: { type: "object", properties: {} },
+      })),
+      (name) => name.toLowerCase(),
+    );
+
+    expect(projection.inputToolCount).toBe(2);
+    expect(projection.unavailableOriginalNames).toEqual(new Set());
+    expect(projection.tools).toEqual([
+      {
+        originalName: "Read",
+        wireName: "read",
+        description: "Alpha",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      },
+      {
+        originalName: "Read",
+        wireName: "read",
+        description: "Zulu",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      },
+    ]);
+  });
+
+  it.each([
+    { names: ["Read", "Read", "read"], first: "Read", last: "read" },
+    { names: ["read", "read", "Read"], first: "read", last: "Read" },
+  ])(
+    "keeps the first accepted spelling in a collision after $first duplicates",
+    ({ names, first, last }) => {
+      expect(() =>
+        projectAnthropicTools(
+          names.map((name) => ({ name, description: name, parameters: { type: "object" } })),
+          () => "Read",
+        ),
+      ).toThrow(`Anthropic tool names "${first}" and "${last}" both map to "Read"`);
+    },
+  );
+
+  it.each([
+    { name: "implicit dialect", dialect: undefined, definitionsKey: "$defs" },
+    {
+      name: "explicit draft-07",
+      dialect: "http://json-schema.org/draft-07/schema#",
+      definitionsKey: "definitions",
+    },
+  ])(
+    "preserves root constraints and tuple definitions for $name",
+    ({ dialect, definitionsKey }) => {
+      const parameters = {
+        ...(dialect ? { $schema: dialect } : {}),
+        type: "object",
+        properties: { range: { $ref: `#/${definitionsKey}/Range` } },
+        required: ["range"],
+        additionalProperties: false,
+        allOf: [{ propertyNames: { enum: ["range"] } }],
+        [definitionsKey]: {
+          Range: {
+            ...(dialect ? { $schema: dialect } : {}),
+            type: "array",
+            items: [{ type: "integer" }, { type: "integer" }],
+            additionalItems: false,
+          },
+        },
+      };
+      const original = structuredClone(parameters);
+      const projection = projectAnthropicTools(
+        [{ name: "select_range", description: "Select a range", parameters }],
+        (name) => name,
+      );
+
+      expect(projection.tools[0]?.inputSchema).toEqual({
+        type: "object",
+        properties: parameters.properties,
+        required: ["range"],
+        additionalProperties: false,
+        allOf: parameters.allOf,
+        [definitionsKey]: {
+          Range: {
+            type: "array",
+            prefixItems: [{ type: "integer" }, { type: "integer" }],
+            items: false,
+          },
+        },
+      });
+      expect(parameters).toEqual(original);
+    },
+  );
+
   it("converts draft-07 tuple items to draft 2020-12 prefixItems for Anthropic", () => {
     const projection = projectAnthropicTools(
       [
@@ -141,6 +234,7 @@ describe("projectAnthropicTools", () => {
 
   it("does not rewrite instance data that resembles a tuple schema", () => {
     const tupleLikeValue = {
+      $schema: "http://json-schema.org/draft-07/schema#",
       items: ["first", "second"],
       additionalItems: false,
     };
@@ -150,6 +244,7 @@ describe("projectAnthropicTools", () => {
           name: "Match",
           description: "Match a literal value",
           parameters: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
             type: "object",
             properties: {
               value: {
@@ -167,5 +262,8 @@ describe("projectAnthropicTools", () => {
       const: tupleLikeValue,
       default: tupleLikeValue,
     });
+    expect(projection.tools[0]?.inputSchema.$schema).toBe(
+      "https://json-schema.org/draft/2020-12/schema",
+    );
   });
 });

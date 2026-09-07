@@ -481,7 +481,6 @@ export function migrateLegacyOpenAICodexProvider(
   if (!models || !providers) {
     return;
   }
-  let providersChanged = false;
   const wildcardPaths = collectLegacyModelPolicyWildcardPaths(raw);
   for (const [providerId, providerValue] of Object.entries({ ...providers })) {
     const provider = getRecord(providers[providerId]) ?? getRecord(providerValue);
@@ -495,7 +494,6 @@ export function migrateLegacyOpenAICodexProvider(
     if (!isLegacyCodexProviderId(providerId)) {
       if (normalized.changed) {
         providers[providerId] = normalized.value;
-        providersChanged = true;
       }
       continue;
     }
@@ -538,7 +536,6 @@ export function migrateLegacyOpenAICodexProvider(
       if (modelCollisions.length > 0 || mergeBlockers.length > 0) {
         if (normalized.changed) {
           providers[providerId] = normalized.value;
-          providersChanged = true;
           changes.push(
             modelCollisions.length > 0
               ? `Skipped merging models.providers.${providerId} into models.providers.${OPENAI_PROVIDER_ID} because colliding model definitions differ for: ${modelCollisions.join(", ")}.`
@@ -575,10 +572,6 @@ export function migrateLegacyOpenAICodexProvider(
       }
     }
     delete providers[providerId];
-    providersChanged = true;
-  }
-  if (providersChanged) {
-    models.providers = providers;
   }
 }
 

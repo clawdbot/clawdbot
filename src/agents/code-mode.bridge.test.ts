@@ -29,7 +29,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("drains a nested combinator after its outer race wins", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const nestedStarted = createDeferred();
@@ -155,7 +155,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
-  it("rejects an over-cap bridge frontier before dispatching its admitted prefix", async () => {
+  it("rejects an over-queue-cap bridge frontier before dispatching its admitted prefix", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
@@ -184,7 +184,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-frontier-overflow",
         {
           code: `return await Promise.all(
-            Array.from({ length: 3 }, (_, index) => fake_mutation({ index })),
+            Array.from({ length: 2 + 128 + 1 }, (_, index) => fake_mutation({ index })),
           );`,
         },
       ),
@@ -255,7 +255,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("bounds nested exec yield by the shared remaining deadline", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
@@ -365,7 +365,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("keeps the actual winner when the later-started nested tool settles first", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const firstStarted = createDeferred();
@@ -464,7 +464,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   ])(
     "drains a detached audit started $label before an awaited nested call",
     async ({ auditCode }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       let auditCompleted = false;
@@ -538,7 +538,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("drains a race winner's detached audit and its slower race branch", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const loserStarted = createDeferred();
@@ -663,7 +663,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it.each(["race", "any"] as const)(
     "preserves the Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       const events: string[] = [];
       const slowStarted = createDeferred();
@@ -739,7 +739,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("preserves fail-fast Promise.all while draining the slower nested tool", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const events: string[] = [];
     const slowStarted = createDeferred();

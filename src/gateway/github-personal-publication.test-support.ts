@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -25,12 +25,54 @@ const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
-const personalToken = "synthetic-personal-credential";
+
+export async function expectPersonalPublicationReplay(
+  {
+    generation,
+    coordinator,
+    action,
+  }: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  > & { generation: string },
+  capture: (requestId: string) => unknown,
+) {
+  const selection = { source: "personal" as const, generation, account };
+  const request = { sessionKey: SESSION_KEY, idempotencyKey: "personal-replay", selection };
+  const published = await coordinator.requestPersonalForSession(request, action);
+  expect(published.status).toBe("published");
+  const before = capture(published.requestId);
+  await expect(
+    coordinator.requestPersonalForSession(
+      {
+        ...request,
+        selection: { ...selection, account: { ...account, login: account.login.toUpperCase() } },
+      },
+      action,
+    ),
+  ).resolves.toEqual(published);
+  for (const changed of [
+    { ...request, selection: { ...selection, generation: `${generation}-changed` } },
+    {
+      ...request,
+      selection: { ...selection, account: { ...account, accountId: account.accountId + 1 } },
+    },
+    { ...request, selection: { ...selection, account: { ...account, login: "different-user" } } },
+    { ...request, title: "Different title" },
+    { ...request, body: "Different body" },
+  ]) {
+    await expect(coordinator.requestPersonalForSession(changed, action)).rejects.toThrow(
+      "My GitHub publication idempotency key was reused with a different selection.",
+    );
+  }
+  expect(capture(published.requestId)).toEqual(before);
+}
 
 export async function createPersonalPublicationFixture() {
   const owner = ensureProfileForEmail("alice@example.test").id;
   const otherOwner = ensureProfileForEmail("bob@example.test").id;
   const generation = randomUUID();
+  const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
     owner,
     () => ({
@@ -107,7 +149,10 @@ export async function createPersonalPublicationFixture() {
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(runtime.live && (!filter || filter(runtime.client)) ? [runtime.client.connId!] : []),
   } as unknown as GatewayRequestContext;
-  const action = preparePersonalGitHubSessionAction({ client, context }, SESSION_KEY);
+  const action = preparePersonalGitHubSessionAction(
+    { client, context },
+    { sessionKey: SESSION_KEY },
+  );
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {

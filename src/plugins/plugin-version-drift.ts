@@ -33,6 +33,18 @@ export type PluginVersionDriftReport = {
   drifts: PluginVersionDriftEntry[];
 };
 
+export type PluginVersionRestartReadiness =
+  | {
+      status: "resolved";
+      report: PluginVersionDriftReport;
+      runningGatewayVersion?: string;
+    }
+  | {
+      status: "unresolved";
+      reason: string;
+      runningGatewayVersion?: string;
+    };
+
 function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string | undefined {
   if (entry.source !== "npm" || !entry.spec) {
     return undefined;
@@ -131,12 +143,23 @@ function shouldCompareOfficialInstallToGateway(params: {
   return false;
 }
 
+export function hasOfficialPluginVersionCandidates(params: {
+  installRecords: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+}): boolean {
+  return Object.entries(params.installRecords).some(
+    ([pluginId, record]) =>
+      Boolean(record) &&
+      isPluginEnabled(params.config, pluginId) &&
+      shouldCompareOfficialInstallToGateway({ pluginId, record }),
+  );
+}
+
 /**
- * Compare active official external plugin installs against the running gateway
+ * Compare active official external plugin installs against an OpenClaw host
  * version and return any mismatches.
  *
- * @param params.gatewayVersion The gateway version string (typically the
- *   `version` field of the installed openclaw package.json).
+ * @param params.gatewayVersion The host version the plugins must match.
  * @param params.installRecords The full set of recorded plugin installs (as
  *   produced by `loadInstalledPluginIndexInstallRecords`).
  * @param params.config The merged daemon-side OpenClawConfig (optional).

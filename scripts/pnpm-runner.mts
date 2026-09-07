@@ -6,7 +6,7 @@ import {
   buildCmdExeCommandLine,
   resolvePathEnvKey,
   resolveWindowsCmdExePath,
-} from "./lib/windows-cmd-helpers-runtime.mts";
+} from "./windows-cmd-helpers.mjs";
 
 export type PnpmRunnerParams = {
   comSpec?: string;

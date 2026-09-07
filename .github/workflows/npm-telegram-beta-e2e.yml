@@ -270,7 +270,7 @@ env:
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
     environment: qa-live-shared

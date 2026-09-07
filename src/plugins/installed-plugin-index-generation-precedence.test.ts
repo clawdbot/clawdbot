@@ -360,7 +360,7 @@ describe("managed npm generation-dir loader precedence", () => {
     // A managed generation with a higher version exists on disk...
     writeManagedGeneration({ stateDir, version: "2.0.0", generationKey: "discord-managed" });
     // ...but the persisted record points at a custom install outside the npm root.
-    const customInstallPath = path.join(stateDir, "custom", "node_modules", "@openclaw", "discord");
+    const customInstallPath = writeManagedFlat(path.join(stateDir, "custom"), "1.0.0");
 
     await writePersistedInstalledPluginIndexInstallRecords(
       {

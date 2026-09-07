@@ -105,6 +105,12 @@ Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
 
+Fresh native terminal sessions use the primary local profile, shown as
+`Local Codex`, or an eligible paired node. Additional local homes are session
+discovery and resume sources, not separate fresh-start destinations. The selected
+working directory controls Codex's project configuration without changing its home
+or login. See [Native CLI starts](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli).
+
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority
 under the 100-source catalog cap. Changes require a Gateway restart.
@@ -177,15 +183,19 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.151.0`):
+with the official plugin (currently `@openai/codex` `0.153.4`):
 
 ```bash
 codex app-server --listen stdio://
 ```
 
 This keeps the app-server version tied to the official `codex` plugin instead of
-whichever separate Codex CLI happens to be installed locally. Set
-`appServer.command` only when you intentionally want a different executable.
+whichever separate Codex CLI happens to be installed locally. OpenClaw resolves
+`@openai/codex/bin/codex.js` from the loader-selected plugin root using Node
+package resolution, including npm-hoisted and pnpm-linked dependencies. It does
+not search `.bin` shims or global `PATH` for managed startup. On Windows, Node
+runs the same package entrypoint without requiring a `codex.cmd` shim.
+Set `appServer.command` only when you intentionally want a different executable.
 Ordinary managed turns with the default isolated agent home prefer this pinned
 package even when a macOS desktop bundle is installed. When
 [Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
@@ -273,6 +283,29 @@ managed stdio or the local Unix control socket for production workloads.
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
 
+`appServer.args` accepts an array (recommended) or a quoted argument string.
+`OPENCLAW_CODEX_APP_SERVER_ARGS` uses the same string parsing on every platform:
+single and double quotes group words, backslashes and `#` stay literal, and an
+unfinished quote groups the remaining text. This preserves the string grammar
+shipped in `v2026.9.1`; strings do not use shell escaping.
+
+Use array entries for values containing embedded quotes, such as
+`'model="gpt-5.6-luna"'`. For a directory containing a literal backslash, both
+forms below pass the same path to Codex:
+
+```json5 validate=false
+args: "app-server --listen stdio:// -c log_dir=/tmp/openclaw\\logs"
+```
+
+```json5 validate=false
+args: ["app-server", "--listen", "stdio://", "-c", "log_dir=/tmp/openclaw\\logs"]
+```
+
+The `\\` in JSON5 encodes one backslash. Array entries preserve embedded quotes
+and backslashes, but surrounding whitespace is trimmed and empty entries are
+omitted. Strings also omit empty quoted arguments. Account for these limits
+before converting existing strings to arrays.
+
 `appServer.serviceTier` is used only when no shared Fast-mode run control is
 supplied. On Codex harness turns, shared Fast on sends `priority`, Fast off
 sends `null` to clear the OpenClaw-owned tier, and auto decides for each model
@@ -319,7 +352,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.151.0`. Explicit custom
+The plugin manages stable Codex app-server `0.153.4`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -354,12 +387,13 @@ allowed app can be installed and authenticated before it becomes callable.
 OpenClaw provisionally admits only ownership-proven, policy-approved apps,
 creates the thread with `_default.enabled = false` and explicit app overrides,
 then calls `app/installed` once with that thread's ID and `forceRefresh: false`.
-It exposes an app only when Codex confirms the app is enabled and callable for
-the actual thread. Managed restrictions, workspace policy, missing metadata,
-revoked auth, and unavailable tools still fail closed.
+If that snapshot reports missing, disabled, or non-callable apps, OpenClaw logs
+one warning and continues with the remaining tools. Codex still enforces
+managed restrictions, workspace policy, and app/tool permissions; unavailable
+apps gain no access.
 
-Attestation completes before OpenClaw injects history, starts a turn, or
-persists the native thread binding. On failure, OpenClaw deletes a persistent
+The check completes before OpenClaw injects history, starts a turn, or
+persists the native thread binding. If the snapshot request fails, OpenClaw deletes a persistent
 provisional thread with `thread/delete` or unsubscribes an ephemeral thread
 with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
 owning app-server connection. Supervised branches also clean up their temporary
@@ -448,7 +482,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.151.0` app-server.
+This preview path uses the pinned Codex `0.153.4` app-server.
 
 ```json5
 {
@@ -513,8 +547,8 @@ until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.
-See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
-and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-worker).
+See [Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
+and [Run Codex on a cloud worker](/plugins/codex-harness/placement#run-codex-on-a-cloud-worker).
 
 ## Auth and environment isolation
 
@@ -595,7 +629,10 @@ and settled-turn finalization use private temporary homes and OpenClaw auth
 even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
-canonical branch and future resumes.
+canonical branch and future resumes. If that supervised turn finishes tool work
+without a final answer, OpenClaw does not borrow host credentials to generate
+one. It delivers the [settled-tool fallback](/plugins/codex-harness-runtime#final-answers-after-settled-tool-work)
+without repeating completed actions.
 
 In a model-locked supervised Chat, `codex_threads` cannot attach a different
 fork or archive the Chat's bound native thread. List and metadata-only read
@@ -703,13 +740,15 @@ Codex runtime, so `Promise.all` does not submit them concurrently; use a
 bounded sequential launch loop when starting collector children.
 
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
-tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
-Codex's `code_mode.direct_only_tool_namespaces` list without replacing
+tool and regular-agent `openclaw` delegation, are grouped under `openclaw_direct`.
+OpenClaw adds that namespace to Codex's
+`features.code_mode.direct_only_tool_namespaces` list without replacing
 operator-supplied entries. Codex therefore exposes those tools as
 `DirectModelOnly` in normal and code-mode-only threads instead of routing them
-through nested Code Mode `tools.*` calls. This boundary is required for
-image-bearing results: nested Code Mode serialization flattens image output to
-text, which would discard the screenshot needed for the next computer action.
+through nested Code Mode `tools.*` calls. This preserves image-bearing results,
+which nested Code Mode otherwise flattens to text. It also keeps delegated human
+approval on the direct model call: a yielded script cell must not let the model
+finish its turn while that approval is still waiting.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
@@ -718,7 +757,7 @@ the full tool payload.
 ## Timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`. Each Codex `item/tool/call` request uses the
+`appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
@@ -734,11 +773,19 @@ first available timeout in this order:
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms of
-outer completion grace, and the app-server client allows 660000 ms so that
-structured wait result can reach Codex. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+Ordinary dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms
+of outer completion grace. Human-interaction tools use the validated question
+wait plus 30000 ms: `ask_user` and `secrets` credential requests honor their question
+timeout, while delegated `openclaw` calls use the fixed 930000 ms default. That
+budget covers the ten-minute approval window plus staging and application;
+model-authored arguments cannot override it. The app-server request watchdog
+leaves another 30000 ms beyond the applicable tool budget for the result to reach
+Codex.
+
+On timeout, OpenClaw aborts the tool signal where supported and returns a failed
+dynamic-tool response to Codex so the turn can continue instead of leaving the
+session in `processing`. These wait budgets never preserve approval authority
+after the requesting run or tool closes.
 
 ### Turn execution and settlement
 
@@ -761,10 +808,25 @@ approvals, dynamic tools, and cancellation retain their independent deadlines.
 
 On receipt of the exact native terminal event, OpenClaw starts an absolute
 two-minute local-settlement budget before asynchronous transcript and media
-projection. Later notifications do not reset it. After separately bounded
-abort cleanup, queued projection gets a five-second drain grace. These local
-bounds still apply to unlimited runs, so blocked projection cannot keep the
-session lane occupied indefinitely.
+projection. Later notifications do not reset it. Presentation callbacks start
+in order and join at settlement without blocking native notification processing.
+If the native turn completed successfully with a complete final answer, expiry
+preserves that answer as a degraded success. OpenClaw retires unfinished
+projection and stale writes, then persists the answer through the existing
+transcript owner, preserving write ordering and hooks.
+Recovered replies retain native network-result provenance even when the
+corresponding tool projection did not settle or a message-write hook replaces
+the message.
+
+The `turn.settlement_warning` trajectory event records the pending presentation
+callback, transcript/checkpoint write, or media projection stage, together with
+the elapsed time and budget. Newly persisted recovered replies also carry the
+settlement warning. Final persistence retains its best-effort policy and the
+existing five-second drain grace; if the writer remains unavailable, OpenClaw
+records `turn.settlement_persistence_unavailable` and delivers the completed
+text without leaving a stale write behind. Expiry without a native completed answer remains a timeout.
+After separately bounded abort cleanup, queued projection gets a five-second
+drain grace. These local bounds also apply to unlimited runs.
 
 Stop and execution-budget expiry interrupt the affected native attempt and
 bound cleanup before releasing its lane. A quiet turn or a local settlement
@@ -851,9 +913,10 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.151.0`. A live `model/list`
-probe against the official `0.151.0` app-server verified this public subset of
-picker rows:
+The current bundled harness is `@openai/codex` `0.153.4`. A live `model/list`
+probe against the official `0.153.4` app-server, using an isolated,
+unauthenticated Codex home and `includeHidden: true`, returned this public
+subset of catalog metadata:
 
 | Model id        | Input modalities | Reasoning efforts                    |
 | --------------- | ---------------- | ------------------------------------ |
@@ -864,9 +927,10 @@ picker rows:
 | `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
 | `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
 
-Available model IDs, input modalities, and reasoning efforts remain
-account-scoped. Run `/codex models` after starting or upgrading the gateway to
-inspect the actual public picker for your account.
+The probe marked `gpt-5.4` and `gpt-5.4-mini` as hidden. This snapshot does not
+prove account entitlement. Available model IDs, input modalities, and reasoning
+efforts remain account-scoped. Run `/codex models` after starting or upgrading
+the gateway to inspect the actual public picker for your account.
 
 OpenClaw reasoning controls preserve supported native levels, including `ultra`.
 Codex owns Ultra's proactive delegation and model-specific inference effort;
@@ -1007,9 +1071,15 @@ Codex harness forwards the other bootstrap files as developer instructions:
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the
-  normal bounded turn-context path instead.
-- `BOOTSTRAP.md`, when present, is forwarded as OpenClaw turn input reference
-  context.
+  bounded turn input reference path instead.
+- `BOOTSTRAP.md`, when present, uses the same turn input reference path.
+  These references are introduced on the first turn of a new native thread,
+  after a cold resume (including a Gateway restart), after native compaction,
+  or when their rendered content changes. Unchanged references are omitted
+  on subsequent warm turns once the complete reference block has been submitted.
+  If prompt fitting drops or truncates the block, a later turn introduces it again.
+  Tracking is process-local; reference content
+  remains ordinary user input in native history.
 
 ## Environment overrides
 

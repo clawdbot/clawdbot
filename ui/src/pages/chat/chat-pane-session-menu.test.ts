@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
@@ -87,18 +88,18 @@ describe("chat pane session menu boundary", () => {
     });
   });
 
-  it("marks parent-linked fork rows as child sessions in the header menu", () => {
+  it.each([
+    { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
+    { key: "agent:main:subagent:child" },
+  ])("hides pinning a lineage child $key in the header menu", async (lineage) => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:fork",
-      kind: "direct",
-      updatedAt: 0,
-      parentSessionKey: "agent:main:parent",
-    } satisfies GatewaySessionRow;
+    state.settings = loadSettings();
+    const session = { ...lineage, kind: "direct", updatedAt: 0 } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    document.body.append(container);
 
     render(
       pane.renderPaneHeader(
@@ -108,14 +109,17 @@ describe("chat pane session menu boundary", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
 
-    const menu = container.querySelector<HTMLElement & { session: { isChild: boolean } }>(
+    const menu = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-chat-header-session-menu",
     );
-    expect(menu?.session.isChild).toBe(true);
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 
   it("uses the refreshed category when deciding whether a header group move is a no-op", async () => {

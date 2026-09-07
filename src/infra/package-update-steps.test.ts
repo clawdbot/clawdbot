@@ -187,12 +187,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     await withTestDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
       const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
       const packageRoot = path.join(managedRoot, "openclaw");
+      const staleRenameDir = path.join(managedRoot, ".openclaw-stale");
       await writePackageRoot(packageRoot, "1.0.0");
+      await fs.mkdir(staleRenameDir);
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
+        await expectPathMissing(staleRenameDir);
         const prefixIndex = argv.indexOf("--prefix");
         expect(prefixIndex).toBeGreaterThan(0);
         const stagePrefix = argv[prefixIndex + 1];
@@ -229,7 +232,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
 
       expect(result.failedStep).toBeNull();
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
@@ -400,7 +403,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "npm",
           "i",
           "-g",
-          "--allow-scripts=./openclaw-2.0.0.tgz",
+          `--allow-scripts=${path.join(packDir, "openclaw-2.0.0.tgz")}`,
           "--prefix",
           stagePrefix,
           path.join(packDir, "openclaw-2.0.0.tgz"),
@@ -544,16 +547,15 @@ describe("runGlobalPackageUpdateSteps", () => {
       const packageRoot = path.join(globalRoot, "openclaw");
 
       const realRename = fs.rename.bind(fs);
+      let stagedPackageRoot: string | undefined;
       let exdevMoves = 0;
       const renameSpy = vi
         .spyOn(fs, "rename")
         .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
           const [from, to] = args;
-          const fromPath = String(from);
           if (
             exdevMoves === 0 &&
-            fromPath.includes(`${path.sep}.openclaw-update-stage-`) &&
-            path.basename(fromPath) === "openclaw" &&
+            String(from) === stagedPackageRoot &&
             String(to) === packageRoot
           ) {
             exdevMoves += 1;
@@ -576,7 +578,8 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
-            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+            stagedPackageRoot = path.join(stageLayout.globalRoot, "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
             return {
               name,
               command: argv.join(" "),
@@ -828,7 +831,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         "expected installed version 2.0.0, found 1.5.0",
       );
       // Staged tree never reached live swap — do not exempt the future-config guard.
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
@@ -905,6 +908,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
         return await realRename(...args);
       });
+      const beforeActivate = vi.fn(async () => {});
 
       let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
       try {
@@ -914,6 +918,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
+          beforeActivate,
           runStep: async ({ name, argv, cwd }) => {
             const stagePrefix = argv[argv.indexOf("--prefix") + 1];
             if (!stagePrefix) {
@@ -1003,8 +1008,15 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(retry.failedStep).not.toBeNull();
         expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
       }
-      // Package and launcher rollback does not reverse possible lifecycle state changes.
-      expect(result.recovery?.serviceRestartSafe).toBe(false);
+      if (failure === "backup copy") {
+        // Launcher backup failed before activation; the original runtime was verified again.
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+      } else {
+        // After activation, package rollback alone cannot reverse lifecycle state changes.
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(result.recovery?.serviceRestartSafe).toBe(false);
+      }
     });
   });
 
@@ -1032,7 +1044,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).resolves.toMatchObject({
         failedStep: { stderrTail: "install crashed", exitCode: 1 },
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
 
       if (stagePrefix === undefined) {

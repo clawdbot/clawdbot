@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
 import { root as openLockRoot } from "@openclaw/fs-safe/root";
 import { isDirectRunUrl } from "./direct-run.mjs";
+import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { findRepoRoot } from "./repo-root.mjs";
 
 const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
@@ -15,19 +16,6 @@ export function resolveDistArtifactLockPath(rootDir: string) {
   // Compiler inputs can resolve outside cwd. Subdirectories share checkout
   // ownership; standalone non-checkout work owns its directory.
   return path.join(findRepoRoot(rootDir) ?? rootDir, DIST_ARTIFACT_LOCK_PATH);
-}
-
-function hasUnjoinedWork(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if ("processTreeState" in error && error.processTreeState !== "terminated") {
-    return true;
-  }
-  if (error instanceof AggregateError && error.errors.some(hasUnjoinedWork)) {
-    return true;
-  }
-  return "cause" in error && hasUnjoinedWork(error.cause);
 }
 
 function retainUnjoinedDistArtifactWork(directory: string, error: unknown) {
@@ -70,8 +58,10 @@ export async function withDistArtifactOwnership<T>(rootDir: string, run: () => P
   try {
     lock = await acquireFileLock(ownerPath, {
       lockPath: ownerPath,
-      // Bounded-root fs-safe locks retain their file on process exit. Only the
-      // explicit release after our child joins may remove this owner record.
+      // This owner record is deliberately fail-closed: it must survive natural
+      // process exit, so only the explicit release after our child joins may
+      // remove it. Stale recovery stays caller-owned via shouldReclaim.
+      retainOnExit: true,
       lockRoot: await openLockRoot(directory),
       payload: () => ({ pid: process.pid, startedAt: new Date().toISOString() }),
       timeoutMs: Number.POSITIVE_INFINITY,

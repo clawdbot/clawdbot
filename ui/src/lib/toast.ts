@@ -15,6 +15,8 @@ export type ToastOptions = {
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   anchorTopOffset?: number;
+  /** Bottom placement suits settings feedback without covering the page heading. */
+  placement?: "top" | "bottom";
   icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
@@ -156,7 +158,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        class="app-toast ${anchored ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
         data-active=${this.active ? "true" : "false"}
         style=${styleMap(
           anchored
@@ -181,28 +183,32 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           }
         }}
       >
-        ${toast.icon
-          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-          : nothing}
+        ${
+          toast.icon
+            ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
+            : nothing
+        }
         <span class="app-toast__message"
-          >${typeof toast.message === "string"
-            ? formatUiExternalText(toast.message)
-            : toast.message}</span
+          >${
+            typeof toast.message === "string" ? formatUiExternalText(toast.message) : toast.message
+          }</span
         >
-        ${toast.actionLabel && toast.onAction
-          ? html`
-              <button
-                type="button"
-                class="app-toast__action"
-                @click=${() => {
-                  this.dismiss("action");
-                  toast.onAction?.();
-                }}
-              >
-                ${toast.actionLabel}
-              </button>
-            `
-          : nothing}
+        ${
+          toast.actionLabel && toast.onAction
+            ? html`
+                <button
+                  type="button"
+                  class="app-toast__action"
+                  @click=${() => {
+                    this.dismiss("action");
+                    toast.onAction?.();
+                  }}
+                >
+                  ${toast.actionLabel}
+                </button>
+              `
+            : nothing
+        }
         <button
           type="button"
           class="app-toast__dismiss"

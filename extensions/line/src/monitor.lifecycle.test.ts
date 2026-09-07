@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -378,10 +378,8 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("resolves a reply's presentation into LINE controls before delivering it", async () => {
-    // The turn adapter owns this preparation: core renders presentations inside
-    // the outbound send pipeline, which replies delivered here never enter.
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = { delivery: { preparePayload?: (payload: ReplyPayload) => ReplyPayload } };
+    type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
     let resolvedTurn: ResolvedTurn | undefined;
     const runTurn = async (params: {
       adapter: { resolveTurn: () => ResolvedTurn };
@@ -417,17 +415,20 @@ describe("monitorLineProvider lifecycle", () => {
         { cfg: {} } as Parameters<typeof onMessage>[1],
       );
 
-      const prepared = resolvedTurn?.delivery.preparePayload?.({
-        text: "Approve this run?",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
-            },
-          ],
+      const prepared = await resolvedTurn?.delivery.preparePayload?.(
+        {
+          text: "Approve this run?",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+              },
+            ],
+          },
         },
-      });
+        { kind: "final" },
+      );
       const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
 
       expect(prepared?.presentation).toBeUndefined();

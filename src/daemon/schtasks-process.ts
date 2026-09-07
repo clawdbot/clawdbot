@@ -14,8 +14,10 @@ import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
@@ -152,7 +154,7 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
 
 export async function resolveScheduledTaskOwnedGatewayPids(
   env: GatewayServiceEnv,
-  context?: { port: number | null; probeHosts: readonly string[] },
+  context?: { port: number | null; probeHosts?: readonly string[] },
   installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<number[]> {
   const command =
@@ -163,33 +165,36 @@ export async function resolveScheduledTaskOwnedGatewayPids(
   if (!installedArguments?.length) {
     return [];
   }
-  const resolvedContext = context ?? {
-    port: resolveScheduledTaskCommandPort(env, command),
-    probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
-  };
-  const port = resolvedContext.port;
+  const port = context ? context.port : resolveScheduledTaskCommandPort(env, command);
   if (!port) {
     return [];
   }
 
-  const ownedPids = new Set<number>();
   const snapshot = readWindowsProcessSnapshot();
   if (process.platform === "win32") {
     if (!snapshot) {
       return [];
     }
-    const pid = findInstalledProcessPid(snapshot, port, installedArguments, () => true);
-    if (pid) {
-      // The task is single-instance; persisted argv identifies its process before it starts listening.
-      return [pid];
+    // Prefer the Gateway PID; before admission its exact supervisor still owns startup.
+    // /End can leave that supervisor alive, so stop must find it before a Gateway exists.
+    for (const argv of [
+      installedArguments,
+      [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
+    ]) {
+      const pid = findInstalledProcessPid(snapshot, port, argv, () => true);
+      if (pid) {
+        return [pid];
+      }
     }
     // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
     return [];
   }
-  // Portable tests use listener command lines because CIM process snapshots exist only on Windows.
-  const diagnostics = await inspectPortUsage(port, {
-    probeHosts: resolvedContext.probeHosts,
-  }).catch(() => null);
+  // CIM argv proves Windows ownership without loading Gateway config. Only the
+  // portable listener path needs bind hosts, after a usable command and port exist.
+  const ownedPids = new Set<number>();
+  const probeHosts =
+    context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
   if (diagnostics?.status === "busy") {
     for (const listener of diagnostics.listeners) {
       if (typeof listener.pid !== "number" || !listener.commandLine) {
@@ -223,7 +228,6 @@ export async function resolveListenerBackedScheduledTaskRuntime(
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const context = {
     port: resolveScheduledTaskCommandPort(env, command),
-    probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
   };
   const pids = await resolveScheduledTaskOwnedGatewayPids(env, context, command);
   return pids.length > 0
@@ -272,7 +276,7 @@ export function probeProcessState(pid: number): "alive" | "missing" | "unknown" 
     const tasklist = spawnSync(
       getWindowsSystem32ExePath("tasklist.exe"),
       ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf8", timeout: 1_500, windowsHide: true },
+      { env: resolveServiceManagerEnv(), encoding: "utf8", timeout: 1_500, windowsHide: true },
     );
     if (tasklist.error || tasklist.status !== 0) {
       return "unknown";
@@ -308,6 +312,7 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
   const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+    env: resolveServiceManagerEnv(),
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
@@ -317,6 +322,7 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
     return;
   }
   const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+    env: resolveServiceManagerEnv(),
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
@@ -362,7 +368,7 @@ export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | nu
       "-Command",
       "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
     ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    { env: resolveServiceManagerEnv(), encoding: "utf8", timeout: 5_000, windowsHide: true },
   );
   if (processSnapshot.error || processSnapshot.status !== 0) {
     return null;

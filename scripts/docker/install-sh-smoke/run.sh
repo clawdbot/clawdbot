@@ -122,8 +122,12 @@ run_with_heartbeat() {
   "$@" &
   command_pid=$!
   (
+    # Join the timer when the command finishes; killing only this shell orphans sleep.
+    trap 'for timer_pid in $(jobs -pr); do kill "$timer_pid" >/dev/null 2>&1 || true; done; wait' EXIT
+    trap 'exit 0' TERM INT
     while true; do
-      sleep "$interval"
+      sleep "$interval" &
+      wait "$!"
       kill -0 "$command_pid" >/dev/null 2>&1 || exit 0
       local now
       local elapsed
@@ -331,6 +335,54 @@ run_install_smoke() {
   echo "OK"
 }
 
+assert_update_smoke_offline() {
+  node - <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const fail = (detail) => { throw new Error(`update smoke requires an idle, service-free container: ${detail}`); };
+if (process.platform !== "linux") fail("Linux process inspection is required");
+for (const name of ["OPENCLAW_PROFILE", "OPENCLAW_SYSTEMD_UNIT", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "XDG_RUNTIME_DIR", "SYSTEMD_UNIT_PATH"]) {
+  if (process.env[name]) fail(`unexpected ${name}`);
+}
+for (const marker of ["/run/systemd/system", "/run/systemd/private", `/run/user/${process.getuid()}/systemd/private`]) {
+  try {
+    fs.lstatSync(marker);
+    fail(`service manager runtime exists at ${marker}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+const initArgs = fs.readFileSync("/proc/1/cmdline", "utf8").split("\0");
+if (process.ppid !== 1 || !initArgs.includes("/usr/local/bin/openclaw-install-smoke")) {
+  fail("the smoke runner must own the PID namespace");
+}
+for (const pid of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))) {
+  if (Number(pid) === 1 || Number(pid) === process.pid) continue;
+  try {
+    if (fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")) fail(`unexpected live process ${pid}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+for (const root of [path.join(os.homedir(), ".config/systemd"), path.join(os.homedir(), ".local/share/systemd"), "/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"]) {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { recursive: true, withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!/\.(service|socket|timer)$/.test(entry.name)) continue;
+    const file = path.join(entry.parentPath, entry.name);
+    if (/openclaw/i.test(entry.name) || /openclaw/i.test(fs.readFileSync(file, "utf8"))) fail(`service definition exists at ${file}`);
+  }
+}
+console.log("==> Verified idle container: no Gateway process or service definition");
+NODE
+}
+
 run_update_smoke() {
   if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
     echo "ERROR: OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION is required for update mode" >&2
@@ -353,7 +405,21 @@ run_update_smoke() {
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
-  echo "==> Run openclaw update from host-served tgz"
+  # The shipped baseline cannot distinguish absent service managers from failed inspection.
+  # Its documented manual path is safe only in this verified idle container; the candidate
+  # then repeats the update with default restart policy so regressions remain visible.
+  assert_update_smoke_offline
+  run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
+  echo "==> Verify candidate default update without a Gateway service"
+  run_update_candidate "$UPDATE_EXPECT_VERSION"
+  verify_candidate_ai_runtime
+  echo "OK"
+}
+
+run_update_candidate() {
+  local UPDATE_BASELINE_VERSION="$1"
+  shift
+  echo "==> Run openclaw update from host-served tgz (from $UPDATE_BASELINE_VERSION)"
   local update_status
   local update_stderr_file
   local update_stderr
@@ -371,7 +437,7 @@ run_update_smoke() {
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
       "${update_env[@]}" \
-      openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
+      openclaw update --tag "$UPDATE_TAG_URL" --yes --json "$@" 2>"$update_stderr_file"
   )"
   update_status=$?
   set -e
@@ -485,9 +551,6 @@ NODE
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
-  verify_candidate_ai_runtime
-
-  echo "OK"
 }
 
 run_npm_global_smoke() {

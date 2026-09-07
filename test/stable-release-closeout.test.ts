@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   extractStableChangelogSection,
@@ -15,6 +16,13 @@ const release = {
     { name: "OpenClaw-2026.6.8.dSYM.zip", digest: `sha256:${"c".repeat(64)}` },
   ],
 };
+const remainingAppAssets = [
+  "OpenClaw-Android-SHA256SUMS.txt",
+  "OpenClaw-Android.apk",
+  "OpenClawCompanion-SHA256SUMS.txt",
+  "OpenClawCompanion-Setup-arm64.exe",
+  "OpenClawCompanion-Setup-x64.exe",
+];
 const changelog =
   "# Changelog\n\n## 2026.6.8\n\n### Fixes\n\n- Shipped fix.\n\n## 2026.6.7\n\n- Old.\n";
 const validCloseoutParams = {
@@ -34,6 +42,71 @@ const validCloseoutParams = {
   rollbackDrillId: "rollback-drill-2026-q2",
   rollbackDrillDate: "2026-06-01",
 };
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function shippedReplayFixture(version: string, mainVersion: string, complete: boolean) {
+  const tag = `v${version}`;
+  const changelogSection = `## ${version}\n\n- Shipped release.`;
+  const replayChangelog = `# Changelog\n\n${changelogSection}`;
+  const mainAppcast = `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`;
+  const githubReleaseAssets = [
+    `OpenClaw-${version}.zip`,
+    `OpenClaw-${version}.dmg`,
+    `OpenClaw-${version}.dSYM.zip`,
+    ...(complete ? remainingAppAssets : []),
+  ].map((name, index) => ({
+    name,
+    digest: `sha256:${index.toString(16).repeat(64)}`,
+  }));
+  const manifest = {
+    version: 2,
+    releaseTag: tag,
+    releaseVersion: version,
+    releaseTagSha: "tag-sha",
+    mainSha: "main-sha",
+    mainPackageVersion: mainVersion,
+    releaseTagPackageVersion: version,
+    changelogSha256: sha256(changelogSection),
+    ...(complete
+      ? { appcastSha256: sha256(mainAppcast) }
+      : {
+          apps: "pending",
+          appPlatforms: { macos: "attached", android: "pending", windows: "pending" },
+          appcast: "verified",
+          appcastSha256: sha256(mainAppcast),
+        }),
+    fullReleaseValidationRunId: "11",
+    fullReleaseValidationRunAttempt: "2",
+    releasePublishRunId: "12",
+    ...(complete ? { releasePublishRecovery: { completePlatformAssetsRequired: true } } : {}),
+    rollbackDrill: { id: "rollback-drill-2026-q2", date: "2026-06-01" },
+    githubReleaseAssets,
+  };
+  return {
+    label: `v${version} ${complete ? "omitted app-state fields" : "explicit pending app state"}`,
+    manifest,
+    params: {
+      ...validCloseoutParams,
+      tag,
+      mainPackageJson: { version: mainVersion },
+      tagPackageJson: { version },
+      mainChangelog: replayChangelog,
+      tagChangelog: replayChangelog,
+      mainAppcast,
+      release: { tagName: tag, isDraft: false, isPrerelease: false, assets: githubReleaseAssets },
+      existingManifest: manifest,
+      allowStaleRollbackDrill: true,
+      nowMs: Date.parse("2026-10-01T00:00:00Z"),
+    },
+  };
+}
+
+const shippedJulyReplayFixture = shippedReplayFixture("2026.7.1", "2026.7.2", true);
+const shippedSeptemberReplayFixture = shippedReplayFixture("2026.9.2", "2026.9.2", false);
+const shippedReplayFixtures = [shippedJulyReplayFixture, shippedSeptemberReplayFixture];
 
 describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
@@ -121,36 +194,66 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toEqual(first.manifest);
   });
 
-  it("replays an existing partial closeout using its recorded rollback drill", () => {
+  it("replays unchanged omitted-digest input using its recorded rollback drill", () => {
+    const releaseWithMissingDigest = {
+      ...release,
+      assets: release.assets.map((asset, index) => (index === 0 ? { name: asset.name } : asset)),
+    };
     const first = verifyStableMainCloseout({
       ...validCloseoutParams,
+      release: releaseWithMissingDigest,
       nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
     const replay = verifyStableMainCloseout({
       ...validCloseoutParams,
+      release: releaseWithMissingDigest,
+      existingManifest: first.manifest,
+      publishedAppcast: "<rss>newer app release without the old entry</rss>",
       allowStaleRollbackDrill: true,
       nowMs: Date.parse("2026-10-01T00:00:00Z"),
     });
 
+    expect(first.manifest?.githubReleaseAssets[0]).toEqual({
+      name: "OpenClaw-2026.6.8.zip",
+      digest: null,
+    });
     expect(replay.errors).toEqual([]);
     expect(replay.manifest).toEqual(first.manifest);
   });
 
-  it("requires the canonical macOS zip, dmg, and dSYM assets", () => {
+  it.each(shippedReplayFixtures)("replays $label byte-for-byte", ({ manifest, params }) => {
     const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: {
-        ...release,
-        assets: [{ name: "openclaw-2026.6.8-dependency-evidence.zip" }],
-      },
-      mainAppcast:
-        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/openclaw-2026.6.8-dependency-evidence.zip\n",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+      ...params,
+      mainAppcast: "<rss>current feed without the historical release</rss>",
+    });
+    expect(result.errors).toEqual([]);
+    expect(JSON.stringify(result.manifest)).toBe(JSON.stringify(manifest));
+  });
+
+  it("rejects replay with a noncanonical recorded appcast hash", () => {
+    const { manifest, params } = shippedSeptemberReplayFixture;
+    const result = verifyStableMainCloseout({
+      ...params,
+      existingManifest: { ...manifest, appcastSha256: "f".repeat(63) },
     });
 
     expect(result.errors).toContain(
-      "GitHub release v2026.6.8 is missing required macOS asset(s): OpenClaw-2026.6.8.zip, OpenClaw-2026.6.8.dmg, OpenClaw-2026.6.8.dSYM.zip.",
+      "Recorded appcast hash presence or format does not match canonical macOS release asset state.",
     );
+    expect(result.manifest).toBeNull();
+  });
+
+  it("records pending apps and appcast before app publication", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      release: { ...release, assets: [] },
+      mainAppcast: "https://example.test/old.zip\n",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({ apps: "pending", appcast: "pending" });
+    expect(result.manifest).not.toHaveProperty("appcastSha256");
   });
 
   it("uses exact correction versions for correction-release state and assets", () => {
@@ -205,71 +308,103 @@ describe("stable release closeout", () => {
     });
   });
 
-  it("requires complete platform assets for failed-publish recovery", () => {
-    const missing = verifyStableMainCloseout({
+  it("records attached apps when every app family has published", () => {
+    const result = verifyStableMainCloseout({
       ...validCloseoutParams,
-      requireCompletePlatformAssets: true,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Android asset names do not match the recovery contract: expected OpenClaw-Android-SHA256SUMS.txt, OpenClaw-Android.apk; got <none>.",
-    );
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Windows asset names do not match the recovery contract: expected OpenClawCompanion-SHA256SUMS.txt, OpenClawCompanion-Setup-arm64.exe, OpenClawCompanion-Setup-x64.exe; got <none>.",
-    );
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Android recovery asset(s) lack GitHub SHA-256 digests: OpenClaw-Android-SHA256SUMS.txt, OpenClaw-Android.apk.",
-    );
-    expect(missing.errors).toContain(
-      "failed-publish recovery is missing the exact candidate-approved Windows installer digests.",
-    );
-    expect(missing.errors).toContain(
-      "failed-publish recovery is missing a trusted Windows Node Release run id.",
-    );
-
-    const complete = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      requireCompletePlatformAssets: true,
-      windowsNodeReleaseRunId: "42",
-      windowsNodeInstallerDigests: {
-        "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
-        "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
-      },
       release: {
         ...release,
         assets: [
           ...release.assets,
-          { name: "OpenClaw-Android-SHA256SUMS.txt", digest: `sha256:${"d".repeat(64)}` },
-          { name: "OpenClaw-Android.apk", digest: `sha256:${"e".repeat(64)}` },
-          {
-            name: "OpenClawCompanion-SHA256SUMS.txt",
-            digest: `sha256:${"f".repeat(64)}`,
-          },
-          {
-            name: "OpenClawCompanion-Setup-arm64.exe",
-            digest: `sha256:${"1".repeat(64)}`,
-          },
-          {
-            name: "OpenClawCompanion-Setup-x64.exe",
-            digest: `sha256:${"2".repeat(64)}`,
-          },
+          ...remainingAppAssets.map((name) => ({
+            name,
+            digest: `sha256:${"d".repeat(64)}`,
+          })),
         ],
       },
       nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
 
-    expect(complete.errors).toEqual([]);
-    expect(complete.manifest).toMatchObject({
-      releasePublishRecovery: {
-        completePlatformAssetsRequired: true,
-        windowsNodeReleaseRunId: "42",
-        windowsNodeInstallerDigests: {
-          "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
-          "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
-        },
-      },
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({ apps: "attached", appcast: "verified" });
+  });
+
+  it("validates the main appcast snapshot recorded by fresh closeout", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      mainAppcast: "<rss>stale main feed</rss>",
+      publishedAppcast:
+        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/OpenClaw-2026.6.8.zip",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
+
+    expect(result.errors).toContain(
+      "main appcast.xml does not point at OpenClaw-2026.6.8.zip from v2026.6.8.",
+    );
+    expect(result.manifest).toBeNull();
+  });
+
+  it.each([
+    ["OpenClaw-2026.6.8.zip", null, "macos", "pending"],
+    ["OpenClaw-Android.apk", `sha256:${"D".repeat(64)}`, "android", "verified"],
+    ["OpenClawCompanion-Setup-x64.exe", `sha256:${"d".repeat(63)}`, "windows", "verified"],
+    ["OpenClawCompanion-SHA256SUMS.txt", `sha256:${"d".repeat(64)}\n`, "windows", "verified"],
+  ])("keeps noncanonical %s evidence pending", (assetName, digest, platform, appcast) => {
+    const assets = [
+      ...release.assets,
+      ...remainingAppAssets.map((name) => ({
+        name,
+        digest: `sha256:${"d".repeat(64)}`,
+      })),
+    ].map((asset) => (asset.name === assetName ? { name: asset.name, digest } : asset));
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      release: { ...release, assets },
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({
+      apps: "pending",
+      appPlatforms: { [platform]: "pending" },
+      appcast,
+    });
+  });
+
+  it("rejects replay when recorded attached state lacks canonical digests", () => {
+    const assets = [
+      ...release.assets,
+      ...remainingAppAssets.map((name) => ({
+        name,
+        digest: `sha256:${"d".repeat(64)}`,
+      })),
+    ];
+    const first = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      release: { ...release, assets },
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+    const invalidAssets = assets.map((asset) =>
+      asset.name === "OpenClaw-Android.apk"
+        ? { name: asset.name, digest: asset.digest.toUpperCase() }
+        : asset,
+    );
+    const replay = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      release: { ...release, assets: invalidAssets },
+      existingManifest: {
+        ...first.manifest,
+        githubReleaseAssets: invalidAssets,
+      },
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(replay.errors).toContain(
+      "Recorded app platform states do not match canonical release asset digests.",
+    );
+    expect(replay.errors).toContain(
+      "Recorded aggregate app state does not match canonical release asset digests.",
+    );
+    expect(replay.manifest).toBeNull();
   });
 
   it("rejects calendar-normalized rollback drill dates", () => {

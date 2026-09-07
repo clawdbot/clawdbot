@@ -82,28 +82,27 @@ export function resolveExecReviewerDefaults(params: {
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+// Preparation and execution must interpret elevation identically before host policy runs.
+export function resolveExecElevatedMode(
+  defaults: ExecToolDefaults | undefined,
+  requested: unknown,
+) {
+  const elevated = defaults?.elevated;
+  const defaultMode =
+    elevated?.defaultLevel === "full"
+      ? "full"
+      : elevated?.defaultLevel === "ask" || elevated?.defaultLevel === "on"
+        ? "ask"
+        : "off";
+  if (typeof requested === "boolean") {
+    return requested ? (defaultMode === "full" ? "full" : "ask") : "off";
+  }
+  return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
+}
+
 export function createExecHostResolver(defaults?: ExecToolDefaults) {
   return (params: ExecToolArgs): ExecHost => {
-    const elevatedDefaults = defaults?.elevated;
-    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-    const elevatedDefaultMode =
-      elevatedDefaults?.defaultLevel === "full"
-        ? "full"
-        : elevatedDefaults?.defaultLevel === "ask"
-          ? "ask"
-          : elevatedDefaults?.defaultLevel === "on"
-            ? "ask"
-            : "off";
-    const effectiveDefaultMode =
-      elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
-    const elevatedMode =
-      typeof params.elevated === "boolean"
-        ? params.elevated
-          ? elevatedDefaultMode === "full"
-            ? "full"
-            : "ask"
-          : "off"
-        : effectiveDefaultMode;
+    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
     const requestedTarget = requireValidExecTarget(params.host);
     return resolveExecTarget({
       configuredTarget: defaults?.host,

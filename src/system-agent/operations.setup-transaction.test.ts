@@ -5,11 +5,14 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import {
+  executeSystemAgentOperation as executeSystemAgentOperationImpl,
+  type SystemAgentCommandDeps,
+} from "./operations.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
@@ -177,8 +180,11 @@ function createRecoverySetupDeps(
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const executeSystemAgentOperation: typeof executeSystemAgentOperationImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => executeSystemAgentOperationImpl(...args));
+
 beforeAll(() => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
   mockConfig.setPluginMetadataBinder((config) => {
     pluginMetadataSnapshot?.bindForConfig(config);
   });
@@ -187,7 +193,6 @@ beforeAll(() => {
 
 afterAll(() => {
   mockConfig.setPluginMetadataBinder(() => {});
-  pluginMetadataSnapshot?.restore();
 });
 
 describe("system-agent setup transaction", () => {
@@ -267,7 +272,7 @@ describe("system-agent setup transaction", () => {
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: pending.workspace, resume: true, surface: "cli" }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply },
     );
     expect(localOnboarding.complete).toHaveBeenCalledWith({
       configPath: pending.configPath,
@@ -295,7 +300,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(pending.configPath)).toEqual(pending);
@@ -593,7 +598,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
     expect(localOnboarding.complete).not.toHaveBeenCalled();

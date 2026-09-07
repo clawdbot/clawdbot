@@ -44,7 +44,8 @@ const reset = numericHeader("x-ratelimit-reset");
 const retryAfter = numericHeader("retry-after");
 const resource = headers.get("x-ratelimit-resource") === "graphql" ? "graphql" : "unknown";
 const rateLimited =
-  Array.isArray(body?.errors) && body.errors.some((error) => error?.type === "RATE_LIMITED");
+  Array.isArray(body?.errors) &&
+  body.errors.some((error) => ["RATE_LIMIT", "RATE_LIMITED"].includes(error?.type));
 const throttleMessage =
   typeof body?.message === "string" &&
   /\b(?:secondary rate limit|abuse detection|API rate limit exceeded)\b/i.test(body.message);

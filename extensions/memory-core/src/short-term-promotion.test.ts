@@ -657,6 +657,37 @@ describe("short-term promotion", () => {
     );
   });
 
+  it("keeps blocked origins out of ranking before applying the candidate limit", async (workspaceDir) => {
+    const nowMs = Date.parse("2026-04-03T10:00:00.000Z");
+    const origins = ["untrusted", "system", "owner", "agent", undefined] as const;
+    await recordMemoryRecalls(
+      workspaceDir,
+      "release notes",
+      origins.map((originClass, index) =>
+        memoryRecallResult(
+          "memory/2026-04-02.md",
+          index + 1,
+          index + 1,
+          index < 2 ? 0.99 : 0.1,
+          `Keep release notes beside the deployment checklist ${index}.`,
+          originClass
+            ? { provenance: { originClass, sessionKind: "interactive", observedAt: nowMs } }
+            : {},
+        ),
+      ),
+      { nowMs },
+    );
+
+    const ranked = await rankAllCandidates(workspaceDir, { nowMs });
+    expect(ranked.map((candidate) => candidate.startLine).toSorted((a, b) => a - b)).toEqual([
+      3, 4, 5,
+    ]);
+    expect(await rankAllCandidates(workspaceDir, { nowMs, limit: 1 })).toEqual(ranked.slice(0, 1));
+    expect(
+      await rankAllCandidates(workspaceDir, { nowMs, limit: 1, includePromoted: true }),
+    ).toEqual(ranked.slice(0, 1));
+  });
+
   it("records recalls and ranks candidates with weighted scores", async (workspaceDir) => {
     const shortTermResult = memoryRecallResult(
       "memory/2026-04-02.md",
@@ -856,6 +887,48 @@ describe("short-term promotion", () => {
     expect(ranked[0]).toMatchObject({ recallCount: 1, dailyCount: 1 });
     expect(ranked[0]?.key).not.toMatch(/^memory:claim:/u);
   });
+
+  for (const signalType of ["recall", "grounded"] as const) {
+    it(`reinforces an existing daily claim when ${signalType} arrives second`, async (workspaceDir) => {
+      const claim = "Deploy scripts live in infra/deploy and need the staging profile.";
+      await recordMemoryRecalls(
+        workspaceDir,
+        "__dreaming_daily__:2026-04-01",
+        [memoryRecallResult("memory/2026-04-01.md", 3, 3, 0.62, claim)],
+        { signalType: "daily", dayBucket: "2026-04-01" },
+      );
+      await recordMemoryRecalls(
+        workspaceDir,
+        signalType === "grounded" ? "__dreaming_grounded_backfill__" : "deploy scripts",
+        [
+          memoryRecallResult(
+            "memory/2026-04-02.md",
+            7,
+            9,
+            0.9,
+            claim,
+            signalType === "grounded"
+              ? { query: "__dreaming_grounded_backfill__:deploy", signalCount: 1 }
+              : {},
+          ),
+        ],
+        { signalType, dayBucket: "2026-04-02" },
+      );
+
+      const ranked = await rankAllCandidates(workspaceDir);
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]).toMatchObject({
+        recallCount: signalType === "recall" ? 1 : 0,
+        dailyCount: 1,
+        groundedCount: signalType === "grounded" ? 1 : 0,
+        signalCount: 2,
+      });
+      expect(ranked[0]?.key).toMatch(/^memory:claim:/u);
+      // The claim keeps its first citation rather than the later signal's file.
+      expect(ranked[0]?.path).toBe("memory/2026-04-01.md");
+      expect(ranked[0]?.startLine).toBe(3);
+    });
+  }
 
   it("reads only light-staged keys that have not already gone through REM", async (workspaceDir) => {
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
@@ -2184,6 +2257,7 @@ describe("short-term promotion", () => {
     });
 
     const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+    expect(auditBefore.updatedAt).toBe("2026-04-04T00:00:00.000Z");
     expect(auditBefore.invalidEntryCount).toBe(1);
     expect(auditBefore.issues.map((issue) => issue.code)).toStrictEqual([
       "recall-store-invalid",
@@ -2669,7 +2743,7 @@ describe("short-term promotion", () => {
     vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
       if (String(filePath) === `/proc/${ownerPid}/status`) {
-        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\n`;
+        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\nThreads:\t1\n`;
       }
       throw new Error(`unexpected read: ${String(filePath)}`);
     });

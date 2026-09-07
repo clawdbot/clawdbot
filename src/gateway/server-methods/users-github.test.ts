@@ -11,9 +11,12 @@ import {
 import {
   prepareGitHubToolEnvironment,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import { cleanupRetiredManagedGitHubProfiles } from "../../agents/github-tool-profile-cleanup.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCommandEnv } from "../../process/exec-spawn.js";
+import * as secretsRuntime from "../../secrets/runtime-state.js";
 import {
   listSecretStoreEntries,
   readSecretStoreExecEnvironment,
@@ -28,6 +31,7 @@ import {
   resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
 import {
+  ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   getUserProfileListItem,
   linkEmail,
@@ -37,12 +41,14 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const network = vi.hoisted(() => ({
+  assertCli: vi.fn(),
   start: vi.fn(),
   poll: vi.fn(),
   refresh: vi.fn(),
@@ -50,12 +56,17 @@ const network = vi.hoisted(() => ({
   command: vi.fn(),
 }));
 vi.mock("../../agents/github-oauth-client.js", () => ({
+  clearGitHubCredentialVerificationCache: vi.fn(),
   requestGitHubOAuthDeviceCode: network.start,
   pollGitHubOAuthDeviceToken: network.poll,
   refreshGitHubOAuthToken: network.refresh,
   verifyGitHubCredential: network.verify,
 }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: network.command }));
+vi.mock("../github-cli-preflight.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github-cli-preflight.js")>();
+  return { ...actual, assertGitHubCliAvailable: network.assertCli };
+});
 
 const tokens = {
   accessToken: "synthetic-access",
@@ -137,6 +148,7 @@ beforeEach(async () => {
   clients = new Set();
   alice = user("alice@example.test");
   bob = user("bob@example.test");
+  network.assertCli.mockReset();
   network.start.mockReset().mockResolvedValue({
     deviceCode: "d".repeat(40),
     userCode: "ABCD-1234",
@@ -208,6 +220,117 @@ afterEach(async () => {
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it.each(["users.github.status", "tools.github.status"])(
+    "%s reports execution authentication instead of a resolved preview credential",
+    async (method) => {
+      const sourceConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          controlUi: {
+            github: { token: { source: "env", provider: "default", id: "GH_TOKEN" } },
+          },
+        },
+      };
+      config = {
+        ...config,
+        gateway: { controlUi: { github: { token: "synthetic-preview" } } },
+      };
+      const snapshot = vi
+        .spyOn(secretsRuntime, "getActiveSecretsRuntimeConfigSnapshot")
+        .mockReturnValue({ config, sourceConfig, configRefsPrepared: true });
+      vi.stubEnv("GH_TOKEN", "synthetic-preview");
+      vi.stubEnv("GITHUB_TOKEN", "synthetic-native");
+      network.command.mockImplementation(
+        async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+          const env = resolveCommandEnv({ argv, env: options.env });
+          return {
+            code: argv[0] === "git" ? 1 : 0,
+            stdout: Buffer.from(
+              argv[0] === "gh" ? env.GH_TOKEN || env.GITHUB_TOKEN || "synthetic-native" : "",
+            ),
+            stderr: Buffer.alloc(0),
+          };
+        },
+      );
+      try {
+        const response = await rpc(
+          alice,
+          method,
+          method === "tools.github.status" ? { agentId: "main", selectedScope: "agent" } : {},
+        );
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(response.mock.calls[0]?.[1]).toMatchObject({
+          [method === "users.github.status" ? "system" : "effective"]: {
+            source: "system-detected",
+            credentialState: "available",
+            account: { login: "system-bot" },
+          },
+        });
+        expect(network.refresh).not.toHaveBeenCalled();
+      } finally {
+        snapshot.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each(["native", "managed"] as const)(
+    "reads personal and %s system status without selecting an agent",
+    async (systemKind) => {
+      const profileId = "ghp_12121212121212121212121212121212";
+      config.agents = {
+        entries: {
+          alpha: {
+            workspace: state.path("alpha-workspace"),
+            tools: { github: { profileId: "ghp_34343434343434343434343434343434" } },
+          },
+          beta: { workspace: state.path("beta-workspace") },
+        },
+      };
+      if (systemKind === "managed") {
+        config.tools = { github: { profileId } };
+        await writeManagedGitHubProfileFiles(
+          resolveManagedGitHubProfileDir({ scope: "system", agentId: "", profileId }),
+          { login: "system-bot", token: "synthetic-native" },
+        );
+      }
+      await connect();
+      network.verify.mockClear();
+      const response = await rpc(alice, "users.github.status");
+      expect(response.mock.calls[0]?.[0]).toBe(true);
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        personal: { state: "connected", account: { login: "personal-alice" } },
+        system: {
+          source: systemKind === "managed" ? "system-configured" : "system-detected",
+          credentialState: "available",
+          account: { login: "system-bot" },
+        },
+      });
+      expect(network.verify.mock.calls.map(([token]) => token)).toEqual([
+        "synthetic-native",
+        tokens.accessToken,
+      ]);
+      const gitProbes = network.command.mock.calls.filter(([argv]) => argv[0] === "git");
+      expect(gitProbes).toHaveLength(1);
+      expect(gitProbes[0]?.[1]?.cwd).toBe(state.stateDir);
+    },
+  );
+
+  it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
+    network.assertCli.mockImplementationOnce(() => {
+      throw new GitHubCliUnavailableError();
+    });
+
+    const response = await rpc(alice, "users.github.authorize.start");
+
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+    expect(JSON.stringify(response.mock.calls)).toContain(
+      "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+    );
+    expect(network.start).not.toHaveBeenCalled();
+    expect(readUserGitHubConnection(owner())).toBeUndefined();
+  });
+
   it.each(["disconnect", "role"] as const)(
     "rechecks %s after personal status verification",
     async (race) => {
@@ -365,25 +488,29 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
     expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
-    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        details: expect.objectContaining({ missingScope: "operator.write" }),
-      }),
-    );
-    for (const method of [
-      "tools.github.authorize.start",
-      "tools.github.configure",
-      "secrets.store.set",
-      "sessions.github.publish",
-    ]) {
+    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
+    for (const [method, missingScope] of [
+      ["tools.github.authorize.start", "operator.admin"],
+      ["tools.github.configure", "operator.admin"],
+      ["secrets.store.set", "operator.admin"],
+      ["sessions.github.publish", "operator.write"],
+    ] as const) {
       const denied = await rpc(alice, method, {
         sessionKey: "agent:main:main",
         idempotencyKey: "reader",
       });
-      expect(denied.mock.calls[0]?.[0], method).toBe(false);
+      expect(denied, method).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope,
+            requiredScopes: [missingScope],
+          },
+        }),
+      );
     }
     const restarted = await start();
     expect(readUserGitHubConnection(owner())?.generation).toBe(connection.generation);
@@ -442,32 +569,63 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(network.poll).toHaveBeenCalledOnce();
   });
 
-  it.each(["unbound", "synthetic", "copied-client", "system-actor"] as const)(
-    "rejects %s profile-like authorization",
-    async (mode) => {
-      let client = alice;
-      if (mode === "unbound") {
-        delete client.authenticatedUserProfile;
-      }
-      if (mode === "synthetic") {
-        client.internal = { syntheticClient: true };
-      }
-      if (mode === "copied-client") {
-        client = { ...client };
-      }
-      if (mode === "system-actor") {
-        client.internal = { operatorRoleActor: { kind: "system" } };
-      }
-      for (const method of [
-        "users.github.status",
-        "users.github.authorize.start",
-        "users.github.disconnect",
-      ]) {
-        expect((await rpc(client, method)).mock.calls[0]?.[0]).toBe(false);
-      }
-      expect(network.start).not.toHaveBeenCalled();
-    },
-  );
+  it("lets a shared-secret owner without a login read status and start My GitHub authorization", async () => {
+    const profile = ensureGatewayOwnerProfile("Gateway Owner");
+    delete alice.authenticatedUserId;
+    alice.authenticatedUserProfile = {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    };
+    alice.internal = { operatorRoleActor: { kind: "system" } };
+
+    expect(await rpc(alice, "users.github.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ personal: expect.objectContaining({ state: "disconnected" }) }),
+    );
+    const started = await start(alice);
+    expect(readUserGitHubConnection(profile.id)?.pending?.requestId).toBe(started.requestId);
+  });
+
+  it.each([
+    "unbound",
+    "synthetic",
+    "synthetic-system",
+    "copied-client",
+    "system-without-profile",
+    "operator-actor",
+  ] as const)("rejects %s profile-like authorization", async (mode) => {
+    let client = alice;
+    if (mode === "unbound") {
+      delete client.authenticatedUserProfile;
+    }
+    if (mode === "synthetic") {
+      client.internal = { syntheticClient: true };
+    }
+    if (mode === "synthetic-system") {
+      client.internal = { syntheticClient: true, operatorRoleActor: { kind: "system" } };
+    }
+    if (mode === "operator-actor") {
+      client.internal = { operatorRoleActor: { kind: "operator", profileId: owner(client) } };
+    }
+    if (mode === "copied-client") {
+      client = { ...client };
+    }
+    if (mode === "system-without-profile") {
+      delete client.authenticatedUserId;
+      delete client.authenticatedUserProfile;
+      client.internal = { operatorRoleActor: { kind: "system" } };
+    }
+    for (const method of [
+      "users.github.status",
+      "users.github.authorize.start",
+      "users.github.disconnect",
+    ]) {
+      expect((await rpc(client, method)).mock.calls[0]?.[0]).toBe(false);
+    }
+    expect(network.start).not.toHaveBeenCalled();
+  });
 
   it.each(["cancel", "disconnect", "replacement", "merge", "role", "expiry"] as const)(
     "fences installation when %s wins the awaited poll",

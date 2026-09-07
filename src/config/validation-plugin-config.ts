@@ -3,12 +3,18 @@ import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
+  isExplicitPluginDisableMarker,
+  isRetiredPluginId,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  isNativeSessionCatalogOptOutOnly,
+  shippedNativeSessionCatalogs,
+} from "../plugins/native-session-catalog-config.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
@@ -19,11 +25,6 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set([
-  "google-antigravity-auth",
-  "google-gemini-cli-auth",
-  "skill-workshop",
-]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type ExplicitPluginReferences = {
@@ -243,7 +244,7 @@ export function validateExplicitPluginConfig(params: {
       missingMessage?: string | null;
     },
   ) => {
-    if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
+    if (isRetiredPluginId(pluginId)) {
       warnings.push({ path: issuePath, message: formatRemovedPluginConfigWarning(pluginId) });
       return;
     }
@@ -288,9 +289,16 @@ export function validateExplicitPluginConfig(params: {
 
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
+  // Normalized entries gain optional keys, so inspect the original disable marker shape.
+  const hasIntentionalDisableMarker = (pluginId: string) =>
+    isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId)) {
+      if (
+        !knownIds.has(pluginId) &&
+        !hasIntentionalDisableMarker(pluginId) &&
+        !isNativeSessionCatalogOptOutOnly(pluginId, entries[pluginId])
+      ) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
@@ -311,7 +319,7 @@ export function validateExplicitPluginConfig(params: {
           `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
           `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
       });
-    } else {
+    } else if (!hasIntentionalDisableMarker(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }
@@ -358,6 +366,7 @@ export function validateExplicitPluginConfig(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
@@ -402,7 +411,27 @@ export function validateExplicitPluginConfig(params: {
             });
           }
         } else if (shouldReplacePluginConfig) {
-          params.replacePluginEntryConfig(pluginId, result.value as Record<string, unknown>);
+          let nextValue = result.value as Record<string, unknown>;
+          const nativeCatalog =
+            record.setup?.nativeSessionCatalog ??
+            shippedNativeSessionCatalogs.find((catalog) => catalog.pluginId === pluginId);
+          const authoredCatalog =
+            isRecord(entry?.config) && isRecord(entry.config.sessionCatalog)
+              ? entry.config.sessionCatalog
+              : undefined;
+          if (
+            nativeCatalog &&
+            isRecord(nextValue.sessionCatalog) &&
+            Object.hasOwn(nextValue.sessionCatalog, "enabled") &&
+            !Object.hasOwn(authoredCatalog ?? {}, "enabled")
+          ) {
+            // Plugin-local defaults remain intact. Root runtime config must not
+            // mistake a schema default for an authored discovery preference.
+            const sessionCatalog = { ...nextValue.sessionCatalog };
+            delete sessionCatalog.enabled;
+            nextValue = { ...nextValue, sessionCatalog };
+          }
+          params.replacePluginEntryConfig(pluginId, nextValue);
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.

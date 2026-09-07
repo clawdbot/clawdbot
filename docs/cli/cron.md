@@ -15,7 +15,7 @@ Run `openclaw automations --help` for the full command surface. See [Automations
 </Tip>
 
 <Note>
-All automation mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
+All automation mutations (`add`/`create`, `edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 
 Every automation subcommand accepts the shared Gateway connection options. Use
@@ -83,6 +83,10 @@ Agent-turn jobs default to the creating conversation when session context is ava
   </Accordion>
 </AccordionGroup>
 
+Removing an isolated automation stops future runs and cleans up its reusable session after active work stops. The JSON removal response includes `sessionCleanup: "pending"` while that cleanup is deferred. Run history is retained.
+
+If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
+
 ## Delivery
 
 `openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
@@ -146,6 +150,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 
 ### Recurring jobs
 
+Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` displays as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
+
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
@@ -156,11 +162,13 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 ### Manual runs
 
+Manually running a disabled job does not enable its schedule or create automatic retries. Use `openclaw automations enable <job-id>` to resume scheduled runs.
+
 `openclaw automations run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
 
 ```bash
 openclaw automations run <job-id>
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --run-id <run-id>
 ```
 
 Add `--wait` when a script should block until that exact queued run records a terminal status:
@@ -317,12 +325,21 @@ openclaw automations run <job-id>
 openclaw automations run <job-id> --due
 openclaw automations run <job-id> --wait --wait-timeout 10m
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
-openclaw automations runs --id <job-id> --limit 50
-openclaw automations runs --id <job-id> --limit 50 --json
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --limit 50
+openclaw automations runs <job-id> --limit 50 --json
+openclaw automations runs <job-id> --run-id <run-id>
 ```
 
-`openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+`automations runs` is the preferred spelling. `cron runs` and the leaf-local
+`--id <job-id>` form remain supported compatibility aliases.
+
+`openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
+
+The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
+
+Existing main-session jobs can still be renamed, disabled, or rescheduled after their agent stops being the system default. Creating a main-session job or explicitly setting its agent, session target, or payload kind revalidates the current main-session rules.
+
+An unresolved owner does not stop the scheduler: that job is skipped with an explanation in `state.lastError`, while other jobs continue. Run `openclaw doctor --fix` to repair unresolved multi-agent legacy ownership, set `agents.defaults.systemAgent.agentId`, or use `openclaw cron edit <job-id> --agent <id>` to repair the job. Sole-agent rosters and legacy default markers honored by the runtime already resolve an owner and need no owner migration. The explanation stays on the job; no agent run-history entry is created because no agent run starts.
 
 `--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly; use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 

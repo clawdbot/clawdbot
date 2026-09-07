@@ -82,17 +82,19 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
     }
     const attribution = this.location?.attribution;
     return html`<span class="activity-feed__device-location"
-      >${label}${attribution
-        ? html`<a
-            class="activity-feed__device-attribution"
-            href=${attribution.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            aria-label=${attribution.text}
-            title=${attribution.text}
-            >${icons.info}</a
-          >`
-        : nothing}</span
+      >${label}${
+        attribution
+          ? html`<a
+              class="activity-feed__device-attribution"
+              href=${attribution.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label=${attribution.text}
+              title=${attribution.text}
+              >${icons.info}</a
+            >`
+          : nothing
+      }</span
     >`;
   }
 }

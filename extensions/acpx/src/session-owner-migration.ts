@@ -14,7 +14,6 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { resolveAcpxSessionResource } from "./session-resource.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type Claim = Awaited<
@@ -51,6 +50,8 @@ async function legacyRecords(input: MigrationInput): Promise<{ directory: string
   if (ids.length === 0) {
     return { directory, ids };
   }
+  // Only legacy records need resource naming; empty directories must not load its runtime graph.
+  const { resolveAcpxSessionResource } = await import("./session-resource.js");
   const evidence = await input.context.inspectAcpSessionClaims?.();
   const { decodeAcpxRuntimeHandleState } = await import("acpx/runtime");
   return {
@@ -163,6 +164,7 @@ async function migrateRecord(
     throw new Error("record ID/name is not a recognized ACPX locator");
   }
   requireStoppedPid(raw.pid);
+  const { resolveAcpxSessionResource } = await import("./session-resource.js");
   const { createFileSessionStore, decodeAcpxRuntimeHandleState, encodeAcpxRuntimeHandleState } =
     await import("acpx/runtime");
   // A roster match alone is never ownership evidence. Canonical metadata and its current

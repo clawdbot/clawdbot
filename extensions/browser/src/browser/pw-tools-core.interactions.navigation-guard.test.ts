@@ -158,64 +158,73 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("runs the post-click navigation guard when navigation starts shortly after the click resolves", async () => {
-    await withFakeTimers(async () => {
-      const navigation = createNavigationPage("http://127.0.0.1:9222/json/version");
-      const click = vi.fn(async () => {
-        setTimeout(() => {
-          navigation.setUrl("http://127.0.0.1:9222/json/list");
-          navigation.emitFrame();
-        }, 10);
+  it.each([
+    {
+      kind: "click",
+      sourceUrl: "http://127.0.0.1:9222/json/version",
+      destinationUrl: "http://127.0.0.1:9222/json/list",
+    },
+    {
+      kind: "select",
+      sourceUrl: "https://example.com/form",
+      destinationUrl: "http://127.0.0.1:9222/private-target",
+    },
+    {
+      kind: "keypress",
+      sourceUrl: "http://127.0.0.1:9222/json/version",
+      destinationUrl: "http://127.0.0.1:9222/private-target",
+    },
+  ])(
+    "runs the post-$kind navigation guard when navigation starts shortly after the $kind resolves",
+    async ({ kind, sourceUrl, destinationUrl }) => {
+      await withFakeTimers(async () => {
+        const navigation = createNavigationPage(sourceUrl);
+        const interaction = vi.fn(async () => {
+          setTimeout(() => {
+            navigation.setUrl(destinationUrl);
+            navigation.emitFrame();
+          }, 10);
+        });
+        const { page } = navigation;
+        const locator =
+          kind === "click"
+            ? { click: interaction }
+            : kind === "select"
+              ? { selectOption: interaction }
+              : undefined;
+        if (kind === "keypress") {
+          Object.assign(page, { keyboard: { press: interaction } });
+        }
+        installInteractionPage(page, locator);
+
+        const completion = vi.fn();
+        const task = (
+          kind === "click"
+            ? strictClick()
+            : kind === "select"
+              ? mod.selectOptionViaPlaywright({
+                  ...strictNavigationOptions(),
+                  ref: "1",
+                  values: ["go"],
+                })
+              : mod.pressKeyViaPlaywright({ ...strictNavigationOptions(), key: "Enter" })
+        ).then(completion);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(completion).not.toHaveBeenCalled();
+        expect(
+          getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+        ).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(250);
+        await task;
+        expect(completion).toHaveBeenCalledTimes(1);
+        expect(
+          getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+        ).toHaveBeenCalledWith(completedNavigationExpectation(page));
       });
-      const { page } = navigation;
-      installInteractionPage(page, { click });
-
-      const completion = vi.fn();
-      const task = strictClick().then(completion);
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(completion).not.toHaveBeenCalled();
-      expect(
-        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(250);
-      await task;
-      expect(completion).toHaveBeenCalledTimes(1);
-
-      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(page),
-      );
-    });
-  });
-
-  it("runs the post-select navigation guard when navigation starts shortly after the select resolves", async () => {
-    await withFakeTimers(async () => {
-      const navigation = createNavigationPage("https://example.com/form");
-      const selectOption = vi.fn(async () => {
-        setTimeout(() => {
-          navigation.setUrl("http://127.0.0.1:9222/private-target");
-          navigation.emitFrame();
-        }, 10);
-      });
-      const { page } = navigation;
-      installInteractionPage(page, { selectOption });
-
-      const task = mod.selectOptionViaPlaywright({
-        ...strictNavigationOptions(),
-        ref: "1",
-        values: ["go"],
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(250);
-      await task;
-
-      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(page),
-      );
-    });
-  });
+    },
+  );
 
   it("checks subframe navigations before a later main-frame navigation", async () => {
     await withFakeTimers(async () => {
@@ -292,7 +301,20 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("snapshots delayed subframe URLs before later rewrites make them look safe", async () => {
+  it.each([
+    {
+      name: "snapshots delayed subframe URLs before later rewrites make them look safe",
+      actionDurationMs: 0,
+      advanceMs: 20,
+      graceMs: 230,
+    },
+    {
+      name: "snapshots subframe URLs observed during the action before they change",
+      actionDurationMs: 30,
+      advanceMs: 30,
+      graceMs: 250,
+    },
+  ])("$name", async ({ actionDurationMs, advanceMs, graceMs }) => {
     await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = createMutableFrame("http://169.254.169.254/latest/meta-data/");
@@ -304,14 +326,19 @@ describe("pw-tools-core interaction navigation guard", () => {
         setTimeout(() => {
           subframe.setUrl("https://example.com/embed");
         }, 20);
+        if (actionDurationMs > 0) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, actionDurationMs);
+          });
+        }
       });
       const { page } = navigation;
       installInteractionPage(page, { click });
 
       const task = strictClick();
 
-      await vi.advanceTimersByTimeAsync(20);
-      await vi.advanceTimersByTimeAsync(230);
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      await vi.advanceTimersByTimeAsync(graceMs);
       await task;
 
       expect(
@@ -323,43 +350,52 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("still quarantines the main frame when a delayed subframe block fires first", async () => {
-    await withFakeTimers(async () => {
-      const mainFrame = {};
-      const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
-      const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
-      const click = vi.fn(async () => {
-        setTimeout(() => {
-          navigation.emitFrame(subframe);
-        }, 10);
-        setTimeout(() => {
-          navigation.setUrl("http://127.0.0.1:8080/internal");
-          navigation.emitFrame(mainFrame);
-        }, 20);
+  it.each([
+    { phase: "a delayed", actionDurationMs: 0, advanceMs: 20, graceMs: 230 },
+    { phase: "an in-flight", actionDurationMs: 30, advanceMs: 30, graceMs: 250 },
+  ])(
+    "still quarantines the main frame when $phase subframe block fires first",
+    async ({ actionDurationMs, advanceMs, graceMs }) => {
+      await withFakeTimers(async () => {
+        const mainFrame = {};
+        const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
+        const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
+        const click = vi.fn(async () => {
+          setTimeout(() => {
+            navigation.emitFrame(subframe);
+          }, 10);
+          setTimeout(() => {
+            navigation.setUrl("http://127.0.0.1:8080/internal");
+            navigation.emitFrame(mainFrame);
+          }, 20);
+          if (actionDurationMs > 0) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, actionDurationMs);
+            });
+          }
+        });
+        const { page } = navigation;
+        installInteractionPage(page, { click });
+
+        getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+          new Error("subframe blocked"),
+        );
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
+          new Error("main frame blocked"),
+        );
+
+        const task = strictClick();
+        const rejection = expect(task).rejects.toThrow("main frame blocked");
+
+        await vi.advanceTimersByTimeAsync(advanceMs);
+        await vi.advanceTimersByTimeAsync(graceMs);
+        await rejection;
+        expect(
+          getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+        ).toHaveBeenCalledWith(completedNavigationExpectation(page));
       });
-      const { page } = navigation;
-      installInteractionPage(page, { click });
-
-      const subframeBlocked = new Error("subframe blocked");
-      const mainFrameBlocked = new Error("main frame blocked");
-      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
-        subframeBlocked,
-      );
-      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-        mainFrameBlocked,
-      );
-
-      const task = strictClick();
-      const rejection = expect(task).rejects.toThrow("main frame blocked");
-
-      await vi.advanceTimersByTimeAsync(20);
-      await vi.advanceTimersByTimeAsync(230);
-      await rejection;
-      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(page),
-      );
-    });
-  });
+    },
+  );
 
   it("does not stop watching for a later main-frame navigation after a harmless subframe hop", async () => {
     await withFakeTimers(async () => {
@@ -434,79 +470,6 @@ describe("pw-tools-core interaction navigation guard", () => {
           "navigation request guard invocation",
         ),
       ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
-    });
-  });
-
-  it("snapshots subframe URLs observed during the action before they change", async () => {
-    await withFakeTimers(async () => {
-      const mainFrame = {};
-      const subframe = createMutableFrame("http://169.254.169.254/latest/meta-data/");
-      const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
-      const click = vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(() => navigation.emitFrame(subframe.frame), 10);
-            setTimeout(() => {
-              subframe.setUrl("https://example.com/embed");
-            }, 20);
-            setTimeout(resolve, 30);
-          }),
-      );
-      const { page } = navigation;
-      installInteractionPage(page, { click });
-
-      const task = strictClick();
-
-      await vi.advanceTimersByTimeAsync(30);
-      await vi.advanceTimersByTimeAsync(250);
-      await task;
-
-      expect(
-        getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
-      ).toHaveBeenCalledWith({
-        ssrfPolicy: { allowPrivateNetwork: false },
-        url: "http://169.254.169.254/latest/meta-data/",
-      });
-    });
-  });
-
-  it("still quarantines the main frame when an in-flight subframe block fires first", async () => {
-    await withFakeTimers(async () => {
-      const mainFrame = {};
-      const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
-      const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
-      const click = vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(() => navigation.emitFrame(subframe), 10);
-            setTimeout(() => {
-              navigation.setUrl("http://127.0.0.1:8080/internal");
-              navigation.emitFrame(mainFrame);
-            }, 20);
-            setTimeout(resolve, 30);
-          }),
-      );
-      const { page } = navigation;
-      installInteractionPage(page, { click });
-
-      const subframeBlocked = new Error("subframe blocked");
-      const mainFrameBlocked = new Error("main frame blocked");
-      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
-        subframeBlocked,
-      );
-      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-        mainFrameBlocked,
-      );
-
-      const task = strictClick();
-      const rejection = expect(task).rejects.toThrow("main frame blocked");
-
-      await vi.advanceTimersByTimeAsync(30);
-      await vi.advanceTimersByTimeAsync(250);
-      await rejection;
-      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(page),
-      );
     });
   });
 
@@ -678,37 +641,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(result).toBe("Ada");
     expect(locator.evaluate.mock.calls[0]?.[1]).toMatchObject({
       fnSource: "async (el) => {\nconst text = el.textContent; return text;\n}",
-    });
-  });
-
-  it("runs the post-keypress navigation guard when navigation starts shortly after the keypress resolves", async () => {
-    await withFakeTimers(async () => {
-      const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
-        extras: {
-          keyboard: {
-            press: vi.fn(async () => {
-              setTimeout(() => {
-                navigation.setUrl("http://127.0.0.1:9222/private-target");
-                navigation.emitFrame();
-              }, 10);
-            }),
-          },
-        },
-      });
-      const { page } = navigation;
-      installInteractionPage(page);
-
-      const task = mod.pressKeyViaPlaywright({
-        ...strictNavigationOptions(),
-        key: "Enter",
-      });
-
-      await vi.advanceTimersByTimeAsync(250);
-      await task;
-
-      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(page),
-      );
     });
   });
 
@@ -1014,11 +946,12 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
     await started;
     ctrl.abort(new Error("aborted by test"));
-
+    expect(drain).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    releaseHover();
     await expect(task).rejects.toThrow("aborted by test");
     expect(drain).toHaveBeenCalledWith(DOWNLOAD_GRACE);
     expect(dispose).toHaveBeenCalledOnce();
-    releaseHover();
   });
 
   it("retains the download grace when an executable wait aborts", async () => {
@@ -1199,4 +1132,3 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

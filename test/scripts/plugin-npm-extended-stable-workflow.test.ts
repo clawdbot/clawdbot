@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -143,7 +144,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(preflightCheckout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-tooling",
-      "sparse-checkout": "packages/normalization-core\nscripts\n",
+      "sparse-checkout": "packages/normalization-core\nscripts\nsrc/plugins\n",
     });
     const pack = step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact");
     expect(pack.run).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
@@ -166,6 +167,8 @@ describe("plugin npm extended-stable workflow", () => {
   ])(
     "publishes the sealed artifact without a source install: $publishTag / identity $identityExit",
     ({ publishTag, identityExit }) => {
+      const nodeExecutable = requireNodeTool("node");
+      const npmCli = realpathSync(requireNodeTool("npm"));
       const root = mkdtempSync(join(tmpdir(), "plugin-oidc-artifact-"));
       try {
         const bin = join(root, "bin");
@@ -181,7 +184,7 @@ describe("plugin npm extended-stable workflow", () => {
         for (const command of ["node", "npm"]) {
           writeFileSync(
             join(bin, command),
-            `#!${process.execPath}
+            `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (${JSON.stringify(command)} === "npm") {
@@ -218,7 +221,7 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
               PATH: `${bin}:/usr/bin:/bin`,
               ...publish.env,
               EVENTS: events,
-              NPM_CLI: realpathSync(join(dirname(process.execPath), "npm")),
+              NPM_CLI: npmCli,
               RUNNER_TEMP: root,
               IDENTITY_EXIT: String(identityExit),
               TARBALL_PATH: tarball,
@@ -559,20 +562,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(pluginManifest.id).toBe("meta");
   });
 
-  it("owns external Git while retaining the npm publish deadline", () => {
-    const source = readFileSync(workflowPath, "utf8");
-    const npmPublishLines = source
-      .split("\n")
-      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
-
-    expect(source).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
-    );
-    expect(source.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmPublishLines).toHaveLength(2);
-    expect(
-      npmPublishLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 300s")),
-    ).toBe(true);
+  it("retains the npm publish deadline for both publication routes", () => {
+    const publish = workflow().jobs?.publish_plugins_npm;
+    for (const stepName of [
+      "Publish with trusted publisher",
+      "Publish approved bootstrap tarball",
+    ]) {
+      expect(step(publish, stepName).run, stepName).toContain(
+        'timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH"',
+      );
+    }
   });
 
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {

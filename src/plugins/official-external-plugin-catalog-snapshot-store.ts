@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -102,8 +103,8 @@ function rowToTrustState(
   return {
     mode: "signed",
     signedBy: row.trust_key_id,
-    signatureCount: Number(row.trust_signature_count),
-    threshold: Number(row.trust_threshold),
+    signatureCount: sqliteNumber(row.trust_signature_count),
+    threshold: sqliteNumber(row.trust_threshold),
     verifiedAt: row.trust_verified_at,
   };
 }
@@ -206,7 +207,7 @@ function rowToSnapshot(
   }
   const metadata: HostedOfficialExternalPluginCatalogMetadata = {
     url: row.feed_url,
-    status: Number(row.status),
+    status: sqliteNumber(row.status),
     checksum: row.checksum,
     ...(row.etag ? { etag: row.etag } : {}),
     ...(row.last_modified ? { lastModified: row.last_modified } : {}),

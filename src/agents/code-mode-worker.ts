@@ -8,9 +8,17 @@ import { createLazyPromise } from "../shared/lazy-promise.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
 
-const getQuickJsWasmModule = createLazyPromise(async () => {
-  const wasmPath = createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm");
-  return WebAssembly.compile(await readFile(wasmPath));
+const getQuickJsModules = createLazyPromise(async () => {
+  const resolve = createRequire(import.meta.url).resolve;
+  const compile = async (path: string) => WebAssembly.compile(await readFile(resolve(path)));
+  const [wasmModule, encoding] = await Promise.all([
+    compile("quickjs-wasi/quickjs.wasm"),
+    compile("quickjs-wasi/encoding.so"),
+  ]);
+  return {
+    wasmModule,
+    wasmExtensions: [{ name: "encoding", wasm: encoding }],
+  };
 });
 
 function codeModeWorkerUrl(): URL {
@@ -76,14 +84,14 @@ export async function runCodeModeWorker(
   try {
     const message = await pool.run(
       async () => {
-        const wasmModule = await getQuickJsWasmModule();
+        const modules = await getQuickJsModules();
         if (!isRecord(workerData)) {
           return workerData;
         }
         const config = isRecord(workerData.config) ? workerData.config : undefined;
         return {
           ...workerData,
-          wasmModule,
+          ...modules,
           // Queueing and initialization consume the same guest budget as
           // parsing and execution; admission must not restart the deadline.
           ...(config && typeof config.timeoutMs === "number"

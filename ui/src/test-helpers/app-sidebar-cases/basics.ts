@@ -31,6 +31,38 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar invitation admission", () => {
+  it.each([
+    { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
+    { field: "draggingSidebarSection", value: "ungrouped", finish: "finishSidebarSectionDrag" },
+    { field: "draggingSidebarEntry", value: "route:home", finish: "finishSidebarEntryDrag" },
+  ] as const)(
+    "waits for $field to finish even without hover or focus",
+    async ({ field, value, finish }) => {
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main", "agent:main:task"]),
+      );
+      expect(sidebar.matches(":hover, :focus-within")).toBe(false);
+      sidebar.sessionOrganizer[field] = value;
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+      try {
+        await context.config.refresh();
+        await sidebar.updateComplete;
+        expect(context.config.current.communityInvite).toBe(true);
+        expect(sidebar.querySelector(".community-invite-card")).toBeNull();
+        sidebar.sessionOrganizer[finish]();
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector(".community-invite-card")).not.toBeNull();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+});
+
 describe("AppSidebar new session navigation", () => {
   it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -128,7 +160,7 @@ describe("AppSidebar new session navigation", () => {
         capabilities: {
           continueSession: true,
           archive: false,
-          createSession: { model: "anthropic/claude-opus-4-8" },
+          startTerminal: true,
         },
         hosts: [],
       },
@@ -289,9 +321,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = true;
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
-    );
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
@@ -312,7 +342,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
-  it("shows the Home spinner without an agent subtitle during an active run", async () => {
+  it("shows the Home ring without an agent subtitle during an active run", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -338,15 +368,16 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
-    // Run state uses the session spinner at the row edge without changing the Home icon.
-    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    // Run state wraps the Home icon and suppresses its unread badge.
+    const spinner = sidebar.querySelector(".nav-item--home .session-glyph__ring");
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner"),
+    ).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
-    expect(spinner?.getAttribute("title")).toBe("Active run");
 
     harness.publishList({
       result: {
@@ -359,7 +390,7 @@ describe("AppSidebar agent chip", () => {
       agentId: "main",
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
@@ -511,5 +542,14 @@ describe("AppSidebar agent chip", () => {
     expect(promoted).not.toBeNull();
     expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
     expect(promoted?.textContent).toContain("Spawned thread");
+    expect(promoted?.querySelector("[data-sidebar-session-pin]")).toBeNull();
+    promoted?.querySelector<HTMLButtonElement>("[data-session-menu]")?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-session-menu",
+    );
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 });

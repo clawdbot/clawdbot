@@ -34,6 +34,11 @@ export class SessionUnreadPatchGuard {
       this.activationMarkedUnreadAt = marker;
     }
     if (unread === false) {
+      // An optimistic read keeps the observed marker until the Gateway confirms it.
+      // Clearing the latch here would let rollback synchronously dispatch a duplicate.
+      if (marker !== undefined) {
+        return false;
+      }
       this.activationMarkedUnreadAt = undefined;
       this.requested = false;
       return false;

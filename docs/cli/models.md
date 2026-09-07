@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fallbacks, auth)"
+summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fallbacks, shared auth, personal accounts)"
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
+  - You want to sign in to or select a personal model account on a shared Gateway
 title: "Models"
 ---
 
@@ -94,6 +95,8 @@ Notes:
 - Broad `models list --all` merges manifest catalog rows over registry rows without loading provider runtime supplement hooks. Provider-filtered manifest fast paths use only providers marked `static`; providers marked `refreshable` stay registry/cache-backed and append manifest rows as supplements, while providers marked `runtime` stay on registry/runtime discovery.
 - `models list` keeps native model metadata and runtime caps distinct. In table output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime cap differs from the native context window; JSON rows include `contextTokens` when a provider exposes that cap.
 - For provider-owned routes, `models list` projects one logical provider/model row onto the selected route. `Input` and `Ctx` come only from an exact physical-route catalog row, with explicit configured logical overrides applied last; unresolved route selection shows unknown capability fields instead of borrowing sibling-route metadata.
+- Configured model IDs retain their case. For example, `Reader` and `reader` keep separate rows with their own names, context limits, and input types. Provider-declared aliases still apply.
+- Models marked `missing` retain their configured aliases in the `Tags` column and JSON `tags`.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or `openai`. It does not accept display labels from interactive provider pickers, such as `Moonshot AI`.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then as a unique configured-provider match for that exact model id, and only then falls back to the configured default provider with a deprecation warning. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
@@ -129,6 +132,8 @@ Options:
 - `--set-image`
 - `--json`
 
+Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
+
 `--set-default` and `--set-image` require live probes; metadata-only scan results are informational and are not applied to config.
 
 ## Aliases
@@ -153,7 +158,55 @@ openclaw models fallbacks clear
 
 Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list|add|remove|clear` manages the parallel `agents.defaults.imageModel.fallbacks` list with the same subcommand shape.
 
+## Personal model accounts
+
+Use `models accounts` for accounts owned by your signed-in person on the selected Gateway. The CLI and **Settings → Profile → Connected accounts** use the same Gateway account store, including when the server is shared.
+
+| Scope          | Command                                            | Where the credential belongs                                        |
+| -------------- | -------------------------------------------------- | ------------------------------------------------------------------- |
+| Personal       | `models accounts login [provider]`                 | Your verified profile on the selected Gateway, which may be remote. |
+| System / agent | `models auth login --provider <id> [--agent <id>]` | The OpenClaw installation on the machine running the command.       |
+
+To configure system/agent credentials for a remote server, run `models auth` on that server with its OpenClaw state/config. Configuring a remote Gateway URL on your laptop does not make `models auth` write to the server.
+
+```bash
+openclaw models accounts list
+openclaw models accounts login
+openclaw models accounts login anthropic --method api-key
+openclaw models accounts login openai --method device-code
+openclaw models accounts login xai --method api-key
+openclaw models accounts use <account-id>
+openclaw models accounts clear-default <provider>
+```
+
+Every account command shows **Gateway**, **Person**, and **Scope: Personal** before accessing accounts or asking for provider credentials. This context goes to stderr so `--json` output stays pipeable. The person is the Gateway's saved, verified profile, not your operating-system username or an unsaved display-name edit.
+
+Gateway access and provider sign-in are separate. Account ownership follows the profile assigned by the Gateway on this connection. Single-user Control UI connections can use the durable **Owner** profile, but short-lived CLI connections are not assigned that profile automatically. The personal-account CLI therefore needs an identity-bearing endpoint, even when the local Control UI already shows **Owner**.
+
+For separate people on a shared server, use its identity-bearing WebSocket endpoint, such as [Tailscale Serve](/gateway/tailscale#tailscale-identity-headers-serve-only) or a [trusted proxy](/gateway/trusted-proxy-auth). Approve device pairing separately if requested: pairing grants device access, not a distinct person's identity. Supplying shared Gateway token/password credentials takes precedence over Tailscale identity authentication. A browser sign-in does not transfer its identity to the CLI. For an identity-aware edge, follow [remote edge authentication](/gateway/remote#gateway-behind-an-identity-aware-proxy).
+
+If no person is identified, the command stops before provider sign-in and explains how to use an identity-bearing endpoint. It does not infer ownership or change Gateway authentication. These commands do not accept `--agent` or an owner id, and they do not modify local shared auth stores or model config. The top-level `openclaw connect` command enrolls a node; it is not a personal-account login.
+
+`list` needs `operator.read` and returns one page of at most 50 saved accounts: id, provider, friendly label, auth type, and whether each is the new-session default. It never returns credentials. Use `--json` for structured output and `list --cursor <nextCursor>` for the next page.
+
+`login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal and offers the same provider and sign-in methods as **Add account** in the Control UI. Omit the provider to choose from the Gateway's catalog; use `--method <id>` to select a method directly. The catalog includes only methods enabled for personal accounts by their provider plugin, not every system/agent setup method.
+
+Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, browser sign-in, and device-code methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
+
+Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt and waits for the Gateway's acknowledgment; a closed connection must start a fresh attempt. Saving an account does not by itself prove that a model request will succeed.
+
+`use` selects an already-saved account for new sessions without signing in again. `clear-default` removes only the personal default for that provider: it keeps saved credentials and existing session selections. Neither operation revokes provider access. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for collaborator, fork, and failover behavior.
+
+All account subcommands accept `--url <url>`, `--port <port>`, `--token-file <path>`, `--password-file <path>`, `--timeout <ms>` (default `30000`), and `--json`. The token/password files authenticate the **Gateway**, not the provider, and do not establish a personal identity for this CLI. An explicit `--url` can use an identity-bearing endpoint without supplying a shared token. It does not send ambient or configured shared credentials to the override; configured edge credentials remain bound to their own endpoint. Flags may precede or follow the leaf command:
+
+```bash
+openclaw models accounts --timeout 45000 list --json
+openclaw models accounts list --timeout 45000 --json
+```
+
 ## Auth profiles
+
+These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
 
 Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 

@@ -85,6 +85,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
   agentId: string;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
+  canRequestPage: () => boolean;
 }): Promise<SessionCatalog[]> {
   const previousCatalogs = new Map(params.previousCatalogs.map((catalog) => [catalog.id, catalog]));
   return Promise.all(
@@ -106,6 +107,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
+            // Pausing automatic replay must retain the full visible window, not its partial prefix.
+            if (!params.canRequestPage()) {
+              return preserveExpandedCatalogHost(host, previous);
+            }
             let result: SessionsCatalogListResult;
             try {
               result = await params.client.request<SessionsCatalogListResult>(
@@ -113,6 +118,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 {
                   agentId: params.agentId,
                   catalogId: catalog.id,
+                  hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
                 },
               );

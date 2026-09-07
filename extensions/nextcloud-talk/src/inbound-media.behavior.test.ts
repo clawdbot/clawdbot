@@ -306,90 +306,6 @@ describe("nextcloud-talk inbound media behavior", () => {
     expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps ordinary structured text authoritative outside file-share activities", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    const structuredText = '{"message":"ordinary rich text","parameters":[]}';
-
-    await handleNextcloudTalkInbound({
-      message: createMessage({ text: structuredText }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          body: expect.stringContaining(structuredText),
-          bodyForAgent: structuredText,
-          rawBody: structuredText,
-          commandBody: structuredText,
-        }),
-      }),
-    );
-    const contextInput = requireFirstMockArg(
-      coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
-      "Nextcloud Talk structured-text context",
-    );
-    expect(contextInput).not.toHaveProperty("media");
-    expect(JSON.stringify(contextInput)).not.toContain("Nextcloud Talk attachment unavailable");
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a structured slash-command payload unchanged on the attachment branch", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-    const structuredCommand = '{"message":"/status","parameters":[]}';
-
-    await handleNextcloudTalkInbound({
-      message: createMessage({ text: structuredCommand }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          body: expect.stringContaining(structuredCommand),
-          bodyForAgent: structuredCommand,
-          rawBody: structuredCommand,
-          commandBody: structuredCommand,
-        }),
-      }),
-    );
-    const contextInput = requireFirstMockArg(
-      coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
-      "Nextcloud Talk structured-command context",
-    );
-    expect(contextInput).not.toHaveProperty("media");
-    expect(JSON.stringify(contextInput)).not.toContain("Nextcloud Talk attachment unavailable");
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-  });
-
   it("passes a successful staged image path and type into inbound context", async () => {
     const coreRuntime = createPluginRuntimeMock();
     (
@@ -789,6 +705,52 @@ describe("nextcloud-talk inbound media behavior", () => {
         "Nextcloud Talk malformed-media context",
       ),
     ).not.toHaveProperty("media");
+  });
+
+  it("keeps structured commands decoded when authorized media is unavailable", async () => {
+    const hasControlCommand = vi.fn((body?: string) => body === "/status");
+    const coreRuntime = createPluginRuntimeMock({
+      channel: {
+        text: { hasControlCommand },
+        commands: { shouldHandleTextCommands: vi.fn(() => true) },
+      },
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    const structuredCommand = '{"message":"/status","parameters":[]}';
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: structuredCommand,
+        attachmentIssue: "media_missing_metadata",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          mediaAllowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/status", expect.anything());
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: `${structuredCommand}\n\n[Nextcloud Talk attachment unavailable]`,
+          rawBody: structuredCommand,
+          commandBody: "/status",
+        }),
+      }),
+    );
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
   });
 
   it("rejects declared oversize media before fetching", async () => {

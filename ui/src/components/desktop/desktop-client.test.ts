@@ -23,6 +23,7 @@ function createFakeRfb() {
     viewOnly = false;
     scaleViewport = false;
     readonly disconnect = vi.fn();
+    readonly sendKey = vi.fn();
 
     constructor(
       readonly target: HTMLElement,
@@ -130,39 +131,87 @@ describe("DesktopClient", () => {
       credentials: { username: "operator", password: "secret" },
     });
 
-    handle.setScaleViewport?.(true);
+    handle.setScaleViewport(true);
     expect(instances[0]?.scaleViewport).toBe(true);
-    handle.sendKeyboardEvent?.(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
+    handle.sendKeyboardEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
     expect(onKeyDown).toHaveBeenCalledOnce();
     expect((onKeyDown.mock.calls[0]?.[0] as KeyboardEvent | undefined)?.key).toBe("k");
-    handle.sendText?.("m");
-    handle.sendBackspace?.();
+    handle.sendText("m");
+    handle.sendBackspace();
     expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
-      ["k", "m", "Backspace"],
+      ["k", "m"],
     );
+    expect(instances[0]?.sendKey).toHaveBeenCalledExactlyOnceWith(0xff08, "Backspace");
 
     handle.disableInput();
     expect(instances[0]?.viewOnly).toBe(true);
     handle.disconnect();
+    handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("forwards socket close metadata through the RFB disconnect callback", async () => {
+  it.each([
+    { clean: true, close: { code: 4000, reason: "control-taken" } },
+    { clean: false, close: { code: 1008, reason: "authentication rejected" } },
+    { clean: false, close: { code: 1006, reason: "" } },
+    { clean: false, close: undefined },
+    { clean: true, close: undefined },
+  ])("preserves RFB clean=$clean with socket close $close", async ({ clean, close }) => {
     const { Rfb, instances } = createFakeRfb();
     const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const onDisconnect = vi.fn();
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
-    await client.connect({
+    const handle = await client.connect({
       wsUrl: "ws://control.example.test/desktop/observe",
       isCurrent: () => true,
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,
     });
-    socket.dispatchEvent(new CloseEvent("close", { code: 4000, reason: "control-taken" }));
-    instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+    onDisconnect.mockImplementation(() => handle.disconnect());
+    if (close) {
+      socket.dispatchEvent(new CloseEvent("close", close));
+    }
+    instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean } }));
 
-    expect(onDisconnect).toHaveBeenCalledWith({ code: 4000, reason: "control-taken" });
+    expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ ...close, clean });
+    handle.disconnect();
+    expect(instances[0]?.disconnect).not.toHaveBeenCalled();
+    if (!close) {
+      socket.dispatchEvent(new CloseEvent("close", { code: 1000 }));
+      expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean });
+    }
+  });
+
+  it.each([
+    ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
+    ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
+    ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
+    ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
+  ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
+    const { Rfb } = createFakeRfb();
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
+    const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
+    const target = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    const events: KeyboardEvent[] = [];
+    const onKey = (event: KeyboardEvent) => events.push(event);
+    canvas.addEventListener("keydown", onKey);
+    canvas.addEventListener("keyup", onKey);
+    target.append(canvas);
+    const handle = await client.connect({
+      wsUrl: "ws://control.example.test/desktop/observe",
+      isCurrent: () => true,
+      viewOnly: false,
+      target,
+    });
+
+    handle.sendText(text);
+
+    expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
+      keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),
+    );
+    handle.disconnect();
   });
 });

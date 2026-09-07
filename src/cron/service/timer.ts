@@ -1,4 +1,3 @@
-import { executeJobCore } from "./timer-execution.js";
 import { onTimer } from "./timer-scheduler.js";
 
 export type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
@@ -15,7 +14,6 @@ export { stopTimer } from "./timer-execution.js";
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronTimerTestApi")] = {
-    executeJobCore,
     onTimer,
   };
 }

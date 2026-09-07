@@ -7,12 +7,15 @@ import {
   markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  ReplyRunAlreadyActiveError,
+  ReplyRunSuccessorAdmissionBlockedError,
   type ReplyBackendHandle,
   type ReplyOperation,
   type ReplyOperationPhase,
@@ -55,6 +58,40 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
 }));
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
 replyRunState.successorAdmissionBarriersByKey ??= new Map();
+
+export function resolveReplyOperationAgentId(sessionKey: string, agentId?: string) {
+  const owner = normalizeOptionalString(agentId) ?? parseAgentSessionKey(sessionKey)?.agentId;
+  return owner ? normalizeAgentId(owner) : undefined;
+}
+
+export function prepareReplyRunKeyUpdate(
+  operation: ReplyOperation,
+  nextSessionKey: string,
+  agentId: string | undefined,
+  stateCleared: boolean,
+): { sessionKey: string; agentId?: string } | undefined {
+  const nextKey = normalizeOptionalString(nextSessionKey);
+  if (!nextKey) {
+    throw new Error("Reply operations require a canonical sessionKey");
+  }
+  const nextAgentId = resolveReplyOperationAgentId(nextKey, agentId) ?? operation.agentId;
+  if (nextKey === operation.key && nextAgentId === operation.agentId) {
+    return undefined;
+  }
+  // Running and settled operations have already published their abort/steer/wait identity.
+  if (operation.result || stateCleared || operation.phase !== "queued") {
+    throw new Error(`Cannot rekey reply operation ${operation.key} in phase ${operation.phase}`);
+  }
+  const targetOwner = replyRunState.activeRunsByKey.get(nextKey);
+  if (targetOwner && targetOwner !== operation) {
+    throw new ReplyRunAlreadyActiveError(nextKey);
+  }
+  if (replyRunState.successorAdmissionBarriersByKey.has(nextKey)) {
+    throw new ReplyRunSuccessorAdmissionBlockedError(nextKey);
+  }
+  return { sessionKey: nextKey, agentId: nextAgentId };
+}
+
 export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
   (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
@@ -168,6 +205,20 @@ export const expireReplyOperationByOperation = new WeakMap<
 
 export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+export function expireStaleReplyOperation(
+  operation: ReplyOperation,
+  reason: ReplyOperationStaleReason,
+  options?: ReplyOperationStaleExpiryOptions,
+): boolean {
+  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
+}
+
+// Committed output belongs to the bounded finalization owner. Stale recovery
+// must not cancel delivery after the backend has already produced its answer.
+export function hasCommittedReplyOperationOutcome(operation: ReplyOperation): boolean {
+  return !operation.result && abortFrozenOperations.has(operation);
 }
 
 export function isReplyOperationAbortable(operation: ReplyOperation): boolean {

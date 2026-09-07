@@ -44,6 +44,7 @@ describe("chat pane session access", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -245,6 +246,7 @@ describe("chat pane session access", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -279,6 +281,7 @@ describe("chat pane session access", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );

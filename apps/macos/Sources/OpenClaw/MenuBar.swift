@@ -32,8 +32,9 @@ enum OpenClawProcessEntrypoint {
 }
 
 struct OpenClawApp: App {
+    // periphery:ignore - SwiftUI installs the application delegate through this property wrapper.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
     private var tailscaleService: TailscaleService {
@@ -69,16 +70,17 @@ struct OpenClawApp: App {
     }
 
     var body: some Scene {
-        Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
-            SettingsRootView(state: self.state, updater: self.delegate.updaterController)
-                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
-                .environment(self.tailscaleService)
-                .background(SettingsWindowOpenRegistrar())
+        // Register before any window is opened, including connection recovery from the dashboard.
+        let openSettings = self.openSettings
+        ConnectionWindowOpener.shared.register {
+            openSettings()
         }
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-        .windowResizability(.contentSize)
+        // The native Connection window is a standard macOS Settings window: toolbar tabs, fixed width,
+        // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
+        return Settings {
+            ConnectionWindow(state: self.state)
+                .environment(self.tailscaleService)
+        }
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Gateway Window…") {
@@ -92,12 +94,20 @@ struct OpenClawApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    self.openWindow(id: SettingsWindowOpener.windowID)
+                Button("Settings…") {
+                    AppNavigationActions.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
+
+                Button("Connection…") {
+                    AppNavigationActions.openConnection()
+                }
             }
-            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
+            CommandGroup(replacing: .appInfo) {
+                Button("About OpenClaw") {
+                    AppNavigationActions.openAbout()
+                }
+            }
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -117,6 +127,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }
+            DashboardGatewayCommands()
         }
     }
 
@@ -127,21 +138,6 @@ struct OpenClawApp: App {
             return
         }
         self.logger.info("attach-only flag enabled")
-    }
-}
-
-struct SettingsWindowOpenRegistrar: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                let openWindow = self.openWindow
-                SettingsWindowOpener.shared.register {
-                    openWindow(id: SettingsWindowOpener.windowID)
-                }
-            }
     }
 }
 
@@ -159,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
-        async let profileCleanup: Void = MacGatewayConnectionFleet.shared.shutdown()
+        async let profileCleanup = MacGatewayConnectionFleet.shared.shutdown()
         // CUA must drain its worker before the node closes the daemon socket.
         if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
             await CuaDriverHostCoordinator.shared.shutdown()
@@ -353,6 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewaysMainMenu.shared.install()
+            BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()
             ExecApprovalsPromptServer.shared.start()
@@ -387,10 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
+            WebChatManager.shared.show()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
@@ -399,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()
         PresenceReporter.shared.stop()

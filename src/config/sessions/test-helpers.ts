@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { applySessionEntryLifecycleMutation, replaceSessionEntry } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
@@ -13,13 +14,14 @@ export function useTempSessionsFixture(prefix: string) {
   let sessionsDir = "";
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
     sessionsDir = path.join(tempDir, "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
     storePath = path.join(sessionsDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -33,7 +35,7 @@ export async function runByteLimitedArchiveCleanupFixture(storePath: string): Pr
   const sessionIds = ["worker-byte-session-0", "worker-byte-session-1"];
   const largeContent = "x".repeat(33 * 1024 * 1024);
   for (const [index, sessionId] of sessionIds.entries()) {
-    const sessionKey = `agent:main:worker-byte-${index}`;
+    const sessionKey = `agent:main:hook:worker-byte-${index}`;
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index });
     await replaceTranscriptEvents({ sessionId, sessionKey, storePath }, [
       { content: `${index}:${largeContent}`, id: sessionId, type: "session" },
@@ -41,14 +43,14 @@ export async function runByteLimitedArchiveCleanupFixture(storePath: string): Pr
   }
   await replaceSessionEntry(
     { sessionKey: "agent:main:worker-byte-retained", storePath },
-    { sessionId: "worker-byte-session-retained", updatedAt: sessionIds.length },
+    { sessionId: "worker-byte-session-retained", updatedAt: Date.now() },
   );
   await applySessionEntryLifecycleMutation({
     storePath,
     maintenanceOverride: {
-      maxEntries: 1,
+      maxEntries: 100,
       mode: "enforce",
-      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      pruneAfterMs: 60_000,
     },
   });
   return sessionIds;

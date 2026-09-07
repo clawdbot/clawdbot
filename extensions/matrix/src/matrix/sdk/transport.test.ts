@@ -29,6 +29,52 @@ describe("performMatrixRequest", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("loads a profile through the real SDK default guarded fetch and closes the client", async () => {
+    const { MatrixClient } = await import("../sdk.js");
+    const { resolveRuntimeMatrixClientWithReadiness } = await import("../client-bootstrap.js");
+    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const profile = { displayname: "Matrix loopback fixture" };
+    const server = http.createServer((request, response) => {
+      requests.push({ url: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(profile));
+    });
+    let client: InstanceType<typeof MatrixClient> | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+      client = new MatrixClient(`http://127.0.0.1:${address.port}/matrix-proxy`, "fixture-token", {
+        encryption: false,
+        autoBootstrapCrypto: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+
+      const resolved = await resolveRuntimeMatrixClientWithReadiness({ client, readiness: "none" });
+      await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
+        profile,
+      );
+      expect(requests).toEqual([
+        {
+          url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
+          authorization: "Bearer fixture-token",
+        },
+      ]);
+    } finally {
+      try {
+        await client?.stopWithoutPersist();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
+  });
+
   it.each([
     {
       name: "a root homeserver",

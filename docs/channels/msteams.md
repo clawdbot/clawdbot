@@ -472,8 +472,8 @@ and are rejected by the default permission baseline.
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt. Falls back to `messages.groupChat.historyLimit`, then defaults to 50. Set `0` to disable.
-- Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
-- Quoted attachment context (parsed from the Skype Reply-schema HTML in a reply's own attachments) is passed through unfiltered; only thread-history seeding applies the sender-allowlist filter today.
+- Graph thread context adds the parent and up to the oldest 50 replies alongside recent channel history. It excludes the triggering message and keeps history separate from the sender's command text, so commands quoted in history do not execute. Long fetched messages retain their beginning and end within the prompt's per-message limit.
+- Thread and quoted attachment context follow `channels.msteams.contextVisibility`, falling back to `channels.defaults.contextVisibility`, then `all`. Use `allowlist` to filter both by sender allowlists (`allowFrom` / `groupAllowFrom`), or `allowlist_quote` to filter thread history while permitting quoted context.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC permissions (manifest)

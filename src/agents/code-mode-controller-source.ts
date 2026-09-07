@@ -1,10 +1,19 @@
 /** Sandboxed guest globals and host bridge for Code Mode QuickJS cells. */
 import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
+import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
   const pending = new Map();
+  const queued = new Map();
+  // Only ordinary requests use this quota. Swarm retains its group/VM bounds
+  // while sharing the same ordered queue and in-flight slots.
+  const maxQueuedOrdinary = ${MAX_CODE_MODE_PENDING_TOOL_CALLS};
+  let queuedOrdinaryCount = 0;
+  let admissionError;
+  const maxPending = globalThis.__openclawMaxPendingToolCalls;
+  delete globalThis.__openclawMaxPendingToolCalls;
   const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
@@ -21,11 +30,13 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Map();
   let nextTimerId = 0;
+  const GuestPromise = Promise;
+  const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
 
-  function safe(value) {
+  function safe(value, diagnosePromises = false) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
+      return JSON.parse(JSON.stringify(diagnosePromises ? serializeOutputValue(value) : value));
     } catch {
       if (value instanceof Error) {
         return { name: value.name, message: value.message };
@@ -39,24 +50,62 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 
   function asText(value) {
     if (typeof value === "string") return value;
-    const encoded = JSON.stringify(safe(value));
+    const encoded = JSON.stringify(safe(value, true));
     return typeof encoded === "string" ? encoded : String(value);
   }
 
-  function beginRequest(method, args) {
+  function assertQueueCapacity(queue) {
+    if (!admissionError && !queue && pending.size >= maxPending && queuedOrdinaryCount >= maxQueuedOrdinary) {
+      admissionError = "code mode bridge queue limit exceeded (" + maxQueuedOrdinary + " ordinary requests queued; " + maxPending + " in-flight slots). Await smaller batches before creating more tool calls or timers.";
+    }
+    // Sticky even if guest code catches the immediate error: the worker refuses
+    // this entire synchronous frontier before dispatching any admitted prefix.
+    if (admissionError) throw new Error(admissionError);
+  }
+
+  function beginRequest(method, args, { queue = false } = {}) {
+    assertQueueCapacity(queue);
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
     bridgeSequences.set(methodName, sequence);
-    const bridgeId = "bridge:" + methodName + ":" + String(sequence);
-    const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
+    const id = "bridge:" + methodName + ":" + String(sequence);
+    const argsJson = JSON.stringify(safe(args ?? []));
+    // Guest toJSON/getters can create requests while serializing this input.
+    assertQueueCapacity(queue);
+    let callbacks;
+    const promise = new Promise((resolve, reject) => { callbacks = { resolve, reject }; });
+    const admit = () => {
+      hostRequest(methodName, argsJson, id);
+      pending.set(id, callbacks);
+    };
+    if (queue || pending.size >= maxPending) {
+      queued.set(id, { admit, callbacks, ordinary: !queue });
+      if (!queue) queuedOrdinaryCount++;
+    } else admit();
     return { id, promise };
   }
 
-  function request(method, args) {
-    return beginRequest(method, args).promise;
+  // Admission and cancellation release capacity through the same owner.
+  function takeQueuedRequest(id) {
+    const entry = queued.get(id);
+    if (!entry) return;
+    queued.delete(id);
+    if (entry.ordinary) queuedOrdinaryCount--;
+    return entry;
+  }
+
+  // Refill after guest continuations run so dependent ordinary calls retain
+  // first use of released slots. Waiting requests refill in insertion order.
+  // Closures, copied inputs, and stable IDs live only in the bounded VM snapshot.
+  function drainQueuedRequests() {
+    while (queued.size > 0 && pending.size < maxPending) {
+      const id = queued.keys().next().value;
+      takeQueuedRequest(id).admit();
+    }
+  }
+
+  function request(method, args, options) {
+    return beginRequest(method, args, options).promise;
   }
 
   function scheduleTimer(callback, delay, args) {
@@ -79,6 +128,11 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const requestId = timers.get(Number(timerId));
     if (!requestId) return;
     timers.delete(Number(timerId));
+    const queuedEntry = takeQueuedRequest(requestId);
+    if (queuedEntry) {
+      queuedEntry.callbacks.resolve(null);
+      return;
+    }
     hostCancelRequest(requestId);
     const entry = pending.get(requestId);
     if (!entry) return;
@@ -251,23 +305,26 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   }
   // Final values may nest handles (Promise.all of searches, keyed maps); an
   // unserialized handle dumps as null and the model never learns the tool name.
-  function serializeCatalogHandles(value, seen = new Set()) {
+  function serializeOutputValue(value, seen = new Map()) {
+    if (value instanceof GuestPromise) return promiseOutput;
     const metadata = callableMetadata.get(value);
     if (metadata) return metadata;
-    if (value === null || typeof value !== "object" || seen.has(value)) return value;
+    if (value === null || typeof value !== "object") return value;
+    if (seen.has(value)) return seen.get(value);
     const proto = Object.getPrototypeOf(value);
-    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
-    seen.add(value);
-    try {
-      if (Array.isArray(value)) return value.map((entry) => serializeCatalogHandles(entry, seen));
-      const plain = {};
-      for (const [key, entry] of Object.entries(value)) {
-        plain[key] = serializeCatalogHandles(entry, seen);
-      }
-      return plain;
-    } finally {
-      seen.delete(value);
+    const isError = value instanceof Error;
+    if (!isError && !Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+    const plain = Array.isArray(value) ? new Array(value.length) : isError ? { name: value.name, message: value.message } : {};
+    // Project before JSON.stringify can invoke Error.toJSON, and preserve graph
+    // identity so cyclic custom fields use the ordinary bounded JSON fallback.
+    seen.set(value, plain);
+    for (const key of Object.keys(value)) {
+      if (isError && key === "toJSON") continue;
+      Object.defineProperty(plain, key, {
+        value: serializeOutputValue(value[key], seen), enumerable: true, configurable: true, writable: true,
+      });
     }
+    return plain;
   }
   const catalog = Object.freeze({
     search: async (query, options) => {
@@ -318,10 +375,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
-    json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
+    json: { value: (value) => output.push({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
-    __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
+    __openclawDrainQueuedRequests: { value: drainQueuedRequests },
+    __openclawAdmissionError: { value: () => admissionError },
+    __openclawSerializeCatalogHandles: { value: serializeOutputValue },
     __openclawTakeOutput: { value: () => output.splice(0) },
     __openclawTrackRejection: {
       value: (promise, reason, handled) => {

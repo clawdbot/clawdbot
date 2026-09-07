@@ -24,7 +24,6 @@ import {
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   setActiveEmbeddedRun,
-  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
@@ -37,11 +36,15 @@ import {
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -49,6 +52,9 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/** Core exec mode algebra for plugin-owned policy adapters. */
+export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
 
 /**
  * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
@@ -70,6 +76,8 @@ export function buildWatchedSessionsHarnessContext(params: {
 }
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { buildTemporalContextText } from "../agents/date-time.js";
+export { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -119,6 +127,7 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
@@ -126,12 +135,11 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
+export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "authoredContextTokenCap"
-  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"
@@ -282,6 +290,7 @@ export {
   resolveMainSessionDelegationMode,
 } from "../agents/delegation-guidance.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
+export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
 export { buildCredentialSafetyPrompt } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -303,7 +312,6 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -318,6 +326,7 @@ export function queueAgentHarnessMessage(
 ): boolean {
   return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
+export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,
@@ -388,6 +397,24 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+/** Load shared MCP request and subprocess ownership only when opening a connection. */
+export const mcpStdioRuntime = Object.freeze({
+  async load() {
+    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
+      await Promise.all([
+        import("../agents/mcp-stdio-client.js"),
+        import("../agents/mcp-stdio-transport.js"),
+        import("../agents/mcp-client-lifecycle.js"),
+      ]);
+    return {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient: lifecycle.connectMcpClient,
+      disposeMcpClient: lifecycle.disposeMcpClient,
+    };
+  },
+});
 
 export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
@@ -462,6 +489,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
 
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
@@ -640,3 +668,5 @@ export function classifyAgentHarnessTerminalOutcome(
 function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
+
+export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

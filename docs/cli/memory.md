@@ -21,6 +21,20 @@ Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
 [wiki](/cli/wiki), [Plugins](/tools/plugin).
 
+## JSON availability
+
+With `--json`, `search`, `promote`, `promote-explain`, `rem-harness`,
+`rem-backfill`, and `session-backfill` report when the memory backend is
+unavailable before any work runs:
+
+- Disabled memory returns `{"agentId":"main","status":"disabled"}` with a successful exit.
+- Backend acquisition failures return the standard `{"ok":false,"error":{"type":"cli_error","message":"..."}}` envelope, plus `agentId`, and exit with code 1.
+
+Handle these outcomes before reading the command's normal result fields. An
+enabled search with no matches still returns `{"results":[]}`. `status --json`
+keeps its aggregate array of available agents, including `[]` when all are
+disabled; acquisition failures still set a nonzero exit code.
+
 ## `memory status`
 
 ```bash
@@ -44,6 +58,14 @@ default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
+Storage diagnostics show the shared agent database file, WAL, reusable free pages,
+and retained embedding-cache payload bytes and entry count, including when the cache
+is disabled. Per-source text-plus-embedding totals describe indexed chunks only.
+These figures overlap: do not add payload or reusable bytes to the file sizes.
+The database also holds sessions and other agent state; the WAL can contain newer
+pages not yet checkpointed into the main file. JSON exposes these facts under
+`status.storage`. Byte inspection runs only for explicit diagnostics, not normal
+memory searches.
 For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
@@ -120,7 +142,8 @@ openclaw memory index --agent main
 ```
 
 Reset does not shrink the database file or restore data already lost by deleting
-it. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
+it. To reclaim disk space, follow [disk-space recovery](/concepts/memory-builtin#reclaim-disk-space)
+before rebuilding. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
 tracked memory derived from selected sessions and prevent re-ingestion.
 
 ## `memory search`
@@ -140,6 +163,9 @@ If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
+
+The Control UI's Memories tab shows the same warning and recovery guidance
+alongside stale search results, and clears them after a fresh search.
 
 ## `memory forget`
 
@@ -339,6 +365,10 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
+
+Entries with `untrusted` or `system` provenance are excluded before ranking, so
+they do not occupy preview limits or appear in `promote-explain`. Promotion still
+rechecks current provenance before writing.
 
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn

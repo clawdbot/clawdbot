@@ -1,10 +1,11 @@
 {
   "id": "imessage",
+  "name": "iMessage",
+  "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac.",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "imessage-legacy-state" }]
   },
-  "icon": "https://cdn.simpleicons.org/imessage",
   "activation": {
     "onStartup": false
   },

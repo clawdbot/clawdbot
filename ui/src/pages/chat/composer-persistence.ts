@@ -3,7 +3,9 @@ import type {
   ChatComposerDraftRetry,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import { readHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
@@ -13,8 +15,10 @@ import {
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
 import {
+  captureDraftReplacement,
   nextDraftRevision,
   rememberDraftAttempt,
+  rememberDraftEdit,
   rememberDraftRevision,
   readDraftRevisionState,
 } from "../../lib/chat/outbox-store-draft-state.ts";
@@ -68,6 +72,7 @@ type ChatComposerPersistenceState = {
   } | null;
   sessionKey: string;
   chatMessage: string;
+  chatMentions?: readonly HumanMention[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
   chatAttachments?: ChatAttachment[];
   chatQueue: ChatQueueItem[];
@@ -104,6 +109,7 @@ export type StoredChatQueueReplacement = {
 type ChatComposerPersistOptions = {
   agentId?: string;
   draft?: string;
+  mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode | null;
   draftRevision?: number;
   expectedDraftRevision?: number;
@@ -193,6 +199,7 @@ function writeStoredComposerSession(
   store.sessions[storeSessionKey] = {
     ...(session?.awaitingDefaults ? { awaitingDefaults: true } : {}),
     ...(session?.draft ? { draft: session.draft } : {}),
+    ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
     ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
     ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
     ...(queue.length ? { queue } : {}),
@@ -201,6 +208,23 @@ function writeStoredComposerSession(
 }
 
 type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevisionState>;
+
+export function captureChatComposerReplacement(
+  state: ChatComposerPersistenceState,
+  sessionKey: string,
+  agentId?: string,
+): () => boolean {
+  const scope = resolveUiConversationIdentity(state, sessionKey, agentId);
+  const { revisions } = loadCapturedChatComposerState(state, scope);
+  // Without browser storage, independent live composers have no shared draft
+  // to overwrite; the same owner ledger still fences that pane's replacements.
+  return captureDraftReplacement(
+    getSafeSessionStorage() ?? state,
+    storageTargetForGateway(state.settings?.gatewayUrl).key,
+    storedChatOutboxScopeKey(scope),
+    revisions.latestAttempt,
+  );
+}
 
 export function loadChatComposerDraftRevision(
   state: ChatComposerScope,
@@ -228,7 +252,12 @@ export function loadChatComposerSnapshot(
   state: ChatComposerScope,
   sessionKey: string,
   agentIdOverride?: string,
-): { draft: string; goalMode?: ChatGoalDraftMode; queue: ChatQueueItem[] } | null {
+): {
+  draft: string;
+  mentions?: readonly HumanMention[];
+  goalMode?: ChatGoalDraftMode;
+  queue: ChatQueueItem[];
+} | null {
   return loadCapturedChatComposerState(
     state,
     resolveUiConversationIdentity(state, sessionKey, agentIdOverride),
@@ -239,7 +268,12 @@ function loadCapturedChatComposerState(
   state: ChatComposerScope,
   captured: StoredChatOutboxScope,
 ): {
-  snapshot: { draft: string; goalMode?: ChatGoalDraftMode; queue: ChatQueueItem[] } | null;
+  snapshot: {
+    draft: string;
+    mentions?: readonly HumanMention[];
+    goalMode?: ChatGoalDraftMode;
+    queue: ChatQueueItem[];
+  } | null;
   revisions: ChatComposerDraftRevisionState;
 } {
   const empty = { snapshot: null, revisions: { committed: 0, latestAttempt: 0 } };
@@ -270,6 +304,7 @@ function loadCapturedChatComposerState(
       revisions,
       snapshot: {
         draft,
+        ...(session.draftMentions ? { mentions: session.draftMentions } : {}),
         ...(session.goalMode ? { goalMode: session.goalMode } : {}),
         queue: (session.queue ?? [])
           .filter((item) => outboxPayloadMatchesOwner(state, item))
@@ -314,6 +349,10 @@ function persistCapturedChatComposerStateResult(
     const goalMode = Object.hasOwn(options, "goalMode")
       ? options.goalMode
       : state.chatGoalDraftMode;
+    const mentions = readHumanMentions(
+      draft,
+      Object.hasOwn(options, "mentions") ? options.mentions : state.chatMentions,
+    );
     const storedDraftRevision = session?.draftRevision;
     rememberDraftRevision(storage, target.key, storeSessionKey, storedDraftRevision);
     // Draft-only rows are bounded and may evict a clear tombstone. Retain the
@@ -329,6 +368,7 @@ function persistCapturedChatComposerStateResult(
     // Draft interpretation shares the text revision; a retry cannot turn an objective into a command.
     const sameDraft =
       storedDraft === draft &&
+      JSON.stringify(session?.draftMentions ?? []) === JSON.stringify(mentions ?? []) &&
       JSON.stringify(session?.goalMode ?? null) === JSON.stringify(goalMode ?? null);
     const expectedDraftRevision = options.expectedDraftRevision;
     const committedMatchesExpected =
@@ -348,6 +388,7 @@ function persistCapturedChatComposerStateResult(
     store.sessions[storeSessionKey] = {
       ...(captured.awaitingDefaults ? { awaitingDefaults: true as const } : {}),
       ...(draft ? { draft } : {}),
+      ...(mentions ? { draftMentions: mentions } : {}),
       ...(goalMode ? { goalMode } : {}),
       draftRevision,
       ...(session?.queue?.length ? { queue: session.queue } : {}),
@@ -358,6 +399,7 @@ function persistCapturedChatComposerStateResult(
     if (
       persisted?.draftRevision === draftRevision &&
       (persisted.draft ?? "") === draft &&
+      JSON.stringify(persisted.draftMentions ?? []) === JSON.stringify(mentions ?? []) &&
       JSON.stringify(persisted.goalMode ?? null) === JSON.stringify(goalMode ?? null)
     ) {
       // Notify only on presence transitions: sidebar draft indicators consume
@@ -581,6 +623,7 @@ export function restoreChatComposerState(
   }
   if (!options.preserveCurrent || (!state.chatMessage && !state.chatGoalDraftMode)) {
     state.chatMessage = normalizeChatComposerDraft(snapshot.draft);
+    state.chatMentions = snapshot.mentions;
     state.chatGoalDraftMode = snapshot.goalMode ?? null;
   }
   if ((!options.preserveCurrent && snapshot.queue.length > 0) || state.chatQueue.length === 0) {
@@ -594,6 +637,7 @@ type ChatComposerDraftSnapshot = {
   awaitingDefaults: boolean;
   sessionKey: string;
   chatMessage: string;
+  mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   expectedDraftRevision: number;
   draftRevision: number;
@@ -634,6 +678,10 @@ export class ChatComposerPersistence {
 
   constructor(private readonly getState: () => DurableChatComposerPersistenceState | undefined) {}
 
+  get active(): boolean {
+    return this.ready;
+  }
+
   start() {
     const state = this.getState();
     if (!state) {
@@ -650,6 +698,7 @@ export class ChatComposerPersistence {
     this.durableRestoreProtected =
       (state.chatAttachments?.length ?? 0) > 0 ||
       (stored?.draft ?? "") !== state.chatMessage ||
+      JSON.stringify(stored?.mentions ?? []) !== JSON.stringify(state.chatMentions ?? []) ||
       JSON.stringify(stored?.goalMode ?? null) !== JSON.stringify(state.chatGoalDraftMode ?? null);
     this.durablePersistence.resetRestoreScope();
     this.lastPersisted = this.snapshot(state, revisions.committed, revisions.committed);
@@ -703,6 +752,14 @@ export class ChatComposerPersistence {
     const draftRevision = nextDraftRevision(baseline);
     this.latestDraftRevision = draftRevision;
     this.pending = this.snapshot(state, draftRevision, this.committedDraftRevision);
+    // An edit owns the draft before its debounced write. Otherwise another
+    // pane's older async action can publish over it and fence out that write.
+    rememberDraftEdit(
+      getSafeSessionStorage() ?? state,
+      storageTargetForGateway(state.settings?.gatewayUrl).key,
+      storedChatOutboxScopeKey(this.pending.scope),
+      draftRevision,
+    );
     this.clearTimer();
     this.timer = globalThis.setTimeout(
       () => this.persistNow(),
@@ -767,6 +824,7 @@ export class ChatComposerPersistence {
         baseline.attachments.length === 0 &&
         storedRevision === baseline.draftRevision &&
         stored?.draft === baseline.chatMessage &&
+        JSON.stringify(stored?.mentions ?? []) === JSON.stringify(baseline.mentions ?? []) &&
         JSON.stringify(stored?.goalMode ?? null) === JSON.stringify(baseline.goalMode ?? null)
       ) {
         this.pending = null;
@@ -824,6 +882,7 @@ export class ChatComposerPersistence {
     try {
       status = persistCapturedChatComposerStateResult(state, snapshot, {
         draft: snapshot.chatMessage,
+        mentions: snapshot.mentions,
         goalMode: snapshot.goalMode ?? null,
         draftRevision: snapshot.draftRevision,
         ...(enforceExpectedRevision
@@ -877,11 +936,13 @@ export class ChatComposerPersistence {
         snapshot.chatMessage,
         snapshot.attachments,
         snapshot.goalMode,
+        snapshot.mentions,
       ) ===
       chatAttachmentDraftSignature(
         normalizeChatComposerDraft(state.chatMessage),
         state.chatAttachments ?? [],
         state.chatGoalDraftMode,
+        state.chatMentions,
       )
     );
   }
@@ -894,6 +955,7 @@ export class ChatComposerPersistence {
     const scope = resolveUiConversationIdentity(state, state.sessionKey);
     const durableScope = this.resolveDurableScope(state, scope);
     const goalMode = state.chatGoalDraftMode ? { ...state.chatGoalDraftMode } : undefined;
+    const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
     const attachments = (state.chatAttachments ?? []).map((attachment) =>
       Object.assign(
         {},
@@ -909,6 +971,7 @@ export class ChatComposerPersistence {
           expectedRevision: expectedDraftRevision,
           revision: draftRevision,
           text: normalizeChatComposerDraft(state.chatMessage),
+          ...(mentions ? { mentions } : {}),
           ...(goalMode ? { goalMode } : {}),
           storedAttachments: captureDurableChatAttachments(attachments),
           writeId: `${draftRevision}:${Math.random().toString(36).slice(2)}`,
@@ -919,6 +982,7 @@ export class ChatComposerPersistence {
       awaitingDefaults: !hasUiSessionDefaults(state),
       sessionKey: state.sessionKey,
       chatMessage: normalizeChatComposerDraft(state.chatMessage),
+      ...(mentions ? { mentions } : {}),
       ...(goalMode ? { goalMode } : {}),
       expectedDraftRevision,
       draftRevision,
@@ -1000,6 +1064,7 @@ export class ChatComposerPersistence {
     ) {
       releaseChatAttachmentPayloads(state.chatAttachments);
       state.chatMessage = "";
+      state.chatMentions = [];
       state.chatGoalDraftMode = null;
       state.chatAttachments = [];
       this.pending = null;
@@ -1038,6 +1103,7 @@ export class ChatComposerPersistence {
           state.chatMessage,
           state.chatAttachments ?? [],
           state.chatGoalDraftMode,
+          state.chatMentions,
         ),
       },
       () => ({
@@ -1046,6 +1112,7 @@ export class ChatComposerPersistence {
           state.chatMessage,
           state.chatAttachments ?? [],
           state.chatGoalDraftMode,
+          state.chatMentions,
         ),
         revision: this.forceDurableOwnerRestore ? 0 : this.latestDraftRevision,
       }),
@@ -1054,6 +1121,7 @@ export class ChatComposerPersistence {
         this.forceDurableOwnerRestore = false;
         const displaced = state.chatAttachments ?? [];
         state.chatMessage = normalizeChatComposerDraft(draft.text);
+        state.chatMentions = draft.mentions;
         state.chatGoalDraftMode = draft.goalMode ?? null;
         state.chatAttachments = draft.attachments;
         releaseChatAttachmentPayloads(displaced);
@@ -1068,6 +1136,7 @@ export class ChatComposerPersistence {
         persistChatComposerStateResult(state, state.sessionKey, {
           agentId: resolveUiConversationIdentity(state, state.sessionKey).agentId,
           draft: state.chatMessage,
+          mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
           draftRevision: adoptedRevision,
         });

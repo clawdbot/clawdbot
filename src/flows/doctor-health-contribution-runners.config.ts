@@ -75,9 +75,16 @@ export async function runWriteConfigHealth(
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
+    const { assertShippedPluginInstallConfigImportCurrent } =
+      await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
       await transformConfigFile({
         transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          // Revalidate the copied source under the config lock; never import after plugin repair.
+          assertShippedPluginInstallConfigImportCurrent(
+            snapshot,
+            ctx.configResult.pluginInstallConfigImport,
+          );
           const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
           return { nextConfig };
         },
@@ -90,6 +97,9 @@ export async function runWriteConfigHealth(
           ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
+          persistCanonicalAgentRoster: configResultWritePending
+            ? ctx.configResult.persistCanonicalAgentRoster
+            : undefined,
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
           ...(legacyParentVersionOverride
             ? { lastTouchedVersionOverride: legacyParentVersionOverride }
@@ -97,21 +107,42 @@ export async function runWriteConfigHealth(
         },
       });
     } catch (error) {
-      const { isConfigValidationFailedError } = await import("../config/io.write-errors.js");
+      const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
+        await import("../config/io.write-errors.js");
+      // A refused write persisted nothing. Queued "Doctor changes" panels stay
+      // unprinted: reporting them would claim repairs that never reached disk.
+      // An earlier pass through this shared runner may have already committed, so
+      // describe only the pending write as unpersisted, never the whole run.
+      const unpersistedLine =
+        ctx.configResultWriteCommitted === true
+          ? "Earlier config fixes were already saved; the remaining changes were not written."
+          : "No config changes were written.";
+      if (isConfigIncludeOwnershipError(error)) {
+        // The candidate mixed an include-owned repair with root-owned changes; the
+        // writer keeps every file intact and names the include boundary, plus its
+        // file when the root file authors the directive, to repair first.
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        const targets = error.includeTargets ?? [];
+        const includedFile =
+          targets.length === 0
+            ? "its included file"
+            : `the included ${targets.length === 1 ? "file" : "files"} ${targets.join(", ")}`;
+        note(
+          [
+            `Doctor could not apply config fixes: ${error.message}`,
+            `${unpersistedLine} Repair ${error.ownedConfigPath} in ${includedFile} by hand, then rerun "openclaw doctor --fix" for the remaining changes.`,
+          ].join("\n"),
+          "Doctor warnings",
+        );
+        ctx.configWriteRefusal = "include-ownership";
+        return;
+      }
       if (isConfigValidationFailedError(error)) {
-        // This refused write persisted nothing. Queued "Doctor changes" panels stay
-        // unprinted: reporting them would claim repairs that never reached disk.
-        // An earlier pass through this shared runner may have already committed, so
-        // describe only the pending write as unpersisted, never the whole run.
         const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
         const issueLines = Array.isArray(error.issues)
           ? formatConfigIssueLines(error.issues, "-", { normalizeRoot: true })
           : [error.message];
-        const unpersistedLine =
-          ctx.configResultWriteCommitted === true
-            ? "Earlier config fixes were already saved; the remaining changes were not written."
-            : "No config changes were written.";
         note(
           [
             "Doctor could not apply config fixes: the repaired config still fails validation.",
@@ -181,7 +212,8 @@ export async function runWriteConfigHealth(
     }
   }
   if (
-    ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true ||
+    (!ctx.prompter.shouldRepair &&
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
     return;
@@ -192,6 +224,10 @@ export async function runWriteConfigHealth(
     await import("../commands/doctor/cron/legacy-repair.js");
   const result = await repairCronCodexModelRefsAfterConfigWrite({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
+    repairRetiredModelRefs: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),

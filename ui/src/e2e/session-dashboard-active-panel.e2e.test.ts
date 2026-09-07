@@ -20,62 +20,65 @@ const boardSnapshot = {
 };
 
 suite.define(() => {
-  it("restores the previously selected side-panel tab", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-    await page.addInitScript(
-      ({ key, storageKey }) => {
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-          string,
-          unknown
-        >;
-        settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-        const sidebarSessionLayouts =
-          settings.sidebarSessionLayouts && typeof settings.sidebarSessionLayouts === "object"
-            ? (settings.sidebarSessionLayouts as Record<string, unknown>)
-            : {};
-        settings.sidebarSessionLayouts = {
-          ...sidebarSessionLayouts,
-          [key]: sidebarSessionLayouts[key] ?? {
-            columns: [
-              {
-                id: "side-panel-column",
-                side: "right",
-                panels: [{ id: "terminal", slot: "terminal" }],
-                activePanelId: "terminal",
-                height: 360,
-                width: 480,
-              },
-            ],
-            dock: "right",
-            open: true,
-          },
-        };
-        localStorage.setItem(storageKey, JSON.stringify(settings));
-      },
-      { key: sessionKey, storageKey: settingsKey },
-    );
-    await installMockGateway(page, {
-      sessionKey,
-      featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
-      methodResponses: { "board.get": boardSnapshot },
-      terminalEnabled: true,
-    });
+  it("restores the saved main and side selection on ordinary dashboard revisits", async () => {
+    await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
+      const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+      await page.addInitScript(
+        ({ key, storageKey }) => {
+          const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+            string,
+            unknown
+          >;
+          settings.boardSessionViews = { [key]: { activeTabId: "main" } };
+          const sidebarSessionLayouts =
+            settings.sidebarSessionLayouts && typeof settings.sidebarSessionLayouts === "object"
+              ? (settings.sidebarSessionLayouts as Record<string, unknown>)
+              : {};
+          settings.sidebarSessionLayouts = {
+            ...sidebarSessionLayouts,
+            [key]: sidebarSessionLayouts[key] ?? {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [
+                    { id: "terminal", slot: "terminal" },
+                    { id: "dashboard", slot: "dashboard" },
+                    { id: "conversation", slot: "conversation" },
+                  ],
+                  activePanelId: "dashboard",
+                  height: 360,
+                  width: 480,
+                },
+              ],
+              dock: "right",
+              mainPanelId: "terminal",
+              open: true,
+            },
+          };
+          localStorage.setItem(storageKey, JSON.stringify(settings));
+        },
+        { key: sessionKey, storageKey: settingsKey },
+      );
+      await installMockGateway(page, {
+        sessionKey,
+        featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
+        methodResponses: { "board.get": boardSnapshot },
+        terminalEnabled: true,
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       await page.locator(".board-session-surface").waitFor();
-      const terminal = page.getByRole("tab", { name: "Terminal", exact: true });
-      const chat = page.getByRole("tab", { name: "Board chat", exact: true });
-      await expect.poll(() => terminal.getAttribute("aria-selected")).toBe("true");
+      const terminal = page.locator('[data-panel-slot="terminal"][data-region="main"]');
+      const dashboard = page.getByRole("tab", { name: "Dashboard", exact: true });
+      await expect.poll(() => dashboard.getAttribute("aria-selected")).toBe("true");
+      await terminal.waitFor();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
 
-      await chat.click();
-      await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
       await page.reload();
-      await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
-    } finally {
-      await context.close();
-    }
+      await page.locator(".board-session-surface").waitFor();
+      await expect.poll(() => dashboard.getAttribute("aria-selected")).toBe("true");
+      await terminal.waitFor();
+    });
   });
 });

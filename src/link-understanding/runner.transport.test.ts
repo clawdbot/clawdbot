@@ -153,7 +153,7 @@ describe("runLinkUnderstanding transport cleanup", () => {
       });
 
       const result = await within(resultPromise, 1000, "link understanding did not finish");
-      expect(result).toEqual({ urls: [url], outputs: [] });
+      expect(result).toEqual([]);
       await within(requestSocketClosed.promise, 1000, "loopback socket stayed open");
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
@@ -214,13 +214,45 @@ it("skips a timed-out streaming link and processes the next link", async () => {
     },
     async (base) => {
       const ctx: MsgContext = { Body: `${base}/slow ${base}/good` };
-      const result = await applyLinkUnderstanding({
+      await applyLinkUnderstanding({
         cfg: config(["-e", "process.stdin.pipe(process.stdout)"], 0.5),
         ctx,
         signal: new AbortController().signal,
       });
-      expect(result.outputs).toEqual(["complete page"]);
       expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
+    },
+  );
+});
+
+it("fetches only bare URLs from messages that also contain titled markdown links", async () => {
+  const requests: string[] = [];
+  await withServer(
+    (req, res) => {
+      const requestPath = req.url ?? "";
+      requests.push(requestPath);
+      res.end(requestPath);
+    },
+    async (base) => {
+      const firstBare = `${base}/bare-one`;
+      const secondBare = `${base}/bare-two`;
+      const ctx: MsgContext = {
+        Body: [
+          `[quoted](${base}/quoted "Docs")`,
+          `[parenthesized](${base}/parenthesized (Docs))`,
+          `[escaped](${base}/escaped "A \\"quoted\\" title")`,
+          firstBare,
+          `[angle](<${base}/angle> 'Docs')`,
+          secondBare,
+        ].join(" "),
+      };
+
+      await applyLinkUnderstanding({
+        cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
+        ctx,
+      });
+
+      expect(requests).toEqual(["/bare-one", "/bare-two"]);
+      expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
     },
   );
 });

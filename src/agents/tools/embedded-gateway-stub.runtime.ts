@@ -7,6 +7,7 @@
 export { resolveSessionAgentId } from "../../agents/agent-scope.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+export { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 export { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 export {
   resolveSessionStoreKey,
@@ -19,6 +20,7 @@ export {
   replaceOversizedChatHistoryMessages,
 } from "../../gateway/server-methods/chat.js";
 export {
+  capChatHistoryAroundMessage,
   readChatHistoryPage,
   resolveChatHistoryNextOffset,
   shouldReplayOldestChatHistoryRecord,

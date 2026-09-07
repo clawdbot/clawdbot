@@ -7,6 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -154,11 +155,11 @@ type RemoveWorktreeParams = WorktreeMutationGuard & {
   claimToken?: string;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
 };
-const MAX_WORKTREES = 30;
+const WORKTREE_CLEANUP_TARGET = 100;
 
 /** A bounded default; manual and actively used worktrees remain protected. */
 export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
-  return { maxCount: MAX_WORKTREES };
+  return { maxCount: WORKTREE_CLEANUP_TARGET };
 }
 
 function validateName(name: string): string {
@@ -261,12 +262,16 @@ async function resolveRepositoryFromRealPath(
     }
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const sourceRoot = await fs.realpath(normalizeGitPathForFilesystem(rootResult.stdout.trim()));
   const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.code !== 0) {
-    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(
+      `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
+    );
   }
-  const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
+  const commonRaw = normalizeGitPathForFilesystem(
+    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
+  );
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
   );
@@ -457,7 +462,7 @@ async function containsSnapshotGitMarker(
   checkoutRoot: string,
   snapshotPaths?: Iterable<Buffer>,
 ): Promise<boolean> {
-  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  let visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
   if (!snapshotPaths) {
     const indexEntries = splitNullBuffer(
       await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
@@ -466,7 +471,8 @@ async function containsSnapshotGitMarker(
       return true;
     }
     const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
-    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+    // Large checkouts exceed V8's argument limit when paths are spread into push().
+    visiblePaths = splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths));
   }
   const checked = new Set<string>();
   const ignoredPaths = splitNullBuffer(
@@ -725,7 +731,9 @@ async function prepareSnapshotIndex(
       }
     }
   }
-  const commonDir = await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]);
+  const commonDir = normalizeGitPathForFilesystem(
+    await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]),
+  );
   requireWorktreeDiskSpace(
     [
       { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
@@ -794,7 +802,7 @@ export class ManagedWorktreeService {
     params: WorktreeMutationGuard,
     run: (guard: WorktreeMutationGuard) => Promise<T>,
   ): Promise<T> {
-    // Count and disk headroom are shared across repositories. Hold one renewable lease
+    // Disk headroom is shared across repositories. Hold one renewable lease
     // through checkout, setup, snapshots, and publication, including CLI processes.
     return await withOpenClawStateLease(
       {
@@ -816,20 +824,6 @@ export class ManagedWorktreeService {
           },
         }),
     );
-  }
-
-  private async requireAllocationCapacity(
-    target: string,
-    repository: ResolvedRepository,
-    bytes = 0,
-  ) {
-    const live = listRegistryWorktrees(this.env).filter((record) => record.removedAt === undefined);
-    if (live.length >= MAX_WORKTREES) {
-      throw new Error(
-        `Managed worktree limit of ${MAX_WORKTREES} reached; archive a session or remove an unused worktree, then retry. Active and manual worktrees are preserved.`,
-      );
-    }
-    this.requireAllocationSpace(target, repository, bytes);
   }
 
   private requireAllocationSpace(target: string, repository: ResolvedRepository, bytes = 0) {
@@ -911,9 +905,18 @@ export class ManagedWorktreeService {
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
     params.commitGuard?.();
-    await this.requireAllocationCapacity(worktreePath, repository);
+    this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
+    if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
+      throw new Error("Worktree checkout commit is invalid");
+    }
+    const base = params.checkoutCommit
+      ? {
+          gitOperand: params.checkoutCommit,
+          recordRef: params.baseRef ?? params.checkoutCommit,
+          remote: false,
+        }
+      : await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
       await estimateWorktreeGitBytes(repository.repoRoot, base.gitOperand),
       base.remote ? await estimateWorktreeGitBytes(repository.repoRoot, "HEAD") : 0,
@@ -1305,7 +1308,7 @@ export class ManagedWorktreeService {
       throw new Error(`source repository no longer exists: ${record.repoRoot}`);
     }
     const repository = await resolveRepository(record.repoRoot);
-    await this.requireAllocationCapacity(record.path, repository);
+    this.requireAllocationSpace(record.path, repository);
     const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
     if (provisionedState === undefined) {
       throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
@@ -1497,7 +1500,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const removed: string[] = [];
+    let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
@@ -1529,7 +1532,7 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
-    removed.push(...(await this.enforceCleanupLimits(params)));
+    removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {

@@ -5,6 +5,8 @@ import {
   readBoundedResponseText as readBoundedResponseTextWithLimit,
 } from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { createTimeoutError } from "../lib/timeout-error.mjs";
+import { readPositiveIntEnvWithEmptyFallback } from "./lib/env-limits.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
@@ -12,7 +14,7 @@ const password = process.env.OPENWEBUI_ADMIN_PASSWORD ?? "";
 const expectedNonce = process.env.OPENWEBUI_EXPECTED_NONCE ?? "";
 const prompt = process.env.OPENWEBUI_PROMPT ?? "";
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
-const modelAttempts = readPositiveInt("OPENWEBUI_MODEL_ATTEMPTS", 72);
+const modelAttempts = readPositiveIntEnvWithEmptyFallback("OPENWEBUI_MODEL_ATTEMPTS", 72);
 const modelRetryMs = readNonNegativeTimerMs("OPENWEBUI_MODEL_RETRY_MS", 5000);
 const fetchTimeoutMs = readPositiveTimerMs("OPENWEBUI_FETCH_TIMEOUT_MS", 720000);
 const controlTimeoutMs = readPositiveTimerMs(
@@ -20,7 +22,10 @@ const controlTimeoutMs = readPositiveTimerMs(
   Math.min(fetchTimeoutMs, 30000),
 );
 const chatTimeoutMs = readPositiveTimerMs("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
-const responseBodyMaxBytes = readPositiveInt("OPENWEBUI_RESPONSE_BODY_MAX_BYTES", 1024 * 1024);
+const responseBodyMaxBytes = readPositiveIntEnvWithEmptyFallback(
+  "OPENWEBUI_RESPONSE_BODY_MAX_BYTES",
+  1024 * 1024,
+);
 const smokeMode =
   process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
 
@@ -36,22 +41,6 @@ if (!baseUrl || !email || !password || !expectedNonce || !prompt) {
 }
 if (smokeMode !== "models" && smokeMode !== "chat") {
   throw new Error(`Unsupported OPENWEBUI_SMOKE_MODE: ${smokeMode}`);
-}
-
-function readPositiveInt(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const text = raw.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  return parsed;
 }
 
 function readNonNegativeInt(name, fallback) {
@@ -77,17 +66,11 @@ function clampOpenWebUiTimerTimeoutMs(valueMs, minMs = 1) {
 }
 
 function readPositiveTimerMs(name, fallback) {
-  return clampOpenWebUiTimerTimeoutMs(readPositiveInt(name, fallback));
+  return clampOpenWebUiTimerTimeoutMs(readPositiveIntEnvWithEmptyFallback(name, fallback));
 }
 
 function readNonNegativeTimerMs(name, fallback) {
   return clampOpenWebUiTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
-}
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
 }
 
 async function withRequestTimeout(label, timeoutMs, run) {
