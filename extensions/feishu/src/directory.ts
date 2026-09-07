@@ -12,6 +12,77 @@ import {
 
 const MAX_FEISHU_DIRECTORY_PAGES = 100;
 
+function resolveFeishuDirectoryLimit(limit: number | undefined): number {
+  // Static directory treats nonpositive limits as unlimited; provider page sizes must stay valid.
+  return limit === undefined ? 50 : limit > 0 ? limit : Number.POSITIVE_INFINITY;
+}
+
+type FeishuDirectoryEntry = FeishuDirectoryGroup | FeishuDirectoryPeer;
+type FeishuDirectoryPage<Item> = {
+  code?: number;
+  msg?: string;
+  data?: {
+    items?: Item[];
+    has_more?: boolean;
+    page_token?: string;
+  };
+};
+
+async function listLiveFeishuDirectoryEntries<Item, Entry extends FeishuDirectoryEntry>(params: {
+  kind: "peer" | "group";
+  limit: number;
+  query?: string;
+  fetchPage: (pageToken?: string) => Promise<FeishuDirectoryPage<Item>>;
+  toEntry: (item: Item) => Entry | undefined;
+  filter?: (entry: Entry) => boolean;
+}): Promise<Entry[]> {
+  const entries: Entry[] = [];
+  const query = normalizeLowercaseStringOrEmpty(params.query);
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < MAX_FEISHU_DIRECTORY_PAGES; page += 1) {
+    const response = await params.fetchPage(pageToken);
+    if (response.code !== 0) {
+      throw new Error(response.msg || `code ${response.code}`);
+    }
+
+    for (const item of response.data?.items ?? []) {
+      const entry = params.toEntry(item);
+      if (!entry) {
+        continue;
+      }
+      const matchesQuery =
+        !query ||
+        normalizeLowercaseStringOrEmpty(entry.id).includes(query) ||
+        normalizeLowercaseStringOrEmpty(entry.name).includes(query);
+      if (matchesQuery && (!params.filter || params.filter(entry))) {
+        entries.push(entry);
+      }
+      if (entries.length >= params.limit) {
+        // A complete result must not fail on an unused, malformed continuation token.
+        return entries;
+      }
+    }
+
+    if (response.data?.has_more !== true) {
+      return entries;
+    }
+
+    const nextPageToken = response.data.page_token?.trim();
+    if (!nextPageToken) {
+      throw new Error(`Feishu live ${params.kind} directory is missing its next page token`);
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error(`Feishu live ${params.kind} directory returned a repeated page token`);
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  throw new Error(`Feishu live ${params.kind} directory pagination limit exceeded`);
+}
+
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;
   query?: string;
@@ -26,41 +97,21 @@ export async function listFeishuDirectoryPeersLive(params: {
 
   try {
     const client = createFeishuClient(account);
-    const peers: FeishuDirectoryPeer[] = [];
-    const limit = params.limit ?? 50;
-
-    const response = await client.contact.user.list({
-      params: {
-        page_size: Math.min(limit, 50),
-      },
+    const limit = resolveFeishuDirectoryLimit(params.limit);
+    return await listLiveFeishuDirectoryEntries({
+      kind: "peer",
+      limit,
+      query: params.query,
+      fetchPage: (pageToken) =>
+        client.contact.user.list({
+          params: {
+            page_size: Math.min(limit, 50),
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        }),
+      toEntry: (user) =>
+        user.open_id ? { kind: "user", id: user.open_id, name: user.name || undefined } : undefined,
     });
-
-    if (response.code !== 0) {
-      throw new Error(response.msg || `code ${response.code}`);
-    }
-
-    const q = normalizeLowercaseStringOrEmpty(params.query);
-    for (const user of response.data?.items ?? []) {
-      if (user.open_id) {
-        const name = user.name || "";
-        if (
-          !q ||
-          normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
-          normalizeLowercaseStringOrEmpty(name).includes(q)
-        ) {
-          peers.push({
-            kind: "user",
-            id: user.open_id,
-            name: name || undefined,
-          });
-        }
-      }
-      if (peers.length >= limit) {
-        break;
-      }
-    }
-
-    return peers;
   } catch (err) {
     if (params.fallbackToStatic === false) {
       throw err instanceof Error ? err : new Error("Feishu live peer lookup failed");
@@ -84,57 +135,24 @@ export async function listFeishuDirectoryGroupsLive(params: {
 
   try {
     const client = createFeishuClient(account);
-    const groups: FeishuDirectoryGroup[] = [];
-    const limit = params.limit ?? 50;
-    const q = normalizeLowercaseStringOrEmpty(params.query);
-    let pageToken: string | undefined;
-    let pages = 0;
-    const seenPageTokens = new Set<string>();
-    do {
-      const response = await client.im.chat.list({
-        params: {
-          page_size: Math.min(limit, 100),
-          page_token: pageToken,
-        },
-      });
-      if (response.code !== 0) {
-        throw new Error(response.msg || `code ${response.code}`);
-      }
-      for (const chat of response.data?.items ?? []) {
-        if (chat.chat_id) {
-          const name = chat.name || "";
-          const group = {
-            kind: "group",
-            id: chat.chat_id,
-            name: name || undefined,
-          } satisfies FeishuDirectoryGroup;
-          const matchesQuery =
-            !q ||
-            normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
-            normalizeLowercaseStringOrEmpty(name).includes(q);
-          if (matchesQuery && (!params.filter || params.filter(group))) {
-            groups.push(group);
-          }
-        }
-        if (groups.length >= limit) {
-          break;
-        }
-      }
-      pages += 1;
-      const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
-      if (nextPageToken && seenPageTokens.has(nextPageToken)) {
-        throw new Error("Feishu live group directory returned a repeated page token");
-      }
-      if (nextPageToken) {
-        seenPageTokens.add(nextPageToken);
-      }
-      pageToken = nextPageToken;
-    } while (pageToken && groups.length < limit && pages < MAX_FEISHU_DIRECTORY_PAGES);
-    if (pageToken && pages >= MAX_FEISHU_DIRECTORY_PAGES) {
-      throw new Error("Feishu live group directory pagination limit exceeded");
-    }
-
-    return groups;
+    const limit = resolveFeishuDirectoryLimit(params.limit);
+    return await listLiveFeishuDirectoryEntries({
+      kind: "group",
+      limit,
+      query: params.query,
+      fetchPage: (pageToken) =>
+        client.im.chat.list({
+          params: {
+            page_size: Math.min(limit, 100),
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        }),
+      toEntry: (chat) =>
+        chat.chat_id
+          ? { kind: "group", id: chat.chat_id, name: chat.name || undefined }
+          : undefined,
+      filter: params.filter,
+    });
   } catch (err) {
     if (params.fallbackToStatic === false) {
       throw err instanceof Error ? err : new Error("Feishu live group lookup failed");

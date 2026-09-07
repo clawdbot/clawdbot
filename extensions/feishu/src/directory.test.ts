@@ -1,4 +1,5 @@
 // Feishu tests cover directory plugin behavior.
+import * as Lark from "@larksuiteoapi/node-sdk";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -54,6 +55,52 @@ function makeConfiguredCfg(): ClawdbotConfig {
       },
     },
   } as ClawdbotConfig;
+}
+
+type FeishuSdkDirectoryResponse = {
+  code: number;
+  msg?: string;
+  data?: {
+    items?: Array<{ open_id?: string; chat_id?: string; name: string }>;
+    has_more?: boolean;
+    page_token?: string;
+  };
+};
+
+function createSdkDirectoryClient(responses: Array<FeishuSdkDirectoryResponse | Error>) {
+  const request = vi.fn(async (options: Lark.HttpRequestOptions<unknown>) => {
+    const response = responses.shift();
+    if (!response) {
+      throw new Error(`Unexpected Feishu SDK request: ${String(options.url)}`);
+    }
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response;
+  });
+  const post = vi.fn(async () => {
+    throw new Error("Unexpected Feishu SDK authentication request");
+  });
+  const httpInstance = Object.assign(Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance, {
+    request,
+    post,
+  });
+  const client = new Lark.Client({
+    appId: "directory-test-app",
+    appSecret: "directory-test-placeholder", // pragma: allowlist secret
+    disableTokenCache: true,
+    loggerLevel: Lark.LoggerLevel.error,
+    logger: {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+    },
+    httpInstance,
+  });
+  createFeishuClientMock.mockReturnValueOnce(client);
+  return { request, post };
 }
 
 describe("feishu directory (config-backed)", () => {
@@ -221,6 +268,288 @@ describe("feishu directory (config-backed)", () => {
       { kind: "user", id: "alice" },
       { kind: "user", id: "carla" },
     ]);
+  });
+
+  it("finds matching live peers beyond the first provider page", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ open_id: "ou_other", name: "Other" }, { name: "Missing provider identity" }],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ open_id: "ou_alice", name: "Alice" }],
+          has_more: false,
+        },
+      });
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    await expect(
+      listFeishuDirectoryPeersLive({
+        cfg: makeConfiguredCfg(),
+        query: "alice",
+        limit: 1,
+        fallbackToStatic: false,
+      }),
+    ).resolves.toEqual([{ kind: "user", id: "ou_alice", name: "Alice" }]);
+    expect(list).toHaveBeenNthCalledWith(2, {
+      params: { page_size: 1, page_token: "page-2" },
+    });
+  });
+
+  it("honors peer limits above the provider's 50-user page size", async () => {
+    const users = Array.from({ length: 60 }, (_, index) => ({
+      open_id: `ou_${index + 1}`,
+      name: `User ${index + 1}`,
+    }));
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: users.slice(0, 50), has_more: true, page_token: "page-2" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: users.slice(50), has_more: false },
+      });
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    const peers = await listFeishuDirectoryPeersLive({
+      cfg: makeConfiguredCfg(),
+      limit: 60,
+      fallbackToStatic: false,
+    });
+
+    expect(peers).toHaveLength(60);
+    expect(peers.at(-1)).toEqual({ kind: "user", id: "ou_60", name: "User 60" });
+    expect(list).toHaveBeenNthCalledWith(2, {
+      params: { page_size: 50, page_token: "page-2" },
+    });
+  });
+
+  it("paginates live peers through the installed Lark SDK HTTP boundary", async () => {
+    const { request, post } = createSdkDirectoryClient([
+      {
+        code: 0,
+        data: {
+          items: [{ open_id: "ou_other", name: "Other" }],
+          has_more: true,
+          page_token: "page-2",
+        },
+      },
+      {
+        code: 0,
+        data: { items: [{ open_id: "ou_alice", name: "Alice" }], has_more: false },
+      },
+    ]);
+
+    await expect(
+      listFeishuDirectoryPeersLive({
+        cfg: makeConfiguredCfg(),
+        query: "alice",
+        limit: 1,
+        fallbackToStatic: false,
+      }),
+    ).resolves.toEqual([{ kind: "user", id: "ou_alice", name: "Alice" }]);
+    expect(request.mock.calls.map(([options]) => options)).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: "https://open.feishu.cn/open-apis/contact/v3/users",
+        params: { page_size: 1 },
+      }),
+      expect.objectContaining({
+        method: "GET",
+        url: "https://open.feishu.cn/open-apis/contact/v3/users",
+        params: { page_size: 1, page_token: "page-2" },
+      }),
+    ]);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "peer", limit: 0 },
+    { kind: "peer", limit: -1 },
+    { kind: "group", limit: 0 },
+    { kind: "group", limit: -1 },
+  ] as const)("treats a nonpositive $kind limit $limit as unlimited", async ({ kind, limit }) => {
+    const first =
+      kind === "peer"
+        ? { open_id: "ou_first", name: "First" }
+        : { chat_id: "chat-first", name: "First" };
+    const second =
+      kind === "peer"
+        ? { open_id: "ou_second", name: "Second" }
+        : { chat_id: "chat-second", name: "Second" };
+    const { request, post } = createSdkDirectoryClient([
+      { code: 0, data: { items: [first], has_more: true, page_token: "page-2" } },
+      { code: 0, data: { items: [second], has_more: false } },
+    ]);
+    const directory =
+      kind === "peer" ? listFeishuDirectoryPeersLive : listFeishuDirectoryGroupsLive;
+
+    await expect(
+      directory({ cfg: makeConfiguredCfg(), limit, fallbackToStatic: false }),
+    ).resolves.toHaveLength(2);
+    const pageSize = kind === "peer" ? 50 : 100;
+    const path = kind === "peer" ? "/open-apis/contact/v3/users" : "/open-apis/im/v1/chats";
+    expect(request.mock.calls.map(([options]) => options)).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: `https://open.feishu.cn${path}`,
+        params: { page_size: pageSize },
+      }),
+      expect.objectContaining({
+        method: "GET",
+        url: `https://open.feishu.cn${path}`,
+        params: { page_size: pageSize, page_token: "page-2" },
+      }),
+    ]);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("propagates later-page transport errors through the installed Lark SDK", async () => {
+    const { request, post } = createSdkDirectoryClient([
+      { code: 0, data: { items: [], has_more: true, page_token: "page-2" } },
+      new Error("SDK page two refused"),
+    ]);
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("SDK page two refused");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("rejects repeated continuation tokens through the installed Lark SDK", async () => {
+    const page = {
+      code: 0,
+      data: { items: [], has_more: true, page_token: "repeated" },
+    };
+    const { request, post } = createSdkDirectoryClient([page, page]);
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("Feishu live peer directory returned a repeated page token");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "returned", response: { code: 999, msg: "page two forbidden" } },
+    { label: "thrown", error: new Error("page two forbidden") },
+  ])("surfaces $label later-page peer failures when fallback is disabled", async (failure) => {
+    const list = vi.fn().mockResolvedValueOnce({
+      code: 0,
+      data: { items: [], has_more: true, page_token: "page-2" },
+    });
+    if ("error" in failure) {
+      list.mockRejectedValueOnce(failure.error);
+    } else {
+      list.mockResolvedValueOnce(failure.response);
+    }
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("page two forbidden");
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves static peer fallback when a later provider page fails", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: [], has_more: true, page_token: "page-2" },
+      })
+      .mockRejectedValueOnce(new Error("page two forbidden"));
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), query: "a" }),
+    ).resolves.toEqual([
+      { kind: "user", id: "alice" },
+      { kind: "user", id: "carla" },
+    ]);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["peer", "group"] as const)(
+    "stops the %s directory before inspecting an unused continuation",
+    async (kind) => {
+      const item =
+        kind === "peer"
+          ? { open_id: "ou_alice", name: "Alice" }
+          : { chat_id: "chat-allowed", name: "Allowed" };
+      const list = vi.fn().mockResolvedValue({
+        code: 0,
+        data: { items: [item], has_more: true },
+      });
+      if (kind === "peer") {
+        createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+      } else {
+        createFeishuClientMock.mockReturnValueOnce({ im: { chat: { list } } });
+      }
+      const directory =
+        kind === "peer" ? listFeishuDirectoryPeersLive : listFeishuDirectoryGroupsLive;
+
+      await expect(
+        directory({ cfg: makeConfiguredCfg(), limit: 1, fallbackToStatic: false }),
+      ).resolves.toHaveLength(1);
+      expect(list).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["peer", "group"] as const)(
+    "rejects missing %s directory continuation tokens",
+    async (kind) => {
+      const list = vi.fn().mockResolvedValue({ code: 0, data: { items: [], has_more: true } });
+      if (kind === "peer") {
+        createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+      } else {
+        createFeishuClientMock.mockReturnValueOnce({ im: { chat: { list } } });
+      }
+      const directory =
+        kind === "peer" ? listFeishuDirectoryPeersLive : listFeishuDirectoryGroupsLive;
+
+      await expect(
+        directory({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+      ).rejects.toThrow(`Feishu live ${kind} directory is missing its next page token`);
+      expect(list).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects repeated live peer directory page tokens", async () => {
+    const list = vi.fn().mockResolvedValue({
+      code: 0,
+      data: { items: [], has_more: true, page_token: "repeat" },
+    });
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("Feishu live peer directory returned a repeated page token");
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds live peer directory pagination", async () => {
+    let page = 0;
+    const list = vi.fn(async () => ({
+      code: 0,
+      data: { items: [], has_more: true, page_token: `page-${++page}` },
+    }));
+    createFeishuClientMock.mockReturnValueOnce({ contact: { user: { list } } });
+
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("Feishu live peer directory pagination limit exceeded");
+    expect(list).toHaveBeenCalledTimes(100);
   });
 
   it("paginates live groups until the filtered result limit is reached", async () => {
