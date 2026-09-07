@@ -432,7 +432,18 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
-                skillLibraryAuthoring?.bind(admittedRunContext);
+                try {
+                  skillLibraryAuthoring?.bind(admittedRunContext);
+                } catch (bindError) {
+                  // A run-replacement race (e.g. two clients touching the same
+                  // in-flight turn) must not fail the whole embedded run over a
+                  // personal-authoring capability that may never be used this
+                  // turn. skill_workshop still fails closed via assertCurrent()
+                  // if the model actually tries to use it after this point.
+                  params.context.logGateway.warn(
+                    `skill authoring bind skipped after run replacement: ${formatForLog(bindError)}`,
+                  );
+                }
                 bindGatewayContextResolver(
                   admittedRunContext,
                   params.context.resolveGatewayContext,
