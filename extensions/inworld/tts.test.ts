@@ -217,6 +217,29 @@ describe("inworldTTS", () => {
     });
   });
 
+  it("redacts reflected Basic credentials from HTTP error bodies", async () => {
+    const uniqueSecret = "inworld-loopback-secret-9876543210";
+    const apiKey = `proof-prefix-${uniqueSecret}-proof-suffix`;
+    queueGuardedResponse(
+      new Response(`proxy failure Authorization: Basic ${apiKey}; request rejected`, {
+        status: 502,
+      }),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await inworldTTS({ text: "test", apiKey });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("Inworld TTS API error (502)");
+    expect(caught?.message).toContain("proxy failure");
+    expect(caught?.message).toContain("Authorization:");
+    expect(caught?.message).not.toContain(apiKey);
+    expect(caught?.message).not.toContain(uniqueSecret);
+  });
+
   it("throws on in-stream errors", async () => {
     const body = JSON.stringify({
       error: { code: 3, message: "Invalid voice ID" },
