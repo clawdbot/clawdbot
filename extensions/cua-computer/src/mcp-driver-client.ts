@@ -314,7 +314,9 @@ class CuaMcpProxyClient {
   async stop(): Promise<void> {
     this.stopped = true;
     this.available = false;
-    this.rejectFatal?.(driverUnavailable("CUA MCP proxy is stopping"));
+    // Pending SDK rejections must retain the CUA terminal reason.
+    this.failure ??= driverUnavailable("CUA MCP proxy is stopping");
+    this.rejectFatal?.(this.failure);
     void this.connection?.retire().catch(() => undefined);
     this.beginShutdown();
     await this.startup.catch(() => undefined);

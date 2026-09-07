@@ -455,6 +455,32 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
   });
 
+  it("preserves the CUA stopping error for pending calls during disposal", async () => {
+    let held = false;
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.arguments?.hold) {
+        held = true;
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await driver.callTool("list_windows", {});
+    const pending = driver
+      .callTool("list_windows", { hold: true })
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(held).toBe(true));
+    await driver.dispose();
+    expect(await pending).toMatchObject({
+      message: "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping",
+    });
+  });
+
   it("accepts a CUA screenshot larger than the default MCP buffer", async () => {
     const image = "A".repeat(11 * 1024 * 1024);
     const endpoint = await createFakeEndpoint((request, fake) => {

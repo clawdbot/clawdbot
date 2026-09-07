@@ -1,13 +1,12 @@
 import { Protocol } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
-  McpError,
   ResultSchema,
   type Notification,
   type Request,
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
+import { isMcpRequestTimeoutError } from "./mcp-error.js";
 
 type McpStdioClient = {
   connect: (transport: Transport) => Promise<void>;
@@ -53,8 +52,6 @@ export function createMcpStdioClient(): McpStdioClient {
       }),
     notification: (method, params) => protocol.notification({ method, params }),
     close: () => protocol.close(),
-    // McpError exposes numeric wire codes, including values outside the SDK enum.
-    isTimeout: (error) =>
-      error instanceof McpError && error.code === Number(ErrorCode.RequestTimeout),
+    isTimeout: isMcpRequestTimeoutError,
   };
 }
