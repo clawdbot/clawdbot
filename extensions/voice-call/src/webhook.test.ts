@@ -1,6 +1,7 @@
 // Voice Call tests cover webhook plugin behavior.
 import crypto from "node:crypto";
-import { request, type IncomingMessage } from "node:http";
+import http, { request, type IncomingMessage } from "node:http";
+import net from "node:net";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
@@ -837,6 +838,79 @@ describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
       await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime-extra/token");
       expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
     } finally {
+      await server.stop();
+    }
+  });
+
+  it("flushes HTTP 404 for unmatched WebSocket upgrade paths before destroy", async () => {
+    const { server, handleWebSocketUpgrade } =
+      createRealtimeRoutingServer("/voice/stream/realtime");
+
+    try {
+      const baseUrl = await server.start();
+      const unmatched = await requestWebSocketUpgrade(server, baseUrl, "/not-a-voice-stream");
+      expect(unmatched).toMatchObject({ kind: "response", statusCode: 404 });
+      expect(handleWebSocketUpgrade).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not surface uncaught errors when the peer resets during a 404 reject", async () => {
+    const { server, handleWebSocketUpgrade } =
+      createRealtimeRoutingServer("/voice/stream/realtime");
+    const createdServers: http.Server[] = [];
+    const originalCreateServer = http.createServer.bind(http);
+    const createServerSpy = vi.spyOn(http, "createServer").mockImplementation((...args) => {
+      const created = originalCreateServer(...args);
+      createdServers.push(created);
+      return created;
+    });
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => {
+      uncaught.push(error);
+    };
+    process.on("uncaughtException", onUncaught);
+    try {
+      const baseUrl = await server.start();
+      const httpServer = createdServers.at(-1);
+      if (!httpServer) {
+        throw new Error("expected webhook http.Server");
+      }
+      const requestUrl = new URL(baseUrl);
+      const socket = net.connect({
+        host: requestUrl.hostname,
+        port: Number(requestUrl.port),
+      });
+      const rejectionStarted = new Promise<void>((resolve) => {
+        httpServer.prependListener("upgrade", (_request, serverSocket) => {
+          const originalEnd = serverSocket.end.bind(serverSocket);
+          serverSocket.end = ((...endArgs: unknown[]) => {
+            socket.destroy();
+            resolve();
+            return (originalEnd as (...args: unknown[]) => typeof serverSocket)(...endArgs);
+          }) as typeof serverSocket.end;
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      socket.write(
+        "GET /not-a-voice-stream HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      );
+      await rejectionStarted;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(uncaught).toEqual([]);
+      expect(handleWebSocketUpgrade).not.toHaveBeenCalled();
+      console.log(
+        `[webhook rst proof] rejection_started=true uncaught=${uncaught.length} realtime_handler_calls=${handleWebSocketUpgrade.mock.calls.length}`,
+      );
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      createServerSpy.mockRestore();
       await server.stop();
     }
   });

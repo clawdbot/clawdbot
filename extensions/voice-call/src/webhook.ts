@@ -18,6 +18,7 @@ import {
   normalizeWebhookPath,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -552,7 +553,12 @@ export class VoiceCallWebhookServer {
           if (path === streamPath && this.mediaStreamHandler) {
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
-            socket.destroy();
+            // Unmatched upgrade paths must flush a readable HTTP rejection before
+            // tear-down; bare destroy drops the status on buffered/reused sockets.
+            // Swallow peer-reset errors so unauthenticated rejects cannot become
+            // process-level unhandled "error" events.
+            socket.once("error", () => {});
+            rejectWebSocketUpgrade(socket, { status: 404 });
           }
         });
       }
