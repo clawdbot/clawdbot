@@ -2,12 +2,12 @@
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   createChannelApprovalNativeRuntimeAdapter,
-  formatChannelApprovalResolvedLabel,
   type ApprovalViewModel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,

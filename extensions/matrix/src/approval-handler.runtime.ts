@@ -1,7 +1,6 @@
 // Matrix plugin module implements approval handler behavior.
 import {
   createChannelApprovalNativeRuntimeAdapter,
-  formatChannelApprovalResolvedLabel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
   type ResolvedApprovalView,
@@ -15,10 +14,9 @@ import {
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import {
   listMessageReceiptPlatformIds,

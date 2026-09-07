@@ -3,7 +3,6 @@ import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createChannelApprovalNativeRuntimeAdapter,
-  formatChannelApprovalResolvedLabel,
   type ChannelApprovalCapabilityHandlerContext,
   type ExpiredApprovalView,
   type PendingApprovalView,
@@ -14,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

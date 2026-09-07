@@ -1,14 +1,16 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type {
+  ApprovalMetadataView,
+  ChannelApprovalKind,
+  ExpiredApprovalView,
+  PendingApprovalView,
+  ResolvedApprovalView,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   formatApprovalDecisionLabel,
   formatChannelApprovalResolvedLabel,
-  type ApprovalMetadataView,
-  type ChannelApprovalKind,
-  type ExpiredApprovalView,
-  type PendingApprovalView,
-  type ResolvedApprovalView,
-} from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMSTeamsApprovalToken } from "./approval-card-actions.js";
 

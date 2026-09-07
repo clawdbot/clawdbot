@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   buildChannelApprovalResolvedText,
-  buildSystemAgentApprovalResolvedText,
-  formatChannelApprovalResolvedLabel,
   type ResolvedApprovalView,
 } from "./approval-handler-runtime.js";
+import {
+  buildSystemAgentApprovalResolvedText,
+  formatChannelApprovalResolvedLabel,
+} from "./approval-runtime.js";
 
 type SystemAgentView = Extract<ResolvedApprovalView, { approvalKind: "system-agent" }>;
 

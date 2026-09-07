@@ -1,6 +1,5 @@
 import {
   createChannelApprovalNativeRuntimeAdapter,
-  formatChannelApprovalResolvedLabel,
   type ChannelApprovalCapabilityHandlerContext,
   type ChannelApprovalKind,
   type ExpiredApprovalView,
@@ -8,7 +7,10 @@ import {
   type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
