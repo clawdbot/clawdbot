@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NodeWorkerWorkspaceSeedInput } from "../worker/node-workspace-protocol.js";
+import { runWorkspaceCommand } from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const identity = {
@@ -166,5 +167,31 @@ describe("node worker workspace seeds", () => {
     ]);
     expect(results.map((result) => result.stdout).toSorted()).toEqual(["fresh\n", "stored\n"]);
     expect(await fsp.readdir(seeds)).toEqual([key]);
+  });
+});
+
+describe("runWorkspaceCommand", () => {
+  it("rejects a real git ls-files listing that exited 0 after hitting the output cap", async () => {
+    const root = tempDirs.make("workspace-git-trunc-");
+    const workspaceDir = path.join(root, "workspace");
+    const homeDir = path.join(root, "home");
+    await fsp.mkdir(workspaceDir);
+    await fsp.mkdir(homeDir);
+    const git = (args: string[], maxOutputBytes?: number) =>
+      runWorkspaceCommand({
+        workspaceDir,
+        homeDir,
+        argv: ["git", "-C", workspaceDir, ...args],
+        ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
+      });
+
+    await git(["init", "--quiet"]);
+    await fsp.writeFile(path.join(workspaceDir, "tracked.txt"), "payload\n");
+    await git(["add", "tracked.txt"]);
+
+    await expect(git(["ls-files", "--stage", "-z"], 8)).rejects.toThrow(
+      "command output was truncated",
+    );
+    await expect(git(["ls-files", "--stage", "-z"])).resolves.toMatch(/tracked\.txt/);
   });
 });
