@@ -514,13 +514,14 @@ async function updateCommandInternal(
 
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
+    const channelChanged = requestedChannel !== null && requestedChannel !== storedChannel;
     await finishAlreadyCurrentUpdate({
       opts,
       result: {
-        status: "skipped",
+        status: channelChanged ? "ok" : "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
         root,
-        reason: "already-current",
+        ...(channelChanged ? {} : { reason: "already-current" }),
         before: { version: currentVersion },
         after: { version: currentVersion },
         steps: [],

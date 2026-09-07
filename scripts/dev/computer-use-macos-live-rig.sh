@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
+
+# Proof config and credentials must win over the invoking operator's environment.
+unset OPENCLAW_GATEWAY_TOKEN OPENCLAW_GATEWAY_PASSWORD OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT
+unset OPENCLAW_CONFIG_PATH OPENCLAW_STATE_DIR OPENCLAW_PROFILE OPENCLAW_HOME OPENCLAW_AGENT_DIR
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -143,6 +148,45 @@ NODE
   esac
 }
 
+write_rig_configs() {
+  # Generate once inside Node: the token never enters shell arguments or output.
+  node - "$@" <<'NODE'
+const { randomBytes } = require("node:crypto");
+const fs = require("node:fs");
+const [platform, portRaw, gatewayPath, clientPath] = process.argv.slice(2);
+const port = Number(portRaw);
+const token = randomBytes(32).toString("hex");
+const nodes = { commands: { allow: ["computer.act"] } };
+const gateway = {
+  gateway: {
+    mode: "local",
+    port,
+    bind: "loopback",
+    auth: { mode: "token", token },
+    nodes,
+  },
+};
+const client = {
+  gateway: {
+    mode: "remote",
+    remote: { transport: "direct", url: `ws://127.0.0.1:${port}`, token },
+  },
+};
+if (platform === "linux") {
+  nodes.pairing = { autoApproveLocal: true, sshVerify: false };
+  client.browser = { enabled: false };
+  client.nodeHost = { browserProxy: { enabled: false } };
+  client.plugins = { entries: { "cua-computer": { enabled: true } } };
+} else {
+  client.gateway.port = port;
+  client.gateway.nodes = nodes;
+}
+for (const [file, config] of [[gatewayPath, gateway], [clientPath, client]]) {
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+}
+NODE
+}
+
 prepare() {
   [[ $# -ge 4 && $# -le 5 ]] || { usage; exit 2; }
   local profile="$1"
@@ -189,30 +233,7 @@ prepare() {
   local staged_app_config="$scratch/app.json"
   local gateway_config="$scratch/gateway.json"
 
-  node - "$port" >"$gateway_config" <<'NODE'
-const port = Number(process.argv[2]);
-process.stdout.write(`${JSON.stringify({
-  gateway: {
-    mode: "local",
-    port,
-    auth: { mode: "none" },
-    nodes: { commands: { allow: ["computer.act"] } },
-  },
-}, null, 2)}\n`);
-NODE
-
-  node - "$port" >"$staged_app_config" <<'NODE'
-const port = Number(process.argv[2]);
-process.stdout.write(`${JSON.stringify({
-  gateway: {
-    mode: "remote",
-    port,
-    auth: { mode: "none" },
-    nodes: { commands: { allow: ["computer.act"] } },
-    remote: { transport: "direct", url: `ws://127.0.0.1:${port}` },
-  },
-}, null, 2)}\n`);
-NODE
+  write_rig_configs macos "$port" "$gateway_config" "$staged_app_config"
 
   mkdir -p "$app_state"
   cp "$staged_app_config" "$app_config"
@@ -266,38 +287,7 @@ prepare_linux() {
   mkdir -p "$scratch/agent-state" "$scratch/cli-state" "$scratch/gateway-state" "$scratch/node-state"
   local gateway_config="$scratch/gateway.json"
   local node_config="$scratch/node.json"
-  local gateway_token
-  gateway_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
-
-  node - "$port" "$gateway_token" >"$gateway_config" <<'NODE'
-const port = Number(process.argv[2]);
-const token = process.argv[3];
-process.stdout.write(`${JSON.stringify({
-  gateway: {
-    mode: "local",
-    port,
-    auth: { mode: "token", token },
-    nodes: {
-      commands: { allow: ["computer.act"] },
-      pairing: { autoApproveLocal: true, sshVerify: false },
-    },
-  },
-}, null, 2)}\n`);
-NODE
-
-  node - "$port" "$gateway_token" >"$node_config" <<'NODE'
-const port = Number(process.argv[2]);
-const token = process.argv[3];
-process.stdout.write(`${JSON.stringify({
-  gateway: {
-    mode: "remote",
-    remote: { transport: "direct", url: `ws://127.0.0.1:${port}`, token },
-  },
-  browser: { enabled: false },
-  nodeHost: { browserProxy: { enabled: false } },
-  plugins: { entries: { "cua-computer": { enabled: true } } },
-}, null, 2)}\n`);
-NODE
+  write_rig_configs linux "$port" "$gateway_config" "$node_config"
 
   node - "$repo_root" "$profile" "$port" "$gateway_config" "$scratch/gateway-state" \
     "$scratch/agent-state" "$node_config" "$scratch/node-state" "$DISPLAY" >"$scratch/rig.json" <<'NODE'
@@ -328,13 +318,11 @@ run_gateway() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   load_rig "$1"
   require_unoccupied_port "$OPENCLAW_CU_RIG_PORT"
-  local auth_mode="none"
-  [[ "$OPENCLAW_CU_RIG_PLATFORM" == "linux" ]] && auth_mode="token"
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \
     OPENCLAW_STATE_DIR="$OPENCLAW_CU_RIG_GATEWAY_STATE" \
     node "$repo_root/scripts/run-node.mjs" --profile "$OPENCLAW_CU_RIG_PROFILE" \
-      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth "$auth_mode" --verbose
+      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth token --bind loopback --verbose
 }
 
 run_app() {
@@ -401,10 +389,9 @@ run_nodes() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   local scratch="$1"
   load_rig "$scratch"
-  # A paired operator device is pinned to the scopes of its first connect, and
-  # later widening needs an approval this rig cannot reach. The CLI therefore
-  # keeps its own identity here; the proof client stays in agent-state, where it
-  # is admitted unpaired as a local backend and keeps operator.write.
+  # Read-only CLI calls do not create device identities. The proof token admits
+  # loopback operator calls without pairing; node identity checks stay enabled.
+  # Keep CLI state separate from the proof runner's operator.write state.
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \
     OPENCLAW_STATE_DIR="$scratch/cli-state" \

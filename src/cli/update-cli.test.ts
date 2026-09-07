@@ -6069,6 +6069,75 @@ describe("update-cli", () => {
     },
   );
 
+  it("reports a same-version channel switch as successful without updating the package", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-switch-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "stable" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "stable" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+    expect(lastWriteJsonCall()).not.toHaveProperty("reason");
+    const result = lastWriteJsonCall() as UpdateRunResult;
+    expect(
+      getUpdateRun(requireValue(result.runId, "channel switch run id"), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
+  });
+
+  it("keeps an explicit same-version channel no-op skipped without rewriting config", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-noop-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "beta" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "beta" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
+  });
+
   it("runs the package update when latest target lookup is unresolved", async () => {
     setTty(false);
     await mockPackageInstallAtCaseDir();
