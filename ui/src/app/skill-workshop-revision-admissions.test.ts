@@ -14,7 +14,6 @@ const input = (instructions: string): SkillWorkshopRevisionAdmissionInput => ({
   proposalAgentId: "main",
   proposalId: "proposal-main",
   proposalSlug: "main-inbox-cleaner",
-  useCurrentChatForRevisions: false,
 });
 
 type AdmittedExecutorResult = { sessionKey: string; status: "admitted" };

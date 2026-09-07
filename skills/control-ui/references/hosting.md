@@ -46,6 +46,14 @@ For dashboards with HTML or MCP App frames:
 5. update or republish the widget to issue a fresh ticketed frame URL;
 6. verify the frame in the Tailscale-hosted Control UI.
 
+Write down both sides of every proxy hop before changing it. The public side is
+normally HTTPS. The Gateway sandbox listener uses HTTPS when Gateway TLS is
+enabled, otherwise HTTP. Configure the proxy upstream with the listener's real
+protocol. Do not infer it from the public URL
+or from the proxy's automatic TLS behavior. A response such as `Client sent an
+HTTP request to an HTTPS server` is a protocol mismatch, not proof that the
+sandbox is healthy.
+
 Example shape:
 
 ```json5
@@ -87,11 +95,20 @@ documentation when a proxy owns identity.
    identity succeed.
 2. **Board state:** `dashboard read` returns the expected widget and revision.
 3. **Sandbox route:** configured sandbox origin reaches only the sandbox
-   listener.
-4. **Ticket:** the current frame URL is fresh after restart or republish.
-5. **Rendering:** the browser loads the frame and its controls work.
+   listener. Verify the public scheme and the proxy-to-listener scheme
+   separately, and inspect the response body as well as its status.
+4. **Ticket:** inspect the browser's frame requests and confirm the current
+   ticketed widget document loads. The sandbox shell and widget document are
+   separate requests; a 200 from one does not prove the other works.
+5. **Widget network:** for live data, confirm the exact HTTPS origin appears in
+   the widget's declared and granted `capabilities.netOrigins`. Then inspect the
+   browser request for CSP, CORS, certificate, mixed-content, and final-URL
+   failures. A successful request from the Gateway host does not prove a
+   sandboxed browser fetch works.
+6. **Rendering:** the browser loads the frame, its data requests succeed, and
+   its controls work.
 
-A working Control UI shell with a blank widget usually points to layers 3–5,
+A working Control UI shell with a blank widget usually points to layers 3–6,
 not board storage.
 
 Source documentation:

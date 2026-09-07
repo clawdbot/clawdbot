@@ -9,6 +9,7 @@ import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -104,17 +105,6 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
   return body ? (JSON.parse(body) as Record<string, unknown>) : {};
 }
 
-function writeSse(res: ServerResponse, events: Record<string, unknown>[]): void {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeTextResponse(res: ServerResponse, requestIndex: number): void {
   const id = `msg_steer_fifo_${requestIndex}`;
   const text = `TURN_${requestIndex}_COMPLETE`;
@@ -125,7 +115,7 @@ function writeTextResponse(res: ServerResponse, requestIndex: number): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -167,7 +157,7 @@ function writeToolResponse(res: ServerResponse): void {
     arguments: "{}",
     status: "completed",
   };
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -211,7 +201,7 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
       status: "completed",
     },
   ];
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     ...items.flatMap((item, outputIndex) => [
       {
         type: "response.output_item.added",
@@ -477,6 +467,7 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
   });
   const gatewayUrl = new URL(instance.url);
   gatewayUrl.protocol = gatewayUrl.protocol === "wss:" ? "https:" : "http:";
+  // Both clients share a device identity; use the same canonical runtime metadata.
   const options: GatewayClientOptions = {
     url: instance.url,
     origin: gatewayUrl.origin,
@@ -492,7 +483,6 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     ],
-    platform: process.platform,
     requestTimeoutMs: 30_000,
     onHelloOk: resolveHello,
     onConnectError: rejectHello,
@@ -995,6 +985,51 @@ describe("Gateway steer FIFO", () => {
         setImmediate(resolve);
       });
       expect(fixture.modelServer.requests).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "hands steered document attachments to the active run as extracted file context",
+    async () => {
+      const fixture = await createGatewayFixture("steer-document-context");
+      const first = await sendHeldTurn(fixture);
+
+      // Real gateway protocol send with a file attachment while the initial
+      // run is still live: admission must steer the active run instead of
+      // dispatching a reply, and the extracted document context must reach
+      // the prompt the run actually sends to the model.
+      const steer = await fixture.diagnosticsClient.request<{ runId?: unknown; status?: unknown }>(
+        "chat.send",
+        {
+          sessionKey: fixture.sessionKey,
+          message: "QUEUED_STEER_DOCUMENT",
+          deliver: false,
+          queueMode: "steer",
+          idempotencyKey: "run-steer-document",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("steered document body", "utf8").toString("base64"),
+              sizeBytes: "steered document body".length,
+            },
+          ],
+        },
+      );
+      expect(steer).toMatchObject({ status: "started" });
+
+      fixture.modelServer.releaseFirst("final");
+
+      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
+      const currentSteer = currentUserInput(fixture.modelServer.requests[1]);
+      expect(currentSteer).toContain("QUEUED_STEER_DOCUMENT");
+      // The media store persists uploads as `<original>---<mediaId><ext>`, so
+      // the extracted block carries the stored name, matching reply dispatch.
+      expect(currentSteer).toMatch(/<file name="notes---[0-9a-f-]+\.txt" mime="text\/plain">/);
+      expect(currentSteer).toContain("steered document body");
+      await waitForRunTerminal(fixture, first.runId);
     },
     TEST_TIMEOUT_MS,
   );

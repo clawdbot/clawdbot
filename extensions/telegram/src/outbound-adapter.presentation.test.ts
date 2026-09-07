@@ -41,32 +41,38 @@ describe("telegramOutbound presentation", () => {
     sendMessageTelegramMock.mockReset();
   });
 
-  it("keeps presentation-only controls deliverable without duplicating labels", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({
-      messageId: "tg-presentation-buttons",
-      chatId: "12345",
-    });
+  it.each([false, true])(
+    "keeps native controls deliverable (authored fallback=%s)",
+    async (hasAuthoredFallback) => {
+      sendMessageTelegramMock.mockResolvedValueOnce({
+        messageId: "tg-presentation-buttons",
+        chatId: "12345",
+      });
 
-    const result = await telegramOutbound.sendPayload!({
-      cfg: {} as never,
-      to: "12345",
-      text: "",
-      payload: {
-        presentation: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+      const result = await telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          ...(hasAuthoredFallback
+            ? { text: "Retry the operation.", presentationTextMode: "fallback" as const }
+            : {}),
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
         },
-      },
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
 
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose an option.");
-    expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
-    expect(result).toEqual({
-      channel: "telegram",
-      messageId: "tg-presentation-buttons",
-      target: { kind: "chat", id: "12345" },
-    });
-  });
+      const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose an option.");
+      expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
+      expect(result).toEqual({
+        channel: "telegram",
+        messageId: "tg-presentation-buttons",
+        target: { kind: "chat", id: "12345" },
+      });
+    },
+  );
 
   it("renders presentation tables as native islands for payload sends on rich accounts", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-rich-table", chatId: "12345" });
@@ -144,6 +150,36 @@ describe("telegramOutbound presentation", () => {
 
     expect(rendered?.text).toBe("plain fallback");
     expect(rendered?.text).not.toContain("<table");
+  });
+
+  it("preserves fallback labels after core capability adaptation", async () => {
+    const label = "Open the workspace with the complete deployment instructions for production";
+    const sourcePresentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Continue", action: { type: "command" as const, command: "/continue" } },
+            { label, action: { type: "web-app" as const, url: "https://example.com/app" } },
+          ],
+        },
+      ],
+    };
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: { presentationTextMode: "fallback" },
+      presentation: adaptMessagePresentationForChannel({
+        presentation: sourcePresentation,
+        capabilities: telegramOutbound.presentationCapabilities,
+      }),
+      sourcePresentation,
+      ctx: { cfg: {}, to: "-10012345" } as never,
+    });
+
+    expect(rendered?.text).toContain(label);
+    expect(rendered?.text).toContain("https://example.com/app");
+    expect(rendered?.channelData?.telegram).toEqual({
+      buttons: [[{ text: "Continue", callback_data: "tgcmd:/continue" }]],
+    });
   });
 
   it("renders presentation web app buttons for payload sends", async () => {

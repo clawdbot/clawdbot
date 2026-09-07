@@ -5,21 +5,6 @@
   display: contents;
 }
 
-.side-panel__main-title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  padding-left: var(--rail-header-padding-start);
-  color: var(--text);
-  font-size: var(--rail-header-title-size);
-}
-
-.side-panel__main-title svg {
-  width: 16px;
-  height: 16px;
-}
-
 .side-panel__header {
   --rail-header-action-glyph-size: 15px;
   margin-bottom: 0;
@@ -378,12 +363,6 @@
   min-width: 0;
   min-height: 0;
   flex: 1 1 0;
-}
-
-.side-panel__empty-header-title {
-  padding-left: var(--rail-header-padding-start);
-  color: var(--text);
-  font-size: var(--rail-header-title-size);
 }
 
 .side-panel-type-menu::part(menu) {

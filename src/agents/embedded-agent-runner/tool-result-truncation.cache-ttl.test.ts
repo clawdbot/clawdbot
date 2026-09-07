@@ -284,6 +284,28 @@ describe("cache-TTL tool-result projection", () => {
     expect(restarted.restoredCacheTtl.size).toBe(0);
   });
 
+  it("preserves a restored soft projection with non-array content on later replay", () => {
+    const state = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(state, [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: { prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] },
+      },
+    ]);
+    // SAFETY: older malformed plugin content is handled by the existing replay guard.
+    const original = { ...tool({ id: "old" }), content: null } as unknown as AgentMessage;
+    truncateOversizedToolResultsInMessages([original], 128_000, 5_000, 20_000, state);
+    const result = truncateOversizedToolResultsInMessages(
+      [{ ...original, content: [] } as AgentMessage],
+      128_000,
+      5_000,
+      20_000,
+      state,
+    );
+    expect(result.messages[0]).toMatchObject({ role: "toolResult", content: null });
+  });
+
   it("replays existing and restored projections when another owner prunes new rounds", () => {
     const state = createToolResultPromptProjectionState();
     const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);

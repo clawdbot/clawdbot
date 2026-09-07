@@ -6,8 +6,8 @@ import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
@@ -71,12 +71,11 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) accessibleLabel = "";
   @property({ attribute: false }) menuLabel = "";
   @property({ attribute: false }) identityById: Record<string, AgentIdentityResult> = {};
-  @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) disabled = false;
   @property({ attribute: false }) onSelect: (value: string) => void = () => {};
   @property({ attribute: false }) onCreateAgent: (() => void) | null = null;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
+  private readonly avatarLoader = new IdentityAvatarController(this);
 
   protected override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("disabled") && this.disabled) {
@@ -88,14 +87,10 @@ export class AgentSelect extends OpenClawLightDomElement {
   }
 
   private renderAvatar(option: AgentSelectOption) {
-    // agents.list projects local files into validated avatarUrl data URLs. Only
-    // Agents settings supplies identity.get /avatar routes together with authToken.
     const agentId = option.agent?.id;
     const identity = agentId ? (this.identityById[agentId] ?? null) : null;
     const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-    const imageUrl = url
-      ? this.avatarLoader.resolve(url, this.authToken ? [this.authToken] : [])
-      : null;
+    const imageUrl = url ? this.avatarLoader.resolve(url) : null;
     return renderAgentSelectAvatar(option, identity, imageUrl);
   }
 

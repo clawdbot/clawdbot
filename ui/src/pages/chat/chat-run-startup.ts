@@ -6,7 +6,8 @@ export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/
 
 export type ChatRunStartupState =
   | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
-  | { state: "activity"; runId: string };
+  | { state: "status"; runId: string; phase: "retrying"; message: string; seq: number }
+  | { state: "activity"; runId: string; seq?: number };
 
 export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status" }>;
 
@@ -19,11 +20,18 @@ export function reconcileChatRunStartup(
     return;
   }
   const current = host.chatRunStartup;
-  if (current?.runId === next.runId && next.state === "status") {
+  if (current?.runId === next.runId) {
     if (
-      current.state === "activity" ||
-      (current.seq !== undefined && (next.seq === undefined || next.seq <= current.seq))
+      (next.state === "status" && next.phase !== "retrying" && current.state === "activity") ||
+      (current.seq !== undefined &&
+        (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
     ) {
+      return;
+    }
+    // Chat deltas use a different sequence; retain the agent sequence so an
+    // older reconnect snapshot cannot resurrect an already-cleared retry.
+    if (next.state === "activity" && next.seq === undefined && current.seq !== undefined) {
+      host.chatRunStartup = { ...next, seq: current.seq };
       return;
     }
   }
@@ -45,7 +53,7 @@ export function chatStartupStatusLabel(
   placement: ApplicationPlacementStartupStatus | null | undefined,
 ): string | undefined {
   if (run) {
-    return t(STARTUP_LABEL_KEYS[run.phase]);
+    return run.phase === "retrying" ? run.message : t(STARTUP_LABEL_KEYS[run.phase]);
   }
   switch (placement?.phase) {
     case "pending":

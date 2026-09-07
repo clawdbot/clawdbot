@@ -14,8 +14,10 @@ export function buildKilocodeProvider(): ModelProviderConfig {
   });
 }
 
-export async function buildKilocodeProviderWithDiscovery(): Promise<ModelProviderConfig> {
-  const models = await discoverKilocodeModels();
+export async function buildKilocodeProviderWithDiscovery(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelProviderConfig> {
+  const models = await discoverKilocodeModels(options);
   return {
     baseUrl: LOCAL_KILOCODE_BASE_URL,
     api: "openai-completions",

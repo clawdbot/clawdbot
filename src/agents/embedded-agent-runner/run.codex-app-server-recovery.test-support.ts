@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   createOverflowRunParams,
@@ -525,16 +525,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-turn-completion-idle-timeout-fallback",
-        config: makeModelFallbackCfg({
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5",
-                fallbacks: ["anthropic/claude-opus-4-6"],
-              },
-            },
-          },
-        }),
+        config: createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-opus-4-6"]),
       });
 
       expect(result.payloads?.[0]).toMatchObject({

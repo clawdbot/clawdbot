@@ -19,7 +19,7 @@ export function renderChatTypingIndicator(
   return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
     ${previews.map(
       (actor) => html`<div class="agent-chat__typing-preview-row">
-        ${renderChatAvatar("user", undefined, undefined, undefined, undefined, {
+        ${renderChatAvatar("user", undefined, undefined, undefined, {
           id: actor.id,
           name: actor.label,
         })}
@@ -36,7 +36,7 @@ export function renderChatTypingIndicator(
         ? html`<div class="agent-chat__typing-dots-row">
             <span class="agent-chat__typing-avatars" aria-hidden="true">
               ${indicators.slice(0, 3).map((actor) =>
-                renderChatAvatar("user", undefined, undefined, undefined, undefined, {
+                renderChatAvatar("user", undefined, undefined, undefined, {
                   id: actor.id,
                   name: actor.label,
                 }),

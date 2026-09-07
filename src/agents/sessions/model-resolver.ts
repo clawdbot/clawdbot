@@ -17,6 +17,11 @@ function isValidThinkingLevel(level: string): level is ThinkingLevel {
   return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
+function splitModelPatternSuffix(pattern: string): [string, string] | undefined {
+  const index = pattern.lastIndexOf(":");
+  return index === -1 ? undefined : [pattern.slice(0, index), pattern.slice(index + 1)];
+}
+
 export interface ScopedModel {
   model: Model;
   /** Thinking level if explicitly specified in pattern (e.g., "model:high"), undefined otherwise */
@@ -28,100 +33,141 @@ export interface ScopedModel {
  * Dates are typically in format: -20241022 or -20250929
  */
 function isAlias(id: string): boolean {
-  // Check if ID ends with -latest
-  if (id.endsWith("-latest")) {
-    return true;
+  return !/-\d{8}$/.test(id);
+}
+
+function scopeModelsToProvider(provider: string, availableModels: Model[]): Model[] {
+  const exact = availableModels.filter((model) => model.provider === provider);
+  return exact.length
+    ? exact
+    : availableModels.filter((model) => model.provider.toLowerCase() === provider.toLowerCase());
+}
+
+type ModelReferenceScope = [pattern: string, models: Model[]];
+
+function collectQualifiedModelScopes(
+  modelReference: string,
+  availableModels: Model[],
+): ModelReferenceScope[][] {
+  const canonicalScopes: ModelReferenceScope[] = [];
+  const qualifiedScopes: ModelReferenceScope[] = [];
+  for (
+    let slashIndex = modelReference.indexOf("/");
+    slashIndex !== -1;
+    slashIndex = modelReference.indexOf("/", slashIndex + 1)
+  ) {
+    const provider = modelReference.slice(0, slashIndex);
+    const modelId = modelReference.slice(slashIndex + 1);
+    const models = scopeModelsToProvider(provider, availableModels);
+    if (models.length) {
+      canonicalScopes.push([modelId, models]);
+    }
+    const trimmedModels =
+      provider === provider.trim()
+        ? models
+        : scopeModelsToProvider(provider.trim(), availableModels);
+    if (trimmedModels.length) {
+      qualifiedScopes.push([modelId.trim(), trimmedModels]);
+    }
+  }
+  return [canonicalScopes, qualifiedScopes];
+}
+
+function collectModelReferenceMatches(
+  modelReference: string,
+  availableModels: Model[],
+  qualifiedOnly = false,
+): Model[] {
+  const trimmedReference = modelReference.trim();
+  if (!trimmedReference) {
+    return [];
   }
 
-  // Check if ID ends with a date pattern (-YYYYMMDD)
-  const datePattern = /-\d{8}$/;
-  return !datePattern.test(id);
+  // Compare every provider/model split before raw ids: both identities may contain slashes.
+  // Literal tuple components win before the whitespace-tolerant reference form.
+  const groups = collectQualifiedModelScopes(trimmedReference, availableModels);
+  if (!qualifiedOnly) {
+    groups.push([[trimmedReference, availableModels]]);
+  }
+  for (const scopes of groups) {
+    const matchedScopes = scopes
+      .map<ModelReferenceScope>(([id, models]) => [
+        id,
+        models.filter((model) => model.id.toLowerCase() === id.toLowerCase()),
+      ])
+      .filter(([, models]) => models.length);
+    const folded = matchedScopes.flatMap(([, models]) => models);
+    const canonical = folded.filter(
+      (model) => `${model.provider}/${model.id}` === trimmedReference,
+    );
+    // Across different split positions only a complete exact tuple can break a case-folded tie.
+    const matches = canonical.length
+      ? canonical
+      : matchedScopes.length > 1
+        ? folded
+        : matchedScopes.flatMap(([id, models]) => {
+            const exact = models.filter((model) => model.id === id);
+            return exact.length ? exact : models;
+          });
+    if (matches.length > 0) {
+      // Catalogs may repeat an identity; preserve the registry's first-row precedence.
+      return matches.filter(
+        (model, index) =>
+          matches.findIndex((candidate) => modelsAreEqual(candidate, model)) === index,
+      );
+    }
+  }
+  return [];
+}
+
+function ambiguousModelReference(pattern: string): string {
+  return `Model "${pattern}" is ambiguous. Use exact provider and model IDs, specifying the provider separately if needed.`;
+}
+
+function collectModelPatternMatches(
+  pattern: string,
+  availableModels: Model[],
+  deferRawIds = false,
+): Model[] {
+  const parts = splitModelPatternSuffix(pattern);
+  const suffix = parts && isValidThinkingLevel(parts[1]) ? parts : undefined;
+  // A complete literal id must win before a thinking suffix changes its interpretation.
+  const matches = collectModelReferenceMatches(pattern, availableModels, deferRawIds && !suffix);
+  return matches.length || !suffix
+    ? matches
+    : collectModelPatternMatches(suffix[0], availableModels, deferRawIds);
 }
 
 /**
- * Find an exact model reference match.
- * Supports either a bare model id or a canonical provider/modelId reference.
- * When matching by bare id, ambiguous matches across providers are rejected.
+ * Match a bare id or provider/model reference, preferring exact model-id casing.
+ * Case-insensitive matches remain available only when unambiguous.
  */
 export function findExactModelReferenceMatch(
   modelReference: string,
   availableModels: Model[],
 ): Model | undefined {
-  const trimmedReference = modelReference.trim();
-  if (!trimmedReference) {
-    return undefined;
-  }
-
-  const normalizedReference = trimmedReference.toLowerCase();
-
-  const canonicalMatches = availableModels.filter(
-    (model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
-  );
-  if (canonicalMatches.length === 1) {
-    return canonicalMatches[0];
-  }
-  if (canonicalMatches.length > 1) {
-    return undefined;
-  }
-
-  const slashIndex = trimmedReference.indexOf("/");
-  if (slashIndex !== -1) {
-    const provider = trimmedReference.slice(0, slashIndex).trim();
-    const modelId = trimmedReference.slice(slashIndex + 1).trim();
-    if (provider && modelId) {
-      const providerMatches = availableModels.filter(
-        (model) =>
-          model.provider.toLowerCase() === provider.toLowerCase() &&
-          model.id.toLowerCase() === modelId.toLowerCase(),
-      );
-      if (providerMatches.length === 1) {
-        return providerMatches[0];
-      }
-      if (providerMatches.length > 1) {
-        return undefined;
-      }
-    }
-  }
-
-  const idMatches = availableModels.filter(
-    (model) => model.id.toLowerCase() === normalizedReference,
-  );
-  return idMatches.length === 1 ? idMatches[0] : undefined;
+  const matches = collectModelReferenceMatches(modelReference, availableModels);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
-/**
- * Try to match a pattern to a model from the available models list.
- * Returns the matched model or undefined if no match found.
- */
-function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | undefined {
-  const exactMatch = findExactModelReferenceMatch(modelPattern, availableModels);
-  if (exactMatch) {
-    return exactMatch;
-  }
-
-  // No exact match - fall back to partial matching
+function matchPartialModelPattern(
+  modelPattern: string,
+  availableModels: Model[],
+): Model | undefined {
+  const normalizedPattern = modelPattern.toLowerCase();
   const matches = availableModels.filter(
-    (m) =>
-      m.id.toLowerCase().includes(modelPattern.toLowerCase()) ||
-      m.name?.toLowerCase().includes(modelPattern.toLowerCase()),
+    (model) =>
+      model.id.toLowerCase().includes(normalizedPattern) ||
+      model.name?.toLowerCase().includes(normalizedPattern),
   );
-
-  if (matches.length === 0) {
-    return undefined;
-  }
-
-  // Separate into aliases and dated versions
-  const aliases = matches.filter((m) => isAlias(m.id));
-  const datedVersions = matches.filter((m) => !isAlias(m.id));
-
-  if (aliases.length > 0) {
-    // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
-    return aliases[0];
-  }
-  // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
-  return datedVersions[0];
+  // Aliases precede snapshots; each group keeps its highest numeric version.
+  const matched = matches.toSorted(
+    (a, b) =>
+      Number(isAlias(b.id)) - Number(isAlias(a.id)) ||
+      b.id.localeCompare(a.id, undefined, { numeric: true }),
+  )[0];
+  // Duplicate names remain searchable aliases; the first registry row owns runtime metadata.
+  return matched && availableModels.find((model) => modelsAreEqual(model, matched));
 }
 
 export interface ParsedModelResult {
@@ -136,21 +182,8 @@ function buildFallbackModel(
   modelId: string,
   availableModels: Model[],
 ): Model | undefined {
-  const providerModels = availableModels.filter((m) => m.provider === provider);
-  if (providerModels.length === 0) {
-    return undefined;
-  }
-
-  const baseModel = providerModels.at(0);
-  if (!baseModel) {
-    return undefined;
-  }
-
-  return {
-    ...baseModel,
-    id: modelId,
-    name: modelId,
-  };
+  const baseModel = availableModels.find((model) => model.provider === provider);
+  return baseModel ? { ...baseModel, id: modelId, name: modelId } : undefined;
 }
 
 function selectAvailableFallbackModel(availableModels: readonly Model[]): Model | undefined {
@@ -167,33 +200,40 @@ function selectAvailableFallbackModel(availableModels: readonly Model[]): Model 
  *
  * Algorithm:
  * 1. Try to match full pattern as a model
- * 2. If found, return it with "off" thinking level
+ * 2. If found, leave the thinking level unspecified
  * 3. If not found and has colons, split on last colon:
  *    - If suffix is valid thinking level, use it and recurse on prefix
- *    - If suffix is invalid, warn and recurse on prefix with "off"
+ *    - If suffix is invalid, warn and leave the thinking level unspecified
  *
- * @internal Exported for testing
+ * @internal Shared with the session extension SDK
  */
 export function parseModelPattern(
   pattern: string,
   availableModels: Model[],
   options?: { allowInvalidThinkingLevelFallback?: boolean },
 ): ParsedModelResult {
-  // Try exact match first
-  const exactMatch = tryMatchModel(pattern, availableModels);
-  if (exactMatch) {
-    return { model: exactMatch, thinkingLevel: undefined, warning: undefined };
+  const exactMatches = collectModelReferenceMatches(pattern, availableModels);
+  // Ambiguity must not fall through to fuzzy selection or custom-model construction.
+  if (exactMatches.length > 1) {
+    return {
+      model: undefined,
+      thinkingLevel: undefined,
+      warning: ambiguousModelReference(pattern),
+    };
+  }
+  const model = exactMatches[0] ?? matchPartialModelPattern(pattern, availableModels);
+  if (model) {
+    return { model, thinkingLevel: undefined, warning: undefined };
   }
 
   // No match - try splitting on last colon if present
-  const lastColonIndex = pattern.lastIndexOf(":");
-  if (lastColonIndex === -1) {
+  const parts = splitModelPatternSuffix(pattern);
+  if (!parts) {
     // No colons, pattern simply doesn't match unknown model
     return { model: undefined, thinkingLevel: undefined, warning: undefined };
   }
 
-  const prefix = pattern.slice(0, lastColonIndex);
-  const suffix = pattern.slice(lastColonIndex + 1);
+  const [prefix, suffix] = parts;
 
   if (isValidThinkingLevel(suffix)) {
     // Valid thinking level - recurse on prefix and use this level
@@ -250,16 +290,13 @@ export async function resolveModelScope(
     // Check if pattern contains glob characters
     if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
       // Extract optional thinking level suffix (e.g., "provider/*:high")
-      const colonIdx = pattern.lastIndexOf(":");
+      const suffix = splitModelPatternSuffix(pattern);
       let globPattern = pattern;
       let thinkingLevel: ThinkingLevel | undefined;
 
-      if (colonIdx !== -1) {
-        const suffix = pattern.slice(colonIdx + 1);
-        if (isValidThinkingLevel(suffix)) {
-          thinkingLevel = suffix;
-          globPattern = pattern.slice(0, colonIdx);
-        }
+      if (suffix && isValidThinkingLevel(suffix[1])) {
+        thinkingLevel = suffix[1];
+        globPattern = suffix[0];
       }
 
       // Match against "provider/modelId" format OR just model ID
@@ -350,111 +387,84 @@ export function resolveCliModel(options: {
     };
   }
 
-  // Build canonical provider lookup (case-insensitive)
-  const providerMap = new Map<string, string>();
-  for (const m of availableModels) {
-    providerMap.set(m.provider.toLowerCase(), m.provider);
+  let scopeGroups: ModelReferenceScope[][];
+  if (cliProvider) {
+    const models = scopeModelsToProvider(cliProvider, availableModels);
+    if (!models.length) {
+      return {
+        model: undefined,
+        warning: undefined,
+        error: `Unknown provider "${cliProvider}". Use --list-models to see available providers/models.`,
+      };
+    }
+    const prefix = `${cliProvider}/`;
+    scopeGroups = [
+      [
+        [
+          cliModel.toLowerCase().startsWith(prefix.toLowerCase())
+            ? cliModel.slice(prefix.length)
+            : cliModel,
+          models,
+        ],
+      ],
+    ];
+  } else {
+    scopeGroups = collectQualifiedModelScopes(cliModel.trim(), availableModels);
   }
-
-  let provider = cliProvider ? providerMap.get(cliProvider.toLowerCase()) : undefined;
-  if (cliProvider && !provider) {
+  const parse = (pattern: string, models: Model[]) =>
+    parseModelPattern(pattern, models, {
+      allowInvalidThinkingLevelFallback: false,
+    });
+  const canonicalMatches = cliProvider
+    ? []
+    : collectModelPatternMatches(cliModel, availableModels, true);
+  let parsed = canonicalMatches.length ? parse(cliModel, canonicalMatches) : undefined;
+  for (const scopes of scopeGroups) {
+    if (parsed) {
+      break;
+    }
+    const matches = scopes
+      .map(([scopePattern, models]) => {
+        // Fuzzy ordering cannot choose between provider identities, including case-only variants.
+        const candidates = models.some((entry) => entry.provider !== models[0]?.provider)
+          ? collectModelPatternMatches(scopePattern, models)
+          : models;
+        return parse(scopePattern, candidates);
+      })
+      .filter((result) => result.model || result.warning);
+    parsed =
+      matches.find((result) => result.warning) ??
+      (matches.length > 1
+        ? { model: undefined, warning: ambiguousModelReference(cliModel) }
+        : matches[0]);
+  }
+  // Preserve raw slash-id fallback after known provider patterns fail.
+  parsed ??= cliProvider ? undefined : parse(cliModel, availableModels);
+  if (parsed?.model || parsed?.warning) {
     return {
-      model: undefined,
-      warning: undefined,
-      error: `Unknown provider "${cliProvider}". Use --list-models to see available providers/models.`,
+      model: parsed.model,
+      thinkingLevel: parsed.thinkingLevel,
+      warning: parsed.model ? parsed.warning : undefined,
+      error: parsed.model ? undefined : parsed.warning,
     };
   }
 
-  // If no explicit --provider, try to interpret "provider/model" format first.
-  // When the prefix before the first slash matches a known provider, prefer that
-  // interpretation over matching models whose IDs literally contain slashes
-  // (e.g. "zai/glm-5" should resolve to provider=zai, model=glm-5, not to a
-  // vercel-ai-gateway model with id "zai/glm-5").
-  let pattern = cliModel;
-  let inferredProvider = false;
-
-  if (!provider) {
-    const slashIndex = cliModel.indexOf("/");
-    if (slashIndex !== -1) {
-      const maybeProvider = cliModel.slice(0, slashIndex);
-      const canonical = providerMap.get(maybeProvider.toLowerCase());
-      if (canonical) {
-        provider = canonical;
-        pattern = cliModel.slice(slashIndex + 1);
-        inferredProvider = true;
-      }
-    }
+  const fallbackScopes = scopeGroups.find((scopes) => scopes.length) ?? [];
+  const providers = new Set(
+    fallbackScopes.flatMap(([, models]) => models.map((entry) => entry.provider)),
+  );
+  if (providers.size > 1) {
+    return { model: undefined, warning: undefined, error: ambiguousModelReference(cliModel) };
   }
-
-  // If no provider was inferred from the slash, try exact matches without provider inference.
-  // This handles models whose IDs naturally contain slashes (e.g. OpenRouter-style IDs).
-  if (!provider) {
-    const lower = cliModel.toLowerCase();
-    const exact = availableModels.find(
-      (m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
-    );
-    if (exact) {
-      return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
-    }
-  }
-
-  if (cliProvider && provider) {
-    // If both were provided, tolerate --model <provider>/<pattern> by stripping the provider prefix
-    const prefix = `${provider}/`;
-    if (cliModel.toLowerCase().startsWith(prefix.toLowerCase())) {
-      pattern = cliModel.slice(prefix.length);
-    }
-  }
-
-  const candidates = provider
-    ? availableModels.filter((m) => m.provider === provider)
-    : availableModels;
-  const { model, thinkingLevel, warning } = parseModelPattern(pattern, candidates, {
-    allowInvalidThinkingLevelFallback: false,
-  });
-
-  if (model) {
-    return { model, thinkingLevel, warning, error: undefined };
-  }
-
-  // If we inferred a provider from the slash but found no match within that provider,
-  // fall back to matching the full input as a raw model id across all models.
-  // This handles OpenRouter-style IDs like "openai/gpt-4o:extended" where "openai"
-  // looks like a provider but the full string is actually a model id on openrouter.
-  if (inferredProvider) {
-    const lower = cliModel.toLowerCase();
-    const exact = availableModels.find(
-      (m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
-    );
-    if (exact) {
-      return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
-    }
-    // Also try parseModelPattern on the full input against all models
-    const fallback = parseModelPattern(cliModel, availableModels, {
-      allowInvalidThinkingLevelFallback: false,
-    });
-    if (fallback.model) {
-      return {
-        model: fallback.model,
-        thinkingLevel: fallback.thinkingLevel,
-        warning: fallback.warning,
-        error: undefined,
-      };
-    }
-  }
-
+  const [provider] = providers;
+  const pattern = fallbackScopes[0]?.[0] ?? cliModel;
   if (provider) {
     let fallbackPattern = pattern;
     let fallbackThinking: ThinkingLevel | undefined;
-    if (!cliThinking) {
-      const lastColon = pattern.lastIndexOf(":");
-      if (lastColon !== -1) {
-        const suffix = pattern.slice(lastColon + 1);
-        if (isValidThinkingLevel(suffix)) {
-          fallbackPattern = pattern.slice(0, lastColon);
-          fallbackThinking = suffix;
-        }
-      }
+    const suffix = splitModelPatternSuffix(pattern);
+    if (!cliThinking && suffix && isValidThinkingLevel(suffix[1])) {
+      fallbackPattern = suffix[0];
+      fallbackThinking = suffix[1];
     }
 
     const fallbackModel = buildFallbackModel(provider, fallbackPattern, availableModels);
@@ -464,13 +474,10 @@ export function resolveCliModel(options: {
         requestedThinking && requestedThinking !== "off"
           ? { ...fallbackModel, reasoning: true }
           : fallbackModel;
-      const fallbackWarning = warning
-        ? `${warning} Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`
-        : `Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`;
       return {
         model: resolvedModel,
         thinkingLevel: requestedThinking,
-        warning: fallbackWarning,
+        warning: `Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`,
         error: undefined,
       };
     }
@@ -480,7 +487,7 @@ export function resolveCliModel(options: {
   return {
     model: undefined,
     thinkingLevel: undefined,
-    warning,
+    warning: undefined,
     error: `Model "${display}" not found. Use --list-models to see available models.`,
   };
 }

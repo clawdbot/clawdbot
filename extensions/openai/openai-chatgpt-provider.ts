@@ -7,19 +7,17 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import {
+  buildManifestModelProviderConfig,
+  DEFAULT_CONTEXT_TOKENS,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   CODEX_CLI_PROFILE_ID,
-  type OAuthCredential,
-  buildOauthProviderAuthResult,
   resolveOpenAICodexAuthIdentity,
-} from "openclaw/plugin-sdk/provider-auth";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  normalizeModelCompat,
-  normalizeProviderId,
-  type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
@@ -47,7 +45,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
-  cloneFirstTemplateModel,
+  buildFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
@@ -221,7 +219,9 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
   };
 }
 
-function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+function resolveCodexForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
@@ -232,7 +232,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     if (!catalogModel || catalogModel.contextWindow === undefined) {
       return undefined;
     }
-    return normalizeModelCompat({
+    return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
       input: catalogModel.input.filter(
@@ -243,7 +243,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       provider: PROVIDER_ID,
       api: "openai-chatgpt-responses",
       baseUrl: synthBaseUrl,
-    });
+    };
   }
 
   if (OPENAI_CODEX_GPT_56_MODEL_IDS.some((modelId) => modelId === lower)) {
@@ -256,15 +256,15 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
     });
     if (registeredModel) {
-      return normalizeModelCompat({
+      return {
         ...registeredModel,
         thinkingLevelMap: {
           ...OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP,
           ...registeredModel.thinkingLevelMap,
         },
-      } as ProviderRuntimeModel);
+      };
     }
-    return normalizeModelCompat({
+    return {
       id: trimmedModelId,
       name: trimmedModelId,
       api: "openai-chatgpt-responses",
@@ -277,7 +277,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP,
-    } as ProviderRuntimeModel);
+    };
   }
 
   if (lower === OPENAI_CODEX_GPT_55_MODEL_ID) {
@@ -289,8 +289,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         model: withCodexTransport(model, synthBaseUrl),
         contextWindow: OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS,
         contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      }) ??
-      normalizeModelCompat({
+      }) ?? {
         id: trimmedModelId,
         name: trimmedModelId,
         api: "openai-chatgpt-responses",
@@ -302,12 +301,12 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         contextWindow: OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS,
         contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
         maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      } as ProviderRuntimeModel)
+      }
     );
   }
 
   let templateIds: readonly string[];
-  let patch: Parameters<typeof cloneFirstTemplateModel>[0]["patch"];
+  let patch: Parameters<typeof buildFirstTemplateModel>[0]["patch"];
   if (lower === OPENAI_CODEX_GPT_55_PRO_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS;
     patch = {
@@ -380,26 +379,18 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     baseUrl: synthBaseUrl,
   };
 
+  const canonicalModelId =
+    lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID ? OPENAI_CODEX_GPT_54_MODEL_ID : trimmedModelId;
   return (
-    cloneFirstTemplateModel({
+    buildFirstTemplateModel({
       providerId: PROVIDER_ID,
-      modelId:
-        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
-          ? OPENAI_CODEX_GPT_54_MODEL_ID
-          : trimmedModelId,
+      modelId: canonicalModelId,
       templateIds,
       ctx,
       patch,
-    }) ??
-    normalizeModelCompat({
-      id:
-        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
-          ? OPENAI_CODEX_GPT_54_MODEL_ID
-          : trimmedModelId,
-      name:
-        lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
-          ? OPENAI_CODEX_GPT_54_MODEL_ID
-          : trimmedModelId,
+    }) ?? {
+      id: canonicalModelId,
+      name: canonicalModelId,
       api: "openai-chatgpt-responses",
       provider: PROVIDER_ID,
       baseUrl: synthBaseUrl,
@@ -411,7 +402,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
       ...(patch?.thinkingLevelMap ? { thinkingLevelMap: patch.thinkingLevelMap } : {}),
       ...(patch?.compat ? { compat: patch.compat } : {}),
-    } as ProviderRuntimeModel)
+    }
   );
 }
 
@@ -447,11 +438,11 @@ function withCodexTransport(
   if (!model) {
     return undefined;
   }
-  return normalizeModelCompat({
+  return {
     ...model,
     api: "openai-chatgpt-responses",
     baseUrl,
-  } as ProviderRuntimeModel);
+  };
 }
 
 function buildCodexCredentialExtra(identity: {
@@ -512,7 +503,10 @@ type OpenAICodexOAuthContext = ProviderAuthContext & {
 };
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
-  const { loginOpenAICodexOAuth } = await import("./openai-chatgpt-oauth.runtime.js");
+  const [{ loginOpenAICodexOAuth }, { buildOauthProviderAuthResult }] = await Promise.all([
+    import("./openai-chatgpt-oauth.runtime.js"),
+    import("openclaw/plugin-sdk/provider-auth-result"),
+  ]);
   const creds = await loginOpenAICodexOAuth({
     prompter: ctx.prompter,
     runtime: ctx.runtime,
@@ -549,7 +543,10 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
 async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
   const spin = ctx.prompter.progress("Starting device code flow…");
   try {
-    const { loginOpenAICodexDeviceCode } = await import("./openai-chatgpt-device-code.js");
+    const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
+      import("./openai-chatgpt-device-code.js"),
+      import("openclaw/plugin-sdk/provider-auth-result"),
+    ]);
     const creds = await loginOpenAICodexDeviceCode({
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       assertCurrent: ctx.assertCurrent,

@@ -13,6 +13,7 @@ type CompilerInputPolicy = {
   toolchainFiles: string[];
   generatorInputs: string[];
   isGeneratorInput?: (file: string) => boolean;
+  assertInput?: (file: string) => string;
 };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
@@ -33,8 +34,14 @@ export class CompilerInputSnapshot {
     this.policy = policy;
   }
 
-  private read(file: string) {
+  private inputPath(file: string) {
     const absolute = path.resolve(this.rootDir, file);
+    return this.policy.assertInput?.(absolute) ?? absolute;
+  }
+
+  private read(file: string) {
+    // Admit the same spelling used for reads and prior-snapshot keys, including Windows aliases.
+    const absolute = this.inputPath(file);
     let entry = this.files.get(absolute);
     if (!entry) {
       const before = fs.statSync(absolute);
@@ -60,7 +67,7 @@ export class CompilerInputSnapshot {
     if (!result) {
       const files = new Set<string>();
       const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(this.rootDir, file),
+        this.inputPath(file),
         {},
         {
           ...ts.sys,
@@ -156,10 +163,10 @@ export class CompilerInputSnapshot {
             add(`${id}:${isDirectory ? "directory" : "file"}`);
           }
           if (isDirectory) {
-            // Extend the canonical parent path for ordinary children; resolve only links.
-            // Rewalking every ancestor multiplies metadata calls across installed trees.
+            // Extend native-canonical parents; resolve only links so Windows aliases
+            // share output ownership without rewalking every ancestor.
             const canonical = entry.isSymbolicLink()
-              ? fs.realpathSync(canonicalFile)
+              ? fs.realpathSync.native(canonicalFile)
               : canonicalFile;
             visit(file, canonical, installed || entry.name === "node_modules");
           } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
@@ -171,7 +178,7 @@ export class CompilerInputSnapshot {
       // A failed lookup can be outside declared roots. Name/existence changes in
       // the local resolution namespace invalidate conservatively; unrelated byte
       // edits do not. Installed package contents are included, not just lockfiles.
-      visit(this.rootDir, fs.realpathSync(this.rootDir));
+      visit(this.rootDir, fs.realpathSync.native(this.rootDir));
       this.topology = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
     }
     // Workspace aliases can expose this producer's outputs as installed inputs.
@@ -291,7 +298,7 @@ export class CompilerInputSnapshot {
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);
-      const previous = before.files.get(path.resolve(this.rootDir, file));
+      const previous = before.files.get(before.inputPath(file));
       // ctime is an invocation-only mutation fence, never a cache key or a warm
       // acceptance path. It covers newly discovered inputs (including manifests)
       // without assuming native XXH3 versions are SHA256 digests of disk bytes.

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
@@ -11,6 +12,10 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  type ValidatedSessionMetadata,
+} from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -42,14 +47,6 @@ type SqliteSessionEntryCacheWriteGeneration = {
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
 const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
-
-function readDataVersion(database: DatabaseSync): number {
-  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
-  if (typeof row.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return row.data_version;
-}
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   const schemaRow = database.prepare("PRAGMA schema_version").get() as {
@@ -95,7 +92,7 @@ function readSessionNodesGeneration(database: DatabaseSync): number {
 
 function readCacheValidityToken(database: DatabaseSync): SqliteSessionEntryCacheValidityToken {
   return {
-    dataVersion: readDataVersion(database),
+    dataVersion: readSqliteDataVersion(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
@@ -127,21 +124,34 @@ export function trackSessionEntryCacheWrite(
 function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
+  prepared?: ValidatedSessionMetadata,
+  fullEntryKeys?: ReadonlySet<string>,
 ): SessionEntryCacheSnapshot {
-  const rows = iterateSqliteQuerySync(
-    database.db,
-    selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
-  );
-  const parsedEntries = new Map<string, SessionEntry>();
-  const keys: string[] = [];
+  // Validation lends complete parsed facts only within this read. A concurrent external commit
+  // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
+  const metadata =
+    !fullEntryKeys && prepared && prepared.dataVersion === readSqliteDataVersion(database.db)
+      ? prepared
+      : undefined;
+  const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
+  const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
-  for (const row of rows) {
-    keys.push(row.session_key);
-    const entry = parseSessionEntryJson(row, projection);
-    if (!entry) {
-      continue;
+  if (!metadata) {
+    for (const row of iterateSqliteQuerySync(
+      database.db,
+      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
+        .select("updated_at")
+        .orderBy("session_key"),
+    )) {
+      keys.push(row.session_key);
+      const entry = parseSessionEntryJson(
+        row,
+        fullEntryKeys?.has(row.session_key) ? "full" : projection,
+      );
+      if (entry) {
+        parsedEntries.set(row.session_key, entry);
+      }
     }
-    parsedEntries.set(row.session_key, entry);
   }
   const entries = projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
   return {
@@ -152,15 +162,32 @@ function loadSessionEntrySnapshot(
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: { cache: boolean; latest?: boolean; projection?: "full" | "list" },
+  options: {
+    cache: boolean;
+    latest?: boolean;
+    projection?: "full" | "list";
+    /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
+    fullEntryKeys?: readonly string[];
+  },
 ): SessionEntryCacheSnapshot {
+  const prepared = assertCanonicalSqliteSessionKeysCurrent(
+    database,
+    undefined,
+    options.projection !== "full" && !options.fullEntryKeys,
+  );
   if (
     !options.cache ||
+    options.fullEntryKeys ||
     options.latest ||
     options.projection === "full" ||
     database.db.isTransaction
   ) {
-    return loadSessionEntrySnapshot(database, options.projection);
+    return loadSessionEntrySnapshot(
+      database,
+      options.projection,
+      prepared,
+      options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+    );
   }
   const validityToken = readCacheValidityToken(database.db);
   const cached = sessionEntryCaches.get(database.db);
@@ -169,7 +196,7 @@ export function readSessionEntryCache(
   }
   // Only tracked publications identify changed rows. A generation gap can contain
   // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
-  const loaded = loadSessionEntrySnapshot(database);
+  const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
   const next = { ...loaded, validityToken };
   sessionEntryCaches.set(database.db, next);
   return next;

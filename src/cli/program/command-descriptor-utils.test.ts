@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
-  defineCommandDescriptorCatalog,
 } from "./command-descriptor-utils.js";
 
 describe("command-descriptor-utils", () => {
@@ -31,16 +30,6 @@ describe("command-descriptor-utils", () => {
       { name: "beta", description: "Beta" },
       { name: "gamma", description: "Gamma" },
     ]);
-  });
-
-  it("defines a reusable descriptor catalog", () => {
-    const catalog = defineCommandDescriptorCatalog(descriptors);
-
-    expect(catalog.descriptors).toBe(descriptors);
-    expect(catalog.getDescriptors()).toBe(descriptors);
-    expect(catalog.getNames()).toEqual(["alpha", "beta", "gamma"]);
-    expect(catalog.getCommandsWithSubcommands()).toEqual(["beta", "gamma"]);
-    expect(catalog.getParentDefaultHelpCommands()).toEqual(["gamma"]);
   });
 
   it("adds descriptors without duplicating existing commands", () => {

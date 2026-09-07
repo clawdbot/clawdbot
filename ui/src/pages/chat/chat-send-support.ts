@@ -1,7 +1,7 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
@@ -32,8 +32,16 @@ import {
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
+export const UNCONFIRMED_CHAT_SEND_ERROR =
+  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
+
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+/** Commands and Goals have their own terminal receipts; chat needs input consumption. */
+export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
+  return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
+}
 
 // Hello permits RPCs before account recovery has claimed any retained first turn.
 // This holds ordinary admission, not offline queuing or stop/approval controls.
@@ -101,6 +109,7 @@ export function retireDeliveredQueuedUserTurn(
   host: ChatHost,
   runId: string | undefined,
   scope: StoredChatOutboxScope,
+  options?: { retainUntilConsumed: boolean },
 ): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
   const client = host.client;
   const owner = client ?? host;
@@ -160,7 +169,9 @@ export function retireDeliveredQueuedUserTurn(
     if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
       return "stale";
     }
-    return removeDeliveredQueuedChatSendForRun(host, runId, scope) ? "retired" : "retained";
+    return !options?.retainUntilConsumed && removeDeliveredQueuedChatSendForRun(host, runId, scope)
+      ? "retired"
+      : "retained";
   };
   const live = readQueuedMessageById(host, stored.id);
   const source =

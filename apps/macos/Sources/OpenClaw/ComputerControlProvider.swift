@@ -62,13 +62,6 @@ enum ComputerControlProvider: String, CaseIterable, Sendable {
         if provider == .cua, !cuaAvailable { return .peekaboo }
         return provider
     }
-
-    var displayName: String {
-        switch self {
-        case .peekaboo: "Peekaboo"
-        case .cua: "CUA"
-        }
-    }
 }
 
 struct CuaDriverWorkerEndpoint: Encodable, Equatable, Sendable {

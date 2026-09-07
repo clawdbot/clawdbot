@@ -153,7 +153,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
   const assertRunCurrent = opts?.runReceipt
-    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!)
+    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!, opts.activeJobMarker)
     : undefined;
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
   const operatorCancellation = createDeferredCore<typeof operatorCancellationMarker>();
@@ -208,14 +208,16 @@ async function executeJobCoreWithTimeoutUnfinalized(
     runAbortController.abort("Gateway restarting.");
     return await createInterruptionOutcome("cancelled");
   }
-  const releaseCronTaskRun = runsDetachedFromMainSession(job)
-    ? registerActiveCronTaskRun({
-        runId: opts?.runId ?? `cron-active:${job.id}`,
-        controller: runAbortController,
-        activeJobMarker: opts?.activeJobMarker,
-        onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
-      })
-    : undefined;
+  const detachedPayload = runsDetachedFromMainSession(job);
+  const releaseCronTaskRun =
+    detachedPayload || job.trigger
+      ? registerActiveCronTaskRun({
+          runId: opts?.runId ?? `cron-active:${job.id}`,
+          controller: runAbortController,
+          activeJobMarker: opts?.activeJobMarker,
+          onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
+        })
+      : undefined;
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     const timeout = createDeferredCore<CronRunTimeout>();
@@ -270,6 +272,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
+      // Conditions own their pending tools; main payloads hand work to a shared
+      // heartbeat. Release cancellation before that handoff can produce effects.
+      onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
       onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -309,7 +314,11 @@ async function executeJobCoreWithTimeoutUnfinalized(
         settlement: runPromise,
       });
     }
-    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
+    trackActiveCronTaskRunSettlement(
+      runPromise,
+      runAbortController.signal,
+      opts?.runReceipt?.agentId ?? opts?.activeJobMarker?.agentId,
+    );
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(

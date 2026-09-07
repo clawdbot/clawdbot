@@ -168,7 +168,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
       return;
     }
-    if (value.startsWith("visibility:") || value.startsWith("member:")) {
+    if (
+      value.startsWith("visibility:") ||
+      value.startsWith("member:") ||
+      value.startsWith("public:")
+    ) {
       if (this.sharing) {
         selectChatSessionSharingItem(this.sharing, value);
       }

@@ -4,8 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
@@ -26,7 +29,7 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -111,53 +114,27 @@ const TEST_RUNTIME_CONFIG = {
   session: {},
 };
 
-async function runSessionsUsage(
+async function runSessionsUsageMethod(
+  method: "sessions.usage" | "sessions.usage.timeseries" | "sessions.usage.logs",
   params: Record<string, unknown>,
   config: OpenClawConfig = TEST_RUNTIME_CONFIG,
 ) {
   const respond = vi.fn();
-  await expectDefined(
-    usageHandlers["sessions.usage"],
-    'usageHandlers["sessions.usage"] test invariant',
-  )({
+  const handler = expectDefined(usageHandlers[method], `${method} test invariant`);
+  await handler({
     respond,
     params,
     context: { getRuntimeConfig: () => config },
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+  } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
 
-async function runSessionsUsageTimeseries(
-  params: Record<string, unknown>,
-  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    usageHandlers["sessions.usage.timeseries"],
-    'usageHandlers["sessions.usage.timeseries"] test invariant',
-  )({
-    respond,
-    params,
-    context: { getRuntimeConfig: () => config },
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
-  return respond;
-}
-
-async function runSessionsUsageLogs(
-  params: Record<string, unknown>,
-  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    usageHandlers["sessions.usage.logs"],
-    'usageHandlers["sessions.usage.logs"] test invariant',
-  )({
-    respond,
-    params,
-    context: { getRuntimeConfig: () => config },
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
-  return respond;
-}
+const runSessionsUsage = (params: Record<string, unknown>, config?: OpenClawConfig) =>
+  runSessionsUsageMethod("sessions.usage", params, config);
+const runSessionsUsageTimeseries = (params: Record<string, unknown>, config?: OpenClawConfig) =>
+  runSessionsUsageMethod("sessions.usage.timeseries", params, config);
+const runSessionsUsageLogs = (params: Record<string, unknown>, config?: OpenClawConfig) =>
+  runSessionsUsageMethod("sessions.usage.logs", params, config);
 
 const BASE_USAGE_RANGE = {
   startDate: "2026-02-01",
@@ -174,10 +151,27 @@ function expectSuccessfulSessionsUsage(
 ): Array<{ key: string; agentId: string }> {
   expect(respond).toHaveBeenCalledTimes(1);
   expect(mockArg(respond, 0, 0)).toBe(true);
-  const result = mockArg(respond, 0, 1) as {
-    sessions: Array<{ key: string; agentId: string }>;
-  };
-  return result.sessions;
+  return (mockArg(respond, 0, 1) as { sessions: Array<{ key: string; agentId: string }> }).sessions;
+}
+
+function mockCombinedStore(
+  store: Record<string, SessionEntry>,
+  owners: ReadonlyArray<readonly [string, string]>,
+) {
+  vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+    durableTargets: [],
+    storePath: "(multiple)",
+    store,
+    targetsBySessionKey: new Map(
+      owners.map(([key, agentId]) => [
+        key,
+        {
+          agentId,
+          storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
+        },
+      ]),
+    ),
+  });
 }
 
 function mockStoredSession(
@@ -344,11 +338,7 @@ describe("sessions.usage", () => {
     // All three sessions belong to one agent, so the whole cache is read exactly once.
     expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledTimes(1);
-    const result = mockArg(respond, 0, 1) as {
-      cacheStatus?: { status: string };
-      sessions: Array<{ sessionId: string; usage?: { totalTokens: number } | null }>;
-      totals: { totalTokens: number };
-    };
+    const result = mockArg(respond, 0, 1) as SessionsUsageResult;
     expect(result.cacheStatus?.status).toBe("refreshing");
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c"]);
     expect(result.sessions.map((session) => session.usage?.totalTokens ?? null)).toEqual([
@@ -486,18 +476,13 @@ describe("sessions.usage", () => {
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(1);
-    expect(expectDefined(sessions[0], "sessions[0] test invariant").key).toBe(
-      "agent:codex:s-codex",
-    );
-    expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("codex");
+    expect(sessions[0]?.key).toBe("agent:codex:s-codex");
+    expect(sessions[0]?.agentId).toBe("codex");
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      agentIdBySessionKey: new Map([["agent:main:s-opus", "main"]]),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
+    mockCombinedStore(
+      {
         "agent:main:s-opus": {
           sessionId: "s-opus",
           sessionFile: "s-opus.jsonl",
@@ -505,7 +490,8 @@ describe("sessions.usage", () => {
           updatedAt: 999,
         },
       },
-    });
+      [["agent:main:s-opus", "main"]],
+    );
 
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" });
 
@@ -526,11 +512,8 @@ describe("sessions.usage", () => {
       writeSessionFile("main.jsonl");
       mockStoredSession("agent:opus:main", "main");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["agent:opus:main", "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           "agent:opus:main": {
             sessionId: "main",
             sessionFile: "main.jsonl",
@@ -538,7 +521,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [["agent:opus:main", "opus"]],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -576,20 +560,17 @@ describe("sessions.usage", () => {
       writeSessionFile("current.jsonl");
       mockStoredSession("global", "current");
 
-      const sessionEntry = {
-        sessionId: "current",
-        sessionFile: "current.jsonl",
-        label: "Opus global",
-        updatedAt: 999,
-      };
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["global", "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
-          global: sessionEntry,
+      mockCombinedStore(
+        {
+          global: {
+            sessionId: "current",
+            sessionFile: "current.jsonl",
+            label: "Opus global",
+            updatedAt: 999,
+          },
         },
-      });
+        [["global", "opus"]],
+      );
 
       const respond = await runSessionsUsage(
         {
@@ -622,11 +603,8 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["agent:main:shared", "main"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           "agent:main:shared": {
             sessionId: "shared",
             sessionFile: "shared.jsonl",
@@ -634,7 +612,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [["agent:main:shared", "main"]],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -669,11 +648,8 @@ describe("sessions.usage", () => {
 
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [storeKey]: {
             sessionId: "s-opus",
             sessionFile: "s-opus.jsonl",
@@ -681,7 +657,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [[storeKey, "opus"]],
+      );
 
       // Query via discovered key: agent:<id>:<sessionId>
       const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:s-opus" });
@@ -699,33 +676,49 @@ describe("sessions.usage", () => {
 
   it("rolls up known session family ids when historical usage is requested", async () => {
     const storeKey = "agent:opus:main";
-    const dailySources: Array<{ missingCostByModel: Record<string, number> }> = [];
+    const sources: SessionCostSummary[] = [];
+    const sourceSnapshots: SessionCostSummary[] = [];
 
     await withUsageState(async (writeSessionFile) => {
       const oldSessionFile = writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
+      const oldestSessionFile = writeSessionFile("oldest.jsonl.reset.2026-01-31T00-00-00.000Z");
       mockStoredSession(storeKey, "current");
       vi.mocked(discoverAllSessions).mockResolvedValueOnce([
         { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
+        { sessionId: "oldest", sessionFile: oldestSessionFile, mtime: 900 },
       ]);
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [storeKey]: {
             sessionId: "current",
             updatedAt: 1_000,
             usageFamilyKey: storeKey,
-            usageFamilySessionIds: ["old", "current"],
+            usageFamilySessionIds: ["old", "current", "oldest"],
           },
         },
-      });
+        [[storeKey, "opus"]],
+      );
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
         summaries: sessions.map((session) => {
           const historical = session.sessionId === "old";
-          const totalTokens = historical ? 10 : 20;
-          const totalCost = historical ? 0.02 : 0.01;
+          const oldest = session.sessionId === "oldest";
+          const totalTokens = oldest ? 30 : historical ? 10 : 20;
+          const totalCost = oldest ? 0.03 : historical ? 0.02 : 0.01;
+          const date = oldest ? "2026-02-02" : "2026-02-01";
+          const messageCounts = {
+            total: 1,
+            user: 1,
+            assistant: 0,
+            toolCalls: 0,
+            toolResults: 0,
+            errors: 0,
+          };
+          const latency = oldest
+            ? { count: 3, avgMs: 7, p95Ms: 9, minMs: 5, maxMs: 9 }
+            : historical
+              ? { count: 2, avgMs: 25, p95Ms: 30, minMs: 20, maxMs: 30 }
+              : { count: 1, avgMs: 10, p95Ms: 10, minMs: 10, maxMs: 10 };
           const totals = {
             ...createEmptyCostUsageTotals(),
             input: totalTokens,
@@ -735,24 +728,22 @@ describe("sessions.usage", () => {
           };
           const daily = {
             ...totals,
-            date: "2026-02-01",
+            date,
             tokens: totalTokens,
             cost: totalCost,
             missingCostEntries: 1,
             missingCostByModel: { "fixture/unpriced": 1 },
           };
-          dailySources.push(daily);
-          return {
+          const summary: SessionCostSummary = {
             ...totals,
+            activityDates: [date],
             dailyBreakdown: [daily],
-            messageCounts: {
-              total: 1,
-              user: 1,
-              assistant: 0,
-              toolCalls: 0,
-              toolResults: 0,
-              errors: 0,
-            },
+            messageCounts,
+            dailyMessageCounts: [{ date, ...messageCounts }],
+            utcQuarterHourMessageCounts: [{ date, quarterIndex: 2, ...messageCounts }],
+            utcQuarterHourTokenUsage: [{ date, quarterIndex: 2, ...totals }],
+            latency,
+            dailyLatency: [{ date, ...latency }],
             modelUsage: [
               {
                 provider: historical ? "fixture::bedrock" : "fixture",
@@ -762,13 +753,20 @@ describe("sessions.usage", () => {
               },
             ],
             toolUsage: {
-              totalCalls: 1,
-              uniqueTools: 1,
-              tools: [{ name: historical ? "a-second" : "z-first", count: 1 }],
+              totalCalls: oldest ? 1 : historical ? 2 : 3,
+              uniqueTools: historical || oldest ? 1 : 2,
+              tools: oldest
+                ? [{ name: "z-first", count: 1 }]
+                : historical
+                  ? [{ name: "a-second", count: 2 }]
+                  : [
+                      { name: "z-first", count: 2 },
+                      { name: "a-second", count: 1 },
+                    ],
             },
             dailyModelUsage: [
               {
-                date: "2026-02-01",
+                date,
                 provider: historical ? "fixture:bedrock" : "fixture",
                 model: historical ? "arn" : "bedrock:arn",
                 tokens: totalTokens,
@@ -777,6 +775,9 @@ describe("sessions.usage", () => {
               },
             ],
           };
+          sources.push(summary);
+          sourceSnapshots.push(structuredClone(summary));
+          return summary;
         }),
         cacheStatus: {
           status: "fresh",
@@ -795,38 +796,13 @@ describe("sessions.usage", () => {
 
       expect(respond).toHaveBeenCalledTimes(1);
       expect(mockArg(respond, 0, 0)).toBe(true);
-      const result = mockArg(respond, 0, 1) as {
-        sessions: Array<{
-          key: string;
-          scope?: string;
-          includedSessionIds?: string[];
-          usage?: {
-            totalTokens: number;
-            totalCost: number;
-            dailyBreakdown?: Array<{
-              totalTokens: number;
-              totalCost: number;
-              missingCostEntries: number;
-              missingCostByModel?: Record<string, number>;
-            }>;
-            messageCounts?: { total: number };
-            modelUsage?: Array<{ provider?: string; model?: string }>;
-            dailyModelUsage?: Array<{ provider?: string; model?: string }>;
-            toolUsage?: { tools: Array<{ name: string }> };
-          };
-        }>;
-        totals: { totalTokens: number; totalCost: number };
-        aggregates: {
-          byModel: Array<{ provider?: string; model?: string }>;
-          modelDaily: Array<{ provider?: string; model?: string }>;
-        };
-      };
+      const result = mockArg(respond, 0, 1) as SessionsUsageResult;
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0]?.key).toBe(storeKey);
       expect(result.sessions[0]?.scope).toBe("family");
-      expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old"]);
-      expect(result.sessions[0]?.usage?.totalTokens).toBe(30);
-      expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.03);
+      expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old", "oldest"]);
+      expect(result.sessions[0]?.usage?.totalTokens).toBe(60);
+      expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.06);
       expect(result.sessions[0]?.usage?.dailyBreakdown).toMatchObject([
         {
           date: "2026-02-01",
@@ -839,16 +815,38 @@ describe("sessions.usage", () => {
           missingCostEntries: 2,
           missingCostByModel: { "fixture/unpriced": 2 },
         },
+        {
+          date: "2026-02-02",
+          totalTokens: 30,
+          totalCost: 0.03,
+          missingCostByModel: { "fixture/unpriced": 1 },
+        },
       ]);
-      expect(dailySources).toHaveLength(2);
-      expect(dailySources.map((day) => day.missingCostByModel)).toEqual([
-        { "fixture/unpriced": 1 },
-        { "fixture/unpriced": 1 },
+      expect(sources).toEqual(sourceSnapshots);
+      const usage = result.sessions[0]?.usage;
+      expect(usage?.activityDates).toEqual(["2026-02-01", "2026-02-02"]);
+      expect(usage?.messageCounts?.total).toBe(3);
+      expect(usage?.dailyMessageCounts).toMatchObject([
+        { date: "2026-02-01", total: 2 },
+        { date: "2026-02-02", total: 1 },
       ]);
-      expect(result.sessions[0]?.usage?.messageCounts?.total).toBe(2);
-      expect(result.sessions[0]?.usage?.toolUsage?.tools.map((tool) => tool.name)).toEqual([
-        "z-first",
-        "a-second",
+      expect(usage?.utcQuarterHourMessageCounts).toMatchObject([
+        { date: "2026-02-01", quarterIndex: 2, total: 2 },
+        { date: "2026-02-02", quarterIndex: 2, total: 1 },
+      ]);
+      expect(usage?.utcQuarterHourTokenUsage).toMatchObject([
+        { date: "2026-02-01", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
+        { date: "2026-02-02", quarterIndex: 2, totalTokens: 30, totalCost: 0.03 },
+      ]);
+      expect(usage?.dailyLatency).toEqual([
+        { date: "2026-02-01", count: 3, avgMs: 20, p95Ms: 30, minMs: 10, maxMs: 30 },
+        { date: "2026-02-02", count: 3, avgMs: 7, p95Ms: 9, minMs: 5, maxMs: 9 },
+      ]);
+      expect(usage?.latency).toEqual({ count: 6, avgMs: 13.5, p95Ms: 30, minMs: 5, maxMs: 30 });
+      // a-second overtakes z-first before the final instance brings their counts level.
+      expect(usage?.toolUsage?.tools).toEqual([
+        { name: "a-second", count: 3 },
+        { name: "z-first", count: 3 },
       ]);
       expect(result.sessions[0]?.usage?.modelUsage).toMatchObject([
         { provider: "fixture", model: "bedrock::arn" },
@@ -857,17 +855,19 @@ describe("sessions.usage", () => {
       expect(result.sessions[0]?.usage?.dailyModelUsage).toMatchObject([
         { provider: "fixture", model: "bedrock:arn" },
         { provider: "fixture:bedrock", model: "arn" },
+        { provider: "fixture", model: "bedrock:arn" },
       ]);
       expect(result.aggregates.byModel).toMatchObject([
-        { provider: "fixture::bedrock", model: "arn" },
         { provider: "fixture", model: "bedrock::arn" },
+        { provider: "fixture::bedrock", model: "arn" },
       ]);
       expect(result.aggregates.modelDaily).toMatchObject([
         { provider: "fixture:bedrock", model: "arn" },
         { provider: "fixture", model: "bedrock:arn" },
+        { provider: "fixture", model: "bedrock:arn" },
       ]);
-      expect(result.totals.totalTokens).toBe(30);
-      expect(result.totals.totalCost).toBeCloseTo(0.03);
+      expect(result.totals.totalTokens).toBe(60);
+      expect(result.totals.totalCost).toBeCloseTo(0.06);
     });
   });
 
@@ -878,14 +878,8 @@ describe("sessions.usage", () => {
       writeSessionFile("run-dup.jsonl");
       mockStoredSession(preferredKey, "run-dup");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([
-          [preferredKey, "opus"],
-          ["agent:other:main", "other"],
-        ]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [preferredKey]: {
             sessionId: "run-dup",
             sessionFile: "run-dup.jsonl",
@@ -897,7 +891,11 @@ describe("sessions.usage", () => {
             updatedAt: 2_000,
           },
         },
-      });
+        [
+          [preferredKey, "opus"],
+          ["agent:other:main", "other"],
+        ],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -1085,11 +1083,7 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(mockArg(respond, 0, 0)).toBe(true);
-    const result = mockArg(respond, 0, 1) as {
-      sessions: Array<{ key: string }>;
-      totals: { totalCost: number; totalTokens: number };
-      aggregates: { sessionCount?: number; longestSessionDurationMs?: number };
-    };
+    const result = mockArg(respond, 0, 1) as SessionsUsageResult;
 
     // Only the most-recent session (s-a, mtime=300) appears in the page
     expect(result.sessions).toHaveLength(1);

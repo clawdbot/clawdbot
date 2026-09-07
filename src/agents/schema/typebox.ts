@@ -11,6 +11,16 @@ import {
 } from "../../infra/outbound/channel-target.js";
 export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
+/** Describe the intended work; completion is reported by the tool result. */
+export function executionTitleSchema() {
+  return Type.Optional(
+    Type.String({
+      maxLength: 120,
+      description: "Every call: short purpose; never claim success. No secrets.",
+    }),
+  );
+}
+
 /** Builds a schema for one outbound channel target. */
 export function channelTargetSchema(options?: { description?: string }) {
   return Type.String({

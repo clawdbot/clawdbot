@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   type WorkerLiveEventParams,
@@ -17,6 +18,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
@@ -177,6 +179,7 @@ export class ComposedGatewayHarness {
 
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
+  private readonly connectionWork = new GatewayConnectionWork();
   private readonly sockets = new Set<WebSocket>();
   private readonly socketCleanups = new Set<() => void>();
   private readonly requestMethods = new Map<string, string>();
@@ -242,7 +245,7 @@ export class ComposedGatewayHarness {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
     });
-    this.placementGateValue = this.createPlacementGate();
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore);
     this.serviceValue = this.createService();
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
@@ -256,11 +259,7 @@ export class ComposedGatewayHarness {
   }
 
   get epoch(): number {
-    const record = this.store.get(ENVIRONMENT_ID);
-    if (!record) {
-      throw new Error("fault environment missing");
-    }
-    return record.ownerEpoch;
+    return expectDefined(this.store.get(ENVIRONMENT_ID), "fault environment missing").ownerEpoch;
   }
 
   async start(): Promise<void> {
@@ -364,7 +363,9 @@ export class ComposedGatewayHarness {
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
     this.liveEventsValue = this.createLiveEvents(false);
-    this.placementGateValue = this.createPlacementGate({ rejectExistingWorkerClaims: true });
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
+      rejectExistingWorkerClaims: true,
+    });
     this.useReplacementExecutor = true;
     this.serviceValue = this.createService();
     this.terminateSockets();
@@ -454,6 +455,8 @@ export class ComposedGatewayHarness {
       cleanup();
     }
     this.socketCleanups.clear();
+    this.connectionWork.beginClose();
+    await this.connectionWork.drain();
     await this.serviceValue.stop();
     for (const service of this.abandonedServices) {
       await service.stop();
@@ -607,12 +610,6 @@ export class ComposedGatewayHarness {
     });
   }
 
-  private createPlacementGate(
-    options: { rejectExistingWorkerClaims?: boolean } = {},
-  ): WorkerSessionPlacementGate {
-    return createWorkerSessionPlacementGate(this.placementStore, options);
-  }
-
   private matchesLiveEventGate(gate: LiveEventGate, request: WorkerLiveEventParams): boolean {
     if (gate.target === "preview") {
       return request.event.kind === "assistant" || request.event.kind === "thinking";
@@ -642,6 +639,7 @@ export class ComposedGatewayHarness {
     const service = this.serviceValue;
     const cleanup = workerServer.attachWorkerWsMessageHandler({
       socket,
+      connectionWork: this.connectionWork,
       connId,
       service: {
         ...service,

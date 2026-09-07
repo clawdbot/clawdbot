@@ -20,7 +20,10 @@ import {
 } from "../../plugins/bundle-mcp.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { getOrCreateSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import {
+  acquireSessionMcpRuntime,
+  releaseSessionMcpRuntime,
+} from "../agent-bundle-mcp-manager-api.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
 import {
   loadMergedBundleMcpConfig,
@@ -460,7 +463,7 @@ export async function prepareCliBundleMcpConfig(params: {
       ...params.config,
       mcp: { ...params.config?.mcp, servers: nativePolicyConfig.mcpServers },
     };
-    const runtime = await getOrCreateSessionMcpRuntime({
+    const acquisition = await acquireSessionMcpRuntime({
       sessionId: params.nativeMcpPolicy.sessionId,
       sessionKey: params.nativeMcpPolicy.sessionKey,
       workspaceDir: params.workspaceDir,
@@ -468,14 +471,19 @@ export async function prepareCliBundleMcpConfig(params: {
       cfg: runtimeConfig,
       toolOverrides: params.toolOverrides,
     });
-    const policy = await prepareNativeMcpPolicy({
-      runtime,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
-      runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
-      warn: params.warn ?? (() => {}),
-    });
+    let policy: Awaited<ReturnType<typeof prepareNativeMcpPolicy>>;
+    try {
+      policy = await prepareNativeMcpPolicy({
+        runtime: acquisition.runtime,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
+        runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
+        warn: params.warn ?? (() => {}),
+      });
+    } finally {
+      await releaseSessionMcpRuntime(acquisition);
+    }
     effectiveConfig = {
       mcpServers: {
         ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,

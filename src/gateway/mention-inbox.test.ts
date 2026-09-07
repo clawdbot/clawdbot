@@ -361,6 +361,7 @@ describe("temporary human mention Inbox", () => {
       invalidateOperatorRolePolicy(f.bob.id);
       await f.setSession({ sessionId: "replacement-session" });
       emitSessionIdentityMutation({
+        agentId: "main",
         kind: "replace",
         previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
         current: { sessionId: "replacement-session", sessionKeys: [SESSION_KEY] },
@@ -593,6 +594,31 @@ describe("human mention directory", () => {
       }, cfg);
     },
   );
+
+  it("allows a mention draft for a non-owner of the fixed global store", async () => {
+    await withInbox(
+      async (f) => {
+        const draft = { agentId: "ops", query: "Bob" };
+        expect(f.inbox.mentionable(f.aliceClient, draft)).toMatchObject({
+          ok: true,
+          value: { users: [{ profileId: f.bob.id, displayName: "Bob" }] },
+        });
+        expect(f.inbox.validateRecipients(f.aliceClient, draft, [f.bob.id])).toEqual({
+          ok: true,
+          value: [f.bob.id],
+        });
+        expect(read(f.inbox, f.bobClient).items).toEqual([]);
+      },
+      {
+        session: { scope: "global", store: "/synthetic/fixed-global.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      },
+    );
+  });
 
   it("applies creation and current visibility policy without accepting unavailable recipients", async () => {
     await withInbox(async (f) => {

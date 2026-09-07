@@ -928,6 +928,34 @@ describe("buildSlackPresentationBlocks", () => {
 
     expect(blocks).toEqual([]);
   });
+
+  it.each([
+    { offset: 9_985, native: true },
+    { offset: 9_986, native: false },
+  ])("counts Unicode, whitespace, and numeric cells at offset $offset", ({ offset, native }) => {
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "First",
+          headers: [" Name "],
+          rows: [[" 😀 "], [42]],
+        },
+        {
+          type: "table" as const,
+          caption: "Second",
+          headers: [" B "],
+          rows: [["🦀"]],
+        },
+      ],
+    };
+    const options = { dataTableCellCharacterCountOffset: offset };
+
+    expect(canRenderSlackPresentation(presentation, options)).toBe(native);
+    expect(buildSlackPresentationBlocks(presentation, options).map((block) => block.type)).toEqual(
+      native ? ["data_table", "data_table"] : [],
+    );
+  });
 });
 
 describe("resolveSlackReplyBlocks", () => {
