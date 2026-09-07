@@ -7,7 +7,28 @@ import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../sessions/index.js";
+import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
 import type { CompactionMessageMetrics } from "./compact.types.js";
+import type { EmbeddedAgentCompactResult } from "./types.js";
+
+/** Keep billing and request-path diagnostics attached to the same completed usage. */
+export function createCompactionUsageRecorder(onUsage: (usage: NormalizedUsage) => void) {
+  const summaryUsage: NonNullable<EmbeddedAgentCompactResult["summaryUsage"]> = [];
+  const recordUsage = (
+    usage: UsageLike,
+    path?: (typeof summaryUsage)[number]["path"],
+    reason?: string,
+  ) => {
+    const normalized = normalizeUsage(usage);
+    if (normalized) {
+      onUsage(normalized);
+      if (path) {
+        summaryUsage.push({ path, usage: normalized, ...(reason ? { reason } : {}) });
+      }
+    }
+  };
+  return { summaryUsage, recordUsage };
+}
 
 export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;

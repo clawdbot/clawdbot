@@ -5,7 +5,9 @@ import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harn
 import type { AssistantMessage } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
+import { resolveCompactionPrefix } from "../compaction-prefix.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
@@ -356,6 +358,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const coreInstructions = [focusInstructions, unresolvedRequestInstructions]
         .filter(Boolean)
         .join("\n\n");
+      let ineligibleReason: string | undefined = preparation.isSplitTurn ? "split-turn" : undefined;
+      const foreground = preparation.isSplitTurn
+        ? undefined
+        : await resolveCompactionPrefix(
+            getCompactionSafeguardRuntime(this.sessionManager)?.foregroundPrefix,
+            preparation.messagesToSummarize,
+            (reason) => {
+              ineligibleReason = reason;
+            },
+          );
+      // Core emits one history-summary request. Only the safeguard owns chunk
+      // planning; estimating hypothetical chunks here rejects otherwise reusable
+      // prefixes when the caller supplies a small compaction target budget.
       const runCoreCompaction = () =>
         compact(
           preparation,
@@ -366,7 +381,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           options.signal,
           this.thinkingLevel,
           this.agent.streamFn,
-          createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
+          createCompactionRuntime((usage, path, reason) =>
+            recordSessionModelUsage(this.sessionManager, usage, path, ineligibleReason ?? reason),
+          ),
+          foreground,
         );
       let result = await runCoreCompaction();
       // Automatic core compaction owns one retry for invalid summary output.

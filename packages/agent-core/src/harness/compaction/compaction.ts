@@ -1,5 +1,6 @@
 import {
   resolveClaudeFable5ModelIdentity,
+  type Context,
   type Model,
   type SimpleStreamOptions,
   type StreamFn,
@@ -593,6 +594,15 @@ export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assi
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
+const SUMMARY_HEADINGS = [
+  "## Goal",
+  "## Constraints & Preferences",
+  "## Progress",
+  "## Key Decisions",
+  "## Next Steps",
+  "## Critical Context",
+] as const;
+
 const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
 Use this EXACT format:
@@ -683,7 +693,15 @@ function createSummarizationOptions(
   return options;
 }
 
-/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+/** Foreground request data admitted by the host for single-chunk compaction. */
+export type CompactionForegroundContext = {
+  model: Pick<Model, "id" | "provider" | "api" | "baseUrl">;
+  context: Context;
+  /** Original summary source when the host verified a foreground projection. */
+  sourceMessages?: AgentMessage[];
+};
+
+/** Reuses eligible foreground inputs, falling back to serialized summarization. */
 async function runSummarizationCompletion(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -697,10 +715,12 @@ async function runSummarizationCompletion(params: {
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
   runtime?: AgentCoreCompletionRuntimeDeps;
+  foreground?: CompactionForegroundContext;
+  requiredHeadings?: readonly string[];
   errorLabel: string;
 }): Promise<Result<string, CompactionError>> {
-  const conversationText = serializeConversation(convertToLlm(params.messages));
-  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+  const messages = convertToLlm(params.messages);
+  let promptText = "";
   if (params.previousSummary) {
     promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
   }
@@ -709,16 +729,6 @@ async function runSummarizationCompletion(params: {
   if (params.customInstructions) {
     promptText += `\n\nAdditional focus: ${params.customInstructions}`;
   }
-  const context = {
-    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: promptText }],
-        timestamp: Date.now(),
-      },
-    ],
-  };
   const options = createSummarizationOptions(
     params.model,
     params.maxTokens,
@@ -727,38 +737,166 @@ async function runSummarizationCompletion(params: {
     params.signal,
     params.thinkingLevel,
   );
-  const response = params.streamFn
-    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
-    : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
-  // Usage belongs to the completed provider request even when its summary is invalid.
-  params.runtime?.internalUsageSink?.(response.usage);
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
+  let fallbackReason: string | undefined;
+  const complete = async (
+    context: Context,
+    rejectTools = false,
+  ): Promise<Result<string, CompactionError>> => {
+    const requestOptions: SimpleStreamOptions = rejectTools
+      ? {
+          ...options,
+          onPayload(payload) {
+            const tools = asOptionalRecord(payload)?.tools;
+            if (
+              Array.isArray(tools) &&
+              tools.some((tool) => {
+                const type = asOptionalRecord(tool)?.type;
+                return params.model.api === "anthropic-messages"
+                  ? type !== undefined && type !== "custom"
+                  : type !== "function";
+              })
+            ) {
+              throw new InvalidSummaryOutputError("Foreground compaction cannot run hosted tools");
+            }
+          },
+        }
+      : options;
+    // Completion consumes a response only; foreground tool declarations never run tools.
+    const response = params.streamFn
+      ? await consumeAgentCoreStream(params.streamFn(params.model, context, requestOptions))
+      : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, requestOptions);
+    // Usage belongs to the completed provider request even when its summary is invalid.
+    params.runtime?.internalUsageSink?.(
+      response.usage,
+      rejectTools ? "foreground-prefix" : "serialized",
+      rejectTools ? undefined : fallbackReason,
     );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
+    if (response.stopReason === "aborted") {
+      return err(
+        new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
+      );
+    }
+    if (response.stopReason === "error") {
+      return err(
+        new CompactionError(
+          "summarization_failed",
+          `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+        ),
+      );
+    }
+    if (
+      rejectTools &&
+      (response.stopReason === "toolUse" ||
+        response.content.some((block) => block.type === "toolCall"))
+    ) {
+      return err(new InvalidSummaryOutputError(`${params.errorLabel} returned a tool call`));
+    }
 
-  const summary = extractSummaryText(response);
-  if (summary === undefined) {
-    return err(
-      new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
-    );
+    const summary = extractSummaryText(response);
+    if (summary === undefined) {
+      return err(
+        new InvalidSummaryOutputError(
+          `${params.errorLabel} failed: model returned no summary text`,
+        ),
+      );
+    }
+    if (rejectTools && params.requiredHeadings) {
+      const lines = summary
+        .trim()
+        .split(/\r?\n/u)
+        .map((line) => line.trim());
+      let cursor = 0;
+      const valid =
+        lines[0] === params.requiredHeadings[0] &&
+        params.requiredHeadings.every((heading) => {
+          const index = lines.indexOf(heading, cursor);
+          cursor = index + 1;
+          return index >= 0;
+        });
+      if (!valid) {
+        return err(
+          new InvalidSummaryOutputError(`${params.errorLabel} returned an invalid format`),
+        );
+      }
+    }
+    return ok(summary);
+  };
+  const userMessage = (text: string): Context["messages"][number] => ({
+    role: "user",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  });
+  const { foreground, model } = params;
+  if (!foreground) {
+    fallbackReason = "no-foreground-prefix";
+  } else if (!params.requiredHeadings?.length) {
+    fallbackReason = "missing-heading-contract";
+  } else if (model.api !== "anthropic-messages" && model.api !== "openai-responses") {
+    fallbackReason = "unsupported-api";
+  } else if (
+    foreground.model.id !== model.id ||
+    foreground.model.provider !== model.provider ||
+    foreground.model.api !== model.api ||
+    foreground.model.baseUrl !== model.baseUrl
+  ) {
+    fallbackReason = "model-route-changed";
+  } else if (
+    params.messages !== foreground.sourceMessages &&
+    JSON.stringify(messages) !==
+      JSON.stringify(
+        foreground.sourceMessages
+          ? convertToLlm(foreground.sourceMessages)
+          : foreground.context.messages,
+      )
+  ) {
+    fallbackReason = "summary-source-changed";
   }
-  return ok(summary);
+  if (foreground && !fallbackReason) {
+    if (params.signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
+    try {
+      const result = await complete(
+        {
+          ...foreground.context,
+          messages: [
+            ...foreground.context.messages,
+            userMessage(`${SUMMARIZATION_SYSTEM_PROMPT}\n\n${promptText}`),
+          ],
+        },
+        true,
+      );
+      if (result.ok && !params.signal?.aborted) {
+        return result;
+      }
+      fallbackReason = "prefix-response-rejected";
+    } catch {
+      // Never include provider exception text: it may contain request bodies or credentials.
+      fallbackReason = "prefix-request-failed";
+    }
+    if (params.signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
+  }
+  return await complete({
+    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+    messages: [
+      userMessage(
+        `<conversation>\n${serializeConversation(messages)}\n</conversation>\n\n${promptText}`,
+      ),
+    ],
+  });
 }
 
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
-  | { kind: "custom"; instructions: string };
+  | {
+      kind: "custom";
+      instructions: string;
+      /** Ordered format contract required to admit native-prefix summary output. */
+      requiredHeadings?: readonly string[];
+    };
 
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
@@ -774,6 +912,7 @@ export async function generateSummary(
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
   summaryPrompt?: CompactionSummaryPrompt,
+  foreground?: CompactionForegroundContext,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
@@ -807,6 +946,13 @@ export async function generateSummary(
     thinkingLevel,
     streamFn,
     runtime,
+    foreground,
+    requiredHeadings:
+      summaryPrompt?.kind === "custom"
+        ? summaryPrompt.requiredHeadings
+        : summaryPrompt?.kind === "turn-prefix"
+          ? ["## Original Request", "## Early Progress", "## Context for Suffix"]
+          : SUMMARY_HEADINGS,
     errorLabel:
       summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
   });
@@ -1033,6 +1179,7 @@ export async function compact(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  foreground?: CompactionForegroundContext,
 ): Promise<Result<CompactionResult, CompactionError>> {
   const {
     firstKeptEntryId,
@@ -1076,6 +1223,8 @@ export async function compact(
           thinkingLevel,
           streamFn,
           runtime,
+          undefined,
+          isSplitTurn ? undefined : foreground,
         )
       : ok<string, CompactionError>(preservedPreviousSummary ?? "No prior history.");
   if (!historyResult.ok) {

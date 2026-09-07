@@ -5,17 +5,23 @@ import {
   claimHeartbeatOutcomeForRun,
 } from "../../../infra/heartbeat-outcome-store.js";
 import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardRuntime,
+} from "../../agent-hooks/compaction-safeguard-runtime.js";
+import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { captureCompactionPrefix } from "../../compaction-prefix.js";
 import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
 import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import { persistToolResultProjections } from "../session-prompt-state.js";
@@ -265,12 +271,37 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
       const { onModelRequest } = preparedStreamRuntime.cache;
-      if (onModelRequest) {
+      const replayPolicy = sessionRuntime.transcriptPolicy;
+      const toolCallIds =
+        replayPolicy.sanitizeToolCallIds && replayPolicy.toolCallIdMode
+          ? {
+              mode: replayPolicy.toolCallIdMode,
+              preserveNativeAnthropicToolUseIds: replayPolicy.preserveNativeAnthropicToolUseIds,
+              duplicateToolCallIdStyle: replayPolicy.duplicateToolCallIdStyle,
+              preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
+                modelApi: attempt.model.api,
+                provider: attempt.model.provider,
+                policy: replayPolicy,
+              }),
+              allowedToolNames: [...prepared.toolCatalog.toolSearchRunPlan.replayAllowedToolNames],
+            }
+          : undefined;
+      {
         const streamFn = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
           // Observe canonical inputs before managed caches consume system/tools.
           if (!activeSession.isCompacting) {
-            onModelRequest(model, context);
+            sessionPromptState.compactionPrefix = captureCompactionPrefix(model, context, {
+              timezone: boundaryTimezone,
+              includeTimestamp: includeBoundaryTimestamp,
+              appendOnlyRuntimeContext,
+              toolCallIds,
+            });
+            setCompactionSafeguardRuntime(sessionManager, {
+              ...getCompactionSafeguardRuntime(sessionManager),
+              foregroundPrefix: sessionPromptState.compactionPrefix,
+            });
+            onModelRequest?.(model, context);
           }
           return streamFn(model, context, options);
         };

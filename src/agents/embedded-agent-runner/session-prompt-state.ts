@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { CompactionPrefixSnapshot } from "../compaction-prefix.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
@@ -20,6 +21,7 @@ export type ToolResultPromptProjectionState = {
 type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
+  compactionPrefix?: CompactionPrefixSnapshot;
   activeProjectKeys: string[];
   toolResults: ToolResultPromptProjectionState;
   sentUserTurnIds: Set<string>;

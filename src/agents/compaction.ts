@@ -21,6 +21,7 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
+import { resolveCompactionPrefix, type CompactionPrefixSnapshot } from "./compaction-prefix.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
@@ -72,6 +73,7 @@ export type CompactionSummarizationInstructions = {
 };
 
 type CompactionSummaryParams = {
+  foregroundPrefix?: CompactionPrefixSnapshot;
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
@@ -131,6 +133,13 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
     params.summarizationInstructions,
   );
   for (const [completedChunks, chunk] of chunks.entries()) {
+    let ineligibleReason: string | undefined = chunks.length === 1 ? undefined : "multiple-chunks";
+    const foreground =
+      chunks.length === 1
+        ? await resolveCompactionPrefix(params.foregroundPrefix, chunk, (reason) => {
+            ineligibleReason = reason;
+          })
+        : undefined;
     try {
       summary = await retryAsync(
         () =>
@@ -145,8 +154,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
             summary,
             params.thinkingLevel,
             params.streamFn,
-            params.usageSink,
+            (usage, path, reason) => params.usageSink?.(usage, path, ineligibleReason ?? reason),
             params.summaryPrompt,
+            foreground,
           ),
         {
           attempts: 3,
@@ -233,6 +243,7 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
       const partialSummary = await summarizeChunks({
         ...params,
         messages: smallMessages,
+        foregroundPrefix: undefined,
       });
       return partialSummary + oversizedSuffix;
     } catch (partialError) {
@@ -322,6 +333,7 @@ export async function summarizeInStages(
       const summary = await summarizeWithFallback({
         ...params,
         messages: chunk,
+        foregroundPrefix: undefined,
         previousSummary: undefined,
       });
       partialSummaries.push(summary);
@@ -383,6 +395,7 @@ export async function summarizeInStages(
   return await summarizeWithFallback({
     ...params,
     messages: summaryMessages,
+    foregroundPrefix: undefined,
     customInstructions: mergeInstructions,
   });
 }

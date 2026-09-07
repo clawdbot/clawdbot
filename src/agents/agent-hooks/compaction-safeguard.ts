@@ -64,6 +64,7 @@ import {
   createSummaryQualityRetentionPlan,
   extractOpaqueIdentifiers,
   nestRequiredSummaryHeadings,
+  REQUIRED_SUMMARY_SECTIONS,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
 import {
@@ -1155,8 +1156,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         headers: authResult.headers,
       });
-      const usageSink: SessionModelUsageSink = (usage) =>
-        recordSessionModelUsage(ctx.sessionManager, usage);
+      const usageSink: SessionModelUsageSink = (usage, requestPath, reason) =>
+        recordSessionModelUsage(ctx.sessionManager, usage, requestPath, reason);
       const llmSummaryParams = {
         model,
         apiKey: authResult.apiKey ?? "",
@@ -1168,6 +1169,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         thinkingLevel,
         streamFn,
         usageSink,
+        foregroundPrefix: preparation.isSplitTurn ? undefined : runtime?.foregroundPrefix,
       };
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
@@ -1217,9 +1219,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 droppedSummary = await summarizeViaLLM({
                   ...llmSummaryParams,
+                  foregroundPrefix: undefined,
                   messages: pruned.droppedMessagesList,
                   maxChunkTokens: droppedMaxChunkTokens,
-                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                  summaryPrompt: {
+                    kind: "custom",
+                    instructions: structuredInstructions,
+                    requiredHeadings: REQUIRED_SUMMARY_SECTIONS,
+                  },
                   previousSummary,
                 });
               } catch (droppedError) {
@@ -1293,8 +1300,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ? await summarizeViaLLM({
                   ...llmSummaryParams,
                   messages: messagesToSummarize,
+                  foregroundPrefix: droppedSummary ? undefined : llmSummaryParams.foregroundPrefix,
                   maxChunkTokens,
-                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                  summaryPrompt: {
+                    kind: "custom",
+                    instructions: structuredInstructions,
+                    requiredHeadings: REQUIRED_SUMMARY_SECTIONS,
+                  },
                   customInstructions: correctiveInstructions,
                   previousSummary: effectivePreviousSummary,
                 })

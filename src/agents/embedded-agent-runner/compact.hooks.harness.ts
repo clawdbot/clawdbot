@@ -20,6 +20,7 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import type { SessionManager } from "../sessions/session-manager.js";
+import { normalizeAssistantReplayContent } from "./replay-history.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -945,6 +946,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   vi.doMock("./replay-history.js", () => ({
+    normalizeAssistantReplayContent,
     sanitizeSessionHistory: sanitizeSessionHistoryMock,
     validateReplayTurns: validateReplayTurnsMock,
   }));

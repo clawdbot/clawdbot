@@ -44,11 +44,11 @@ import { type AgentSession, estimateTokens, SessionManager } from "../sessions/i
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
-import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
+  createCompactionUsageRecorder,
   normalizeObservedTokenCount,
   resolveCompactionProviderStream,
   summarizeCompactionMessages,
@@ -170,17 +170,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const recordUsage = accountingRecorder?.recordUsage
-        ? (usage: UsageLike) => {
-            const normalized = normalizeUsage(usage);
-            if (normalized) {
-              accountingRecorder.recordUsage?.(normalized);
-            }
-          }
-        : undefined;
-      if (recordUsage) {
-        setSessionModelUsageSink(sessionManager, recordUsage);
-      }
+      const { summaryUsage, recordUsage } = createCompactionUsageRecorder((usage) =>
+        accountingRecorder?.recordUsage?.(usage),
+      );
+      setSessionModelUsageSink(sessionManager, recordUsage);
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
@@ -657,6 +650,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           return {
             ok: true,
             compacted: true,
+            ...(summaryUsage.length > 0 ? { summaryUsage } : {}),
             ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
               sessionTarget: resultSessionTarget,

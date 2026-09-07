@@ -41,6 +41,7 @@ export {
   serializeConversation,
   shouldCompact,
   type CompactionDetails,
+  type CompactionForegroundContext,
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
