@@ -105,6 +105,20 @@ openclaw onboard --non-interactive \
 
 `hy4-preview` is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. Tencent's OpenAI-compatible examples use `hy4-preview` as the model id and support standard chat-completions tool calling plus `reasoning_effort`.
 
+## Existing TokenHub configurations
+
+Fresh onboarding selects `hy4-preview` on both endpoints. Existing TokenHub
+configurations follow a separate migration policy: when a TokenHub model
+allowlist is configured, `openclaw doctor --fix` changes a deprecated
+`tencent-tokenhub/hy3-preview` primary to `tencent-tokenhub/hy3`, not Hy4.
+This applies to string and object primary settings and preserves fallbacks,
+custom aliases, and unrelated settings. Explicit `hy3` and `hy4-preview`
+primaries stay unchanged.
+
+The catalog recommendation for `hy3-preview` remains `hy4-preview`, but it is
+not the Doctor migration destination. Moving to Hy4 is an explicit choice:
+review its different pricing and verify model access for the selected endpoint.
+
 ## Advanced configuration
 
 <AccordionGroup>

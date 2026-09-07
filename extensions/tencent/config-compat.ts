@@ -5,12 +5,10 @@ const TENCENT_TOKENHUB_HY3_MODEL_REF = "tencent-tokenhub/hy3";
 const TENCENT_TOKENHUB_HY3_PREVIEW_MODEL_REF = "tencent-tokenhub/hy3-preview";
 const TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF = "tencent-tokenhub/hy4-preview";
 
-// Deliberately a hardcoded snapshot rather than a manifest read: this
-// migration rewrites configs users already own, so it must stay pinned to the
-// default-model change it was written for. Reading `defaultModel` from the
-// manifest would let every future default rotation silently rewrite user
-// configs again.
-const TENCENT_TOKENHUB_MIGRATION_TARGET_MODEL_REF = TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF;
+// Legacy Hy3 preview configs migrate to Hy3, not the fresh-onboarding default.
+// Pin this independently of the manifest: a default rotation must not silently
+// upgrade existing users to Hy4 with different pricing and model access.
+const TENCENT_TOKENHUB_MIGRATION_TARGET_MODEL_REF = TENCENT_TOKENHUB_HY3_MODEL_REF;
 
 // Ordered so the repaired allowlist matches onboard.ts's alias order.
 const TENCENT_TOKENHUB_MANAGED_MODEL_REFS = [

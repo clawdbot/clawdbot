@@ -29,10 +29,10 @@ describe("bundled setup config migrations", () => {
 
     expect(result.changes).toEqual([
       "Updated Tencent TokenHub agent model defaults to include tencent-tokenhub/hy4-preview, tencent-tokenhub/hy3, tencent-tokenhub/hy3-preview.",
-      "Changed Tencent TokenHub primary default from tencent-tokenhub/hy3-preview to tencent-tokenhub/hy4-preview.",
+      "Changed Tencent TokenHub primary default from tencent-tokenhub/hy3-preview to tencent-tokenhub/hy3.",
     ]);
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "tencent-tokenhub/hy4-preview",
+      primary: "tencent-tokenhub/hy3",
     });
     expect(Object.keys(result.config.agents?.defaults?.models ?? {}).toSorted()).toEqual([
       "tencent-tokenhub/hy3",
