@@ -3461,9 +3461,9 @@ describe("EmbeddedTuiBackend", () => {
       ],
       expectedDeltas: [
         { deltaText: "Echo", replace: undefined },
-        { deltaText: "Echo", replace: undefined },
+        { deltaText: "\n\nEcho", replace: undefined },
       ],
-      expectedText: "EchoEcho",
+      expectedText: "Echo\n\nEcho",
     },
     {
       name: "a new assistant item extending an earlier item's text",
@@ -3473,9 +3473,9 @@ describe("EmbeddedTuiBackend", () => {
       ],
       expectedDeltas: [
         { deltaText: "Echo", replace: undefined },
-        { deltaText: "Echo!", replace: undefined },
+        { deltaText: "\n\nEcho!", replace: undefined },
       ],
-      expectedText: "EchoEcho!",
+      expectedText: "Echo\n\nEcho!",
     },
     {
       name: "replayed and growing snapshots of one assistant item",
@@ -3500,9 +3500,9 @@ describe("EmbeddedTuiBackend", () => {
       expectedDeltas: [
         { deltaText: "Echo", replace: undefined },
         { deltaText: "Echo", replace: undefined },
-        { deltaText: "!", replace: undefined },
+        { deltaText: "\n\n!", replace: undefined },
       ],
-      expectedText: "EchoEcho!",
+      expectedText: "EchoEcho\n\n!",
     },
     {
       name: "empty corrections that remove only the current assistant item",
@@ -3513,7 +3513,7 @@ describe("EmbeddedTuiBackend", () => {
       ],
       expectedDeltas: [
         { deltaText: "Hello", replace: undefined },
-        { deltaText: " world", replace: undefined },
+        { deltaText: "\n\n world", replace: undefined },
         { deltaText: "Hello", replace: true },
       ],
       expectedText: "Hello",

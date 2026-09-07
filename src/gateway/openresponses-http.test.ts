@@ -457,7 +457,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { itemId: "answer-1", text: "Echo", delta: "Echo" },
         { itemId: "answer-2", text: "Echo", delta: "Echo" },
       ],
-      expected: "EchoEcho",
+      expected: "Echo\n\nEcho",
       resultTexts: ["Echo", "Echo"],
     },
     {
@@ -469,7 +469,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { itemId: "answer-2", text: "Echo", delta: "Echo" },
         { itemId: "answer-2", text: "Echo!", delta: "!" },
       ],
-      expected: "EchoEcho!",
+      expected: "Echo\n\nEcho!",
     },
     {
       name: "repeated delta-only text within an assistant item",
@@ -485,7 +485,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },
         { itemId: "answer-2", text: "tail", delta: "tail" },
       ],
-      expected: `${"x".repeat(500_001)}tail`,
+      expected: `${"x".repeat(500_001)}\n\ntail`,
     },
   ])(
     "preserves $name in official SDK assistant streams",

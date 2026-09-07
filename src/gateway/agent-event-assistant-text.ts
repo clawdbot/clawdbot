@@ -78,6 +78,16 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
   };
 }
 
+/** Paragraph separator owed between a retained item prefix and the next item's text. */
+function missingItemBoundarySeparator(previousText: string, nextText: string): string {
+  if (!previousText || !nextText) {
+    return "";
+  }
+  const trailing = previousText.slice(-2).match(/\n*$/u)?.[0].length ?? 0;
+  const leading = nextText.slice(0, 2).match(/^\n*/u)?.[0].length ?? 0;
+  return "\n".repeat(Math.max(0, 2 - trailing - leading));
+}
+
 /** Merge item snapshots without imposing a transport's display or wire limit. */
 export function mergeAssistantText(
   previous: AssistantTextSnapshot,
@@ -93,11 +103,17 @@ export function mergeAssistantText(
           // Only provisional stream replacements discard earlier items.
           prefix: input.replace && input.replaceable ? "" : previous.text,
         };
+  // Distinct items are separate messages; keep their paragraph boundary.
+  const startsNewItem = scope !== undefined && scope !== previous.scope;
   let text: string;
   if (scope && input.text !== undefined) {
-    text = scope.prefix + input.text;
+    text = scope.prefix + missingItemBoundarySeparator(scope.prefix, input.text) + input.text;
   } else if (input.text === undefined) {
-    text = previous.text + (input.delta ?? "");
+    const delta = input.delta ?? "";
+    text =
+      previous.text +
+      (startsNewItem ? missingItemBoundarySeparator(previous.text, delta) : "") +
+      delta;
   } else if (unkeyed === "append-only") {
     // Legacy HTTP snapshots recover held prefixes; non-prefix input remains
     // incremental unless its producer explicitly marks a replacement.
