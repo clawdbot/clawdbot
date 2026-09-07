@@ -83,6 +83,7 @@ type SlackTraceState = {
   tsCounter: number;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
+  rejectAppendStreamCode: string | undefined;
 };
 
 const traceRuntimeError = vi.fn();
@@ -97,6 +98,7 @@ const traceState = vi.hoisted((): SlackTraceState => ({
   counts: { tool: 0, block: 0, final: 0 },
   tsCounter: 0,
   rejectStartStreamCode: undefined,
+  rejectAppendStreamCode: undefined,
 }));
 
 // Replace only the core agent turn. Everything downstream of the captured
@@ -446,6 +448,19 @@ function createRecordingSlackClient(): Record<string, unknown> {
         return { ok: true, ts };
       },
       appendStream: async (args: Record<string, unknown>) => {
+        const rejectCode = traceState.rejectAppendStreamCode;
+        if (rejectCode) {
+          traceState.rejectAppendStreamCode = undefined;
+          record({
+            method: "chat.appendStream",
+            target: asWireString(args.ts),
+            payload: stripToken(args),
+            result: { ok: false, error: rejectCode },
+          });
+          const error = new Error(`An API error occurred: ${rejectCode}`);
+          Object.assign(error, { data: { ok: false, error: rejectCode } });
+          throw error;
+        }
         record({
           method: "chat.appendStream",
           target: asWireString(args.ts),
@@ -600,6 +615,7 @@ async function setupSlackTrace(
 ) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.tsCounter = 0;
+  traceState.rejectAppendStreamCode = undefined;
   traceRuntimeError.mockClear();
   traceState.counts = { tool: 0, block: 0, final: 0 };
   traceState.turn = null;
@@ -820,6 +836,121 @@ describe("slack delivery trace goldens", () => {
       }
     });
   }
+
+  it("recovers an expired native progress stream and acknowledges its final on the same message", async () => {
+    const finalText = "The recovered native turn is complete.";
+    let finalAcknowledgementChecked = false;
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "expired-native-progress",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+          { kind: "tool-progress", name: "write", phase: "start" },
+          { kind: "advance", ms: 2000 },
+          { kind: "tool-progress", name: "write", phase: "result" },
+          { kind: "final", text: finalText },
+          { kind: "idle" },
+        ],
+      },
+      setup: async (recorder) => {
+        const dispatch = await setupSlackTrace(recorder, "progress-native-unified");
+        traceState.rejectAppendStreamCode = "message_not_in_streaming_state";
+        const client = traceState.client as unknown as {
+          chat: { update: (args: Record<string, unknown>) => Promise<unknown> };
+        };
+        const update = client.chat.update;
+        const entered = createDeferred<void>();
+        const response = createDeferred<void>();
+        client.chat.update = async (args) => {
+          if (JSON.stringify(args.blocks).includes(finalText)) {
+            entered.resolve();
+            await response.promise;
+          }
+          return await update(args);
+        };
+        return async (step) => {
+          if (step.kind !== "final") {
+            await dispatch(step);
+            return;
+          }
+          const pending = dispatch(step);
+          await entered.promise;
+          expect(traceState.counts.final).toBe(0);
+          finalAcknowledgementChecked = true;
+          response.resolve();
+          await pending;
+          expect(traceState.counts.final).toBe(1);
+        };
+      },
+      normalize: createSlackTsNormalizer(),
+    });
+    const out = events.filter((event) => event.dir === "out");
+    const starts = out.filter((event) => event.kind === "chat.startStream");
+    const updates = out.filter((event) => event.kind === "chat.update");
+    const streamTs = (starts[0]?.data as { result?: { ts?: string } })?.result?.ts;
+    expect(starts).toHaveLength(1);
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(updates.every((event) => (event.data as { target?: string }).target === streamTs)).toBe(
+      true,
+    );
+    expect(JSON.stringify(updates.at(-1)?.data)).toContain(finalText);
+    expect(JSON.stringify(updates.at(-1)?.data)).toContain('"status":"complete"');
+    expect(JSON.stringify(updates.at(-1)?.data)).toContain("src/native-card.ts");
+    expect(out.filter((event) => event.kind === "chat.appendStream")).toHaveLength(1);
+    expect(
+      out.some((event) => event.kind === "chat.postMessage" || event.kind === "chat.stopStream"),
+    ).toBe(false);
+    expect(finalAcknowledgementChecked).toBe(true);
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it.each(["oversized", "invalid_blocks"])(
+    "delivers a definitely rejected recovered final through normal delivery (%s)",
+    async (failure) => {
+      const finalText = failure === "oversized" ? "a".repeat(12001) : "The final answer.";
+      const events = await runDeliveryTraceScenario({
+        scenario: {
+          name: "oversized-expired-native-final",
+          steps: [
+            { kind: "reply-start" },
+            { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+            { kind: "tool-progress", name: "write", phase: "start" },
+            { kind: "advance", ms: 2000 },
+            { kind: "tool-progress", name: "write", phase: "result" },
+            { kind: "final", text: finalText },
+            { kind: "idle" },
+          ],
+        },
+        setup: async (recorder) => {
+          const dispatch = await setupSlackTrace(recorder, "progress-native-unified");
+          traceState.rejectAppendStreamCode = "message_not_in_streaming_state";
+          if (failure === "invalid_blocks") {
+            const client = traceState.client as unknown as {
+              chat: { update: (args: Record<string, unknown>) => Promise<unknown> };
+            };
+            const update = client.chat.update;
+            client.chat.update = async (args) => {
+              if (JSON.stringify(args.blocks).includes(finalText)) {
+                const error = new Error("An API error occurred: invalid_blocks");
+                Object.assign(error, { data: { ok: false, error: "invalid_blocks" } });
+                throw error;
+              }
+              return await update(args);
+            };
+          }
+          return dispatch;
+        },
+        normalize: createSlackTsNormalizer(),
+      });
+      const posted = events.filter((event) => event.kind === "chat.postMessage");
+      expect(posted.length).toBeGreaterThan(failure === "oversized" ? 1 : 0);
+      expect(collectSlackWireTexts(posted).join("")).toBe(finalText);
+      expect(traceState.counts.final).toBe(1);
+      expect(events.some((event) => event.kind === "chat.stopStream")).toBe(false);
+      expect(traceRuntimeError).not.toHaveBeenCalled();
+    },
+  );
 
   it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
     let streamTs: string | undefined;
