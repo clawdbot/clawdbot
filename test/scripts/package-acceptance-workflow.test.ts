@@ -11811,6 +11811,24 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(installSmoke.jobs?.root_dockerfile_image_ready?.["timeout-minutes"]).toBe(5);
     expect(installSmoke.jobs?.qr_package_install_smoke?.["timeout-minutes"]).toBe(30);
     expect(installSmoke.jobs?.root_dockerfile_smokes?.["timeout-minutes"]).toBe(90);
+    const sourceIdentityStep = workflowStep(
+      workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_smokes"),
+      "Prepare selected root Docker source identity",
+    );
+    expect(sourceIdentityStep.env).toMatchObject({
+      SOURCE_IDENTITY_DIR: "${{ runner.temp }}/root-dockerfile-candidate.git",
+      TARGET_REPOSITORY: "${{ github.repository }}",
+      TARGET_SHA: "${{ needs.preflight.outputs.target_sha }}",
+    });
+    expect(sourceIdentityStep.run).toContain('git init --bare "$SOURCE_IDENTITY_DIR"');
+    expect(sourceIdentityStep.run).toContain('"$TARGET_SHA:refs/heads/selected"');
+    expect(sourceIdentityStep.run).toContain("symbolic-ref HEAD refs/heads/selected");
+    expect(
+      workflowStep(
+        workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_smokes"),
+        "Run Docker gateway network e2e",
+      ).env?.OPENCLAW_DOCKER_E2E_REPO_ROOT,
+    ).toBe("${{ runner.temp }}/root-dockerfile-candidate.git");
     expect(installSmoke.jobs?.installer_smoke_update_image?.["timeout-minutes"]).toBe(45);
     expect(installSmoke.jobs?.installer_smoke_nonroot_image?.["timeout-minutes"]).toBe(45);
     expect(installSmoke.jobs?.installer_smoke_update?.["timeout-minutes"]).toBe(120);
