@@ -1,4 +1,7 @@
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
@@ -7,14 +10,6 @@ import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readProviderNumber(value: unknown): number | undefined {
-  return typeof value === "string" ? parseStrictFiniteNumber(value) : readFiniteNumber(value);
-}
 
 function rateLimitReachedSummary(value: unknown): string | undefined {
   const reachedType = asOptionalRecord(value)?.type;
@@ -109,27 +104,27 @@ function appendRateLimitWindows(
   });
   const primary = asOptionalRecord(rateLimit?.primary_window);
   if (primary) {
-    const limitSeconds = readFiniteNumber(primary.limit_window_seconds) ?? 10_800;
-    const resetAt = readFiniteNumber(primary.reset_at);
+    const limitSeconds = asFiniteNumber(primary.limit_window_seconds) ?? 10_800;
+    const resetAt = asFiniteNumber(primary.reset_at);
     windows.push({
       ...windowFields(formatWindowDuration(limitSeconds)),
-      usedPercent: clampPercent(readFiniteNumber(primary.used_percent) ?? 0),
+      usedPercent: clampPercent(asFiniteNumber(primary.used_percent) ?? 0),
       resetAt: resetAt ? resetAt * 1000 : undefined,
     });
   }
 
   const secondary = asOptionalRecord(rateLimit?.secondary_window);
   if (secondary) {
-    const limitSeconds = readFiniteNumber(secondary.limit_window_seconds) ?? 86_400;
-    const resetAt = readFiniteNumber(secondary.reset_at);
+    const limitSeconds = asFiniteNumber(secondary.limit_window_seconds) ?? 86_400;
+    const resetAt = asFiniteNumber(secondary.reset_at);
     const windowLabel = resolveSecondaryWindowLabel({
       windowHours: Math.round(limitSeconds / 3600),
-      primaryResetAt: readFiniteNumber(primary?.reset_at),
+      primaryResetAt: asFiniteNumber(primary?.reset_at),
       secondaryResetAt: resetAt,
     });
     windows.push({
       ...windowFields(windowLabel),
-      usedPercent: clampPercent(readFiniteNumber(secondary.used_percent) ?? 0),
+      usedPercent: clampPercent(asFiniteNumber(secondary.used_percent) ?? 0),
       resetAt: resetAt ? resetAt * 1000 : undefined,
     });
   }
@@ -197,7 +192,7 @@ export async function fetchCodexUsage(
   const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
   const balanceValue = asOptionalRecord(data.credits)?.balance;
   if (balanceValue !== undefined && balanceValue !== null) {
-    const balance = readProviderNumber(balanceValue);
+    const balance = parseStrictFiniteNumber(balanceValue);
     if (balance !== undefined && balance >= 0) {
       billing.push({ type: "balance", amount: balance, unit: "credits" });
     }
@@ -207,9 +202,9 @@ export async function fetchCodexUsage(
   const individualLimit = asOptionalRecord(spendControl?.individual_limit);
   if (individualLimit) {
     const reached = spendControl?.reached === true;
-    const usedPercent = readFiniteNumber(individualLimit.used_percent);
-    const remainingPercent = readFiniteNumber(individualLimit.remaining_percent);
-    const resetAtSeconds = readFiniteNumber(individualLimit.reset_at);
+    const usedPercent = asFiniteNumber(individualLimit.used_percent);
+    const remainingPercent = asFiniteNumber(individualLimit.remaining_percent);
+    const resetAtSeconds = asFiniteNumber(individualLimit.reset_at);
     const resetAt = resetAtSeconds ? resetAtSeconds * 1000 : undefined;
     windows.push({
       label: "Monthly spend",
@@ -220,8 +215,8 @@ export async function fetchCodexUsage(
           ),
       resetAt,
     });
-    const used = readProviderNumber(individualLimit.used);
-    const limit = readProviderNumber(individualLimit.limit);
+    const used = parseStrictFiniteNumber(individualLimit.used);
+    const limit = parseStrictFiniteNumber(individualLimit.limit);
     if (used !== undefined && used >= 0 && limit !== undefined && limit >= 0) {
       billing.push({
         type: "budget",

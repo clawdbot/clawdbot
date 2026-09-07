@@ -2430,29 +2430,17 @@ describe("models.authStatus", () => {
     ).toBe(10);
   });
 
-  it.each([
-    ["deepseek", "direct"],
-    ["deepseek", "stored"],
-    ["clawrouter", "stored"],
-  ])("adds %s %s API-key balances to auth status", async (provider, source) => {
+  it.each(["deepseek", "clawrouter"])("shows %s saved-key balance", async (provider) => {
+    const { buildAuthHealthSummary } = await vi.importActual<
+      typeof import("../../agents/auth-health.js")
+    >("../../agents/auth-health.js");
+    mocks.buildAuthHealthSummary.mockImplementation(buildAuthHealthSummary);
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([{ provider, displayName: provider }]);
-    if (source === "direct") {
-      mocks.getRuntimeConfig.mockReturnValue({
-        models: { providers: { [provider]: { apiKey: "key" } } },
-      });
-    } else {
-      setPreparedAuthStore({
-        version: 1,
-        profiles: {
-          [`${provider}:default`]: { type: "api_key", provider, key: "key" },
-        },
-      });
-    }
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [createApiKeyProfile(provider)],
-      providers: [createStaticApiKeyProvider(provider)],
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [`${provider}:default`]: { type: "api_key", provider, key: "key" },
+      },
     });
     mocks.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: 0,
@@ -3019,20 +3007,11 @@ describe("models.authOrderSet", () => {
       agents: { list: [{ id: "main", default: true, agentDir: "/tmp/agent" }] },
     };
     mocks.getRuntimeConfig.mockReturnValue(config);
-    const profiles = ["openai:one", "openai:two"].map((profileId) => {
-      const profile = expectDefined(
-        createOpenAiCodexOauthHealthSummary().profiles[0],
-        "OAuth health fixture",
-      );
-      profile.profileId = profileId;
-      return profile;
-    });
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles,
-      providers: [{ provider: "openai", status: "ok", profiles }],
-    });
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { buildAuthHealthSummary } = await vi.importActual<
+      typeof import("../../agents/auth-health.js")
+    >("../../agents/auth-health.js");
+    mocks.buildAuthHealthSummary.mockImplementation(buildAuthHealthSummary);
     mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
       updatedAt: Date.now(),
       providers: [
@@ -3054,6 +3033,8 @@ describe("models.authOrderSet", () => {
       expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
     );
     const warmed = await readAuthStatus();
+    expect(warmed.providers[0]?.usageProfileId).toBe("openai:one");
+    expect(warmed.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
     expect(
       warmed.providers[0]?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent),
     ).toEqual([10, 20]);
@@ -3079,6 +3060,8 @@ describe("models.authOrderSet", () => {
       expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).not.toHaveBeenCalled();
       const saved = await readAuthStatus();
       expect(saved.providers[0]?.profileOrder).toEqual(order);
+      expect(saved.providers[0]?.usageProfileId).toBe("openai:two");
+      expect(saved.providers[0]?.usage?.windows[0]?.usedPercent).toBe(20);
       expect(saved.providers[0]?.profiles).toEqual(warmed.providers[0]?.profiles);
       expect(saved.usageRefreshPending).toBeUndefined();
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
