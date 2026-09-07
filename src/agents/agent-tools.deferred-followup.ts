@@ -69,6 +69,10 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
         "No spawn for quick lookup/single read.",
         `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
       );
+      description = description.replace(
+        "After spawn, do non-overlap work; follow the receipt's completion mode.",
+        `After spawn, do non-overlap work; follow the receipt's completion mode. Before moving on, check own spawned children via ${guidance} for failed/timeout/killed status and follow up instead of leaving them stalled.`,
+      );
     }
   }
   return description;

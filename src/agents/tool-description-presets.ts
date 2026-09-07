@@ -150,7 +150,7 @@ export function describeSessionsSpawnTool(options?: {
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
-    "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
+    "Hidden child: research, parallel/batch reads, throwaway side tasks -- including multi-step trial-and-error against external APIs/services (auth probing, endpoint discovery, iterative debugging). Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }
